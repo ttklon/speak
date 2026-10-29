@@ -1,0 +1,17 @@
+# ZSpeakly ignores
+publish/
+publish-win-x64/
+models/*.bin
+models/*.gguf
+models/*.onnx
+!models/.gitkeep
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.db
+*.log
+TestResults/
+actions-runner/
+_work/
