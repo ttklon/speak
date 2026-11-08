@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeStyle, describeStyle, stylePrompt } from './style.js';
+import { analyzeStyle, describeStyle, stylePrompt, plural } from './style.js';
 
 const sample = (text) => ({ id: String(Math.random()), text, createdAt: Date.now() });
 
@@ -44,5 +44,13 @@ describe('стиль письма', () => {
   it('игнорирует слишком короткие записи', () => {
     const s = analyzeStyle([sample('ок'), sample('да')]);
     expect(s.samples).toBe(0);
+  });
+
+  it('склоняет числительные по-русски', () => {
+    expect(plural(1, 'текст', 'текста', 'текстов')).toBe('текст');
+    expect(plural(21, 'текст', 'текста', 'текстов')).toBe('текст');
+    expect(plural(2, 'текст', 'текста', 'текстов')).toBe('текста');
+    expect(plural(13, 'текст', 'текста', 'текстов')).toBe('текстов');
+    expect(plural(21, 'текст', 'текста', 'текстов')).not.toBe('текстов');
   });
 });

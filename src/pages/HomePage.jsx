@@ -186,7 +186,25 @@ export default function HomePage() {
             Версия {APP.version} · {totalWords.toLocaleString('ru-RU')} слов ·{' '}
             {Math.round(totalSeconds)} с речи
           </span>
-          <button type="button" className="link-btn" onClick={() => navigate('settings', { section: 'about' })}>
+          <button
+            type="button"
+            className="link-btn"
+            onClick={async () => {
+              const bridge = window.zspeakly?.native;
+              if (!bridge?.checkUpdates) {
+                navigate('settings', { section: 'about' });
+                return;
+              }
+              const res = await bridge.checkUpdates();
+              if (res?.status === 'available') {
+                push({ title: `Доступна ${res.version}`, description: 'Откройте «О программе», чтобы скачать.', tone: 'success' });
+              } else if (res?.status === 'latest') {
+                push({ title: 'Обновлений нет', description: `Установлена ${APP.version}.`, tone: 'success' });
+              } else if (res?.status === 'unavailable' || res?.status === 'error') {
+                push({ title: 'Автообновление недоступно', description: res.reason, tone: 'warn' });
+              }
+            }}
+          >
             Проверить обновления
           </button>
         </div>

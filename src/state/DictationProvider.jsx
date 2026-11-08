@@ -81,6 +81,12 @@ export function DictationProvider({ children }) {
         addDictation(item);
         recordWords(item.words, durationMs);
         if (settingsRef.current.readAloud) speak(cleaned, settingsRef.current.language);
+        // нативное уведомление Windows: «готово, вставлено» — по настройке
+        if (settingsRef.current.notifications && window.zspeakly?.native?.notify) {
+          window.zspeakly.native
+            .notify({ title: 'Готово', body: cleaned.slice(0, 120), silent: true })
+            .catch(() => {});
+        }
       }
       setTimeout(() => setState((s) => (s === 'done' ? 'idle' : s)), 2200);
       return item;

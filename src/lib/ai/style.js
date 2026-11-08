@@ -74,11 +74,21 @@ export function analyzeStyle(dictations = []) {
   };
 }
 
+/** Русское склонение: 1 текст, 2 текста, 5 текстов. */
+export function plural(n, one, few, many) {
+  const abs = Math.abs(Number(n) || 0) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
 /** Короткое человеческое описание профиля для интерфейса. */
 export function describeStyle(style) {
   if (!style || !style.samples) return 'Пока нечего анализировать: продиктуйте пару фраз.';
   const parts = [
-    `${style.samples} текстов`,
+    `${style.samples} ${plural(style.samples, 'текст', 'текста', 'текстов')}`,
     `≈${style.avgSentence} слов в предложении`,
     style.address === 'ты' ? 'на «ты»' : style.address === 'вы' ? 'на «вы»' : 'нейтрально',
     style.tone === 'friendly' ? 'дружелюбно' : style.tone === 'formal' ? 'по-деловому' : 'без выраженного тона',
