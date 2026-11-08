@@ -76,4 +76,24 @@ describe('translate', () => {
     expect(res.engine).toBe('offline');
     expect(res.text).toBe('Привет как дела.');
   });
+
+  describe('сокращение не рвёт мысль', () => {
+    it('оставляет целые слова и заглавные после точки', () => {
+      const out = OPS.shorten('Это длинный текст, который нужно сократить. В общем, надо короче.');
+      expect(out).not.toMatch(/\bсодержи\b|\bпотомучто\b/);
+      expect(out).toMatch(/^[А-ЯЁA-Z]/);
+      expect(out).not.toMatch(/[,;]\s*\./);
+      expect(out).not.toMatch(/[.!?]\s+[а-яё]/);
+    });
+
+    it('вырезает «воду» в начале фразы', () => {
+      expect(OPS.shorten('Короче, я думаю, нам надо встретиться завтра.')).toMatch(/^Я думаю/);
+    });
+
+    it('не оставляет пустых предложений', () => {
+      const out = OPS.shorten('Ну, в общем, короче, всё хорошо.');
+      expect(out.replace(/\s+/g, ' ').trim()).not.toMatch(/^[,.;]/);
+      expect(out.length).toBeGreaterThan(3);
+    });
+  });
 });

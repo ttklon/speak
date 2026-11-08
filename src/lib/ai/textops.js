@@ -67,7 +67,13 @@ function stripFillers(text) {
     const re = new RegExp(`(\\s)${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\s,.!?])`, 'giu');
     out = out.replace(re, ' ');
   }
-  return out.replace(/\s{2,}/g, ' ').trim();
+  // после удаления слов-паразитов остаются «, , ,» и висячие запятые
+  out = out
+    .replace(/[,;:]\s*(?=[,;:])/g, '')
+    .replace(/([,;:])\s*([.!?])/g, '$2')
+    .replace(/^\s*[,;:\s]+/, '')
+    .replace(/\s{2,}/g, ' ');
+  return out.trim();
 }
 
 function capitalizeSentences(text) {
@@ -106,17 +112,53 @@ export const OPS = {
   },
 
   /** Сокращает на ~30%: убирает вводные и оставляет первые две трети слов. */
+  /**
+   * Сокращение: убираем «воду» и подрезаем длинные фразы по границам слов.
+   * Раньше текст обрывался на полуслове («…потому что он содержит.»).
+   */
   shorten(text) {
     const cleaned = OPS.clean(text);
-    const sentences = repeatSentences(cleaned);
-    if (sentences.length <= 1) {
-      const words = cleaned.split(' ');
-      if (words.length <= 8) return cleaned;
-      const keep = Math.max(6, Math.round(words.length * 0.7));
-      return ensurePeriod(`${words.slice(0, keep).join(' ')}`);
+    const WATER = '(?:в общем|как бы|на самом деле|по сути|в принципе|собственно|короче|типа|ну)';
+
+    // 1) выкидываем вводные-паразиты вместе с их запятой, не ломая соседние фразы
+    let out = cleaned.replace(
+      new RegExp(`(^|[.!?…;:]\\s+)${WATER}\\s*,?\\s*`, 'gi'),
+      '$1',
+    );
+
+    // 2) длинные предложения подрезаем по последнему целому слову
+    out = out
+      .split(/(?<=[.!?…])\s+/)
+      .map((sentence) => {
+        if (sentence.length <= 120) return sentence;
+        const head = sentence.slice(0, 120);
+        const cut = head.lastIndexOf(' ');
+        return ensurePeriod((cut > 40 ? head.slice(0, cut) : head).replace(/[,;:]\s*$/, ''));
+      })
+      .join(' ');
+
+    // 3) чистим следы правок: «, .» и висячие запятые в начале
+    out = out
+      .replace(/\s+([,.!?…;:])/g, '$1')
+      .replace(/([,;:])\s*\./g, '.')
+      // запятая сразу после точки — след удалённого вводного слова
+      .replace(/([.!?…])\s*[,;]\s*/g, '$1 ')
+      .replace(/^\s*[,;:]\s*/, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    // обрубок после удаления «воды» подклеиваем к предыдущей фразе запятой
+    out = out.replace(/([.!?…])\s+([а-яёa-z]{1,14}\.)$/i, (m, end, tail) => `, ${tail}`);
+    // после точки — заглавная: иначе «воды. надо.» читается как ошибка
+    out = out.replace(/([.!?…]\s+)([а-яёa-z])/g, (m, p, ch) => p + ch.toUpperCase());
+    out = out.replace(/^([а-яёa-z])/, (m) => m.toUpperCase());
+
+    // 4) больше двух предложений — оставляем самые информативные (первые)
+    const sentences = repeatSentences(out);
+    if (sentences.length > 2) {
+      return sentences.slice(0, Math.max(2, Math.round(sentences.length * 0.7))).join(' ');
     }
-    const keep = Math.max(1, Math.round(sentences.length * 0.7));
-    return sentences.slice(0, keep).join(' ');
+    return out;
   },
 
   /** Список ключевых тезисов: по предложениям, до 5 пунктов. */
