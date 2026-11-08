@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - name: Install
@@ -33,6 +33,9 @@ jobs:
 
       - name: Tests
         run: npm test
+
+      - name: Smoke main process
+        run: npm run test:main
 
       - name: Build + package (NSIS + portable)
         run: npm run dist:win
@@ -54,8 +57,15 @@ jobs:
           body: |
             ## ZSpeakly — офлайн голосовой ввод
 
-            Установщик и портативная версия в ассетах релиза.
-            Диктовка (`Ctrl+Alt+Space`), живой перевод, заметки встреч, словарь и буфер обмена.
-            Всё локально, без облака и подписки.
+            Установщик и портативная версия — в ассетах.
+
+            - **Диктовка** по `Ctrl+Alt+Space` в любое поле Windows 11
+            - **Словарь**, который учится на ваших правках
+            - **AI-инструкции** над выделенным текстом (`Ctrl+Alt+E/F/S/Q/T`)
+            - **Буфер обмена** с источником «приложение — окно» и скриншотами
+
+            Всё локально: без облака, аккаунта и подписки. Python не используется — только Electron.
+
+            Для офлайн-распознавания запустите `scripts\download-models.ps1` (движок + модели).
           draft: false
           fail_on_unmatched_files: false

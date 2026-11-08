@@ -75,7 +75,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ZSpeakly"
+      "shortcutName": "ZSpeakly",
+      "artifactName": "ZSpeakly-Setup-${version}.exe"
     },
     "portable": {
       "artifactName": "ZSpeakly-${version}-portable.exe"
@@ -85,14 +86,16 @@
         "from": "models",
         "to": "models",
         "filter": [
-          "**/*"
+          "*.bin",
+          "*.gguf"
         ]
       },
       {
         "from": "bin",
         "to": "bin",
         "filter": [
-          "**/*"
+          "*.exe",
+          "*.dll"
         ]
       }
     ],
