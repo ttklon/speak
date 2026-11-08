@@ -73,7 +73,8 @@ jobs:
           DEBUG: electron-builder
         run: |
           npm run build 2>&1 | Tee-Object -FilePath build-renderer.log
-          npx electron-builder --win nsis portable 2>&1 | Tee-Object -FilePath build-package.log
+          # --publish never: релиз публикуем отдельным job только по тегу
+          npx electron-builder --win nsis portable --publish never 2>&1 | Tee-Object -FilePath build-package.log
           if ($LASTEXITCODE -ne 0) {
             Get-Content build-package.log -Tail 25 | ForEach-Object {
               $line = ($_ -replace '[\r\n]+', ' ').Trim()
