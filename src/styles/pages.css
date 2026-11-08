@@ -2349,3 +2349,58 @@ button.plan-card--action:hover .plan-card__title {
 .model-state--warn {
   color: #e0b064;
 }
+
+/* Поиск по настройкам: найденные строки, а не только разделы */
+.settings-search-results {
+  margin: 8px 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 210px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.settings-search-hit {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-1, #eaeaea);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-search-hit:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.settings-search-hit__title {
+  font-weight: 500;
+}
+
+.settings-search-hit__where {
+  color: var(--text-3, #8b8b8b);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+/* Подсветка строки, к которой пришли из поиска */
+.setting-row.is-highlight {
+  animation: setting-flash 1.6s ease-out;
+  border-radius: 10px;
+}
+
+@keyframes setting-flash {
+  0% {
+    background: rgba(61, 220, 132, 0.18);
+  }
+  100% {
+    background: transparent;
+  }
+}

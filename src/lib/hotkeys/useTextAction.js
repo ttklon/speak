@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../../state/ToastProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
+import { readClipboard, writeClipboard } from '../clipboard.js';
 import { runInstruction } from '../ai/instructions.js';
 import { analyzeStyle, applyStyle, stylePrompt } from '../ai/style.js';
 import { truncate } from '../utils.js';
@@ -28,7 +29,7 @@ async function readSelection() {
     if (selected) return selected;
   }
   try {
-    return await navigator.clipboard.readText();
+    return await readClipboard();
   } catch {
     return '';
   }
@@ -42,7 +43,7 @@ async function writeSelection(text) {
     return ok ? 'inserted' : 'failed';
   }
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboard(text);
     return 'copied';
   } catch {
     return 'failed';

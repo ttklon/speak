@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Copy, Mic, Pencil, Search, Square, Trash2, X } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useDictation } from '../state/DictationProvider.jsx';
+import { writeClipboard } from '../lib/clipboard.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds } from '../lib/utils.js';
@@ -56,7 +57,7 @@ export default function HomePage() {
 
   const copyText = async (text) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboard(text);
       push({ title: 'Скопировано в буфер', description: truncate(text, 64), tone: 'success' });
     } catch {
       push({ title: 'Не удалось скопировать', tone: 'warn' });

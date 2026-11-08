@@ -10,6 +10,7 @@ import DataSection from './sections/DataSection.jsx';
 import NetworkSection from './sections/NetworkSection.jsx';
 import AboutSection from './sections/AboutSection.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
+import { SETTING_ENTRIES } from './settingsIndex.js';
 
 const SECTIONS = [
   { id: 'account', label: 'Аккаунт', icon: CircleUser },
@@ -24,11 +25,40 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
   const { settings } = useAppData();
   const [query, setQuery] = useState('');
 
+  // поиск ищет и по названиям разделов, и по конкретным строкам внутри них:
+  // раньше запрос «звук» давал пустой экран
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return SETTING_ENTRIES.filter(
+      (e) =>
+        e.title.toLowerCase().includes(q) ||
+        e.sectionLabel.toLowerCase().includes(q) ||
+        (e.desc || '').toLowerCase().includes(q),
+    ).slice(0, 12);
+  }, [query]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return SECTIONS;
-    return SECTIONS.filter((s) => s.label.toLowerCase().includes(q));
-  }, [query]);
+    // раздел показываем, даже если совпала только строка внутри него
+    const withHits = new Set(matches.map((m) => m.section));
+    return SECTIONS.filter((s) => s.label.toLowerCase().includes(q) || withHits.has(s.id));
+  }, [query, matches]);
+
+  // переход к найденной строке: открываем раздел и подсвечиваем совпадение
+  const jumpTo = (entry) => {
+    onSectionChange(entry.section);
+    setQuery('');
+    setTimeout(() => {
+      const target = [...document.querySelectorAll('.settings-main .setting-row')].find((row) =>
+        row.textContent.toLowerCase().includes(entry.title.toLowerCase()),
+      );
+      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target?.classList.add('is-highlight');
+      setTimeout(() => target?.classList.remove('is-highlight'), 1600);
+    }, 120);
+  };
 
   const active = SECTIONS.find((s) => s.id === section) || SECTIONS[0];
 
@@ -60,6 +90,21 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
               placeholder="Поиск по настройкам"
             />
           </label>
+          {matches.length ? (
+            <div className="settings-search-results">
+              {matches.map((m) => (
+                <button
+                  key={`${m.section}|${m.title}`}
+                  type="button"
+                  className="settings-search-hit"
+                  onClick={() => jumpTo(m)}
+                >
+                  <span className="settings-search-hit__title">{m.title}</span>
+                  <span className="settings-search-hit__where">{m.sectionLabel}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <nav>
             {filtered.map((s) => {
               const IconCmp = s.icon;

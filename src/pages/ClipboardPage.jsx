@@ -14,6 +14,7 @@ import {
   Video,
 } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
+import { readClipboard, writeClipboard } from '../lib/clipboard.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import { Button, EmptyState, SearchInput } from '../components/ui/Controls.jsx';
@@ -71,7 +72,7 @@ export default function ClipboardPage() {
       if (Date.now() - lastExternal.current < 300) return;
       setTimeout(async () => {
         try {
-          const text = await navigator.clipboard.readText();
+          const text = await readClipboard();
           if (!text) return;
           addClipboardItem({
             kind: /^(https?:\/\/|www\.)/i.test(text.trim()) ? 'text' : 'text',
@@ -226,15 +227,17 @@ export default function ClipboardPage() {
 
   const copyItem = async (item) => {
     try {
-      await navigator.clipboard.writeText(item.text || '');
+      // нативный мост первым: в file:// браузерное API часто запрещено
+      await writeClipboard(item.text || '', item.image);
       setJustCopied(item.id);
       setTimeout(() => setJustCopied(null), 1400);
       push({ title: 'Скопировано', description: truncate(item.text, 60), tone: 'success', ttl: 1800 });
-      if (window.zspeakly?.native?.writeClipboard) {
-        window.zspeakly.native.writeClipboard({ text: item.text, image: item.image });
-      }
     } catch {
-      push({ title: 'Буфер обмена недоступен', tone: 'warn' });
+      push({
+        title: 'Не удалось скопировать',
+        description: 'Выделите текст в карточке и нажмите Ctrl+C.',
+        tone: 'warn',
+      });
     }
   };
 
