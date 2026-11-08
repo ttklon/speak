@@ -87,6 +87,19 @@ jobs:
       - name: Icons
         run: npm run icons
 
+      - name: Прогреть бинарник Electron (с ретраями)
+        shell: bash
+        # electron-builder скачивает Electron сам; делаем это заранее и с повторами,
+        # чтобы сбой сети не валил всю упаковку
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "::notice title=electron::прогрев, попытка $i"
+            # install.js умеет докачать бинарник, если его нет
+            if node node_modules/electron/install.js; then exit 0; fi
+            sleep 15
+          done
+          echo "::warning title=electron::бинарник не скачался заранее, полагаемся на electron-builder"
+
       - name: Кэш Electron (переживает сетевые сбои раннера)
         uses: actions/cache@v4
         with:
@@ -117,11 +130,12 @@ jobs:
             npx electron-builder --win nsis portable --publish never 2>&1 | Tee-Object -FilePath build-package.log
             if ($LASTEXITCODE -eq 0) { $ok = $true }
             elseif ($attempt -lt 3) {
+              # Повторяем на любой сбой упаковки: основная причина — сеть раннера
+              # при скачивании бинарника Electron (ERR_ELECTRON_BUILDER_CANNOT_EXECUTE).
               $log = Get-Content build-package.log -Raw
-              $transient = $log -match 'electronDownloader|downloadElectron|ETIMEDOUT|ECONNRESET|socket hang up|Could not connect|HTTP error 5'
-              if (-not $transient) { break }
-              Write-Host "::warning title=electron-builder::сетевой сбой загрузки, повтор через 20 с"
-              Start-Sleep -Seconds 20
+              $hint = ($log -split "`n" | Where-Object { $_ -match 'Error|error|failed|Cannot' } | Select-Object -Last 1)
+              Write-Host "::warning title=electron-builder::попытка $attempt не удалась: $hint"
+              Start-Sleep -Seconds 30
             }
           }
 
