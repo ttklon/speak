@@ -35,6 +35,8 @@ let store = null;
 let clipboardTimer = null;
 let updater = null;
 let lastClipboardText = '';
+let windowHiddenForInsert = false;
+let lastInsertedText = '';
 let lastClipboardImageHash = '';
 
 // ── Одиночный экземпляр ────────────────────────────────────────────────────
@@ -191,10 +193,25 @@ function createTray() {
 
 // ── Хоткеи ─────────────────────────────────────────────────────────────────
 let dictationActive = false;
+let windowWasHiddenForDictation = false;
 
 function toggleDictation() {
   dictationActive = !dictationActive;
   mainWindow?.webContents.send('hotkey', { type: dictationActive ? 'down' : 'up' });
+  // если окно скрыто в трее — на время диктовки оно должно быть на экране,
+  // иначе человек не видит индикатор и не понимает, слушают его или нет
+  if (dictationActive) {
+    if (!mainWindow?.isVisible()) mainWindow?.show();
+    mainWindow?.showInactive();
+    windowWasHiddenForDictation = true;
+  } else if (windowWasHiddenForDictation) {
+    windowWasHiddenForDictation = false;
+    setTimeout(() => {
+      if (dictationActive) return;
+      const toTray = store?.get('zs:settings')?.closeToTray !== false;
+      if (toTray && !mainWindow?.isFocused?.()) mainWindow?.hide();
+    }, 900);
+  }
 }
 
 function navigate(page) {
@@ -217,10 +234,7 @@ function registerShortcuts(settings = {}) {
   globalShortcut.unregisterAll();
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
   try {
-    globalShortcut.register(dictKey, () => {
-      dictationActive = !dictationActive;
-      mainWindow?.webContents.send('hotkey', { type: dictationActive ? 'down' : 'up' });
-    });
+    globalShortcut.register(dictKey, () => toggleDictation());
   } catch (err) {
     console.warn('[hotkeys] dictation failed', err.message);
   }
@@ -310,7 +324,10 @@ function startClipboardWatch() {
     if (settings.clipboardMonitor === false) return;
 
     const text = clipboard.readText();
-    if (text && text !== lastClipboardText) {
+    // свой вставленный диктант не пишем в историю буфера
+    const ownText = Boolean(text) && text === lastInsertedText;
+    if (ownText) lastClipboardText = text;
+    else if (text && text !== lastClipboardText) {
       lastClipboardText = text;
       foregroundWindow().then((win) => {
         const source = win.app
@@ -407,7 +424,11 @@ function registerIpc() {
   ipcMain.handle('stt:transcribe', async (_e, payload) => whisper.transcribe(payload?.wav, payload || {}));
 
   ipcMain.handle('text:insert', async (_e, text) => {
-    clipboard.writeText(String(text || ''));
+    const value = String(text || '');
+    if (!value) return false;
+    lastInsertedText = value;
+    lastClipboardText = value; // чтобы мониторинг не добавил это в историю
+    clipboard.writeText(value);
     return pasteToActiveWindow();
   });
   ipcMain.handle('text:paste', () => pasteToActiveWindow());
@@ -566,6 +587,8 @@ function readSelection() {
 /** Заменить выделение результатом: кладём в буфер и жмём Ctrl+V. */
 function replaceSelection(text) {
   return new Promise((resolve) => {
+    lastInsertedText = String(text || '');
+    lastClipboardText = lastInsertedText;
     clipboard.writeText(String(text || ''));
     setTimeout(() => {
       const ok = pasteToActiveWindow();
@@ -574,23 +597,55 @@ function replaceSelection(text) {
   });
 }
 
-/** Вставка текста в активное окно: Ctrl+V через PowerShell SendKeys */
+/**
+ * Вставка в активное окно другого приложения.
+ *
+ * sendInputEvent бьёт только в наш рендерер, поэтому для чужих окон нужен
+ * системный ввод. По умолчанию — WScript.Shell SendKeys (PowerShell, ~0.3 с).
+ * Если в переменной окружения ZSPEAKLY_INPUT=app указан путь к helper.exe
+ * (SendInput, вставка за ~30 мс), используется он.
+ */
 function pasteToActiveWindow() {
   if (process.platform !== 'win32') return false;
-  mainWindow?.blur();
-  const script =
-    "Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 90; [System.Windows.Forms.SendKeys]::SendWait('^v')";
-  execFile(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
-    { windowsHide: true },
-    (err) => {
-      if (err) console.warn('[paste] failed', err.message);
-      mainWindow?.focus();
-    },
-  );
+
+  // прячем окно, чтобы фокус вернулся туда, где человек печатал
+  try {
+    if (mainWindow?.isFocused?.() && mainWindow.isVisible?.()) mainWindow.hide();
+    else mainWindow?.blur();
+    windowHiddenForInsert = true;
+  } catch {}
+
+  const helper = process.env.ZSPEAKLY_INPUT;
+  if (helper && fs.existsSync(helper)) {
+    execFile(helper, ['ctrl+v'], { windowsHide: true }, (err) => {
+      if (err) {
+        console.warn('[paste] helper failed, fallback', err.message);
+        setTimeout(() => sendKeys('^v'), 120);
+        restoreWindowAfterInsert();
+      }
+    });
+    return true;
+  }
+
+  setTimeout(() => {
+    sendKeys('^v');
+    restoreWindowAfterInsert();
+  }, 60);
   return true;
 }
+
+/** Вернуть окно ZSpeakly, когда вставка уже случилась. */
+function restoreWindowAfterInsert() {
+  if (!windowHiddenForInsert) return;
+  windowHiddenForInsert = false;
+  setTimeout(() => {
+    try {
+      if (mainWindow && !mainWindow.isVisible?.()) mainWindow.show();
+      mainWindow?.focus?.();
+    } catch {}
+  }, 220);
+}
+
 
 // ── Жизненный цикл ─────────────────────────────────────────────────────────
 app.on('before-quit', () => {

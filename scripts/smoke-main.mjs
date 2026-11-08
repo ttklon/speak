@@ -18,9 +18,12 @@ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-smoke-'));
 const handlers = new Map();
 const onHandlers = new Map();
 const registered = [];
+const sentEvents = [];
+const sentInputEvents = [];
 const clipboardText = { value: 'выделенный текст' };
 
-const fakeWindow = () => ({
+const windowInstances = [];
+const makeWindow = () => ({
   webContents: {
     send: () => {},
     executeJavaScript: async () => {},
@@ -38,11 +41,20 @@ const fakeWindow = () => ({
   isMinimized: () => false,
   restore: () => {},
   isMaximized: () => false,
+  isFocused: () => true,
   maximize: () => {},
   unmaximize: () => {},
   minimize: () => {},
   close: () => {},
+  webContents: {
+    send: (ch, payload) => sentEvents.push({ ch, payload }),
+    sendInputEvent: (ev) => sentInputEvents.push(ev),
+    executeJavaScript: async () => {},
+    setWindowOpenHandler: () => {},
+    on: () => {},
+  },
 });
+const fakeWindow = () => windowInstances[windowInstances.length - 1] || makeWindow();
 
 const electronStub = {
   app: {
@@ -59,8 +71,10 @@ const electronStub = {
     getLoginItemSettings: () => ({ openAtLogin: false }),
   },
   BrowserWindow: Object.assign(function BrowserWindow() {
-    return fakeWindow();
-  }, { getAllWindows: () => [] }),
+    const win = makeWindow();
+    windowInstances.push(win);
+    return win;
+  }, { getAllWindows: () => windowInstances }),
   Tray: class {
     setToolTip() {}
     setContextMenu() {}
@@ -73,8 +87,11 @@ const electronStub = {
     handle: (ch, fn) => handlers.set(ch, fn),
   },
   globalShortcut: {
-    unregisterAll: () => registered.length = 0,
-    register: (acc) => registered.push(acc),
+    unregisterAll: () => (registered.length = 0),
+    register: (acc, fn) => {
+      registered.push(acc);
+      globalShortcutRegs.push({ accel: acc, fn });
+    },
   },
   clipboard: {
     readText: () => clipboardText.value,
@@ -91,9 +108,30 @@ const electronStub = {
   desktopCapturer: { getSources: async () => [] },
 };
 
+// перехватываем spawn/execFile — никаких реальных процессов в тесте
+const spawnCalls = [];
+const globalShortcutRegs = [];
+const cpStub = {
+  execFile: (file, args, opts, cb) => {
+    spawnCalls.push({ file, args });
+    if (typeof cb === 'function') setTimeout(() => cb(null, '', ''), 0);
+    return { on: () => {} };
+  },
+  exec: (cmd, opts, cb) => {
+    spawnCalls.push({ file: cmd, args: [] });
+    if (typeof cb === 'function') setTimeout(() => cb(null, '', ''), 0);
+    return { on: () => {} };
+  },
+  spawn: (file, args) => {
+    spawnCalls.push({ file, args });
+    return { on: () => {}, stdout: { on: () => {} }, stderr: { on: () => {} }, kill: () => {} };
+  },
+};
+
 const originalLoad = Module._load;
 Module._load = function patched(request, parent, isMain) {
   if (request === 'electron') return electronStub;
+  if (request === 'node:child_process' || request === 'child_process') return cpStub;
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -102,9 +140,9 @@ const main = require(path.resolve('electron/main.cjs'));
 const ok = [];
 const fail = [];
 
-function check(name, fn) {
+async function check(name, fn) {
   try {
-    fn();
+    await fn();
     ok.push(name);
   } catch (err) {
     fail.push(`${name}: ${err.message}`);
@@ -113,10 +151,10 @@ function check(name, fn) {
 
 await new Promise((r) => setTimeout(r, 200));
 
-check('main загружается без реального Electron', () => {
+await check('main загружается без реального Electron', () => {
   if (!main) throw new Error('модуль не вернулся');
 });
-check('IPC-каналы зарегистрированы', () => {
+await check('IPC-каналы зарегистрированы', () => {
   const need = [
     'stt:transcribe', 'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
@@ -126,10 +164,10 @@ check('IPC-каналы зарегистрированы', () => {
   const missing = need.filter((ch) => !handlers.has(ch));
   if (missing.length) throw new Error(`нет каналов: ${missing.join(', ')}`);
 });
-check('store:get работает синхронно', () => {
+await check('store:get работает синхронно', () => {
   if (!onHandlers.has('store:get')) throw new Error('нет store:get');
 });
-check('hotkey:set регистрирует глобальные сочетания', () => {
+await check('hotkey:set регистрирует глобальные сочетания', () => {
   const res = handlers.get('hotkey:set')({}, { dictationKey: 'Control+Alt+Space', textActions: [
     { id: 'to-english', keys: ['Ctrl', 'Alt', 'E'], enabled: true },
     { id: 'off', keys: ['Ctrl', 'Alt', 'X'], enabled: false },
@@ -140,16 +178,16 @@ check('hotkey:set регистрирует глобальные сочетани
   }
   if (registered.includes('Control+Alt+X')) throw new Error('выключенная инструкция зарегистрирована');
 });
-check('замена выделения пишет в буфер', async () => {
+await check('замена выделения пишет в буфер', async () => {
   await handlers.get('text:replace-selection')({}, 'готовый текст');
   if (clipboardText.value !== 'готовый текст') throw new Error(`в буфере: ${clipboardText.value}`);
 });
-check('hotkey:set принимает строку (обратная совместимость)', () => {
+await check('hotkey:set принимает строку (обратная совместимость)', () => {
   if (!handlers.get('hotkey:set')({}, 'Control+Alt+Space')) throw new Error('строка не принята');
 });
 
 // ── WAV-контейнер для whisper.cpp ───────────────────────────────────────────
-check('writeWav пишет корректный RIFF-заголовок', () => {
+await check('writeWav пишет корректный RIFF-заголовок', () => {
   const { writeWav } = require(path.resolve('electron/wav.cjs'));
   const pcm = Buffer.alloc(16000 * 2); // 1 секунда
   const wav = writeWav(pcm, 16000);
@@ -161,7 +199,41 @@ check('writeWav пишет корректный RIFF-заголовок', () => 
   if (wav.length !== 44 + pcm.length) throw new Error('длина файла неверная');
 });
 
-await new Promise((r) => setTimeout(r, 600));
+await check('insertText шлёт Ctrl+V в активное окно', async () => {
+  // вставка включается только на Windows — притворяемся win32
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    await handlers.get('text:insert')({}, 'привет из диктовки');
+    await new Promise((r) => setTimeout(r, 250));
+    // вставка в чужое окно идёт через системный SendKeys ('^v'), а не через рендерер
+    const calls = spawnCalls.map((c) => `${c.file} ${(c.args || []).join(' ')}`);
+    const pasted = calls.some((c) => /SendKeys\]::SendWait\('\^v'\)/.test(c));
+    if (!pasted) throw new Error(`не нашёл Ctrl+V: ${calls.join(' | ') || 'пусто'}`);
+    if (clipboardText.value !== 'привет из диктовки') throw new Error('текст не в буфере');
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('хоткей диктовки показывает скрытое окно из трея', async () => {
+  const win = windowInstances.at(-1);
+  const visible = { value: false };
+  win.isVisible = () => visible.value;
+  win.show = () => { visible.value = true; };
+  win.showInactive = () => { visible.value = true; };
+  win.hide = () => { visible.value = false; };
+
+  const regs = [];
+  globalShortcutRegs.length = 0;
+  await handlers.get('hotkey:set')({}, { dictationKey: 'Control+Alt+Space' });
+  const entry = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space');
+  if (!entry) throw new Error('хоткей диктовки не зарегистрирован');
+  entry.fn();
+  if (!visible.value) throw new Error('окно осталось скрытым во время диктовки');
+  entry.fn();
+});
+
 
 console.log(`\nOK (${ok.length}):`);
 ok.forEach((n) => console.log('  ✓', n));
