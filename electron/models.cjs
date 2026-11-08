@@ -120,14 +120,10 @@ async function downloadModel(id, onProgress) {
  * Движок whisper.cpp: берём последний релиз ggml-org/whisper.cpp,
  * asset whisper-bin-x64.zip, распаковываем .exe/.dll в userData\bin.
  */
-async function downloadEngine(onProgress) {
-  const d = ensureDirs();
-  if (modelStatus().bin) return { ok: true, already: true, path: d.bin };
-
-  const api = 'https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest';
-  const release = await new Promise((resolve, reject) => {
+async function fetchJson(url) {
+  return new Promise((resolve, reject) => {
     https
-      .get(api, { headers: { 'User-Agent': 'ZSpeakly', Accept: 'application/vnd.github+json' } }, (res) => {
+      .get(url, { headers: { 'User-Agent': 'ZSpeakly', Accept: 'application/vnd.github+json' } }, (res) => {
         let body = '';
         res.on('data', (c) => (body += c));
         res.on('end', () => {
@@ -140,12 +136,33 @@ async function downloadEngine(onProgress) {
       })
       .on('error', reject);
   });
+}
 
-  const assets = Array.isArray(release?.assets) ? release.assets : [];
-  const asset =
-    assets.find((a) => a.name === 'whisper-bin-x64.zip') ||
-    assets.find((a) => /bin-x64.*\.zip$/i.test(a.name));
-  if (!asset) return { ok: false, reason: 'в релизе whisper.cpp нет архива x64' };
+/** Новейший релиз, в котором реально есть whisper-bin-x64.zip. */
+async function findEngineAsset() {
+  const want = ['whisper-bin-x64.zip', 'whisper-bin-Win32.zip'];
+  const releases = await fetchJson('https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30');
+  for (const rel of Array.isArray(releases) ? releases : []) {
+    for (const name of want) {
+      const asset = (rel.assets || []).find((a) => a.name === name);
+      if (asset) return { asset, release: rel.tag_name };
+    }
+  }
+  return null;
+}
+
+async function downloadEngine(onProgress) {
+  const d = ensureDirs();
+  if (modelStatus().bin) return { ok: true, already: true, path: d.bin };
+
+  let found;
+  try {
+    found = await findEngineAsset();
+  } catch (err) {
+    return { ok: false, reason: `GitHub недоступен: ${err.message}` };
+  }
+  if (!found) return { ok: false, reason: 'не нашёл сборку whisper.cpp для Windows x64' };
+  const asset = found.asset;
 
   const zip = path.join(d.bin, 'whisper-bin-x64.zip');
   try {

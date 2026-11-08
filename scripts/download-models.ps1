@@ -18,9 +18,19 @@ New-Item -ItemType Directory -Force -Path $binDir, $models | Out-Null
 Write-Host "`n=== 1/4 whisper.cpp (whisper-cli.exe) ===" -ForegroundColor Cyan
 # Берём последний релиз ggml-org/whisper.cpp: whisper-bin-x64.zip
 try {
-  $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest' -Headers @{ 'User-Agent' = 'zspeakly' }
-  $asset = $rel.assets | Where-Object { $_.name -eq 'whisper-bin-x64.zip' } | Select-Object -First 1
-  if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like '*bin-x64*.zip' } | Select-Object -First 1 }
+  # свежие релизы whisper.cpp бывают без бинарников — ищем первый, где архив есть
+  $rels = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30' -Headers @{ 'User-Agent' = 'zspeakly' }
+  $asset = $null
+  foreach ($rel in $rels) {
+    $hit = $rel.assets | Where-Object { $_.name -eq 'whisper-bin-x64.zip' } | Select-Object -First 1
+    if ($hit) { $asset = $hit; break }
+  }
+  if (-not $asset) {
+    foreach ($rel in $rels) {
+      $hit = $rel.assets | Where-Object { $_.name -like '*Win32*.zip' } | Select-Object -First 1
+      if ($hit) { $asset = $hit; break }
+    }
+  }
   if ($asset) {
     $zip = Join-Path $env:TEMP 'whisper-bin-x64.zip'
     Write-Host "Качаю $($asset.name) ($([math]::Round($asset.size/1MB,1)) МБ)..."

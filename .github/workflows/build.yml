@@ -75,8 +75,10 @@ jobs:
           npm run build 2>&1 | Tee-Object -FilePath build-renderer.log
           npx electron-builder --win nsis portable 2>&1 | Tee-Object -FilePath build-package.log
           if ($LASTEXITCODE -ne 0) {
-            Get-Content build-package.log -Tail 120 | ForEach-Object { Write-Host $_ }
-            Get-Content build-package.log -Tail 120 | Out-File -Encoding utf8 -Append $env:GITHUB_STEP_SUMMARY
+            Get-Content build-package.log -Tail 25 | ForEach-Object {
+              $line = ($_ -replace '[\r\n]+', ' ').Trim()
+              if ($line) { Write-Host "::error title=electron-builder::$line" }
+            }
             exit $LASTEXITCODE
           }
 
