@@ -1,0 +1,84 @@
+{
+  "name": "zspeakly",
+  "productName": "ZSpeakly",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ZSpeakly — офлайн голосовой помощник: диктовка в любое поле, живой перевод, заметки встреч, буфер обмена, словарь и AI-инструкции.",
+  "author": {
+    "name": "ZSpeakly",
+    "email": "hello@zspeakly.local"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "electron:dev": "node scripts/dev-electron.mjs",
+    "electron": "electron .",
+    "dist:win": "npm run build && electron-builder --win nsis portable",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "test": "vitest run",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "jsdom": "^25.0.1",
+    "lucide-react": "^0.469.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "app.zspeakly.desktop",
+    "productName": "ZSpeakly",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "icons"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "icons/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ZSpeakly"
+    },
+    "portable": {
+      "artifactName": "ZSpeakly-${version}-portable.exe"
+    }
+  }
+}

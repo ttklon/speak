@@ -1,0 +1,383 @@
+/* Оболочка окна, титульная панель и сайдбар — размеры и цвета из видео. */
+
+.app-shell {
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 0;
+}
+
+/* В браузере — «окно» 1000×640 по центру, как в записи видео */
+.app-window {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-window);
+  border-radius: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: none;
+}
+
+body.web .app-window {
+  width: min(1020px, calc(100vw - 48px));
+  height: min(660px, calc(100vh - 48px));
+  border-radius: var(--radius-window);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  margin: auto;
+}
+
+body.web .app-shell {
+  align-items: center;
+}
+
+/* ── Title bar ─────────────────────────────────────────────── */
+.titlebar {
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  flex: none;
+  background: var(--bg-window);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar__drag {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.titlebar__title {
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.titlebar__controls {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.win-btn {
+  width: 38px;
+  height: var(--titlebar-h);
+  display: grid;
+  place-items: center;
+  color: var(--text-2);
+  transition: background 0.12s var(--ease), color 0.12s;
+}
+
+.win-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.win-btn--close:hover {
+  background: #e5484d;
+  color: #fff;
+}
+
+/* ── Layout body ───────────────────────────────────────────── */
+.app-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex: none;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 9px 8px;
+  min-height: 0;
+}
+
+.sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 450;
+  letter-spacing: -0.015em;
+  transition: background 0.12s var(--ease), color 0.12s;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-2);
+}
+
+.nav-item.is-active {
+  background: var(--bg-active);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.nav-item__icon {
+  flex: none;
+  color: var(--text-4);
+}
+
+.nav-item.is-active .nav-item__icon,
+.nav-item:hover .nav-item__icon {
+  color: var(--text-2);
+}
+
+.nav-item.is-active .nav-item__icon {
+  color: var(--text);
+}
+
+.nav-item__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Пункты-разделители: разрыв между «Словарь…Горячие клавиши» и «Заметки встреч» */
+.nav-item:nth-child(4) {
+  margin-top: 12px;
+}
+
+.badge-new {
+  font-size: 7.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #7ea6f0;
+  background: rgba(48, 91, 168, 0.22);
+  border: 1px solid rgba(90, 140, 224, 0.24);
+  border-radius: 4px;
+  padding: 1px 3.5px;
+  line-height: 1.3;
+  flex: none;
+}
+
+.badge-new--inline {
+  margin-left: 6px;
+  background: rgba(48, 91, 168, 0.3);
+  border-color: rgba(90, 140, 224, 0.3);
+  color: #8fb4f5;
+}
+
+.sidebar__bottom {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 10px;
+}
+
+.plan-card {
+  padding: 10px 2px 8px;
+  border-top: 1px solid var(--border-soft);
+  margin-top: 6px;
+}
+
+.plan-card__title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.plan-card__limit {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.plan-card__bar {
+  margin: 8px 0 9px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.plan-card__bar > span {
+  display: block;
+  height: 100%;
+  background: var(--text);
+  border-radius: 2px;
+}
+
+.plan-card__text {
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: var(--text-4);
+  margin: 0 0 10px;
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 3px;
+  color: var(--text-3);
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  transition: color 0.12s, background 0.12s;
+  text-align: left;
+}
+
+.sidebar__link span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__link:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.sidebar__link-arrow {
+  opacity: 0.5;
+}
+
+.sidebar__link--settings {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 4px;
+  padding-top: 2px;
+  height: 30px;
+}
+
+.profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 4px;
+  border-top: 1px solid var(--border-soft);
+  margin-top: 4px;
+  color: var(--text-3);
+  text-align: left;
+}
+
+.profile:hover {
+  color: var(--text-2);
+}
+
+.profile__avatar {
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: #f4f3f6;
+  color: #17171a;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  flex: none;
+}
+
+.profile__email {
+  flex: 1;
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.profile__logout {
+  opacity: 0.45;
+  flex: none;
+}
+
+/* ── Content area ──────────────────────────────────────────── */
+.content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-content);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  padding: 26px 30px 24px;
+}
+
+.page__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.page__title {
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin: 0;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.page__sub {
+  margin: 7px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-4);
+  max-width: 520px;
+}
+
+.page__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.section-head__title {
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.section-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

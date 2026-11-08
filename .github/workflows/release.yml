@@ -6,37 +6,56 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Тег релиза, напр. v0.1.0"
+        description: "Тег релиза, напр. v1.0.0"
         required: true
-        default: "v0.1.0-test"
+        default: "v1.0.0"
 
 jobs:
   release:
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 60
+    runs-on: windows-latest
+    timeout-minutes: 45
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-node@v4
         with:
-          dotnet-version: "8.0.x"
+          node-version: "20"
+          cache: npm
 
-      - name: Build & Publish self-contained single-file (~80 МБ с рантаймом)
-        run: |
-          dotnet restore
-          dotnet publish src/ZSpeakly.App/ZSpeakly.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o publish
-        shell: pwsh
+      - name: Install
+        run: npm ci || npm install
 
-      - name: Zip
-        run: Compress-Archive -Path publish/* -DestinationPath ZSpeakly-${{ github.ref_name }}-win-x64.zip -Force
+      - name: Icons
+        run: npm run icons
+
+      - name: Tests
+        run: npm test
+
+      - name: Build + package (NSIS + portable)
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: List artifacts
         shell: pwsh
+        run: Get-ChildItem release | Select-Object Name, Length
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ZSpeakly-${{ github.ref_name }}-win-x64.zip
-          generate_release_notes: true
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ZSpeakly ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            release/*.exe
+            release/*.blockmap
+          body: |
+            ## ZSpeakly — офлайн голосовой ввод
+
+            Установщик и портативная версия в ассетах релиза.
+            Диктовка (`Ctrl+Alt+Space`), живой перевод, заметки встреч, словарь и буфер обмена.
+            Всё локально, без облака и подписки.
+          draft: false
           fail_on_unmatched_files: false

@@ -1,4 +1,7 @@
 # ZSpeakly ignores
+node_modules/
+dist/
+release/
 publish/
 publish-win-x64/
 models/*.bin
@@ -15,3 +18,11 @@ obj/
 TestResults/
 actions-runner/
 _work/
+.vite/
+coverage/
+.DS_Store
+Thumbs.db
+*.tmp
+*.deb
+*.AppImage
+*.snap

@@ -8,55 +8,75 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    # ТВОЙ Windows-ПК — self-hosted runner с метками speak,windows
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 30
-
+  # Быстрая проверка на облачных раннерах: тесты + сборка рендерера
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET 8 SDK
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-node@v4
         with:
-          dotnet-version: "8.0.x"
+          node-version: "20"
+          cache: npm
 
-      - name: Info
-        run: |
-          dotnet --info
-          dotnet --list-sdks
-        shell: pwsh
+      - name: Install
+        run: npm ci || npm install
 
-      - name: Restore
-        run: dotnet restore
-        shell: pwsh
+      - name: Icons
+        run: npm run icons
 
-      - name: Build Release
-        run: dotnet build --no-restore -c Release --nologo -v minimal
-        shell: pwsh
+      - name: Tests
+        run: npm test
 
-      - name: Test (если есть)
-        run: |
-          if (Test-Path "tests") { dotnet test --no-build -c Release } else { echo "tests/ нет — пропускаем" }
-        shell: pwsh
+      - name: Build renderer
+        run: npm run build
 
-      - name: Publish win-x64 (framework-dependent, лёгкий ~25 МБ)
-        # single-file требует отдельного prepare, делаем обычный publish
-        run: dotnet publish src/ZSpeakly.App/ZSpeakly.App.csproj -c Release -r win-x64 --self-contained false -o publish-win-x64 || echo "src/ZSpeakly.App ещё не создан — пропускаем publish"
-        shell: pwsh
-
-      - name: Upload artifact
-        if: hashFiles('publish-win-x64/**') != ''
+      - name: Upload renderer
         uses: actions/upload-artifact@v4
         with:
-          name: ZSpeakly-win-x64
-          path: publish-win-x64/
+          name: zspeakly-dist
+          path: dist/
           retention-days: 7
 
+  # Сборка установщика на Windows (твой self-hosted runner или windows-latest)
+  package:
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install
+        run: npm ci || npm install
+
+      - name: Icons
+        run: npm run icons
+
+      - name: Build + package
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: zspeakly-win-x64
+          path: |
+            release/*.exe
+            release/*.blockmap
+          retention-days: 14
+
       - name: Summary
-        run: |
-          echo "### ZSpeakly build OK" >> $env:GITHUB_STEP_SUMMARY
-          echo "Ветка: $env:GITHUB_REF_NAME" >> $env:GITHUB_STEP_SUMMARY
-          echo "Runner: $env:RUNNER_NAME ($env:RUNNER_OS)" >> $env:GITHUB_STEP_SUMMARY
         shell: pwsh
+        run: |
+          echo "### ZSpeakly собрана" >> $env:GITHUB_STEP_SUMMARY
+          echo "Ветка: $env:GITHUB_REF_NAME" >> $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem release -Filter *.exe | ForEach-Object {
+            echo "- $($_.Name) — $([math]::Round($_.Length/1MB,1)) МБ" >> $env:GITHUB_STEP_SUMMARY
+          }

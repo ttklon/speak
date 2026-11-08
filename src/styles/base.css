@@ -1,0 +1,172 @@
+/* ZSpeakly — палитра и типографика взяты из покадрового разбора видео
+   (docs/00-VIDEO-TEARDOWN.md + повторный разбор кадров 1280x720).
+
+   Замеры фона: окно #1E1E1E, сайдбар #1E1E1E, контент #1F1F1F,
+   активный пункт меню #2D2C2F, карточки #222222, белый #FAF9FC,
+   зелёный тоггл #15C660, синий бейдж «НОВОЕ» #305BA8. */
+
+:root {
+  --bg-app: #121213;
+  --bg-window: #1e1e1e;
+  --bg-sidebar: #1c1c1d;
+  --bg-content: #1f1f1f;
+  --bg-card: #222223;
+  --bg-card-hover: #282829;
+  --bg-elevated: #262628;
+  --bg-input: #242425;
+  --bg-active: #2d2c2f;
+  --bg-hover: #29292b;
+
+  --border: #2f2f31;
+  --border-soft: #272729;
+  --border-strong: #3a3a3d;
+
+  --text: #faf9fc;
+  --text-2: #c2c1c4;
+  --text-3: #9b9a9e;
+  --text-4: #75747a;
+  --text-5: #5a595f;
+
+  --green: #15c660;
+  --green-dim: #12a552;
+  --blue: #305ba8;
+  --blue-bright: #5a8ce0;
+  --red: #e5484d;
+  --amber: #d9a33a;
+
+  --radius-window: 12px;
+  --radius-card: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+
+  --sidebar-w: 188px;
+  --titlebar-h: 30px;
+
+  --font: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', 'Cascadia Mono', 'Consolas', monospace;
+
+  --shadow-modal: 0 24px 70px rgba(0, 0, 0, 0.62), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg-app);
+  color: var(--text);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* В браузере (dev preview) фон вокруг окна — тёмный градиент как обои из видео */
+body.web {
+  background:
+    radial-gradient(1200px 700px at 50% 20%, #2a2a2b 0%, #171718 45%, #0e0e0f 100%);
+}
+
+.boot {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.boot-logo {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: var(--text);
+  color: #0c0c0d;
+  font-weight: 800;
+  font-size: 24px;
+  display: grid;
+  place-items: center;
+  animation: bootPulse 1.4s var(--ease) infinite;
+}
+
+@keyframes bootPulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+::selection {
+  background: rgba(90, 140, 224, 0.35);
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+a {
+  color: inherit;
+}
+
+/* Скроллбары как в видео: тонкие, светлые, без трека */
+.scroll-area {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.scroll-area::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-area::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+  background-clip: content-box;
+}
+
+.hide-scroll {
+  scrollbar-width: none;
+}
+.hide-scroll::-webkit-scrollbar {
+  display: none;
+}
