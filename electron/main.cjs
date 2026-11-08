@@ -369,6 +369,10 @@ function stopClipboardWatch() {
 
 // ── IPC ────────────────────────────────────────────────────────────────────
 function registerIpc() {
+  // Асинхронное чтение: preload.store.get() ходит через invoke, а не sendSync.
+  // Без этого обработчика вызов молча зависал.
+  ipcMain.handle('store:get', (_e, key) => store.get(key) ?? null);
+
   ipcMain.on('store:get', (event, key) => {
     event.returnValue = store.get(key);
   });
