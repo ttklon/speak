@@ -130,6 +130,9 @@ jobs:
             # указываем готовый дистрибутив из node_modules: electron-builder
             # не будет ничего скачивать и не упадёт на сетевом сбое раннера
             $dist = (node -e "process.stdout.write(require('electron'))" | Select-Object -Last 1)
+            Write-Host "::notice title=electron::дистрибутив $dist"
+            if (-not (Test-Path $dist)) { Write-Host "::error title=electron::дистрибутив не найден: $dist"; }
+            Remove-Item -Recurse -Force dist-electron -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Force -Path dist-electron | Out-Null
             Copy-Item -Recurse -Force $dist dist-electron/win-unpacked
             npx electron-builder --win nsis portable --publish never 2>&1 | Tee-Object -FilePath build-package.log
@@ -145,9 +148,17 @@ jobs:
           }
 
           if (-not $ok) {
-            Get-Content build-package.log -Tail 25 | ForEach-Object {
+            # сначала строки с настоящей причиной, потом хвост
+            $all = Get-Content build-package.log -ErrorAction SilentlyContinue
+            if (-not $all) { Write-Host "::error title=electron-builder::лог пустой — падение до запуска" }
+            $all | Where-Object { $_ -match '⨯|Error|error:|failed|Cannot|cannot|ENOENT|EPERM' } |
+              Select-Object -First 30 | ForEach-Object {
+                $line = ($_ -replace '[\r\n]+', ' ').Trim()
+                if ($line) { Write-Host "::error title=electron-builder::$line" }
+              }
+            $all | Select-Object -Last 25 | ForEach-Object {
               $line = ($_ -replace '[\r\n]+', ' ').Trim()
-              if ($line) { Write-Host "::error title=electron-builder::$line" }
+              if ($line) { Write-Host "::error title=electron-builder-tail::$line" }
             }
             exit 1
           }
