@@ -468,8 +468,26 @@ function registerIpc() {
     formats: clipboard.availableFormats(),
   }));
   ipcMain.handle('clipboard:write', (_e, payload) => {
-    if (payload?.text) clipboard.writeText(payload.text);
-    return true;
+    if (!payload) return false;
+    // картинка приоритетнее текста: «Копировать» для снимка должен дать сам снимок
+    const image = payload.image;
+    if (typeof image === 'string' && image.startsWith('data:image/')) {
+      try {
+        const { nativeImage } = require('electron');
+        const img = nativeImage.createFromDataURL(image);
+        if (!img.isEmpty()) {
+          clipboard.writeImage(img);
+          return true;
+        }
+      } catch (err) {
+        console.warn('[clipboard] image write failed', err.message);
+      }
+    }
+    if (payload.text) {
+      clipboard.writeText(String(payload.text));
+      return true;
+    }
+    return false;
   });
 
   ipcMain.handle('hotkey:set', (_e, payload) => {

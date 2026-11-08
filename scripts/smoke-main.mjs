@@ -21,6 +21,7 @@ const registered = [];
 const sentEvents = [];
 const sentInputEvents = [];
 const clipboardText = { value: 'выделенный текст' };
+const clipboardImage = { value: null };
 
 const windowInstances = [];
 const makeWindow = () => ({
@@ -81,7 +82,11 @@ const electronStub = {
     on() {}
   },
   Menu: { buildFromTemplate: () => ({}) },
-  nativeImage: { createFromPath: () => ({ isEmpty: () => true }), createEmpty: () => ({}) },
+  nativeImage: {
+    createFromPath: () => ({ isEmpty: () => true }),
+    createFromDataURL: () => ({ isEmpty: () => false, __fromDataUrl: true }),
+    createEmpty: () => ({}),
+  },
   ipcMain: {
     on: (ch, fn) => onHandlers.set(ch, fn),
     handle: (ch, fn) => handlers.set(ch, fn),
@@ -94,6 +99,7 @@ const electronStub = {
     },
   },
   clipboard: {
+    writeImage: (img) => { clipboardImage.value = img; },
     readText: () => clipboardText.value,
     writeText: (v) => {
       clipboardText.value = String(v);
@@ -214,6 +220,15 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
   } finally {
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   }
+});
+
+await check('clipboard:write кладёт картинку, а не только текст', async () => {
+  const ok = await handlers.get('clipboard:write')({}, {
+    image: 'data:image/png;base64,iVBORw0KGgo=',
+    text: 'подпись',
+  });
+  if (!ok) throw new Error('канал вернул false');
+  if (!clipboardImage.value) throw new Error('картинка не попала в буфер');
 });
 
 await check('хоткей диктовки показывает скрытое окно из трея', async () => {
