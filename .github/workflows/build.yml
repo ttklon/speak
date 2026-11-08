@@ -127,7 +127,12 @@ jobs:
             $attempt++
             Write-Host "::notice title=electron-builder::попытка $attempt из 3"
             # --publish never: релиз публикуем отдельным job только по тегу
-            npx electron-builder --win nsis portable --publish never 2>&1 | Tee-Object -FilePath build-package.log
+            # указываем готовый дистрибутив из node_modules: electron-builder
+            # не будет ничего скачивать и не упадёт на сетевом сбое раннера
+            $dist = (node -e "process.stdout.write(require('electron'))" | Select-Object -Last 1)
+            New-Item -ItemType Directory -Force -Path dist-electron | Out-Null
+            Copy-Item -Recurse -Force $dist dist-electron/win-unpacked
+            npx electron-builder --win nsis portable --publish never -c.electronDist=dist-electron -c.electronVersion=(node -p "require('electron/package.json').version") 2>&1 | Tee-Object -FilePath build-package.log
             if ($LASTEXITCODE -eq 0) { $ok = $true }
             elseif ($attempt -lt 3) {
               # Повторяем на любой сбой упаковки: основная причина — сеть раннера
