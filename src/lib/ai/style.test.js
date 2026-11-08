@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeStyle, describeStyle, stylePrompt, plural } from './style.js';
+import { analyzeStyle, applyStyle, describeStyle, stylePrompt, plural } from './style.js';
 
 const sample = (text) => ({ id: String(Math.random()), text, createdAt: Date.now() });
 
@@ -44,6 +44,18 @@ describe('стиль письма', () => {
   it('игнорирует слишком короткие записи', () => {
     const s = analyzeStyle([sample('ок'), sample('да')]);
     expect(s.samples).toBe(0);
+  });
+
+  it('подстраивает обращение и канцелярит, не ломая падежи', () => {
+    const st = { ...analyzeStyle([{ text: 'Привет, ты как? Я думал ты уже дома, пиши мне.' }]), emoji: false };
+    expect(applyStyle('Вы можете осуществить это в целях экономии', st)).toBe('Ты можешь сделать это чтобы экономии');
+    expect(applyStyle('Направляю вам отчёт, Ваша задача готова', st)).toBe('Направляю тебе отчёт, Твоя задача готова');
+    // падежи не превращаются в кашу
+    expect(applyStyle('Ваш отчёт и ваши планы', st)).toBe('Твой отчёт и твои планы');
+  });
+
+  it('не трогает текст без истории диктовок', () => {
+    expect(applyStyle('Вы можете', { samples: 0 })).toBe('Вы можете');
   });
 
   it('склоняет числительные по-русски', () => {

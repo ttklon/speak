@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../../state/ToastProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { runInstruction } from '../ai/instructions.js';
-import { analyzeStyle, stylePrompt } from '../ai/style.js';
+import { analyzeStyle, applyStyle, stylePrompt } from '../ai/style.js';
 import { truncate } from '../utils.js';
 
 function native() {
@@ -76,12 +76,14 @@ export function useTextAction() {
           });
           return;
         }
-        const style = settings.useWritingStyle ? stylePrompt(analyzeStyle(dictations)) : '';
-        const result = await runInstruction(
+        const profile = settings.useWritingStyle ? analyzeStyle(dictations) : null;
+        const style = profile ? stylePrompt(profile) : '';
+        const raw = await runInstruction(
           style && instruction.prompt ? { ...instruction, prompt: `${instruction.prompt} ${style}` } : instruction,
           source,
           settings,
         );
+        const result = profile && raw ? applyStyle(raw, profile) : raw;
         if (!result || result === source) {
           push({
             title: 'Изменений нет',
