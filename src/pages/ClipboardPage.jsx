@@ -18,8 +18,9 @@ import { useToast } from '../state/ToastProvider.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import { Button, EmptyState, SearchInput } from '../components/ui/Controls.jsx';
 import { CLIPBOARD_TABS, DEFAULT_SETTINGS } from '../lib/config.js';
-import { dayLabel, kindLabel, timeHM, truncate } from '../lib/utils.js';
+import { dayLabel, formatSeconds, kindLabel, timeHM, truncate } from '../lib/utils.js';
 import { navigate } from '../lib/router.js';
+import { startScreenRecording, isRecordingSupported } from '../lib/media/recorder.js';
 
 const TABS = [{ id: 'all', label: 'Все' }, ...CLIPBOARD_TABS];
 
@@ -46,6 +47,8 @@ export default function ClipboardPage() {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [justCopied, setJustCopied] = useState(null);
+  const [recording, setRecording] = useState(null);
+  const [recordMs, setRecordMs] = useState(0);
   const lastExternal = useRef(0);
 
   // Приём новых элементов из main-процесса Electron (нативный мониторинг)
@@ -115,6 +118,66 @@ export default function ClipboardPage() {
     [filtered, selectedId],
   );
 
+  /** Запись экрана: старт/стоп, постер в историю и файл в «Видео». */
+  const toggleRecording = async () => {
+    if (recording) {
+      const result = await recording.stop();
+      setRecording(null);
+      if (!result?.blob?.size) {
+        push({ title: 'Запись пустая', tone: 'warn' });
+        return;
+      }
+      const item = {
+        kind: 'file',
+        text: `Запись экрана · ${formatSeconds(result.durationMs)} · ${result.sizeMb} МБ`,
+        image: result.poster || '',
+        source: 'Запись экрана — ZSpeakly',
+        createdAt: Date.now(),
+      };
+      addClipboardItem(item);
+      // сохраняем файл рядом, чтобы видео не потерялось
+      const bridge = window.zspeakly?.native;
+      if (bridge?.saveFile) {
+        const buf = await result.blob.arrayBuffer();
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const saved = await bridge.saveFile({ name: `ZSpeakly-${Date.now()}.webm`, base64 });
+        push({
+          title: 'Запись сохранена',
+          description: saved?.ok ? saved.path : 'Видео добавлено в буфер обмена',
+          tone: 'success',
+        });
+      } else {
+        const url = URL.createObjectURL(result.blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ZSpeakly-${Date.now()}.webm`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        push({ title: 'Запись сохранена', description: 'Файл скачан в «Загрузки»', tone: 'success' });
+      }
+      return;
+    }
+
+    if (!isRecordingSupported()) {
+      push({ title: 'Запись экрана недоступна', description: 'Нужен установленный ZSpeakly на Windows.', tone: 'warn' });
+      return;
+    }
+    try {
+      const rec = await startScreenRecording({ onTick: (ms) => setRecordMs(ms) });
+      setRecordMs(0);
+      setRecording(rec);
+      push({ title: 'Запись пошла', description: 'Нажмите «Запись экрана» ещё раз, чтобы остановить.', tone: 'success' });
+      // остановка из системного диалога тоже должна завершить запись
+      rec.finished.then(() => setRecording((cur) => (cur === rec ? null : cur)));
+    } catch (err) {
+      push({
+        title: 'Не удалось начать запись',
+        description: err?.name === 'NotAllowedError' ? 'Выбор экрана отменён' : String(err?.message || err),
+        tone: 'warn',
+      });
+    }
+  };
+
   /** Скриншот: в Electron — реальный снимок экрана, в браузере — демо-картинка. */
   const runHotkey = async (id) => {
     if (id === 'panel') {
@@ -122,10 +185,7 @@ export default function ClipboardPage() {
       return;
     }
     if (id === 'record') {
-      push({
-        title: 'Запись экрана',
-        description: 'Начните демонстрацию: ZSpeakly сохранит снимок и звук локально.',
-      });
+      await toggleRecording();
       return;
     }
     const bridge = window.zspeakly?.native;
@@ -228,7 +288,9 @@ export default function ClipboardPage() {
                 <IconCmp size={13} />
               </span>
               <div className="clip-hotkey__body">
-                <div className="clip-hotkey__title">{h.title}</div>
+                <div className="clip-hotkey__title">
+                {h.id === 'record' && recording ? `Остановить · ${formatSeconds(recordMs)}` : h.title}
+              </div>
                 <div className="clip-hotkey__keys">
                   {h.keys.map((k) => (
                     <span key={k} className="key" style={{ height: 16, minWidth: 16, fontSize: 8.5 }}>

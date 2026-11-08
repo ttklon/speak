@@ -2287,3 +2287,65 @@ button.plan-card--action .btn {
 button.plan-card--action:hover .plan-card__title {
   color: #fff;
 }
+
+/* ── Менеджер моделей ───────────────────────────────────────────────────── */
+.model-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  margin-bottom: 6px;
+}
+
+.model-card.is-active {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.model-card__pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.model-card__pick:hover .model-card__name {
+  color: #fff;
+}
+
+.model-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(76, 217, 123, 0.14);
+  color: #58d98a;
+  font-size: 9.5px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.model-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-size: 10.5px;
+}
+
+.model-state--ok {
+  color: #58d98a;
+}
+
+.model-state--warn {
+  color: #e0b064;
+}

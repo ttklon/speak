@@ -25,7 +25,8 @@
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
-    "@fontsource/jetbrains-mono": "^5.3.0"
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "electron-updater": "^6.8.11"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

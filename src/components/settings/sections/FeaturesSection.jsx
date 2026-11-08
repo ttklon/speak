@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Check, Download, Plus } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
-import { LANGUAGES, MODELS } from '../../../lib/config.js';
+import { LANGUAGES } from '../../../lib/config.js';
 import { engineName } from '../../../lib/recognition/engine.js';
+import ModelManager from './ModelManager.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 
 export default function FeaturesSection() {
@@ -108,42 +109,7 @@ export default function FeaturesSection() {
         </div>
       </div>
 
-      <div className="settings-group">
-        <div className="settings-group__title">Модель распознавания</div>
-        <div className="settings-group__desc">Движок сейчас: {engineName()}.</div>
-        {MODELS.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className={`model-card ${settings.whisperModel === m.id ? 'is-active' : ''}`}
-            onClick={() => updateSettings({ whisperModel: m.id })}
-          >
-            <Download size={14} style={{ opacity: 0.5 }} />
-            <div className="grow">
-              <div className="model-card__name">{m.label}</div>
-              <div className="model-card__meta">
-                {m.size} · RAM {m.ram} · {m.speed} realtime · {m.quality}
-              </div>
-            </div>
-            {settings.whisperModel === m.id ? <Check size={13} style={{ color: 'var(--green)' }} /> : null}
-          </button>
-        ))}
-        <div className="row-8" style={{ marginTop: 8 }}>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={<Plus size={12} />}
-            onClick={() =>
-              push({
-                title: 'Модели качаются скриптом',
-                description: 'scripts/download-models.ps1 — офлайн, без облака.',
-              })
-            }
-          >
-            Как загрузить модель
-          </Button>
-        </div>
-      </div>
+      <ModelManager />
 
       <div className="settings-group">
         <div className="settings-group__title">Буфер обмена</div>

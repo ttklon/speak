@@ -21,6 +21,8 @@ const {
 
 const { JsonStore } = require('./store.cjs');
 const whisper = require('./whisper.cjs');
+const { createUpdater } = require('./updater.cjs');
+const models = require('./models.cjs');
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ZSPEAKLY_DEV_URL || 'http://localhost:5173';
@@ -30,6 +32,7 @@ let mainWindow = null;
 let tray = null;
 let store = null;
 let clipboardTimer = null;
+let updater = null;
 let lastClipboardText = '';
 let lastClipboardImageHash = '';
 
@@ -113,6 +116,29 @@ function createWindow() {
       shell.openExternal(url);
     }
   });
+}
+
+/** Нативное уведомление Windows: тост в трее. */
+function showNotification({ title = 'ZSpeakly', body = '', silent = true } = {}) {
+  try {
+    const { Notification, nativeImage: ni } = require('electron');
+    if (!Notification.isSupported()) return false;
+    const n = new Notification({
+      title: String(title),
+      body: String(body),
+      silent: Boolean(silent),
+      icon: ni.createFromPath(iconPath() || ''),
+    });
+    n.on('click', () => {
+      mainWindow?.show();
+      mainWindow?.focus();
+    });
+    n.show();
+    return true;
+  } catch (err) {
+    console.warn('[notify] failed', err.message);
+    return false;
+  }
 }
 
 function iconPath() {
@@ -415,6 +441,39 @@ function registerIpc() {
     app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args: ['--hidden'] });
     return app.getLoginItemSettings().openAtLogin;
   });
+  ipcMain.handle('app:save-file', async (_e, payload) => {
+    // payload: { name, base64 } — сохраняем в «Видео» / «Загрузки»
+    try {
+      const dir = app.getPath('videos');
+      fs.mkdirSync(dir, { recursive: true });
+      const target = path.join(dir, String(payload?.name || 'zspeakly.webm').replace(/[\\/:*?"<>|]/g, '_'));
+      fs.writeFileSync(target, Buffer.from(String(payload?.base64 || ''), 'base64'));
+      return { ok: true, path: target };
+    } catch (err) {
+      return { ok: false, reason: err.message };
+    }
+  });
+
+  ipcMain.handle('models:status', () => models.modelStatus());
+  ipcMain.handle('models:download', async (_e, id) => {
+    const res = await models.downloadModel(id, (percent, received, total) => {
+      mainWindow?.webContents.send('model:progress', { id, percent, received, total });
+    });
+    mainWindow?.webContents.send('model:progress', { id, percent: res.ok ? 100 : 0, done: true, ...res });
+    return res;
+  });
+  ipcMain.handle('models:download-engine', async () => {
+    const res = await models.downloadEngine((percent) => {
+      mainWindow?.webContents.send('model:progress', { id: 'engine', percent });
+    });
+    mainWindow?.webContents.send('model:progress', { id: 'engine', percent: res.ok ? 100 : 0, done: true, ...res });
+    return res;
+  });
+
+  ipcMain.handle('update:check', () => updater?.check() || { status: 'unavailable', reason: 'updater не готов' });
+  ipcMain.handle('update:download', () => updater?.download() || { status: 'error', reason: 'updater не готов' });
+  ipcMain.handle('update:install', () => Boolean(updater?.install()));
+  ipcMain.handle('app:notify', (_e, payload) => showNotification(payload));
   ipcMain.handle('app:noop', () => null);
 
   // Выбор источника для getDisplayMedia (запись экрана / системный звук)
@@ -512,6 +571,17 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   createTray();
+
+  updater = createUpdater({
+    onStatus: (state) => mainWindow?.webContents.send('update:status', state),
+  });
+  // тихая проверка раз в сутки при наличии сети (настройка checkUpdates)
+  const initial = store.get('zs:settings') || {};
+  if (initial.checkUpdates !== false) {
+    setTimeout(() => {
+      updater?.check().catch(() => {});
+    }, 15000);
+  }
 
   const settings = store.get('zs:settings') || {};
   registerShortcuts({

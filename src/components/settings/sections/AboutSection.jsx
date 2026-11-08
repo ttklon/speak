@@ -3,6 +3,7 @@ import { Button } from '../../ui/Controls.jsx';
 import { APP } from '../../../lib/config.js';
 import { ENGINE_LABEL, IS_ELECTRON } from '../../../lib/constants.js';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
+import UpdateRow from './UpdateRow.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 
 export default function AboutSection() {
@@ -90,27 +91,15 @@ export default function AboutSection() {
           >
             Открыть репозиторий
           </Button>
-          <Button
-            variant="bare"
-            size="sm"
-            onClick={() =>
-              push({
-                title: 'Обновлений нет',
-                description: `Установлена последняя версия ${APP.version}.`,
-                tone: 'success',
-              })
-            }
-          >
-            Проверить обновления
-          </Button>
         </div>
+        <UpdateRow />
       </div>
 
       <div className="settings-group">
         <div className="settings-group__title">Горячие клавиши приложения</div>
         <div className="kv-row">
           <span className="kv-row__key">Диктовка</span>
-          <span className="kv-row__value">Ctrl + Alt + Space</span>
+          <span className="kv-row__value">{(settings.dictationKeys || ['Ctrl', 'Alt', 'Space']).join(' + ')}</span>
         </div>
         <div className="kv-row">
           <span className="kv-row__key">Настройки</span>
