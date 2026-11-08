@@ -4,14 +4,12 @@ import TitleBar from './components/layout/TitleBar.jsx';
 import HomePage from './pages/HomePage.jsx';
 import DictionaryPage from './pages/DictionaryPage.jsx';
 import HotkeysPage from './pages/HotkeysPage.jsx';
-import MeetingsPage from './pages/MeetingsPage.jsx';
-import TranslatePage from './pages/TranslatePage.jsx';
 import ClipboardPage from './pages/ClipboardPage.jsx';
-import MobileModal from './components/modals/MobileModal.jsx';
 import SettingsModal from './components/settings/SettingsModal.jsx';
 import ProfileModal from './components/modals/ProfileModal.jsx';
 import DictationHUD from './components/ui/DictationHUD.jsx';
-import { useRoute, navigate } from './lib/router.js';
+import OnboardingModal from './components/modals/OnboardingModal.jsx';
+import { useRoute, navigate, replace } from './lib/router.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
 
@@ -19,16 +17,13 @@ const PAGES = {
   home: HomePage,
   dictionary: DictionaryPage,
   hotkeys: HotkeysPage,
-  meetings: MeetingsPage,
-  translate: TranslatePage,
   clipboard: ClipboardPage,
 };
 
 export default function App() {
   const route = useRoute();
-  const { updateSettings } = useAppData();
+  const { settings, updateSettings } = useAppData();
   const { push } = useToast();
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('account');
   const [profileOpen, setProfileOpen] = useState(false);
@@ -38,13 +33,15 @@ export default function App() {
 
   // Поддержка прямых ссылок вида #/settings?section=features
   useEffect(() => {
-    if (route.page === 'settings') {
+    // пока не спросили имя — не перекрываем приветствие настройками
+    if (route.page === 'settings' && settings.onboarded) {
       openedFromHash.current = true;
       setSettingsSection(route.params.section || 'account');
       setSettingsOpen(true);
-      navigate(route.params.from || 'home');
+      // replace, а не navigate: иначе hashchange закроет только что открытые настройки
+      replace(route.params.from || 'home');
     }
-  }, [route]);
+  }, [route, settings.onboarded]);
 
   // Переход на другую страницу закрывает модалки (кроме случая открытия из hash)
   useEffect(() => {
@@ -54,7 +51,6 @@ export default function App() {
       openedFromHash.current = false;
       return;
     }
-    setMobileOpen(false);
     setProfileOpen(false);
     setSettingsOpen(false);
   }, [route.page]);
@@ -87,7 +83,6 @@ export default function App() {
       if (command === 'settings') setSettingsOpen(true);
       if (command === 'clipboard') navigate('clipboard');
       if (command === 'home') navigate('home');
-      if (command === 'mobile') setMobileOpen(true);
       if (command === 'about') {
         setSettingsSection('about');
         setSettingsOpen(true);
@@ -106,7 +101,15 @@ export default function App() {
     });
   }, []);
 
-  const openMobile = useCallback(() => setMobileOpen(true), []);
+  const openPresets = useCallback(() => {
+    navigate('hotkeys');
+    setTimeout(() => {
+      const tab = Array.from(document.querySelectorAll('.hk-toolbar .tabs__tab')).find((b) =>
+        /Рекомендуемые/i.test(b.textContent || ''),
+      );
+      tab?.click();
+    }, 120);
+  }, []);
   const openProfile = useCallback(() => setProfileOpen(true), []);
   const openSettings = useCallback((section = 'account') => {
     setSettingsSection(section);
@@ -118,10 +121,10 @@ export default function App() {
   }, [updateSettings]);
 
   const content = useMemo(() => {
-    if (page(route) === 'home') return <HomePage onOpenSettings={openSettings} onOpenMobile={openMobile} />;
+    if (page(route) === 'home') return <HomePage onOpenSettings={openSettings} />;
     const Page = PAGES[page(route)] || HomePage;
     return <Page onOpenSettings={openSettings} />;
-  }, [route, openSettings, openMobile]);
+  }, [route, openSettings]);
 
   return (
     <div className="app-shell">
@@ -131,8 +134,8 @@ export default function App() {
           <Sidebar
             page={page(route)}
             onOpenSettings={() => openSettings('account')}
-            onOpenMobile={openMobile}
             onOpenProfile={openProfile}
+            onOpenPresets={openPresets}
           />
           <main className="content">{content}</main>
         </div>
@@ -140,7 +143,6 @@ export default function App() {
 
       <DictationHUD />
 
-      <MobileModal open={mobileOpen} onClose={() => setMobileOpen(false)} />
       <ProfileModal
         open={profileOpen}
         onClose={() => setProfileOpen(false)}
@@ -149,6 +151,8 @@ export default function App() {
           openSettings('account');
         }}
       />
+      <OnboardingModal />
+
       <SettingsModal
         open={settingsOpen}
         section={settingsSection}

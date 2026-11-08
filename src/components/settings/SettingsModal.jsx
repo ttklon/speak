@@ -81,7 +81,7 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
       </div>
       <div className="settings-footer">
         <span className="settings-foot__hint">
-          Настройки применяются сразу и хранятся локально · {settings.language.toUpperCase()}
+          Настройки применяются сразу и хранятся локально · {String(settings.language || 'ru').toUpperCase()}
         </span>
         <Button variant="white" size="sm" onClick={onClose}>
           Готово

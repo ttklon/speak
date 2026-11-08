@@ -19,10 +19,8 @@ export default function DataSection({ onOpenSection }) {
     storageSize,
     dictations,
     clipboard,
-    meetingNotes,
     clearDictations,
     clearClipboard,
-    sessions,
   } = useAppData();
   const { push } = useToast();
 
@@ -86,7 +84,7 @@ export default function DataSection({ onOpenSection }) {
           <div className="setting-row__label">
             Всего записей
             <div className="setting-row__desc">
-              {dictations.length} диктовок · {meetingNotes.length} заметок встреч · {sessions.length} сессий перевода
+              {dictations.length} диктовок · {clipboard.length} элементов буфера
             </div>
           </div>
           <span className="setting-row__value">{formatBytes(storageSize)}</span>
@@ -94,36 +92,15 @@ export default function DataSection({ onOpenSection }) {
       </div>
 
       <div className="settings-group">
-        <div className="settings-group__title">Встречи и живой перевод</div>
+        <div className="settings-group__title">Аудио</div>
         <div className="notice">
           <span className="notice__icon">
             <TriangleAlert size={13} />
           </span>
           <span>
-            При удалении стираются только локально записанное аудио и кэш — заметки остаются. Но именно
-            аудио позволяет в любой момент заново создать и вычитать протокол; после удаления это станет
-            невозможно. По умолчанию 30 дней.
+            ZSpeakly не пишет звук на диск: распознавание идёт на лету, остаётся только текст.
+            Поэтому удалять нечего — истории записей просто нет.
           </span>
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Хранить</div>
-          <Select
-            value={String(settings.retentionMonths)}
-            onChange={(v) => updateSettings({ retentionMonths: Number(v) })}
-            options={[
-              { value: '1', label: '1 месяц' },
-              { value: '3', label: '3 месяца' },
-              { value: '12', label: '1 год' },
-            ]}
-            width={130}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Занято места</div>
-          <span className="setting-row__value">0 Б</span>
-          <Button variant="bare" size="sm" onClick={() => push({ title: 'Аудио встреч не хранится' })}>
-            Удалить сейчас
-          </Button>
         </div>
       </div>
 
@@ -159,7 +136,7 @@ export default function DataSection({ onOpenSection }) {
         <div className="setting-row">
           <div className="setting-row__label">
             Микрофон
-            <div className="setting-row__desc">Нужен для диктовки, встреч и перевода.</div>
+            <div className="setting-row__desc">Нужен для диктовки и предпросмотра голосом.</div>
           </div>
           <Button
             variant="bare"

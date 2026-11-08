@@ -13,15 +13,13 @@ export const APP = {
   site: 'https://github.com/ttklon/speak#readme',
   freeNote: 'Всё локально: без облака, подписки и лимитов слов.',
   description:
-    'Удерживайте клавишу для диктовки. Дважды нажмите клавишу, чтобы активировать режим ZSpeakly Agent.',
+    'Удерживайте клавишу для диктовки. Дважды нажмите клавишу, чтобы включить режим агента.',
 };
 
 export const NAV = [
   { id: 'home', label: 'Главная', icon: 'home' },
   { id: 'dictionary', label: 'Словарь', icon: 'book' },
   { id: 'hotkeys', label: 'Горячие клавиши', icon: 'keyboard' },
-  { id: 'meetings', label: 'Заметки встреч', icon: 'calendar' },
-  { id: 'translate', label: 'Живой перевод', icon: 'mic' },
   { id: 'clipboard', label: 'Буфер обмена', icon: 'clipboard', badge: 'НОВОЕ' },
 ];
 
@@ -61,7 +59,7 @@ export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'agent',
     title: 'Режим агента',
-    description: 'Двойное нажатие для вопроса ZSpeakly Agent',
+    description: 'Двойное нажатие — короткий вопрос локальному агенту (Ollama, без облака)',
     keys: ['Ctrl', 'Alt', 'Space'],
     double: true,
     enabled: false,
@@ -147,7 +145,11 @@ export const CLIPBOARD_HOTKEYS = [
 ];
 
 export const DEFAULT_SETTINGS = {
+  onboarded: false, // первый запуск: спросить имя
+  userName: '',
   language: 'ru', // язык интерфейса и распознавания
+  readAloud: false, // предпросмотр диктовки голосом
+  readAloudVoice: '',
   dictationKeys: ['Ctrl', 'Alt', 'Space'],
   dictationKey: 'Control+Alt+Space',
   translateTarget: 'en',
@@ -185,8 +187,6 @@ export const STORAGE_KEYS = {
   hotkeys: 'zs.hotkeys',
   presets: 'zs.presets',
   instructions: 'zs.instructions',
-  sessions: 'zs.sessions',
-  meetingNotes: 'zs.meetingNotes',
   stats: 'zs.stats',
   profile: 'zs.profile',
 };

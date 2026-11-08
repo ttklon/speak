@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Keyboard, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import Icon from '../components/ui/Icon.jsx';
 import { Button, Keys, SearchInput, Tabs } from '../components/ui/Controls.jsx';
@@ -8,6 +8,7 @@ import AddInstructionModal from '../components/modals/AddInstructionModal.jsx';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
 import { keysLabel, toAccelerator } from '../lib/utils.js';
+import { useTextAction } from '../lib/hotkeys/useTextAction.js';
 
 export default function HotkeysPage() {
   const {
@@ -26,10 +27,36 @@ export default function HotkeysPage() {
     updateInstruction,
   } = useAppData();
   const { push } = useToast();
+  const { run: runAction, busy } = useTextAction();
   const [tab, setTab] = useState('voice');
   const [recorder, setRecorder] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
   const [query, setQuery] = useState('');
+
+  /** Все включённые AI-инструкции уходят в main-процесс как глобальные хоткеи. */
+  const textActions = useMemo(
+    () =>
+      [...presets, ...instructions]
+        .filter((a) => a.enabled && a.keys?.length)
+        .map((a) => ({ id: a.id, title: a.title, keys: a.keys, enabled: true, prompt: a.prompt })),
+    [presets, instructions],
+  );
+
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.setDictationHotkey) return;
+    bridge.setDictationHotkey({ dictationKey: settings.dictationKey, textActions });
+  }, [settings.dictationKey, textActions]);
+
+  // Хоткей нажали в системе — выполняем инструкцию здесь, в рендерере
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.onTextAction) return undefined;
+    return bridge.onTextAction((id) => {
+      const action = [...presets, ...instructions].find((a) => a.id === id);
+      if (action) runAction(action);
+    });
+  }, [presets, instructions, runAction]);
 
   /** Сохраняет сочетание: локально, в настройки и в глобальные хоткеи Electron. */
   const applyCombo = (hk, keys) => {
@@ -201,6 +228,14 @@ export default function HotkeysPage() {
                 <div className="hk-row__desc">{p.description}</div>
               </div>
               <div className="preset-row__keys">
+                <button
+                  type="button"
+                  className="link-btn"
+                  disabled={busy === p.id}
+                  onClick={() => runAction(p)}
+                >
+                  {busy === p.id ? 'Работаю…' : 'Попробовать'}
+                </button>
                 <Keys keys={p.keys || []} size="sm" />
                 <button
                   type="button"
@@ -252,6 +287,14 @@ export default function HotkeysPage() {
                     {item.description || item.prompt.slice(0, 90)}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className="link-btn"
+                  disabled={busy === item.id}
+                  onClick={() => runAction(item)}
+                >
+                  {busy === item.id ? 'Работаю…' : 'Попробовать'}
+                </button>
                 {item.keys?.length ? <Keys keys={item.keys} size="sm" /> : null}
                 <Toggle
                   checked={item.enabled}

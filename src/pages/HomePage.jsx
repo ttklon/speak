@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Copy, Gift, Mic, Search, Square, X } from 'lucide-react';
+import { Copy, Mic, Pencil, Search, Square, Trash2, X } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useDictation } from '../state/DictationProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
@@ -7,6 +7,7 @@ import { navigate } from '../lib/router.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds } from '../lib/utils.js';
 import { APP } from '../lib/config.js';
 import Icon from '../components/ui/Icon.jsx';
+import EditDictationModal from '../components/modals/EditDictationModal.jsx';
 import { Button, SearchInput } from '../components/ui/Controls.jsx';
 
 const STAT_MINUTES = 144; // «144 мин» экономии — как в кадре видео
@@ -24,13 +25,14 @@ function HeroStat({ value, unit, label }) {
 }
 
 export default function HomePage() {
-  const { dictations, voiceHotkeys, profile, settings } = useAppData();
+  const { dictations, voiceHotkeys, settings, deleteDictation } = useAppData();
   const { state, draft, start, stop, last, elapsed } = useDictation();
   const { push } = useToast();
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
   const [hoverId, setHoverId] = useState(null);
   const [snippet, setSnippet] = useState(null);
+  const [editing, setEditing] = useState(null);
 
   const dictationKey =
     settings.dictationKeys ||
@@ -64,6 +66,11 @@ export default function HomePage() {
   return (
     <div className="page page--home scroll-area">
       <header className="hero">
+        {settings.userName ? (
+          <p className="hero__hello">
+            Привет, {settings.userName}. {state === 'listening' ? 'Записываю…' : 'Всё готово к диктовке.'}
+          </p>
+        ) : null}
         <h1 className="hero__title">
           Не печатай,
           <br />
@@ -73,8 +80,8 @@ export default function HomePage() {
           Удерживайте клавишу{' '}
           <kbd className="inline-key">{keysLabel(dictationKey.slice(-1))}</kbd> для диктовки. Дважды нажмите
           клавишу{' '}
-          <kbd className="inline-key">{keysLabel(dictationKey.slice(0, 2))}</kbd>, чтобы активировать режим
-          ZSpeakly Agent.
+          <kbd className="inline-key">{keysLabel(dictationKey.slice(0, 2))}</kbd>, чтобы открыть панель
+          буфера обмена.
         </p>
 
         <div className="hero__stats">
@@ -113,33 +120,6 @@ export default function HomePage() {
           </div>
         ) : null}
       </header>
-
-      <section className="invite-card">
-        <div className="invite-card__icon">
-          <Gift size={18} strokeWidth={1.5} />
-        </div>
-        <div className="invite-card__body">
-          <div className="invite-card__title">Пригласить друзей</div>
-          <div className="invite-card__desc">
-            ZSpeakly бесплатный — просто поделитесь ссылкой на проект.
-          </div>
-        </div>
-        <button
-          type="button"
-          className="btn btn--pill"
-          onClick={async () => {
-            const link = `${APP.repo}?ref=${encodeURIComponent(profile?.name || 'local')}`;
-            try {
-              await navigator.clipboard.writeText(link);
-              push({ title: 'Ссылка скопирована', description: link, tone: 'success' });
-            } catch {
-              push({ title: 'Ссылка', description: link });
-            }
-          }}
-        >
-          Получить ссылку
-        </button>
-      </section>
 
       <section className="recent">
         <div className="section-head">
@@ -234,20 +214,45 @@ export default function HomePage() {
                 Копировать
               </Button>
               <Button
+                variant="ghost"
+                size="sm"
+                icon={<Pencil size={12} />}
+                onClick={() => {
+                  setEditing(snippet);
+                  setSnippet(null);
+                }}
+              >
+                Исправить
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<Trash2 size={12} />}
+                onClick={() => {
+                  deleteDictation(snippet.id);
+                  setSnippet(null);
+                  push({ title: 'Запись удалена', tone: 'warn' });
+                }}
+              >
+                Удалить
+              </Button>
+              <Button
                 variant="white"
                 size="sm"
                 icon={<Mic size={13} />}
                 onClick={() => {
                   setSnippet(null);
-                  navigate('translate');
+                  start({ mode: 'hold' });
                 }}
               >
-                Перевести
+                Продиктовать ещё
               </Button>
             </div>
           </div>
         </div>
       ) : null}
+
+      <EditDictationModal open={Boolean(editing)} item={editing} onClose={() => setEditing(null)} />
     </div>
   );
 }

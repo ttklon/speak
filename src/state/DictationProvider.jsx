@@ -9,6 +9,20 @@ import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS } from '../lib/ai/textops.js';
 
+/** Предпросмотр диктовки: читаем результат системным голосом Windows. */
+function speak(text, language = 'ru') {
+  if (!text || typeof speechSynthesis === 'undefined') return;
+  try {
+    speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = language === 'ru' ? 'ru-RU' : language === 'en' ? 'en-US' : language;
+    utter.rate = 1.02;
+    speechSynthesis.speak(utter);
+  } catch {
+    /* голоса нет — молча пропускаем */
+  }
+}
+
 const DictationContext = createContext(null);
 
 export function DictationProvider({ children }) {
@@ -66,6 +80,7 @@ export function DictationProvider({ children }) {
         setLast(item);
         addDictation(item);
         recordWords(item.words, durationMs);
+        if (settingsRef.current.readAloud) speak(cleaned, settingsRef.current.language);
       }
       setTimeout(() => setState((s) => (s === 'done' ? 'idle' : s)), 2200);
       return item;

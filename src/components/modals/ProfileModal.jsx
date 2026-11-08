@@ -10,12 +10,10 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
   const { profile, setProfile, stats, dictations, clipboard, storageSize } = useAppData();
   const { push } = useToast();
   const [name, setName] = useState(profile.name);
-  const [email, setEmail] = useState(profile.email);
 
   useEffect(() => {
     if (open) {
       setName(profile.name);
-      setEmail(profile.email);
     }
   }, [open, profile]);
 
@@ -33,7 +31,7 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
           <Button
             variant="white"
             onClick={() => {
-              setProfile({ ...profile, name: name.trim() || 'local', email: email.trim() });
+              setProfile({ ...profile, name: name.trim() || 'local' });
               push({ title: 'Профиль сохранён', tone: 'success' });
               onClose?.();
             }}
@@ -48,14 +46,14 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
           <span className="profile-modal__avatar">{(name || 'Z')[0].toUpperCase()}</span>
           <div>
             <div className="profile-modal__name">{name || 'local'}</div>
-            <div className="profile-modal__plan">{profile.plan}</div>
+            <div className="profile-modal__plan">локальный профиль</div>
           </div>
         </div>
 
         <div className="stack-12" style={{ marginTop: 14 }}>
           <div className="field">
             <label className="field__label" htmlFor="profile-name">
-              Имя пользователя
+              Как вас называть
             </label>
             <input
               id="profile-name"
@@ -64,18 +62,6 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-          </div>
-          <div className="field">
-            <label className="field__label" htmlFor="profile-email">
-              Email
-            </label>
-            <input
-              id="profile-email"
-              className="input"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <span className="field__hint">Используется только локально — учётная запись не создаётся.</span>
           </div>
         </div>
 

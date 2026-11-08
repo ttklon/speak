@@ -1,7 +1,7 @@
 /**
  * Единое состояние ZSpeakly: настройки, история диктовок, словарь,
- * хоткеи, AI-пресеты, буфер обмена, сессии перевода, заметки встреч,
- * статистика и профиль. Всё сохраняется локально (localStorage / profile.json).
+ * хоткеи, AI-пресеты и буфер обмена. Всё сохраняется локально
+ * (localStorage в браузере, profile.json в установленной версии).
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,18 +13,12 @@ import {
   DEFAULT_VOICE_HOTKEYS,
   STORAGE_KEYS,
 } from '../lib/config.js';
-import {
-  buildSeedClipboard,
-  buildSeedDictations,
-  SEED_DICTIONARY,
-  SEED_MEETINGS,
-  buildSeedSessions,
-} from '../lib/seed.js';
+import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../lib/seed.js';
 import { uid } from '../lib/utils.js';
 
 const AppDataContext = createContext(null);
 
-function usePersistentState(key, initialFactory) {
+function usePersistentState(key, initialFactory, { merge } = {}) {
   // Сид-данные вычисляем один раз: иначе список пересоздавался бы на каждом рендере.
   const initialRef = useRef(null);
   if (initialRef.current === null) {
@@ -35,6 +29,11 @@ function usePersistentState(key, initialFactory) {
   const [value, setValue] = useState(() => {
     const stored = read(key);
     if (stored === null || stored === undefined) return initial;
+    // частичный объект (например, после обновления версии) дополняем дефолтами,
+    // иначе UI может упасть на отсутствующем поле
+    if (merge && stored && typeof stored === 'object' && !Array.isArray(stored)) {
+      return { ...merge, ...stored };
+    }
     return stored;
   });
 
@@ -59,7 +58,9 @@ const DEFAULT_STATS = {
 };
 
 export function AppDataProvider({ children }) {
-  const [settings, setSettings] = usePersistentState(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS);
+  const [settings, setSettings] = usePersistentState(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS, {
+    merge: DEFAULT_SETTINGS,
+  });
   const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => buildSeedDictations());
   const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => SEED_DICTIONARY);
   const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => buildSeedClipboard());
@@ -69,8 +70,6 @@ export function AppDataProvider({ children }) {
     STORAGE_KEYS.instructions,
     () => DEFAULT_CUSTOM_INSTRUCTIONS,
   );
-  const [sessions, setSessions] = usePersistentState(STORAGE_KEYS.sessions, () => buildSeedSessions());
-  const [meetingNotes, setMeetingNotes] = usePersistentState(STORAGE_KEYS.meetingNotes, () => SEED_MEETINGS);
   const [stats, setStats] = usePersistentState(STORAGE_KEYS.stats, () => DEFAULT_STATS);
   const [profile, setProfile] = usePersistentState(STORAGE_KEYS.profile, () => ({
     name: 'local',
@@ -101,6 +100,15 @@ export function AppDataProvider({ children }) {
 
   const deleteDictation = useCallback(
     (id) => setDictations((prev) => prev.filter((d) => d.id !== id)),
+    [setDictations],
+  );
+
+  /** Пользователь поправил расшифровку — сохраняем исправленный текст. */
+  const updateDictation = useCallback(
+    (id, patch) =>
+      setDictations((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, ...patch, editedAt: Date.now() } : d)),
+      ),
     [setDictations],
   );
 
@@ -218,42 +226,17 @@ export function AppDataProvider({ children }) {
     [setInstructions],
   );
 
-  const addSession = useCallback(
-    (session) => {
-      setSessions((prev) => [session, ...prev]);
-      setStats((s) => ({ ...s, sessions: s.sessions + 1 }));
-    },
-    [setSessions, setStats],
-  );
-
-  const addMeetingNote = useCallback(
-    (note) => setMeetingNotes((prev) => [note, ...prev]),
-    [setMeetingNotes],
-  );
-
-  const updateMeetingNote = useCallback(
-    (id, patch) => setMeetingNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...patch } : n))),
-    [setMeetingNotes],
-  );
-
-  const removeMeetingNote = useCallback(
-    (id) => setMeetingNotes((prev) => prev.filter((n) => n.id !== id)),
-    [setMeetingNotes],
-  );
-
   const resetAll = useCallback(() => {
     setDictations([]);
     setClipboard([]);
     setDictionary([]);
-    setSessions([]);
-    setMeetingNotes([]);
     setInstructions([]);
     setPresets(DEFAULT_AI_PRESETS);
     setVoiceHotkeys(DEFAULT_VOICE_HOTKEYS);
     setSettings(DEFAULT_SETTINGS);
     setStats(DEFAULT_STATS);
   }, [
-    setDictations, setClipboard, setDictionary, setSessions, setMeetingNotes,
+    setDictations, setClipboard, setDictionary,
     setInstructions, setPresets, setVoiceHotkeys, setSettings, setStats,
   ]);
 
@@ -268,7 +251,7 @@ export function AppDataProvider({ children }) {
     });
   }, [settings.dictationRetentionDays, setDictations]);
 
-  const bytes = useMemo(() => storageBytes(), [dictations, clipboard, sessions, meetingNotes]);
+  const bytes = useMemo(() => storageBytes(), [dictations, clipboard, dictionary]);
 
   const value = useMemo(
     () => ({
@@ -277,6 +260,7 @@ export function AppDataProvider({ children }) {
       dictations,
       addDictation,
       deleteDictation,
+      updateDictation,
       clearDictations,
       dictionary,
       addDictionaryWord,
@@ -297,12 +281,6 @@ export function AppDataProvider({ children }) {
       addInstruction,
       removeInstruction,
       updateInstruction,
-      sessions,
-      addSession,
-      meetingNotes,
-      addMeetingNote,
-      updateMeetingNote,
-      removeMeetingNote,
       stats,
       recordWords,
       profile,
@@ -311,12 +289,11 @@ export function AppDataProvider({ children }) {
       storageSize: bytes,
     }),
     [
-      settings, updateSettings, dictations, addDictation, deleteDictation, clearDictations,
+      settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, clearDictations,
       dictionary, addDictionaryWord, removeDictionaryWord, clipboard, addClipboardItem,
       removeClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
       updateHotkey, resetHotkeys, presets, togglePreset, updatePresetKeys, instructions, addInstruction,
-      removeInstruction, updateInstruction, sessions, addSession, meetingNotes, addMeetingNote,
-      updateMeetingNote, removeMeetingNote, stats, recordWords, profile, setProfile, resetAll, bytes,
+      removeInstruction, updateInstruction, stats, recordWords, profile, setProfile, resetAll, bytes,
     ],
   );
 

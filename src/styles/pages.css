@@ -2153,3 +2153,137 @@
   gap: 8px;
   flex: none;
 }
+
+/* ── Приветствие по имени ────────────────────────────────────────────────── */
+.hero__hello {
+  margin: 0 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-4);
+}
+
+/* ── Онбординг: одно поле имени ──────────────────────────────────────────── */
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.onboarding__logo {
+  display: flex;
+}
+
+.onboarding__text {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.onboarding__hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-4);
+  font-size: 10.5px;
+}
+
+/* ── Тест микрофона ─────────────────────────────────────────────────────── */
+.mic-level {
+  height: 4px;
+  margin: 2px 0 10px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.mic-level > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--text-3);
+  transition: width 0.08s linear;
+}
+
+.mic-level.is-live > span {
+  background: linear-gradient(90deg, #7fd7a8, #4cc38a);
+}
+
+.mic-tester__hint {
+  font-size: 10.5px;
+  color: var(--text-4);
+  margin-bottom: 8px;
+}
+
+/* ── Буфер: карточки-хоткеи стали кнопками ──────────────────────────────── */
+button.clip-hotkey {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+button.clip-hotkey:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ── Правка расшифровки и обучение словаря ──────────────────────────────── */
+.edit-dictation {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.6;
+  font-family: inherit;
+}
+
+.learn-card {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: var(--radius-card);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px 12px;
+}
+
+.learn-card__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.learn-card__list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+
+/* ── Кликабельная плашка в сайдбаре ─────────────────────────────────────── */
+button.plan-card--action {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  padding: 10px 2px 8px;
+}
+
+button.plan-card--action .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 2px;
+}
+
+button.plan-card--action:hover .plan-card__title {
+  color: #fff;
+}

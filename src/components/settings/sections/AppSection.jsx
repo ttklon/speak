@@ -1,20 +1,14 @@
-import { useEffect, useState } from 'react';
 import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { APP, LANGUAGES } from '../../../lib/config.js';
 import { isElectron } from '../../../lib/storage.js';
-import { listDevices } from '../../../lib/audio/devices.js';
+import MicTester from './MicTester.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 
 export default function AppSection() {
   const { settings, updateSettings, resetAll } = useAppData();
   const { push } = useToast();
-  const [devices, setDevices] = useState([]);
-
-  useEffect(() => {
-    listDevices().then(setDevices);
-  }, []);
 
   return (
     <div>
@@ -52,23 +46,39 @@ export default function AppSection() {
             <div className="setting-row__desc">Показывает «Слушаю…» с уровнем микрофона поверх окон.</div>
           </div>
           <Toggle
-            checked={settings.showFloatingIndicator}
+            checked={settings.showFloatingIndicator !== false}
             onChange={(v) => updateSettings({ showFloatingIndicator: v })}
           />
         </div>
       </div>
 
       <div className="settings-group">
-        <div className="settings-group__title">Звук и ввод</div>
+        <div className="settings-group__title">Предпросмотр диктовки</div>
         <div className="setting-row">
-          <div className="setting-row__label">Микрофон</div>
-          <Select
-            value={settings.audioDeviceId}
-            onChange={(v) => updateSettings({ audioDeviceId: v })}
-            options={[{ value: 'default', label: 'Системный по умолчанию' }, ...devices.map((d) => ({ value: d.id, label: d.label }))]}
-            width={210}
+          <div className="setting-row__label">
+            Читать результат голосом
+            <div className="setting-row__desc">
+              После диктовки ZSpeakly озвучит текст системным голосом Windows — удобно проверить, что
+              распознано верно.
+            </div>
+          </div>
+          <Toggle
+            checked={Boolean(settings.readAloud)}
+            onChange={(v) => {
+              updateSettings({ readAloud: v });
+              if (v && typeof speechSynthesis !== 'undefined') {
+                const v0 = new SpeechSynthesisUtterance('Предпросмотр диктовки включён');
+                v0.lang = 'ru-RU';
+                speechSynthesis.speak(v0);
+              }
+            }}
           />
         </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Звук и ввод</div>
+        <MicTester />
         <div className="setting-row">
           <div className="setting-row__label">
             Звуковой отклик

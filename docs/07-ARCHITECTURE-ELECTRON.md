@@ -95,7 +95,7 @@ renderer ──start──▶ main ──spawn──▶ whisper-cli -m ggml-smal
 - `buildSummary` — частотный анализ предложений, выделение решений (`Решили`, `Согласовали`)
   и задач (инфинитивы, `Нужно`, сроки), без дублей между блоками.
 
-Все операции детерминированы и покрыты тестами (43 теста). Если в настройках включён Ollama
+Все операции детерминированы и покрыты тестами (45 тестов). Если в настройках включён Ollama
 (`http://localhost:11434`), те же операции пробуют локальную модель и молча возвращаются
 к правилам при недоступности.
 
@@ -106,10 +106,26 @@ renderer ──start──▶ main ──spawn──▶ whisper-cli -m ggml-smal
 - CSP в `index.html` запрещает внешние скрипты и соединения.
 - Пароли в буфере можно не сохранять (`hidePasswords`).
 
+## Никакого Python
+
+Приложение полностью на Electron: main-процесс — Node.js (`electron/main.cjs`), рендерер — React.
+Ни в сборке, ни в рантайме нет `python.exe`, PyInstaller, `child_process` на python, сокет-моста
+или питон-зависимостей. Внешних процессов ровно три, и все опциональны:
+
+| Процесс | Зачем | Если нет |
+|---|---|---|
+| `whisper-cli.exe` (C++ из whisper.cpp) | офлайн-распознавание | Web Speech или демо-движок |
+| `powershell.exe` (SendKeys) | вставка текста в чужое окно на Windows | текст остаётся в буфере |
+| `tasklist.exe` | имя приложения-источника для буфера | источник = «Системный буфер» |
+
+Всё остальное — Node API: `fs`, `path`, `child_process`, `electron` (clipboard, globalShortcut,
+desktopCapturer, Tray, session).
+
 ## Тесты
 
 ```
-npm test    # vitest: utils (20), textops (12), summarizer (4), App render (7) = 43
+npm test           # vitest: utils (20), textops (12), dictionary learn (5), App render (8) = 45
+npm run test:main  # смоук main: IPC-каналы, хоткеи, замена выделения (6 проверок)
 ```
 
 `App.test.jsx` рендерит каждую страницу через `renderToString` — ловит падения компонентов,
@@ -122,5 +138,6 @@ npm run build      # renderer → dist/
 npm run dist:win   # NSIS + portable → release/
 ```
 
-electron-builder упаковывает `dist/`, `electron/`, `icons/` в asar; иконка `icons/icon.ico`
+electron-builder упаковывает `dist/`, `electron/`, `icons/` в asar, а `models/` и `bin/`
+кладёт в `extraResources` (и распаковывает из asar), чтобы `whisper-cli.exe` можно было запускать; иконка `icons/icon.ico`
 генерируется скриптом `scripts/make-icons.mjs` (PNG + ICO без внешних зависимостей).

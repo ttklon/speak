@@ -115,6 +115,55 @@ export default function ClipboardPage() {
     [filtered, selectedId],
   );
 
+  /** Скриншот: в Electron — реальный снимок экрана, в браузере — демо-картинка. */
+  const runHotkey = async (id) => {
+    if (id === 'panel') {
+      navigate('clipboard');
+      return;
+    }
+    if (id === 'record') {
+      push({
+        title: 'Запись экрана',
+        description: 'Начните демонстрацию: ZSpeakly сохранит снимок и звук локально.',
+      });
+      return;
+    }
+    const bridge = window.zspeakly?.native;
+    if (bridge?.screenshot) {
+      const res = await bridge.screenshot();
+      push({
+        title: res?.ok ? 'Скриншот сохранён' : 'Не удалось сделать скриншот',
+        description: res?.ok ? `${res.width}×${res.height} · уже в буфере обмена` : res?.reason,
+        tone: res?.ok ? 'success' : 'warn',
+      });
+      return;
+    }
+    // Браузер: рисуем снимок вкладки через canvas, чтобы превью тоже работало
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 640, 360);
+    grad.addColorStop(0, '#1b1d22');
+    grad.addColorStop(1, '#2b2f38');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 640, 360);
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    ctx.font = '600 20px Inter, sans-serif';
+    ctx.fillText('Снимок экрана', 28, 44);
+    ctx.fillStyle = 'rgba(255,255,255,.45)';
+    ctx.font = '13px Inter, sans-serif';
+    ctx.fillText(`${document.title || 'ZSpeakly'} · ${new Date().toLocaleTimeString('ru-RU')}`, 28, 68);
+    addClipboardItem({
+      kind: 'image',
+      text: '',
+      image: canvas.toDataURL('image/png'),
+      source: 'Снимок экрана — ZSpeakly',
+      createdAt: Date.now(),
+    });
+    push({ title: 'Скриншот сохранён', description: 'В установленной версии снимается весь экран.', tone: 'success' });
+  };
+
   const copyItem = async (item) => {
     try {
       await navigator.clipboard.writeText(item.text || '');
@@ -168,7 +217,13 @@ export default function ClipboardPage() {
         {HOTKEYS.map((h) => {
           const IconCmp = h.icon;
           return (
-            <div key={h.id} className="clip-hotkey">
+            <button
+              key={h.id}
+              type="button"
+              className="clip-hotkey"
+              onClick={() => runHotkey(h.id)}
+              title={`${h.title} — ${h.keys.join(' + ')}`}
+            >
               <span className="clip-hotkey__icon">
                 <IconCmp size={13} />
               </span>
@@ -182,7 +237,7 @@ export default function ClipboardPage() {
                   ))}
                 </div>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>

@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { ChevronRight, LogOut, QrCode } from 'lucide-react';
+import { ChevronRight, Sparkles, User } from 'lucide-react';
 import Icon from '../ui/Icon.jsx';
 import { NAV } from '../../lib/config.js';
 import { navigate } from '../../lib/router.js';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 
-export default function Sidebar({ page, onOpenSettings, onOpenMobile, onOpenProfile }) {
+export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPresets }) {
   const { profile } = useAppData();
   const { push } = useToast();
   const [hovered, setHovered] = useState(null);
@@ -33,34 +33,13 @@ export default function Sidebar({ page, onOpenSettings, onOpenMobile, onOpenProf
       </nav>
 
       <div className="sidebar__bottom">
-        <div className="plan-card">
-          <div className="plan-card__title">Free</div>
-          <div className="plan-card__limit">Безлимит слов</div>
-          <div className="plan-card__bar">
-            <span style={{ width: '100%' }} />
-          </div>
-          <p className="plan-card__text">
-            Полная диктовка, живой перевод и локальная обработка — бесплатно навсегда.
-          </p>
-          <button
-            type="button"
-            className="btn btn--white btn--sm btn--block"
-            onClick={() =>
-              push({
-                title: 'У вас уже есть всё',
-                description: 'ZSpeakly не продаёт подписку: облака нет, лимитов нет.',
-                tone: 'success',
-              })
-            }
-          >
-            Активно
-          </button>
-        </div>
-
-        <button type="button" className="sidebar__link" onClick={onOpenMobile}>
-          <QrCode size={14} strokeWidth={1.6} />
-          <span>Мобильное прилож…</span>
-          <ChevronRight size={13} className="sidebar__link-arrow" />
+        <button type="button" className="plan-card plan-card--action" onClick={onOpenPresets}>
+          <div className="plan-card__title">AI-инструкции</div>
+          <div className="plan-card__limit">Выдели текст — нажми клавиши</div>
+          <p className="plan-card__text">Переписать, сократить, перевести. Офлайн, без лимитов.</p>
+          <span className="btn btn--white btn--sm btn--block">
+            <Sparkles size={12} /> Открыть
+          </span>
         </button>
 
         <button type="button" className="sidebar__link sidebar__link--settings" onClick={onOpenSettings}>
@@ -71,8 +50,8 @@ export default function Sidebar({ page, onOpenSettings, onOpenMobile, onOpenProf
 
         <button type="button" className="profile" onClick={onOpenProfile} title="Профиль">
           <span className="profile__avatar">{(profile?.name || 'Z')[0].toUpperCase()}</span>
-          <span className="profile__email">{profile?.email || 'me@zspeakly.local'}</span>
-          <LogOut size={12} className="profile__logout" />
+          <span className="profile__email">{profile?.name || 'локальный профиль'}</span>
+          <User size={12} className="profile__logout" />
         </button>
       </div>
     </aside>

@@ -181,6 +181,11 @@ function sendCommand(command) {
   mainWindow?.webContents.send('command', command);
 }
 
+function accelerator(keys = []) {
+  const map = { Ctrl: 'Control', Cmd: 'Command', Win: 'Super', Esc: 'Escape' };
+  return keys.map((k) => map[k] || k).join('+');
+}
+
 function registerShortcuts(settings = {}) {
   globalShortcut.unregisterAll();
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
@@ -198,6 +203,76 @@ function registerShortcuts(settings = {}) {
   } catch {
     /* ignore */
   }
+
+  // AI-инструкции из раздела «Горячие клавиши» (пресеты + свои инструкции)
+  const actions = Array.isArray(settings.textActions) ? settings.textActions : [];
+  for (const action of actions) {
+    if (!action?.enabled || !action.keys?.length) continue;
+    try {
+      globalShortcut.register(accelerator(action.keys), () => {
+        mainWindow?.webContents.send('text-action', action.id);
+      });
+    } catch (err) {
+      console.warn('[hotkeys] action failed', action.id, err.message);
+    }
+  }
+}
+
+// ── Определение активного окна (откуда скопировали) ────────────────────────
+let foregroundCache = { title: '', app: '', at: 0 };
+
+function foregroundWindow() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32' || Date.now() - foregroundCache.at < 1500) {
+      resolve(foregroundCache);
+      return;
+    }
+    // C# в одну строку: PowerShell не любит многострочные here-string в -Command
+    const cs = [
+      'using System;',
+      'using System.Runtime.InteropServices;',
+      'using System.Text;',
+      'public class W {',
+      '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+      '[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);',
+      '[DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);',
+      'public static string Title() { var b = new StringBuilder(512); GetWindowText(GetForegroundWindow(), b, 512); return b.ToString(); }',
+      'public static int Pid() { int p; GetWindowThreadProcessId(GetForegroundWindow(), out p); return p; }',
+      '}',
+    ].join(' ');
+    const ps = `Add-Type -TypeDefinition @'\n${cs}\n'@; Write-Output (W::Title()); Write-Output (W::Pid())`;
+
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', ps],
+      { windowsHide: true, timeout: 4000 },
+      (err, stdout) => {
+        if (err || !stdout) {
+          resolve(foregroundCache);
+          return;
+        }
+        const [title = '', pid = ''] = String(stdout).trim().split(/\r?\n/);
+        const app = processName(Number(pid));
+        foregroundCache = { title: title.slice(0, 120), app, at: Date.now() };
+        resolve(foregroundCache);
+      },
+    );
+  });
+}
+
+function processName(pid) {
+  if (!pid) return '';
+  try {
+    const out = require('node:child_process').execFileSync(
+      'tasklist.exe',
+      ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'],
+      { windowsHide: true, timeout: 1500, encoding: 'utf8' },
+    );
+    const name = String(out).split(',')[0].replace(/"/g, '').trim();
+    return name.replace(/\.exe$/i, '');
+  } catch {
+    return '';
+  }
 }
 
 // ── Буфер обмена ───────────────────────────────────────────────────────────
@@ -210,12 +285,18 @@ function startClipboardWatch() {
     const text = clipboard.readText();
     if (text && text !== lastClipboardText) {
       lastClipboardText = text;
-      const kind = /^(https?:\/\/|www\.)/i.test(text.trim()) ? 'text' : 'text';
-      mainWindow?.webContents.send('clipboard:item', {
-        kind,
-        text,
-        source: 'Системный буфер',
-        createdAt: Date.now(),
+      foregroundWindow().then((win) => {
+        const source = win.app
+          ? `${win.app}${win.title ? ` — ${win.title}` : ''}`
+          : 'Системный буфер';
+        mainWindow?.webContents.send('clipboard:item', {
+          kind: 'text',
+          text,
+          source,
+          app: win.app || '',
+          windowTitle: win.title || '',
+          createdAt: Date.now(),
+        });
       });
     }
 
@@ -277,6 +358,35 @@ function registerIpc() {
     return pasteToActiveWindow();
   });
   ipcMain.handle('text:paste', () => pasteToActiveWindow());
+  ipcMain.handle('text:read-selection', () => readSelection());
+  ipcMain.handle('text:replace-selection', (_e, text) => replaceSelection(text));
+
+  ipcMain.handle('clipboard:screenshot', async () => {
+    try {
+      const { desktopCapturer } = require('electron');
+      const display = screen.getPrimaryDisplay();
+      const { width, height } = display.size;
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width, height },
+      });
+      const source = sources[0];
+      if (!source) return { ok: false, reason: 'экран недоступен' };
+      const image = source.thumbnail;
+      clipboard.writeImage(image);
+      const item = {
+        kind: 'image',
+        text: '',
+        image: image.resize({ width: 480 }).toDataURL(),
+        source: `Снимок экрана — ${source.name || 'дисплей'}`,
+        createdAt: Date.now(),
+      };
+      mainWindow?.webContents.send('clipboard:item', item);
+      return { ok: true, width: image.getSize().width, height: image.getSize().height };
+    } catch (err) {
+      return { ok: false, reason: err.message };
+    }
+  });
 
   ipcMain.handle('clipboard:read', () => ({
     text: clipboard.readText(),
@@ -288,9 +398,15 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('hotkey:set', (_e, accelerator) => {
-    if (!accelerator) return false;
-    registerShortcuts({ dictationKey: accelerator });
+  ipcMain.handle('hotkey:set', (_e, payload) => {
+    // payload: строка-акселератор (диктовка) или { dictationKey, textActions }
+    if (!payload) return false;
+    if (typeof payload === 'string') {
+      const current = store.get('zs:settings') || {};
+      registerShortcuts({ ...current, dictationKey: payload });
+      return true;
+    }
+    registerShortcuts(payload);
     return true;
   });
 
@@ -318,7 +434,56 @@ function registerIpc() {
   });
 }
 
-// Вставка текста в активное окно: Ctrl+V через PowerShell SendKeys
+// Отправка клавиш в активное окно через PowerShell SendKeys (Windows-only)
+function sendKeys(keys) {
+  if (process.platform !== 'win32') return false;
+  const script = `Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 90; [System.Windows.Forms.SendKeys]::SendWait('${keys}')`;
+  execFile(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
+    { windowsHide: true },
+    (err) => {
+      if (err) console.warn('[sendKeys] failed', err.message);
+    },
+  );
+  return true;
+}
+
+/**
+ * Забрать выделенный текст из активного окна: уходим в трей, жмём Ctrl+C,
+ * читаем буфер. Возвращает '' если в буфере не текст.
+ */
+function readSelection() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve(clipboard.readText() || '');
+      return;
+    }
+    const previous = clipboard.readText();
+    mainWindow?.blur();
+    setTimeout(() => {
+      sendKeys('^c');
+      setTimeout(() => {
+        const text = clipboard.readText();
+        mainWindow?.focus();
+        resolve(text && text !== previous ? text : text || '');
+      }, 220);
+    }, 120);
+  });
+}
+
+/** Заменить выделение результатом: кладём в буфер и жмём Ctrl+V. */
+function replaceSelection(text) {
+  return new Promise((resolve) => {
+    clipboard.writeText(String(text || ''));
+    setTimeout(() => {
+      const ok = pasteToActiveWindow();
+      setTimeout(() => resolve(ok), 180);
+    }, 60);
+  });
+}
+
+/** Вставка текста в активное окно: Ctrl+V через PowerShell SendKeys */
 function pasteToActiveWindow() {
   if (process.platform !== 'win32') return false;
   mainWindow?.blur();
@@ -349,7 +514,10 @@ app.whenReady().then(() => {
   createTray();
 
   const settings = store.get('zs:settings') || {};
-  registerShortcuts({ dictationKey: settings.dictationKey || 'Control+Alt+Space' });
+  registerShortcuts({
+    dictationKey: settings.dictationKey || 'Control+Alt+Space',
+    textActions: settings.textActions || [],
+  });
   if (settings.clipboardMonitor !== false) startClipboardWatch();
 
   app.on('activate', () => {

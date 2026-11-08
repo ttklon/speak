@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Button } from '../../ui/Controls.jsx';
 import { APP } from '../../../lib/config.js';
 import { ENGINE_LABEL, IS_ELECTRON } from '../../../lib/constants.js';
@@ -5,8 +6,22 @@ import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 
 export default function AboutSection() {
-  const { dictations, dictionary, clipboard } = useAppData();
+  const { dictations, dictionary, clipboard, settings } = useAppData();
   const { push } = useToast();
+  const [stt, setStt] = useState(null);
+
+  // На Windows спрашиваем main-процесс: нашлись ли whisper-cli.exe и модель
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.sttStatus) return;
+    let alive = true;
+    bridge.sttStatus(settings.whisperModel).then((res) => {
+      if (alive) setStt(res);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [settings.whisperModel]);
 
   return (
     <div>
@@ -33,6 +48,18 @@ export default function AboutSection() {
           <span className="kv-row__key">Распознавание речи</span>
           <span className="kv-row__value">{ENGINE_LABEL}</span>
         </div>
+        {IS_ELECTRON ? (
+          <div className="kv-row">
+            <span className="kv-row__key">whisper.cpp</span>
+            <span className="kv-row__value">
+              {stt === null
+                ? 'проверяю…'
+                : stt.available
+                  ? `готов · ${String(stt.model || '').split(/[\\/]/).pop()}`
+                  : `${stt.reason} — запустите scripts\download-models.ps1`}
+            </span>
+          </div>
+        ) : null}
         <div className="kv-row">
           <span className="kv-row__key">Данные</span>
           <span className="kv-row__value">

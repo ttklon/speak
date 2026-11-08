@@ -92,9 +92,10 @@ export default function FeaturesSection() {
       </div>
 
       <div className="settings-group">
-        <div className="settings-group__title">Язык перевода диктовки</div>
+        <div className="settings-group__title">Язык перевода для инструкций</div>
         <div className="settings-group__desc">
-          Целевой язык для режима перевода: продиктовали — получили текст на другом языке.
+          Куда переводить выделенный текст, когда срабатывает инструкция «Перевести на английский»
+          (Ctrl+Alt+E).
         </div>
         <div className="setting-row">
           <div className="setting-row__label">Переводить на</div>

@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 
-export const PAGES = ['home', 'dictionary', 'hotkeys', 'meetings', 'translate', 'clipboard'];
+export const PAGES = ['home', 'dictionary', 'hotkeys', 'clipboard'];
 
 export function parseHash(hash = typeof location !== 'undefined' ? location.hash : '') {
   const raw = String(hash || '').replace(/^#\/?/, '');
