@@ -149,6 +149,7 @@ export const DEFAULT_SETTINGS = {
   userName: '',
   language: 'ru', // язык интерфейса и распознавания
   readAloud: false, // предпросмотр диктовки голосом
+  useWritingStyle: false, // подмешивать ваш стиль в AI-инструкции
   readAloudVoice: '',
   dictationKeys: ['Ctrl', 'Alt', 'Space'],
   dictationKey: 'Control+Alt+Space',

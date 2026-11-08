@@ -72,9 +72,22 @@ export default function DataSection({ onOpenSection }) {
           <Button
             variant="bare"
             size="sm"
-            onClick={() => {
-              window.zspeakly?.native?.openDataFolder?.();
-              push({ title: 'Папка данных', description: '%APPDATA%\\ZSpeakly' });
+            onClick={async () => {
+              const bridge = window.zspeakly?.native;
+              if (!bridge?.openDataFolder) {
+                push({
+                  title: 'Папка данных',
+                  description: 'В браузере данные лежат в localStorage. Установленная версия хранит их в %APPDATA%\\ZSpeakly.',
+                  tone: 'warn',
+                });
+                return;
+              }
+              const opened = await bridge.openDataFolder();
+              push({
+                title: opened ? 'Открыл папку данных' : 'Не удалось открыть папку',
+                description: '%APPDATA%\\ZSpeakly',
+                tone: opened ? 'success' : 'warn',
+              });
             }}
           >
             Открыть

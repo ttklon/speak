@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../../state/ToastProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { runInstruction } from '../ai/instructions.js';
+import { analyzeStyle, stylePrompt } from '../ai/style.js';
 import { truncate } from '../utils.js';
 
 function native() {
@@ -50,7 +51,7 @@ async function writeSelection(text) {
 
 export function useTextAction() {
   const { push } = useToast();
-  const { settings } = useAppData();
+  const { settings, dictations } = useAppData();
   const [busy, setBusy] = useState(null);
   const mounted = useRef(true);
 
@@ -75,7 +76,12 @@ export function useTextAction() {
           });
           return;
         }
-        const result = await runInstruction(instruction, source, settings);
+        const style = settings.useWritingStyle ? stylePrompt(analyzeStyle(dictations)) : '';
+        const result = await runInstruction(
+          style && instruction.prompt ? { ...instruction, prompt: `${instruction.prompt} ${style}` } : instruction,
+          source,
+          settings,
+        );
         if (!result || result === source) {
           push({
             title: 'Изменений нет',
@@ -96,7 +102,7 @@ export function useTextAction() {
         if (mounted.current) setBusy(null);
       }
     },
-    [push, settings],
+    [push, settings, dictations],
   );
 
   return { run, busy };

@@ -82,27 +82,13 @@
     "portable": {
       "artifactName": "ZSpeakly-${version}-portable.exe"
     },
-    "extraResources": [
+    "publish": [
       {
-        "from": "models",
-        "to": "models",
-        "filter": [
-          "*.bin",
-          "*.gguf"
-        ]
-      },
-      {
-        "from": "bin",
-        "to": "bin",
-        "filter": [
-          "*.exe",
-          "*.dll"
-        ]
+        "provider": "github",
+        "owner": "ttklon",
+        "repo": "speak",
+        "releaseType": "release"
       }
-    ],
-    "asarUnpack": [
-      "bin/**",
-      "models/**"
     ]
   }
 }

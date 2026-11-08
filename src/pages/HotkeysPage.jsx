@@ -9,6 +9,7 @@ import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
 import { keysLabel, toAccelerator } from '../lib/utils.js';
 import { useTextAction } from '../lib/hotkeys/useTextAction.js';
+import { analyzeStyle, describeStyle } from '../lib/ai/style.js';
 
 export default function HotkeysPage() {
   const {
@@ -22,12 +23,14 @@ export default function HotkeysPage() {
     togglePreset,
     updatePresetKeys,
     instructions,
+    dictations,
     addInstruction,
     removeInstruction,
     updateInstruction,
   } = useAppData();
   const { push } = useToast();
   const { run: runAction, busy } = useTextAction();
+  const style = useMemo(() => analyzeStyle(dictations), [dictations]);
   const [tab, setTab] = useState('voice');
   const [recorder, setRecorder] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -185,22 +188,21 @@ export default function HotkeysPage() {
                 <div className="hk-row--sub">
                   <div className="hk-row__body">
                     <div className="hk-row__title">Стиль письма</div>
-                    <div className="hk-row__desc">
-                      Настроение — подключите приложение для чата, чтобы ответы звучали как вы
-                    </div>
+                    <div className="hk-row__desc">{describeStyle(style)}</div>
                   </div>
-                  <Button
-                    variant="white"
-                    size="sm"
-                    onClick={() =>
+                  <Toggle
+                    checked={Boolean(settings.useWritingStyle)}
+                    onChange={(v) => {
+                      updateSettings({ useWritingStyle: v });
                       push({
-                        title: 'Стиль письма',
-                        description: 'Обучение стилю идёт офлайн: ZSpeakly анализирует ваши тексты локально.',
-                      })
-                    }
-                  >
-                    Подключить
-                  </Button>
+                        title: v ? 'Стиль включён' : 'Стиль выключен',
+                        description: v
+                          ? 'AI-инструкции будут подстраиваться под вашу манеру письма.'
+                          : 'Инструкции работают без подстройки.',
+                        tone: 'success',
+                      });
+                    }}
+                  />
                 </div>
               ) : null}
             </div>

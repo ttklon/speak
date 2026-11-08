@@ -436,7 +436,12 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('app:open-data-folder', () => shell.openPath(app.getPath('userData')));
+  ipcMain.handle('app:open-data-folder', async () => {
+    const target = app.getPath('userData');
+    fs.mkdirSync(target, { recursive: true });
+    const err = await shell.openPath(target);
+    return !err;
+  });
   ipcMain.handle('app:auto-launch', (_e, enabled) => {
     app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args: ['--hidden'] });
     return app.getLoginItemSettings().openAtLogin;
