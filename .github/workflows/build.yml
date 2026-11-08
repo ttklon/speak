@@ -66,6 +66,16 @@ jobs:
       - name: Icons
         run: npm run icons
 
+      - name: Кэш Electron (переживает сетевые сбои раннера)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-cache-${{ runner.os }}-
+
       - name: Build + package (NSIS + portable)
         shell: pwsh
         env:
@@ -74,14 +84,32 @@ jobs:
           DEBUG: electron-builder
         run: |
           npm run build 2>&1 | Tee-Object -FilePath build-renderer.log
-          # --publish never: релиз публикуем отдельным job только по тегу
-          npx electron-builder --win nsis portable --publish never 2>&1 | Tee-Object -FilePath build-package.log
-          if ($LASTEXITCODE -ne 0) {
+
+          # Загрузка бинарника Electron иногда падает на сетевом сбое раннера:
+          # три попытки, между ними — пауза. Это не ошибка нашего кода.
+          $attempt = 0
+          $ok = $false
+          while ($attempt -lt 3 -and -not $ok) {
+            $attempt++
+            Write-Host "::notice title=electron-builder::попытка $attempt из 3"
+            # --publish never: релиз публикуем отдельным job только по тегу
+            npx electron-builder --win nsis portable --publish never 2>&1 | Tee-Object -FilePath build-package.log
+            if ($LASTEXITCODE -eq 0) { $ok = $true }
+            elseif ($attempt -lt 3) {
+              $log = Get-Content build-package.log -Raw
+              $transient = $log -match 'electronDownloader|downloadElectron|ETIMEDOUT|ECONNRESET|socket hang up|Could not connect|HTTP error 5'
+              if (-not $transient) { break }
+              Write-Host "::warning title=electron-builder::сетевой сбой загрузки, повтор через 20 с"
+              Start-Sleep -Seconds 20
+            }
+          }
+
+          if (-not $ok) {
             Get-Content build-package.log -Tail 25 | ForEach-Object {
               $line = ($_ -replace '[\r\n]+', ' ').Trim()
               if ($line) { Write-Host "::error title=electron-builder::$line" }
             }
-            exit $LASTEXITCODE
+            exit 1
           }
 
       - name: Verify artifacts
