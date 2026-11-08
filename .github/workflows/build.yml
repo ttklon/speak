@@ -106,9 +106,26 @@ jobs:
           path: |
             ~/AppData/Local/electron/Cache
             ~/AppData/Local/electron-builder/Cache
+            ~/AppData/Local/electron-builder-binaries
           key: electron-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-cache-${{ runner.os }}-
+
+      - name: Прогреть бинарники electron-builder (NSIS и др.)
+        shell: bash
+        # nsis/winCodeSign качаются с github releases и иногда отдают 504 —
+        # повторяем до пяти раз, дальше настоящая упаковка тоже с повторами
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "::notice title=electron-builder::прогрев бинарников, попытка $i"
+            npx electron-builder --win nsis --publish never > warmup.log 2>&1 || true
+            if [ -z "$(grep -E 'status code 50[0-9]|Cannot|ENOTFOUND|ETIMEDOUT' warmup.log)" ]; then
+              echo "::notice::бинарники на месте"
+              exit 0
+            fi
+            sleep 25
+          done
+          echo "::warning title=electron-builder::бинарники не скачались заранее, пробуем в самой упаковке"
 
       - name: Build + package (NSIS + portable)
         shell: pwsh
