@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     platform: process.platform,
     sttStatus: (model) => ipcRenderer.invoke('stt:status', model),
     transcribe: (payload) => ipcRenderer.invoke('stt:transcribe', payload),
+    transcribePcm: (payload) => ipcRenderer.invoke('stt:transcribe-pcm', payload),
     insertText: (text) => ipcRenderer.invoke('text:insert', text),
     pasteToActive: () => ipcRenderer.invoke('text:paste'),
     readSelection: () => ipcRenderer.invoke('text:read-selection'),

@@ -10,6 +10,7 @@
  */
 
 import { describeRecognitionError } from './errors.js';
+import { startPcmRecording } from '../audio/pcmRecorder.js';
 
 const SpeechRecognitionImpl =
   typeof window !== 'undefined'
@@ -17,8 +18,9 @@ const SpeechRecognitionImpl =
     : null;
 
 export const hasWebSpeech = Boolean(SpeechRecognitionImpl);
+// нужен именно PCM-канал: старый transcribe(wav) без записи звука бесполезен
 export const hasNativeStt = () =>
-  typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribe);
+  typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribePcm);
 
 export function engineName() {
   if (hasNativeStt()) return 'whisper.cpp (офлайн)';
@@ -188,44 +190,65 @@ export function createRecognizer(opts = {}) {
     onLevel,
   } = opts;
 
-  // 1) Нативный whisper.cpp
+  // 1) Нативный whisper.cpp: пишем PCM в рендерере → main → whisper-cli.exe
   if (hasNativeStt()) {
     const native = window.zspeakly.native;
-    let unsub = () => {};
-    let timer = null;
+    let recorder = null;
     let text = '';
+    let stopped = false;
+
     return {
       kind: 'native',
       async start() {
-        onStart?.();
-        unsub = native.onEvent?.((msg) => {
-          if (!msg) return;
-          if (msg.type === 'level') onLevel?.(msg.value);
-          if (msg.type === 'line') {
-            text = [text, msg.text].filter(Boolean).join(' ');
-            onFinal?.({ text: msg.text, last: msg.text });
-          }
-          if (msg.type === 'partial') onPartial?.({ text, interim: msg.text });
-          if (msg.type === 'error') onError?.({ code: msg.code, title: msg.title, hint: msg.hint });
-          if (msg.type === 'end') onEnd?.({ text: msg.text || text });
-        });
-        await native.startRecording?.({ lang });
-        timer = setInterval(() => {
-          const level = native.levelSync?.();
-          if (typeof level === 'number') onLevel?.(level);
-        }, 120);
+        try {
+          recorder = await startPcmRecording({
+            deviceId: opts.deviceId || 'default',
+            onLevel: (v) => onLevel?.(v),
+          });
+          onStart?.();
+        } catch (err) {
+          // нет микрофона или отказали в доступе — сообщаем честно
+          onError?.({ ...describeRecognitionError(err), title: 'Микрофон недоступен', hint: String(err?.message || err) });
+          throw err;
+        }
       },
       async stop() {
-        clearInterval(timer);
-        const res = await native.stopRecording?.();
-        unsub?.();
-        if (res?.text) text = res.text;
+        if (!recorder || stopped) return { text };
+        stopped = true;
+        const { pcm, durationMs } = recorder.stop();
+        if (!pcm?.length || durationMs < 350) {
+          // слишком коротко — whisper всё равно вернёт пустоту
+          return { text: '' };
+        }
+        let res;
+        try {
+          res = await native.transcribePcm?.({
+            pcm,
+            lang: String(lang || 'ru').slice(0, 2),
+            model: opts.model || 'small',
+          });
+        } catch (err) {
+          onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });
+          return { text: '' };
+        }
+        if (res?.ok && res.text) {
+          text = res.text;
+          onFinal?.({ text: res.text, last: res.text });
+          onEnd?.({ text: res.text });
+        } else {
+          onError?.({
+            code: 'stt-empty',
+            title: 'whisper.cpp не распознал',
+            hint: res?.reason || 'Проверьте модель и микрофон в настройках',
+          });
+          onEnd?.({ text: '' });
+        }
         return { text };
       },
       abort() {
-        clearInterval(timer);
-        native.abortRecording?.();
-        unsub?.();
+        stopped = true;
+        recorder?.abort?.();
+        recorder = null;
       },
       get text() {
         return text;

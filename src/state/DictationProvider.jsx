@@ -103,6 +103,8 @@ export function DictationProvider({ children }) {
 
       const recognizer = createRecognizer({
         lang: langTag(settingsRef.current.language),
+        deviceId: settingsRef.current.audioDeviceId,
+        model: settingsRef.current.whisperModel,
         onStart: () => setState('listening'),
         onPartial: ({ text, interim }) => {
           const composed = [text, interim].filter(Boolean).join(' ');

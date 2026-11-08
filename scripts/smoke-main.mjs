@@ -118,8 +118,10 @@ check('main загружается без реального Electron', () => {
 });
 check('IPC-каналы зарегистрированы', () => {
   const need = [
-    'stt:transcribe', 'text:insert', 'text:paste', 'text:read-selection',
+    'stt:transcribe', 'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
+    'models:status', 'models:download', 'models:download-engine',
+    'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',
   ];
   const missing = need.filter((ch) => !handlers.has(ch));
   if (missing.length) throw new Error(`нет каналов: ${missing.join(', ')}`);
@@ -144,6 +146,19 @@ check('замена выделения пишет в буфер', async () => {
 });
 check('hotkey:set принимает строку (обратная совместимость)', () => {
   if (!handlers.get('hotkey:set')({}, 'Control+Alt+Space')) throw new Error('строка не принята');
+});
+
+// ── WAV-контейнер для whisper.cpp ───────────────────────────────────────────
+check('writeWav пишет корректный RIFF-заголовок', () => {
+  const { writeWav } = require(path.resolve('electron/wav.cjs'));
+  const pcm = Buffer.alloc(16000 * 2); // 1 секунда
+  const wav = writeWav(pcm, 16000);
+  if (wav.toString('ascii', 0, 4) !== 'RIFF') throw new Error('нет RIFF');
+  if (wav.toString('ascii', 8, 12) !== 'WAVE') throw new Error('нет WAVE');
+  if (wav.readUInt32LE(24) !== 16000) throw new Error('частота не 16 кГц');
+  if (wav.readUInt16LE(22) !== 1) throw new Error('не моно');
+  if (wav.readUInt32LE(40) !== pcm.length) throw new Error('размер данных неверный');
+  if (wav.length !== 44 + pcm.length) throw new Error('длина файла неверная');
 });
 
 await new Promise((r) => setTimeout(r, 600));

@@ -1,7 +1,7 @@
 {
   "name": "zspeakly",
   "productName": "ZSpeakly",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "ZSpeakly — офлайн голосовой ввод для Windows 11: диктовка в любое поле, словарь, AI-инструкции и буфер обмена.",
   "author": {

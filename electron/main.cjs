@@ -23,6 +23,7 @@ const { JsonStore } = require('./store.cjs');
 const whisper = require('./whisper.cjs');
 const { createUpdater } = require('./updater.cjs');
 const models = require('./models.cjs');
+const { writeWav } = require('./wav.cjs');
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ZSPEAKLY_DEV_URL || 'http://localhost:5173';
@@ -373,6 +374,32 @@ function registerIpc() {
       tray?.setToolTip(Number(value) ? `ZSpeakly — ${value} новых` : 'ZSpeakly — офлайн голосовой ввод');
     } catch {
       /* ignore */
+    }
+  });
+
+  ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {
+    const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
+    const status = whisper.status(model);
+    if (!status.available) return { ok: false, text: '', reason: status.reason };
+    const raw = Buffer.from(payload?.pcm || []);
+    if (!raw.length) return { ok: false, text: '', reason: 'пустая запись' };
+    const dir = path.join(app.getPath('temp'), 'zspeakly');
+    fs.mkdirSync(dir, { recursive: true });
+    const wav = path.join(dir, `dictation-${Date.now()}.wav`);
+    try {
+      fs.writeFileSync(wav, writeWav(raw, payload?.sampleRate || 16000));
+    } catch (err) {
+      return { ok: false, text: '', reason: `не записал wav: ${err.message}` };
+    }
+    const prompt = (store?.get('zs:dictionary') || [])
+      .map((d) => d.word)
+      .slice(0, 40)
+      .join(', ');
+    try {
+      const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt });
+      return res;
+    } finally {
+      fs.rmSync(wav, { force: true });
     }
   });
 
