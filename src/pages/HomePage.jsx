@@ -67,11 +67,10 @@ export default function HomePage() {
   return (
     <div className="page page--home scroll-area">
       <header className="hero">
-        {settings.userName ? (
-          <p className="hero__hello">
-            Привет, {settings.userName}. {state === 'listening' ? 'Записываю…' : 'Всё готово к диктовке.'}
-          </p>
-        ) : null}
+        <p className="hero__hello">
+          {settings.userName ? `Привет, ${settings.userName}. ` : ''}
+          {state === 'listening' ? 'Записываю…' : 'Всё готово к диктовке.'}
+        </p>
         <h1 className="hero__title">
           Не печатай,
           <br />

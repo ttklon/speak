@@ -17,10 +17,14 @@ export default function AccountSection() {
   }, [profile, settings.userName]);
 
   const save = () => {
-    const clean = name.trim().slice(0, 40) || 'local';
+    const clean = name.trim().slice(0, 40);
     updateSettings({ userName: clean });
     setProfile({ ...profile, name: clean });
-    push({ title: 'Имя сохранено', description: clean, tone: 'success' });
+    push({
+      title: clean ? 'Имя сохранено' : 'Имя очищено',
+      description: clean || 'Приветствие будет без имени.',
+      tone: 'success',
+    });
   };
 
   return (

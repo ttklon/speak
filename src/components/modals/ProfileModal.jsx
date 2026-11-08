@@ -31,7 +31,7 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
           <Button
             variant="white"
             onClick={() => {
-              setProfile({ ...profile, name: name.trim() || 'local' });
+              setProfile({ ...profile, name: name.trim() });
               push({ title: 'Профиль сохранён', tone: 'success' });
               onClose?.();
             }}
@@ -45,7 +45,7 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
         <div className="profile-modal__hero">
           <span className="profile-modal__avatar">{(name || 'Z')[0].toUpperCase()}</span>
           <div>
-            <div className="profile-modal__name">{name || 'local'}</div>
+            <div className="profile-modal__name">{name || 'Без имени'}</div>
             <div className="profile-modal__plan">локальный профиль</div>
           </div>
         </div>

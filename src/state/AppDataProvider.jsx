@@ -72,7 +72,7 @@ export function AppDataProvider({ children }) {
   );
   const [stats, setStats] = usePersistentState(STORAGE_KEYS.stats, () => DEFAULT_STATS);
   const [profile, setProfile] = usePersistentState(STORAGE_KEYS.profile, () => ({
-    name: 'local',
+    name: '',
     email: 'me@zspeakly.local',
     plan: 'Free · безлимит',
     credits: 0,

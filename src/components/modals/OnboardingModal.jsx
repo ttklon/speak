@@ -16,8 +16,8 @@ export default function OnboardingModal() {
   // портал нельзя рендерить на сервере (тесты SSR) — включаем только в браузере
   useEffect(() => setMounted(true), []);
   const open = mounted && !settings.onboarded;
-  // profile.name по умолчанию 'local' — это не имя, не подставляем его в поле
-  const preset = settings.userName || (profile?.name && profile.name !== 'local' ? profile.name : '');
+  // имени может не быть вовсе — тогда поле пустое
+  const preset = settings.userName || profile?.name || '';
   const [name, setName] = useState(preset);
 
   useEffect(() => {
