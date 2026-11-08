@@ -1,0 +1,62 @@
+name: Build ZSpeakly
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # ТВОЙ Windows-ПК — self-hosted runner с метками speak,windows
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Info
+        run: |
+          dotnet --info
+          dotnet --list-sdks
+        shell: pwsh
+
+      - name: Restore
+        run: dotnet restore
+        shell: pwsh
+
+      - name: Build Release
+        run: dotnet build --no-restore -c Release --nologo -v minimal
+        shell: pwsh
+
+      - name: Test (если есть)
+        run: |
+          if (Test-Path "tests") { dotnet test --no-build -c Release } else { echo "tests/ нет — пропускаем" }
+        shell: pwsh
+
+      - name: Publish win-x64 (framework-dependent, лёгкий ~25 МБ)
+        # single-file требует отдельного prepare, делаем обычный publish
+        run: dotnet publish src/ZSpeakly.App/ZSpeakly.App.csproj -c Release -r win-x64 --self-contained false -o publish-win-x64 || echo "src/ZSpeakly.App ещё не создан — пропускаем publish"
+        shell: pwsh
+
+      - name: Upload artifact
+        if: hashFiles('publish-win-x64/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZSpeakly-win-x64
+          path: publish-win-x64/
+          retention-days: 7
+
+      - name: Summary
+        run: |
+          echo "### ZSpeakly build OK" >> $env:GITHUB_STEP_SUMMARY
+          echo "Ветка: $env:GITHUB_REF_NAME" >> $env:GITHUB_STEP_SUMMARY
+          echo "Runner: $env:RUNNER_NAME ($env:RUNNER_OS)" >> $env:GITHUB_STEP_SUMMARY
+        shell: pwsh
