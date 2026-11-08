@@ -26,6 +26,10 @@ jobs:
           cache: npm
 
       - name: Install
+        env:
+          # electron-builder скачивает бинарник сам (с ретраями);
+          # пост-установка electron тянет 100 МБ и рвёт всю сборку
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         # сеть на раннере иногда рвётся: до трёх попыток, потом npm install
         run: |
           for i in 1 2 3; do
@@ -69,6 +73,8 @@ jobs:
 
       - name: Install
         shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         # сеть на раннере иногда рвётся: до трёх попыток, потом npm install
         run: |
           for i in 1 2 3; do
