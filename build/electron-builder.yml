@@ -1,0 +1,8 @@
+# Только для CI-релиза: даём electron-builder адрес GitHub Releases,
+# чтобы он сгенерировал latest.yml (по нему работает автообновление).
+# Локальная сборка этот файл не использует.
+publish:
+  provider: github
+  owner: ttklon
+  repo: speak
+  releaseType: release

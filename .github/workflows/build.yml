@@ -69,6 +69,7 @@ jobs:
       - name: Build + package (NSIS + portable)
         shell: pwsh
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           DEBUG: electron-builder
         run: |
@@ -137,6 +138,11 @@ jobs:
         with:
           name: zspeakly-win-x64
           path: artifacts
+
+      - name: Проверка артефактов
+        run: |
+          ls -la artifacts
+          test -f artifacts/latest.yml || echo "::warning::latest.yml не собрался — автообновление не увидит версию"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
