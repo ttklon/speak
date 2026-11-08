@@ -1,8 +1,13 @@
-# Только для CI-релиза: даём electron-builder адрес GitHub Releases,
-# чтобы он сгенерировал latest.yml (по нему работает автообновление).
-# Локальная сборка этот файл не использует.
+# Только для CI-релиза.
+#
+# 1) publish — чтобы electron-builder сгенерировал latest.yml (по нему работает
+#    автообновление). Локальная сборка этот файл не использует.
+# 2) electronDist — берём уже распакованный Electron из node_modules, чтобы
+#    упаковка не зависела от сети раннера (скачивание часто отваливается).
 publish:
   provider: github
   owner: ttklon
   repo: speak
   releaseType: release
+
+electronDist: dist-electron
