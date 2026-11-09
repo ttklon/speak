@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     diagStatus: () => ipcRenderer.invoke('diag:status'),
     diagRecent: (limit) => ipcRenderer.invoke('diag:recent', limit),
     diagSetEnabled: (enabled) => ipcRenderer.invoke('diag:set-enabled', enabled),
+    diagSetEndpoint: (url) => ipcRenderer.invoke('diag:set-endpoint', url),
     diagSendNow: () => ipcRenderer.invoke('diag:send-now'),
     diagPing: () => ipcRenderer.invoke('diag:ping'),
     diagClear: () => ipcRenderer.invoke('diag:clear'),

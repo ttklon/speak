@@ -1,14 +1,30 @@
-# Приёмник журналов ZSpeakly. Разворачивается один раз:
+# Приёмник журналов ZSpeakly.
+#
+# Развернуть (одна команда, ничего больше не нужно):
 #   cd server && npx wrangler deploy
-# Секреты (не в git):
-#   npx wrangler secret put GITHUB_TOKEN   # fine-grained, Contents: RW в приватном репозитории логов
-#   npx wrangler secret put LOGS_SECRET    # необязательный общий секрет
+#
+# Хранилище живёт внутри самого воркера (Durable Object + SQLite),
+# поэтому отдельный репозиторий, база или аккаунт НЕ требуются.
+#
+# Необязательно, но полезно — закрыть чтение журналов ключом:
+#   npx wrangler secret put LOGS_SECRET
+# Приложение при этом продолжает отправлять логи без ключа.
 name = "zspeakly-logs"
 main = "worker.mjs"
 compatibility_date = "2024-11-01"
 workers_dev = true
 
+# Журнал: одна «комната» на приёмник, внутри SQLite
+[[durable_objects.bindings]]
+name = "LOGS"
+class_name = "LogStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["LogStore"]
+
 [vars]
-# приватный репозиторий, куда складываются журналы
-LOGS_REPO = "ttklon/speak-logs"
+# Копия журналов в GitHub-репозиторий — только если сами захотите.
+# Оставьте пустым: основное хранилище уже внутри воркера.
+LOGS_REPO = ""
 LOGS_BRANCH = "main"

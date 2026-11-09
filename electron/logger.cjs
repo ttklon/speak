@@ -23,8 +23,8 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 
-// Приёмник можно переопределить переменной окружения (например, на свой
-// self-hosted коллектор). Пустая строка = отправка выключена принудительно.
+// Куда отправлять журналы. Меняется из «Настройки → Диагностика»,
+// переменной окружения ZSPEAKLY_LOG_ENDPOINT или остаётся по умолчанию.
 const DEFAULT_ENDPOINT = 'https://zspeakly-logs.ttklon.workers.dev/v1/events';
 
 const MAX_MEMORY = 400; // событий в памяти
@@ -40,7 +40,9 @@ let buffered = [];
 let flushTimer = null;
 let filePath = null;
 let enabled = true;
-let endpoint = DEFAULT_ENDPOINT;
+// Адрес приёмника можно переопределить переменной окружения (например, на свой
+// self-hosted коллектор). Пустая строка = отправка выключена принудительно.
+let endpoint = process.env.ZSPEAKLY_LOG_ENDPOINT ?? DEFAULT_ENDPOINT;
 let installId = 'local';
 let context = {}; // версия, платформа и т.п.
 let sending = false;
@@ -212,6 +214,28 @@ function init(opts = {}) {
   return { filePath, enabled, endpoint: endpoint ? 'настроен' : '' };
 }
 
+/**
+ * Свой адрес приёмника из «Настройки → Диагностика».
+ * Пустая строка = не отправлять никуда (только локальный журнал).
+ */
+function setEndpoint(url) {
+  const value = String(url || '').trim();
+  if (!value) {
+    endpoint = '';
+    return { ok: true, endpoint: '' };
+  }
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { ok: false, reason: 'адрес должен начинаться с http:// или https://' };
+    }
+    endpoint = parsed.toString();
+    return { ok: true, endpoint };
+  } catch {
+    return { ok: false, reason: 'некорректный адрес' };
+  }
+}
+
 function setContext(patch = {}) {
   context = { ...context, ...patch };
 }
@@ -274,6 +298,7 @@ const logger = {
   log,
   init,
   setContext,
+  setEndpoint,
   setInstallId,
   setEnabled,
   isEnabled,
@@ -288,6 +313,7 @@ const logger = {
   status() {
     return {
       enabled,
+      endpoint,
       endpointConfigured: Boolean(endpoint),
       installId,
       file: filePath,

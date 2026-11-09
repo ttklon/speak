@@ -1,8 +1,41 @@
 # Приёмник журналов ZSpeakly
 
 Один Cloudflare Worker. Приложение отправляет сюда служебные события
-(`POST /v1/events`), воркер вычищает персональные данные и складывает файл
-в приватный репозиторий: `events/ГГГГ-ММ-ДД/<installId>-<суффикс>.json`.
+(`POST /v1/events`), воркер вычищает персональные данные и складывает их
+в собственное хранилище — **Durable Object с SQLite внутри воркера**.
+
+Отдельный репозиторий, база данных, аккаунт или сервер **не нужны**:
+`npx wrangler deploy` — и всё работает. Читать журналы можно прямо из браузера.
+
+## Развернуть
+
+```bash
+cd server
+npx wrangler deploy
+```
+
+Всё. Адрес воркера (`https://zspeakly-logs.<ваш-поддомен>.workers.dev`) должен
+совпадать с адресом в `electron/logger.cjs` или задаваться переменной
+окружения `ZSPEAKLY_LOG_ENDPOINT`.
+
+Необязательно:
+
+```bash
+# закрыть чтение журналов ключом (приложение шлёт логи и без него)
+npx wrangler secret put LOGS_SECRET
+```
+
+## Читать журналы
+
+| Адрес | Что даёт |
+| --- | --- |
+| `/admin?key=<LOGS_SECRET>` | страница: время, уровень, область, сообщение, данные, стек, версия |
+| `/v1/events?limit=100&key=...` | то же в JSON |
+| `/health` | состояние приёмника и способ хранения |
+
+Страница `/admin` — обычный HTML, открывается в любом браузере, ошибки
+подсвечены красным. Хранится 30 дней и не больше 20 000 событий: старое
+удаляется само, воркер не растёт бесконечно.
 
 ## Что приходит
 
@@ -15,40 +48,30 @@
 | `message` | `Распознавание не удалось` |
 | `data` | `{ bytes: 96_000, model: "small", ms: 4200 }` |
 | `stack` | первые строки стека |
-| `app` | `{ version, platform, arch }` |
+| `app` | `{ version, platform, arch, engine }` |
 | `installId` | случайный uuid, не связан с человеком |
 
 Никогда не отправляется: текст диктовки, содержимое буфера обмена, аудио,
-выделенный текст, промпты, имена файлов. Почта, домашние пути и токены
-заменяются на `<email>`, `<home>`, `<token>` — на стороне приложения,
+выделенный текст, промпты, имя пользователя. Почта, домашние пути и токены
+заменяются на `<email>`, `<home>`, `<token>` — на стороне приложения
 и повторно здесь.
 
-## Развернуть
+## Копия в GitHub (необязательно)
 
-```bash
-cd server
-npx wrangler deploy
-npx wrangler secret put GITHUB_TOKEN   # fine-grained: Contents RW в ttklon/speak-logs
-npx wrangler secret put LOGS_SECRET    # необязательно, общий секрет
-```
-
-Нужен приватный репозиторий `ttklon/speak-logs`. Ветка и репозиторий
-меняются в `wrangler.toml` (`LOGS_REPO`, `LOGS_BRANCH`).
-
-Адрес воркера должен совпадать с адресом в `electron/logger.cjs`
-(`https://zspeakly-logs.ttklon.workers.dev/v1/events`) или задаваться
-переменной окружения `ZSPEAKLY_LOG_ENDPOINT`.
+Если хочется ещё и файлы в репозитории — задайте `LOGS_REPO` в
+`wrangler.toml` и `npx wrangler secret put GITHUB_TOKEN` (fine-grained,
+Contents: RW). Без этого шага всё работает на встроенном хранилище.
 
 ## Проверить
 
 ```bash
-curl -s https://zspeakly-logs.ttklon.workers.dev/health
-curl -s -X POST https://zspeakly-logs.ttklon.workers.dev/v1/events \
+curl -s https://zspeakly-logs.workers.dev/health
+curl -s -X POST https://zspeakly-logs.workers.dev/v1/events \
   -H 'content-type: application/json' \
   -d '{"installId":"test","app":{"version":"1.4.1"},"events":[{"level":"error","scope":"stt","message":"проверка канала"}]}'
 ```
 
-Ответ `{"ok":true,"stored":1}` означает, что событие легло в репозиторий.
-Если канал не настроен, приложение всё равно работает: события лежат в
-`%APPDATA%\ZSpeakly\logs\zspeakly.log` и их можно забрать кнопкой
-«Диагностика → Скопировать ошибки».
+Ответ `{"ok":true,"stored":1}` означает, что событие легло в журнал; смотрите
+его на `/admin`. Если приёмник недоступен, приложение продолжает работать:
+события остаются в `%APPDATA%\ZSpeakly\logs\zspeakly.log`, а «Диагностика →
+Скопировать ошибки» собирает их в текст.
