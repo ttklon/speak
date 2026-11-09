@@ -49,7 +49,17 @@ contextBridge.exposeInMainWorld('zspeakly', {
     openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
     openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
     setAutoLaunch: (enabled) => ipcRenderer.invoke('app:auto-launch', enabled),
+    openLogs: () => ipcRenderer.invoke('app:open-logs'),
+    log: (entry) => ipcRenderer.invoke('diag:log', entry),
+    diagStatus: () => ipcRenderer.invoke('diag:status'),
+    diagRecent: (limit) => ipcRenderer.invoke('diag:recent', limit),
+    diagSetEnabled: (enabled) => ipcRenderer.invoke('diag:set-enabled', enabled),
+    diagSendNow: () => ipcRenderer.invoke('diag:send-now'),
+    diagPing: () => ipcRenderer.invoke('diag:ping'),
+    diagClear: () => ipcRenderer.invoke('diag:clear'),
     setDictationHotkey: (payload) => ipcRenderer.invoke('hotkey:set', payload),
+    httpGet: (url) => ipcRenderer.invoke('http:get', url),
+    httpPost: (payload) => ipcRenderer.invoke('http:post', payload),
     notify: (payload) => ipcRenderer.invoke('app:notify', payload),
     saveFile: (payload) => ipcRenderer.invoke('app:save-file', payload),
     modelsStatus: () => ipcRenderer.invoke('models:status'),
@@ -66,6 +76,11 @@ contextBridge.exposeInMainWorld('zspeakly', {
     onHotkey: (cb) => on('hotkey', cb),
     onTextAction: (cb) => on('text-action', cb),
     onCommand: (cb) => on('command', cb),
+    onClipboardAction: (cb) => {
+      const handler = (_e, action) => cb(action);
+      ipcRenderer.on('clipboard:action', handler);
+      return () => ipcRenderer.removeListener('clipboard:action', handler);
+    },
     onClipboard: (cb) => on('clipboard:item', cb),
   },
 

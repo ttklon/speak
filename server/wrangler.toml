@@ -1,0 +1,14 @@
+# Приёмник журналов ZSpeakly. Разворачивается один раз:
+#   cd server && npx wrangler deploy
+# Секреты (не в git):
+#   npx wrangler secret put GITHUB_TOKEN   # fine-grained, Contents: RW в приватном репозитории логов
+#   npx wrangler secret put LOGS_SECRET    # необязательный общий секрет
+name = "zspeakly-logs"
+main = "worker.mjs"
+compatibility_date = "2024-11-01"
+workers_dev = true
+
+[vars]
+# приватный репозиторий, куда складываются журналы
+LOGS_REPO = "ttklon/speak-logs"
+LOGS_BRANCH = "main"

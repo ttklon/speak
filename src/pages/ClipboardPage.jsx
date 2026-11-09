@@ -54,6 +54,41 @@ export default function ClipboardPage() {
   const [recordMs, setRecordMs] = useState(0);
   const lastExternal = useRef(0);
 
+  // Глобальные сочетания буфера (Shift+Ctrl+A и т.д.) регистрирует main-процесс,
+  // но раньше он слал только навигацию. Теперь действие приезжает сюда, и
+  // «Скриншот с придумкой» реально превращается в заметку с подписью.
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.onClipboardAction) return undefined;
+    return bridge.onClipboardAction((action) => {
+      if (action === 'note') {
+        const run = async () => {
+          const res = await bridge?.screenshot?.();
+          if (!res?.ok) {
+            push({ title: 'Не удалось сделать скриншот', description: res?.reason, tone: 'warn' });
+            return;
+          }
+          addClipboardItem({
+            kind: 'note',
+            title: 'Скриншот с заметкой',
+            text: 'Снимок экрана. Допишите подпись — она сохранится вместе с картинкой.',
+            image: res.image || '',
+            source: 'Скриншот с придумкой',
+            createdAt: Date.now(),
+          });
+          push({
+            title: 'Заметка со скриншотом готова',
+            description: 'Откройте её в буфере и допишите подпись.',
+            tone: 'success',
+          });
+        };
+        run();
+        return;
+      }
+      runHotkey(action === 'screenshot' ? 'screenshot' : action);
+    });
+  }, [addClipboardItem, push]);
+
   // Приём новых элементов из main-процесса Electron (нативный мониторинг)
   useEffect(() => {
     const onClip = (e) => {
@@ -376,6 +411,12 @@ export default function ClipboardPage() {
                 >
                   {item.kind === 'image' && item.image ? (
                     <img className="clip-card__image" src={item.image} alt={item.source || 'Изображение'} />
+                  ) : item.kind === 'password' && settings.hidePasswords ? (
+                    // «Скрывать пароли»: в сетке значение замаскировано, чтобы его
+                    // не было видно при демонстрации экрана
+                    <div className="clip-card__text clip-card__text--masked">
+                      {'•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length)))}
+                    </div>
                   ) : item.kind === 'password' && settings.hidePasswords ? (
                     // «Скрывать пароли»: в сетке значение замаскировано, чтобы его
                     // не было видно при демонстрации экрана

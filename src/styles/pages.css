@@ -2478,3 +2478,81 @@ button.plan-card--action:hover .plan-card__title {
   letter-spacing: 2px;
   color: var(--text-4);
 }
+
+/* ── «Скрывать пароли»: маска в списке, сетке и предпросмотре ── */
+.clip-card__text--masked,
+.clip-preview__masked {
+  letter-spacing: 2px;
+  color: var(--text-4);
+}
+.clip-preview__masked {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.clip-preview__reveal {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0;
+  color: var(--blue-bright, #5a8ce0);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.clip-preview__reveal:hover {
+  filter: brightness(1.2);
+}
+
+/* ── Диагностика: список событий ───────────────────────────── */
+.diag-list {
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 4px;
+}
+.diag-row {
+  display: grid;
+  grid-template-columns: 58px 62px 76px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  background: rgba(255, 255, 255, 0.02);
+}
+.diag-row--error {
+  background: rgba(229, 72, 77, 0.12);
+}
+.diag-row--warn {
+  background: rgba(217, 163, 58, 0.1);
+}
+.diag-row__time {
+  color: var(--text-4);
+}
+.diag-row__level {
+  text-transform: lowercase;
+  color: var(--text-3);
+}
+.diag-row--error .diag-row__level {
+  color: var(--red);
+}
+.diag-row--warn .diag-row__level {
+  color: var(--amber);
+}
+.diag-row__scope {
+  color: var(--blue-bright, #5a8ce0);
+}
+.diag-row__msg {
+  color: var(--text-2);
+  word-break: break-word;
+}
+.diag-row__data {
+  display: block;
+  color: var(--text-4);
+  font-size: 9.5px;
+}

@@ -4,9 +4,9 @@
  * Приоритет:
  *  1) whisper.cpp через main-процесс Electron (полностью офлайн, лучший вариант);
  *  2) Web Speech API (быстрый черновик);
- *  3) демо-движок — если браузер объявляет Web Speech, но сервис недоступен
- *     (типичный случай в офлайне и в headless-браузере), сессия автоматически
- *     переключается на демо-распознавание, чтобы интерфейс оставался живым.
+ *  3) в браузерном превью — демо-движок, если Web Speech недоступен (офлайн,
+ *     headless). В Electron демо НЕТ: там отсутствие движка — это честная
+ *     ошибка с подсказкой, а не выдуманный текст в чужом окне.
  */
 
 import { describeRecognitionError } from './errors.js';
@@ -18,14 +18,18 @@ const SpeechRecognitionImpl =
     : null;
 
 export const hasWebSpeech = Boolean(SpeechRecognitionImpl);
+// В Electron моста достаточно, чтобы отличить настоящую сборку от превью.
+const isElectronShell = () =>
+  typeof window !== 'undefined' && Boolean(window.zspeakly?.isElectron);
 // нужен именно PCM-канал: старый transcribe(wav) без записи звука бесполезен
 export const hasNativeStt = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribePcm);
 
 export function engineName() {
   if (hasNativeStt()) return 'whisper.cpp (офлайн)';
-  if (hasWebSpeech) return 'Web Speech (локально)';
-  return 'демо-движок';
+  if (hasWebSpeech && !isElectronShell()) return 'Web Speech (локально)';
+  if (isElectronShell()) return 'движок не установлен';
+  return 'демо-движок (превью)';
 }
 
 const DEMO_LINES = {
@@ -208,28 +212,49 @@ export function createRecognizer(opts = {}) {
           onStart?.();
         } catch (err) {
           // нет микрофона или отказали в доступе — сообщаем честно
-          onError?.({ ...describeRecognitionError(err), title: 'Микрофон недоступен', hint: String(err?.message || err) });
-          throw err;
+          // Причина от браузера (NotAllowedError, NotFoundError) важнее
+          // технического «Permission denied» — человеку нужен следующий шаг.
+          const named = err?.name === 'NotAllowedError' ? 'not-allowed' : err?.name === 'NotFoundError' ? 'audio-capture' : '';
+          const described = named ? describeRecognitionError(named) : describeRecognitionError('audio-capture');
+          onError?.({
+            ...described,
+            code: named || 'mic-failed',
+            title: described.title || 'Микрофон недоступен',
+            hint: described.hint || String(err?.message || err),
+          });
+          // НЕ пробрасываем исключение: провайдер ждёт промис, а не отказ,
+          // иначе «не удалось начать запись» вместо причины от микрофона.
+          return;
         }
       },
       async stop() {
         if (!recorder || stopped) return { text };
         stopped = true;
         const { pcm, durationMs } = recorder.stop();
-        if (!pcm?.length || durationMs < 350) {
-          // слишком коротко — whisper всё равно вернёт пустоту
-          return { text: '' };
+        if (!pcm?.length) {
+          onError?.({ code: 'no-audio', title: 'Запись пустая', hint: 'Микрофон ничего не передал. Проверьте устройство в настройках.' });
+          onEnd?.({ text: '' });
+          return { text: '', reason: 'no-audio' };
+        }
+        if (durationMs < 350) {
+          onError?.({ code: 'too-short', title: 'Слишком короткая запись', hint: 'Удерживайте клавишу чуть дольше и говорите сразу.' });
+          onEnd?.({ text: '' });
+          return { text: '', reason: 'too-short' };
         }
         let res;
         try {
+          // pcm уходит как Int16Array: main превращает его в сырые байты сам,
+          // иначе whisper получает мусор вместо звука (был именно такой баг)
           res = await native.transcribePcm?.({
             pcm,
+            durationMs,
             lang: String(lang || 'ru').slice(0, 2),
             model: opts.model || 'small',
           });
         } catch (err) {
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });
-          return { text: '' };
+          onEnd?.({ text: '' });
+          return { text: '', reason: String(err?.message || err) };
         }
         if (res?.ok && res.text) {
           text = res.text;
@@ -256,7 +281,9 @@ export function createRecognizer(opts = {}) {
     };
   }
 
-  // 2) Web Speech с автоматическим переходом на демо при недоступном сервисе
+  // 2) Web Speech. Демо-движок подключаем ТОЛЬКО в браузерном превью:
+  // в Electron он вставлял выдуманный текст в чужое окно — это была заглушка,
+  // из-за которой «диктовка работает», хотя распознавания не происходило.
   if (hasWebSpeech) {
     let active = null;
     let emitted = false;
@@ -281,6 +308,16 @@ export function createRecognizer(opts = {}) {
         active?.abort?.();
       } catch {
         /* ignore */
+      }
+      if (isElectronShell()) {
+        // нечего слушать: без сети Web Speech бесполезен, а whisper.cpp не найден
+        onError?.({
+          code: 'web-unavailable',
+          title: 'Распознавание недоступно',
+          hint: 'Web Speech не работает без интернета, а whisper.cpp не установлен. Откройте «Настройки → Функции → Модель распознавания» и скачайте движок с моделью.',
+        });
+        emitEnd({ text: '' });
+        return;
       }
       demo = createDemoRecognizer({
         lang: lang.slice(0, 2),
@@ -369,7 +406,32 @@ export function createRecognizer(opts = {}) {
     };
   }
 
-  // 3) Только демо
+  // 3) Совсем нечем распознавать
+  if (isElectronShell()) {
+    const dead = {
+      kind: 'unavailable',
+      start() {
+        const err = {
+          code: 'engine-missing',
+          title: 'Движок распознавания не установлен',
+          hint: 'Настройки → Функции → Модель распознавания: скачайте whisper.cpp и модель. Без них диктовка не работает.',
+        };
+        onError?.(err);
+        setTimeout(() => onEnd?.({ text: '' }), 300);
+        return err;
+      },
+      stop() {
+        return { text: '' };
+      },
+      abort() {},
+      get text() {
+        return '';
+      },
+    };
+    return dead;
+  }
+
+  // 4) Демо — только браузерное превью, где это осознанная демонстрация
   return createDemoRecognizer({ lang: lang.slice(0, 2), onPartial, onFinal, onError, onEnd, onStart, onLevel });
 }
 

@@ -22,7 +22,7 @@ const PAGES = {
 
 export default function App() {
   const route = useRoute();
-  const { settings, updateSettings } = useAppData();
+  const { settings, updateSettings, presets, instructions } = useAppData();
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('account');
@@ -93,13 +93,57 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
+  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
+  // Теперь реально переключается через data-theme на <html>.
+  useEffect(() => {
+    const theme = settings.theme === 'system' ? 'system' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
+  }, [settings.theme]);
+
+  // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
+  // отдельно. Раньше это происходило только при ручном щелчке тумблера —
+  // после переезда профиля или переустановки автозапуск молча терялся.
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.setAutoLaunch) return;
+    bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
+  }, [settings.autoLaunch]);
+
+  // AI-инструкции должны срабатывать в любом приложении и на любой странице,
+  // а не только когда открыт раздел «Горячие клавиши». Регистрируем их здесь,
+  // на уровне приложения.
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.setDictationHotkey) return;
+    const all = [...(presets || []), ...(instructions || [])];
+    const textActions = all
+      .filter((a) => a.enabled && a.keys?.length)
+      .map((a) => ({ id: a.id, title: a.title, keys: a.keys, enabled: true, prompt: a.prompt || '' }));
+    bridge
+      .setDictationHotkey({
+        dictationKey: settings.dictationKey || 'Control+Alt+Space',
+        textActions,
+      })
+      .catch?.(() => {});
+  }, [presets, instructions, settings.dictationKey]);
+
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onCommand) return undefined;
     return bridge.onCommand((command) => {
       if (command === 'settings') setSettingsOpen(true);
+      // из трея: «Диагностика» открывает настройки сразу на нужном разделе
+      if (command === 'diagnostics') {
+        setSettingsSection('diagnostics');
+        setSettingsOpen(true);
+      }
       if (command === 'clipboard') navigate('clipboard');
       if (command === 'home') navigate('home');
+      if (command === 'mobile') {
+        setSettingsSection('account');
+        setSettingsOpen(true);
+      }
       if (command === 'about') {
         setSettingsSection('about');
         setSettingsOpen(true);

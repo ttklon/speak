@@ -230,18 +230,35 @@ export const OPS = {
 /** Попытка локальной LLM (Ollama). Возвращает null, если недоступна. */
 export async function llmRewrite({ endpoint, model, system, text, timeout = 6000 }) {
   if (!endpoint || !text) return null;
+  const url = `${endpoint.replace(/\/$/, '')}/api/generate`;
+  const body = {
+    model: model || 'qwen2.5:0.5b',
+    prompt: `${system || 'Улучши текст, сохрани смысл, ответь только результатом:'}\n\n${text}`,
+    stream: false,
+    options: { temperature: 0.2, num_predict: 512 },
+  };
+
+  // В окне Electron запрос делает главный процесс: CSP страницы пускает
+  // только localhost:11434, а сервер пользователя может быть на другом порту.
+  const bridge = typeof window !== 'undefined' ? window.zspeakly?.native : null;
+  if (bridge?.httpPost) {
+    try {
+      const res = await bridge.httpPost({ url, body, timeout });
+      if (!res?.ok) return null;
+      const out = String(res.data?.response || '').trim();
+      return out || null;
+    } catch {
+      return null;
+    }
+  }
+
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeout);
   try {
-    const res = await fetch(`${endpoint.replace(/\/$/, '')}/api/generate`, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model || 'qwen2.5:0.5b',
-        prompt: `${system || 'Улучши текст, сохрани смысл, ответь только результатом:'}\n\n${text}`,
-        stream: false,
-        options: { temperature: 0.2, num_predict: 512 },
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     if (!res.ok) return null;

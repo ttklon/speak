@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CircleUser, Info, LayoutGrid, ShieldCheck, SlidersHorizontal, Wifi } from 'lucide-react';
+import { CircleUser, Info, LayoutGrid, ShieldCheck, SlidersHorizontal, Wifi, Bug } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import { Button, Select } from '../ui/Controls.jsx';
 import { Toggle } from '../ui/Toggle.jsx';
@@ -7,6 +7,7 @@ import AccountSection from './sections/AccountSection.jsx';
 import AppSection from './sections/AppSection.jsx';
 import FeaturesSection from './sections/FeaturesSection.jsx';
 import DataSection from './sections/DataSection.jsx';
+import DiagnosticsSection from './sections/DiagnosticsSection.jsx';
 import NetworkSection from './sections/NetworkSection.jsx';
 import AboutSection from './sections/AboutSection.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
@@ -17,6 +18,7 @@ const SECTIONS = [
   { id: 'app', label: 'Приложение', icon: LayoutGrid },
   { id: 'features', label: 'Функции', icon: SlidersHorizontal },
   { id: 'data', label: 'Данные и разрешения', icon: ShieldCheck },
+  { id: 'diagnostics', label: 'Диагностика', icon: Bug },
   { id: 'network', label: 'Сеть', icon: Wifi },
   { id: 'about', label: 'О программе', icon: Info },
 ];
@@ -67,6 +69,7 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
     app: <AppSection />,
     features: <FeaturesSection />,
     data: <DataSection onOpenSection={onSectionChange} />,
+    diagnostics: <DiagnosticsSection />,
     network: <NetworkSection />,
     about: <AboutSection />,
   }[active.id];

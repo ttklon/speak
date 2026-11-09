@@ -16,8 +16,13 @@ import { AppDataProvider } from './state/AppDataProvider.jsx';
 import { DictationProvider } from './state/DictationProvider.jsx';
 import { ToastProvider } from './state/ToastProvider.jsx';
 import { isElectron } from './lib/storage.js';
+import { installErrorHooks } from './lib/diagnostics.js';
 
 if (!isElectron()) document.body.classList.add('web');
+
+// Перехватываем ошибки интерфейса до первого рендера: иначе падение в
+// компоненте видно только в DevTools, которого у пользователя нет.
+installErrorHooks();
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>

@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.4.0',
+  version: '1.4.1',
   build: '2026.11.09',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -169,7 +169,8 @@ export const DEFAULT_SETTINGS = {
   typingEffect: false,
   showFloatingIndicator: true,
   notifications: true,
-  telemetry: false,
+  // отправка ошибок и служебных логов (без текста диктовки); по умолчанию включена
+  diagnostics: true,
   hidePasswords: true,
 };
 

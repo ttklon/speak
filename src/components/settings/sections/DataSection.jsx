@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
@@ -25,7 +26,12 @@ export default function DataSection({ onOpenSection }) {
   } = useAppData();
   const { push } = useToast();
 
-  const audioBytes = Math.round(storageSize * 0.42);
+  // Реальный размер именно диктовок. Раньше здесь было storageSize * 0.42 —
+  // придуманное число, которое ничего не измеряло.
+  const dictationBytes = useMemo(
+    () => new Blob([JSON.stringify(dictations)]).size * 2,
+    [dictations],
+  );
 
   return (
     <div>
@@ -38,11 +44,17 @@ export default function DataSection({ onOpenSection }) {
       <div className="settings-group">
         <div className="settings-group__title">Диктовки</div>
         <div className="setting-row">
-          <div className="setting-row__label">Хранить</div>
+          <div className="setting-row__label">
+            Хранить
+            <div className="setting-row__desc">
+              Старые расшифровки удаляются автоматически — сразу при смене срока и при запуске.
+            </div>
+          </div>
           <Select
             value={String(settings.dictationRetentionDays)}
             onChange={(v) => updateSettings({ dictationRetentionDays: Number(v) })}
             options={[
+              { value: '1', label: '24 часа' },
               { value: '7', label: '1 неделя' },
               { value: '30', label: '1 месяц' },
               { value: '90', label: '3 месяца' },
@@ -53,7 +65,7 @@ export default function DataSection({ onOpenSection }) {
         </div>
         <div className="setting-row">
           <div className="setting-row__label">Занято места</div>
-          <span className="setting-row__value">{formatBytes(audioBytes)}</span>
+          <span className="setting-row__value">{formatBytes(dictationBytes)}</span>
           <Button
             variant="bare"
             size="sm"
@@ -83,11 +95,11 @@ export default function DataSection({ onOpenSection }) {
                 });
                 return;
               }
-              const opened = await bridge.openDataFolder();
+              const res = await bridge.openDataFolder();
               push({
-                title: opened ? 'Открыл папку данных' : 'Не удалось открыть папку',
-                description: '%APPDATA%\\ZSpeakly',
-                tone: opened ? 'success' : 'warn',
+                title: res?.ok ? 'Открыл папку данных' : 'Не удалось открыть папку',
+                description: res?.path || res?.reason || '%APPDATA%\\ZSpeakly',
+                tone: res?.ok ? 'success' : 'warn',
               });
             }}
           >
@@ -171,14 +183,32 @@ export default function DataSection({ onOpenSection }) {
         </div>
         <div className="setting-row">
           <div className="setting-row__label">
-            Телеметрия
+            Отправка ошибок
             <div className="setting-row__desc">
-              {settings.telemetry
-                ? 'Включена. Честно: собирать и отправлять некуда и нечего — сетевого кода для статистики в приложении нет, поэтому на деле ничего не уходит.'
-                : 'Отключена. В приложении вообще нет кода, который что-то отправляет наружу, — этот тумблер ничего не меняет и оставлен только для совместимости настроек.'}
+              Чтобы падения и сбои распознавания можно было починить. Уходят только технические
+              события — без текста диктовки, буфера обмена и имени. По умолчанию включено,
+              выключается одним тумблером. Прежний тумблер «Телеметрия» на это не влияет: сбора
+              статистики в приложении нет.
             </div>
           </div>
-          <Toggle checked={Boolean(settings.telemetry)} onChange={(v) => updateSettings({ telemetry: v })} />
+          <Toggle
+            checked={settings.diagnostics !== false}
+            onChange={(v) => {
+              updateSettings({ diagnostics: v });
+              window.zspeakly?.native?.diagSetEnabled?.(v).catch?.(() => {});
+            }}
+          />
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Диагностика и журнал
+            <div className="setting-row__desc">
+              Последние события, ручная отправка и папка с логами — в разделе «Диагностика».
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => onOpenSection('diagnostics')}>
+            Открыть
+          </Button>
         </div>
         <div className="setting-row">
           <div className="setting-row__label">Уведомления</div>
