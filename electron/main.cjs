@@ -537,6 +537,7 @@ function registerIpc() {
     mainWindow?.webContents.send('model:progress', { id, percent: res.ok ? 100 : 0, done: true, ...res });
     return res;
   });
+  ipcMain.handle('models:import', async (_e, sourcePath) => models.importModel(sourcePath));
   ipcMain.handle('models:download-engine', async () => {
     const res = await models.downloadEngine((percent) => {
       mainWindow?.webContents.send('model:progress', { id: 'engine', percent });
@@ -705,12 +706,25 @@ app.whenReady().then(() => {
     onStatus: (state) => mainWindow?.webContents.send('update:status', state),
     channel: (store.get('zs:settings') || {}).updateChannel || 'stable',
   });
-  // тихая проверка раз в сутки при наличии сети (настройка checkUpdates)
+  // Тихая проверка обновлений: при старте (через 15 с, чтобы не тормозить
+  // запуск) и дальше раз в сутки. Раньше проверка была однократной, хотя
+  // в настройках обещано «раз в сутки» — то есть обновление могло не прийти.
   const initial = store.get('zs:settings') || {};
   if (initial.checkUpdates !== false) {
-    setTimeout(() => {
+    const CHECK_EVERY = 24 * 60 * 60 * 1000;
+    let lastCheck = 0;
+
+    const quietCheck = () => {
+      if ((store.get('zs:settings') || {}).checkUpdates === false) return;
+      lastCheck = Date.now();
       updater?.check().catch(() => {});
-    }, 15000);
+    };
+
+    setTimeout(quietCheck, 15000);
+    const updateTimer = setInterval(() => {
+      if (Date.now() - lastCheck >= CHECK_EVERY) quietCheck();
+    }, 30 * 60 * 1000);
+    updateTimer.unref?.();
   }
 
   const settings = store.get('zs:settings') || {};

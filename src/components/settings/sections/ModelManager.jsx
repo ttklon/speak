@@ -20,18 +20,41 @@ export default function ModelManager() {
   const [progress, setProgress] = useState({}); // id → percent
   const [busy, setBusy] = useState(null);
 
-  const refresh = async () => {
-    if (!bridge?.modelsStatus) return;
-    setStatus(await bridge.modelsStatus());
+  const refresh = async ({ silent = true } = {}) => {
+    if (!bridge?.modelsStatus) return null;
+    try {
+      const next = await bridge.modelsStatus();
+      // если main вернул не то, что ждём — не роняем плашку в «неизвестно»
+      if (next && (next.models || next.bin !== undefined)) setStatus(next);
+      if (!silent) {
+        const found = next?.models ? Object.values(next.models).filter((m) => m.downloaded).length : 0;
+        push({
+          title: 'Статус обновлён',
+          description: `${next?.bin ? 'движок на месте' : 'движка нет'} · моделей скачано: ${found}`,
+          tone: next?.bin ? 'success' : 'warn',
+        });
+      }
+      return next;
+    } catch (err) {
+      if (!silent) push({ title: 'Не удалось прочитать статус', description: String(err?.message || err), tone: 'warn' });
+      return null;
+    }
   };
 
+  // Статус перечитываем сразу и по каждому событию загрузки, а не только
+  // по «done»: иначе скачанная ранее модель оставалась «не скачанной»,
+  // а кнопка «Обновить статус» ничего не перерисовывала.
   useEffect(() => {
     refresh();
+  }, []);
+
+  useEffect(() => {
     if (!bridge?.onModelProgress) return undefined;
     return bridge.onModelProgress((p) => {
       setProgress((prev) => ({ ...prev, [p.id]: p.percent }));
+      // перечитываем статус на любом прогрессе: диск мог измениться извне
+      refresh();
       if (p.done) {
-        refresh();
         setBusy(null);
         if (p.ok) {
           push({
@@ -56,12 +79,47 @@ export default function ModelManager() {
       return;
     }
     setBusy(id);
+    setProgress((prev) => ({ ...prev, [id]: 0 }));
     updateSettings({ whisperModel: id });
-    const res = await bridge.downloadModel(id);
+    let res;
+    try {
+      res = await bridge.downloadModel(id);
+    } catch (err) {
+      res = { ok: false, reason: String(err?.message || err) };
+    }
+    // статус перечитываем в любом случае — даже если ответ потерялся
+    await refresh();
     if (!res?.ok) {
       setBusy(null);
       push({ title: 'Не удалось скачать модель', description: res?.reason, tone: 'warn' });
     }
+  };
+
+  // Модель могли скачать вручную в «Загрузки» — даём подхватить её файлом
+  const importModel = async () => {
+    if (!bridge?.importModel) {
+      push({ title: 'Только в установленном приложении', tone: 'warn' });
+      return;
+    }
+    let res;
+    try {
+      res = await bridge.importModel();
+    } catch (err) {
+      res = { ok: false, reason: String(err?.message || err) };
+    }
+    if (res?.ok) {
+      updateSettings({ whisperModel: res.id });
+      push({
+        title: 'Модель подключена',
+        description: `ggml-${res.id}.bin · ${res.sizeMb} МБ`,
+        tone: 'success',
+      });
+    } else if (res?.canceled) {
+      push({ title: 'Файл не выбран', tone: 'warn' });
+    } else {
+      push({ title: 'Не удалось подключить модель', description: res?.reason, tone: 'warn' });
+    }
+    await refresh();
   };
 
   const downloadEngine = async () => {
@@ -70,7 +128,14 @@ export default function ModelManager() {
       return;
     }
     setBusy('engine');
-    const res = await bridge.downloadEngine();
+    setProgress((prev) => ({ ...prev, engine: 0 }));
+    let res;
+    try {
+      res = await bridge.downloadEngine();
+    } catch (err) {
+      res = { ok: false, reason: String(err?.message || err) };
+    }
+    await refresh();
     if (!res?.ok) {
       setBusy(null);
       push({ title: 'Движок не установился', description: res?.reason, tone: 'warn' });
@@ -154,9 +219,28 @@ export default function ModelManager() {
         >
           {busy === 'engine' ? `Движок ${progress.engine || 0}%` : status?.bin ? 'Движок уже стоит' : 'Скачать движок whisper.cpp'}
         </Button>
-        <Button variant="bare" size="sm" onClick={refresh} disabled={!bridge?.modelsStatus}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={importModel}
+          disabled={!bridge?.importModel || Boolean(busy)}
+        >
+          Указать файл модели
+        </Button>
+        <Button
+          variant="bare"
+          size="sm"
+          onClick={() => refresh({ silent: false })}
+          disabled={!bridge?.modelsStatus}
+          logo={null}
+        >
           Обновить статус
         </Button>
+        {!bridge?.modelsStatus ? (
+          <span className="settings-foot-hint">
+            доступно в установленном приложении — в браузере нет доступа к диску
+          </span>
+        ) : null}
       </div>
       <div className="settings-foot-hint" style={{ marginTop: 8 }}>
         Модели качаются с официальных адресов (Hugging Face, GitHub) и лежат в %APPDATA%\ZSpeakly\models.

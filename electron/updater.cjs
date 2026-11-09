@@ -46,7 +46,9 @@ function createUpdater({ onStatus, channel: initialChannel = 'stable' } = {}) {
     try {
       // require внутри функции: electron-updater тянет electron и падает в тестах
       const { autoUpdater } = require('electron-updater');
-      autoUpdater.autoDownload = false;
+      // Обновление скачивается само, как только найдено: человек должен
+      // получить «версия готова, перезапустить?», а не искать кнопку.
+      autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
       autoUpdater.logger = null;
       applyChannel(autoUpdater);

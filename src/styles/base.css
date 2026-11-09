@@ -16,6 +16,10 @@
   --bg-input: #242425;
   --bg-active: #2d2c2f;
   --bg-hover: #29292b;
+  --bg-toggle-off: #3a3a3e;
+  --bg-key: #2b2b2e;
+  --bg-key-edge: #2a2a2d;
+  --bg-menu: #2a2a2d;
 
   --border: #2f2f31;
   --border-soft: #272729;
@@ -169,4 +173,66 @@ a {
 }
 .hide-scroll::-webkit-scrollbar {
   display: none;
+}
+
+/* ── Светлая тема ──────────────────────────────────────────────
+   Срабатывает, когда Windows в светлом режиме и в настройках выбрано
+   «Как в системе», либо принудительно через html[data-theme="light"].
+   Пока в настройках «Тёмная», тема не переключается никогда. */
+@media (prefers-color-scheme: light) {
+  html[data-theme='system'] {
+    --bg-app: #e9e9ec;
+    --bg-window: #ffffff;
+    --bg-sidebar: #f4f4f6;
+    --bg-content: #fbfbfc;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f3f3f5;
+    --bg-elevated: #ffffff;
+    --bg-input: #f3f3f5;
+    --bg-active: #e8e8ec;
+    --bg-hover: #eeeef1;
+
+    --border: #dcdce1;
+    --border-soft: #e7e7eb;
+    --border-strong: #c9c9d0;
+
+    --text: #14141a;
+    --text-2: #3b3b45;
+    --text-3: #5b5b66;
+    --text-4: #7b7b87;
+    --text-5: #9a9aa5;
+
+    --bg-toggle-off: #c8c8d0;
+    --bg-key: #f0f0f3;
+    --bg-key-edge: #dfdfe4;
+    --bg-menu: #ffffff;
+  }
+}
+
+html[data-theme='light'] {
+  --bg-app: #e9e9ec;
+  --bg-window: #ffffff;
+  --bg-sidebar: #f4f4f6;
+  --bg-content: #fbfbfc;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f3f3f5;
+  --bg-elevated: #ffffff;
+  --bg-input: #f3f3f5;
+  --bg-active: #e8e8ec;
+  --bg-hover: #eeeef1;
+
+  --border: #dcdce1;
+  --border-soft: #e7e7eb;
+  --border-strong: #c9c9d0;
+
+  --text: #14141a;
+  --text-2: #3b3b45;
+  --text-3: #5b5b66;
+  --text-4: #7b7b87;
+  --text-5: #9a9aa5;
+
+  --bg-toggle-off: #c8c8d0;
+  --bg-key: #f0f0f3;
+  --bg-key-edge: #dfdfe4;
+  --bg-menu: #ffffff;
 }

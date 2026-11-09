@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Copy, Mic, Pencil, Search, Square, Trash2, X } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useDictation } from '../state/DictationProvider.jsx';
 import { writeClipboard } from '../lib/clipboard.js';
+import { typeOut } from '../lib/feedback.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds } from '../lib/utils.js';
@@ -34,6 +35,23 @@ export default function HomePage() {
   const [hoverId, setHoverId] = useState(null);
   const [snippet, setSnippet] = useState(null);
   const [editing, setEditing] = useState(null);
+  // эффект печати: постепенно проявляем свежий результат
+  const [typed, setTyped] = useState('');
+  const [typedId, setTypedId] = useState(null);
+
+  useEffect(() => {
+    if (!last || settings.typingEffect !== true) {
+      setTypedId(null);
+      return undefined;
+    }
+    const controller = { aborted: false };
+    setTypedId(last.id);
+    setTyped('');
+    typeOut(last.text, (partial) => setTyped(partial), { signal: controller });
+    return () => {
+      controller.aborted = true;
+    };
+  }, [last?.id, settings.typingEffect]);
 
   // источник правды — строка-акселератор из настроек («Control+Alt+Space»);
   // массив dictationKeys может быть устаревшим после смены сочетания
@@ -120,8 +138,9 @@ export default function HomePage() {
 
         {!listening && last ? (
           <div className="last-result">
+            {/* «Эффект печати»: текст проявляется по словам, как в демонстрации */}
             <Icon name="check" size={13} />
-            <span className="last-result__text">{truncate(last.text, 96)}</span>
+            <span className="last-result__text">{truncate(last.id === typedId ? typed : last.text, 96)}</span>
             <span className="last-result__meta">{formatSeconds(last.durationMs)}</span>
             <button type="button" className="icon-btn icon-btn--sm" onClick={() => copyText(last.text)}>
               <Copy size={12} />

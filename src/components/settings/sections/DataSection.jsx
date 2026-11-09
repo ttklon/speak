@@ -172,9 +172,13 @@ export default function DataSection({ onOpenSection }) {
         <div className="setting-row">
           <div className="setting-row__label">
             Телеметрия
-            <div className="setting-row__desc">Отправка статистики отключена по умолчанию и не нужна.</div>
+            <div className="setting-row__desc">
+              {settings.telemetry
+                ? 'Включена. Честно: собирать и отправлять некуда и нечего — сетевого кода для статистики в приложении нет, поэтому на деле ничего не уходит.'
+                : 'Отключена. В приложении вообще нет кода, который что-то отправляет наружу, — этот тумблер ничего не меняет и оставлен только для совместимости настроек.'}
+            </div>
           </div>
-          <Toggle checked={settings.telemetry} onChange={(v) => updateSettings({ telemetry: v })} />
+          <Toggle checked={Boolean(settings.telemetry)} onChange={(v) => updateSettings({ telemetry: v })} />
         </div>
         <div className="setting-row">
           <div className="setting-row__label">Уведомления</div>

@@ -187,7 +187,7 @@
   width: 34px;
   height: 19px;
   border-radius: 999px;
-  background: #3a3a3e;
+  background: var(--bg-toggle-off);
   position: relative;
   transition: background 0.18s var(--ease);
   flex: none;
@@ -246,9 +246,9 @@
   padding: 0 5px;
   display: inline-grid;
   place-items: center;
-  background: #2b2b2e;
-  border: 1px solid #3a3a3e;
-  border-bottom-color: #2a2a2d;
+  background: var(--bg-key);
+  border: 1px solid var(--border-strong);
+  border-bottom-color: var(--bg-key-edge);
   border-radius: 4px;
   font-size: 9.5px;
   font-family: var(--mono);
@@ -296,8 +296,8 @@
   padding: 0 5px;
   margin: 0 1px;
   border-radius: 4px;
-  background: #2b2b2e;
-  border: 1px solid #3a3a3e;
+  background: var(--bg-key);
+  border: 1px solid var(--border-strong);
   font-family: var(--mono);
   font-size: 9.5px;
   color: var(--text-2);
@@ -434,7 +434,7 @@
   left: 0;
   right: 0;
   max-height: 232px;
-  background: #2a2a2d;
+  background: var(--bg-menu);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-md);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
@@ -662,8 +662,8 @@
   min-width: 240px;
   max-width: 440px;
   padding: 9px 10px 9px 11px;
-  background: #2b2b2e;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--bg-menu);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
   animation: toastIn 0.2s var(--ease);

@@ -47,6 +47,21 @@ export function ToastProvider({ children }) {
             <div className="toast__body">
               <div className="toast__title">{t.title}</div>
               {t.description ? <div className="toast__desc">{t.description}</div> : null}
+              {t.action?.label ? (
+                <button
+                  type="button"
+                  className="toast__action"
+                  onClick={() => {
+                    try {
+                      t.action.onClick?.();
+                    } finally {
+                      dismiss(t.id);
+                    }
+                  }}
+                >
+                  {t.action.label}
+                </button>
+              ) : null}
             </div>
             <button type="button" className="toast__close" onClick={() => dismiss(t.id)} aria-label="Закрыть">
               <X size={12} />

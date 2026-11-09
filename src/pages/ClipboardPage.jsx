@@ -48,6 +48,8 @@ export default function ClipboardPage() {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [justCopied, setJustCopied] = useState(null);
+  // какие пароли пользователь явно раскрыл в этой сессии
+  const [revealed, setRevealed] = useState(() => new Set());
   const [recording, setRecording] = useState(null);
   const [recordMs, setRecordMs] = useState(0);
   const lastExternal = useRef(0);
@@ -374,6 +376,12 @@ export default function ClipboardPage() {
                 >
                   {item.kind === 'image' && item.image ? (
                     <img className="clip-card__image" src={item.image} alt={item.source || 'Изображение'} />
+                  ) : item.kind === 'password' && settings.hidePasswords ? (
+                    // «Скрывать пароли»: в сетке значение замаскировано, чтобы его
+                    // не было видно при демонстрации экрана
+                    <div className="clip-card__text clip-card__text--masked">
+                      {'•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length)))}
+                    </div>
                   ) : (
                     <div className="clip-card__text">{item.text}</div>
                   )}
@@ -400,7 +408,11 @@ export default function ClipboardPage() {
                       onClick={() => setSelectedId(item.id)}
                       onDoubleClick={() => copyPaste(item)}
                     >
-                      <div className="clip-list__text">{item.text || '[изображение]'}</div>
+                      <div className="clip-list__text">
+                        {item.kind === 'password' && settings.hidePasswords
+                          ? '•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length)))
+                          : item.text || '[изображение]'}
+                      </div>
                       <div className="clip-list__source">
                         {item.source} · {timeHM(item.createdAt)}
                       </div>
@@ -439,6 +451,18 @@ export default function ClipboardPage() {
                 <div className="clip-preview__body">
                   {selected.kind === 'image' && selected.image ? (
                     <img className="clip-preview__img" src={selected.image} alt={selected.source} />
+                  ) : selected.kind === 'password' && settings.hidePasswords && !revealed.has(selected.id) ? (
+                    // настройка «Скрывать пароли»: пока не нажали «Показать», значение замаскировано
+                    <span className="clip-preview__masked">
+                      {'•'.repeat(Math.min(24, Math.max(8, String(selected.text || '').length)))}
+                      <button
+                        type="button"
+                        className="clip-preview__reveal"
+                        onClick={() => setRevealed((prev) => new Set(prev).add(selected.id))}
+                      >
+                        Показать
+                      </button>
+                    </span>
                   ) : (
                     selected.text
                   )}

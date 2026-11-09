@@ -208,4 +208,45 @@ async function downloadEngine(onProgress) {
   return { ok: true, path: d.bin, bin: modelStatus().bin };
 }
 
-module.exports = { modelStatus, downloadModel, downloadEngine, MODELS };
+/**
+ * Подхватить модель, скачанную вручную (например, из Hugging Face в «Загрузки»).
+ * Копируем в userData\models под правильным именем ggml-*.bin.
+ */
+async function importModel(sourcePath, onProgress) {
+  const { dialog } = require('electron');
+  let file = sourcePath;
+  if (!file) {
+    const picked = await dialog.showOpenDialog({
+      title: 'Выберите файл модели ggml',
+      properties: ['openFile'],
+      filters: [{ name: 'Модель whisper.cpp', extensions: ['bin'] }],
+    });
+    if (picked.canceled || !picked.filePaths?.length) return { ok: false, canceled: true };
+    file = picked.filePaths[0];
+  }
+
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch (err) {
+    return { ok: false, reason: `файл не читается: ${err.message}` };
+  }
+  if (stat.size < 20 * 1024 * 1024) {
+    return { ok: false, reason: 'это не похоже на модель whisper.cpp (меньше 20 МБ)' };
+  }
+
+  // имя определяем по размеру: tiny ≈ 75, base ≈ 142, small ≈ 466, medium ≈ 1500 МБ
+  const mb = stat.size / (1024 * 1024);
+  const guess = mb < 110 ? 'tiny' : mb < 300 ? 'base' : mb < 900 ? 'small' : 'medium';
+  const target = path.join(ensureDirs().models, `ggml-${guess}.bin`);
+
+  try {
+    fs.copyFileSync(file, target);
+  } catch (err) {
+    return { ok: false, reason: `не удалось скопировать: ${err.message}` };
+  }
+  onProgress?.(100);
+  return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
+}
+
+module.exports = { modelStatus, downloadModel, downloadEngine, importModel, MODELS };

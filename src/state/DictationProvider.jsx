@@ -8,6 +8,7 @@ import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } fro
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS } from '../lib/ai/textops.js';
+import { playCue } from '../lib/feedback.js';
 
 /** Предпросмотр диктовки: читаем результат системным голосом Windows. */
 function speak(text, language = 'ru') {
@@ -69,6 +70,8 @@ export function DictationProvider({ children }) {
         durationMs,
         words: words(cleaned),
         createdAt: Date.now(),
+        // id нужен, чтобы «эффект печати» точно понял, что пришёл новый текст
+        id: `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         language: settingsRef.current.language,
         source: 'dictation',
       };
@@ -106,6 +109,8 @@ export function DictationProvider({ children }) {
       setState('listening');
       if (opts.mode) setMode(opts.mode);
       setHudOpen(true);
+      // настройка «Звуковой отклик» — короткий сигнал на старте
+      if (settingsRef.current.soundFeedback !== false) playCue('start');
 
       // На свежей установке движок или модель могут быть не скачаны.
       // Предупреждаем сразу — иначе человек наговорит минуту и получит пустоту.
@@ -181,6 +186,7 @@ export function DictationProvider({ children }) {
     const rec = recRef.current;
     setState('processing');
     setLevel(0);
+    if (rec && settingsRef.current.soundFeedback !== false) playCue('stop');
     if (!rec) return;
     const fallbackText = recRef.current?.text || draftRef.current;
     const result = rec.stop?.();

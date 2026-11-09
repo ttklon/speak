@@ -15,6 +15,7 @@ import {
 } from '../lib/config.js';
 import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../lib/seed.js';
 import { uid } from '../lib/utils.js';
+import { pruneByAge } from '../lib/retention.js';
 
 const AppDataContext = createContext(null);
 
@@ -79,12 +80,39 @@ export function AppDataProvider({ children }) {
   }));
   const [merged, setMerged] = useState(false);
 
+  // «Хранить» в настройках данных раньше было декорацией: срок сохранялся,
+  // но ничего не удалялось. Теперь старые записи реально вычищаются —
+  // при старте и при каждом изменении срока (см. src/lib/retention.js).
+  useEffect(() => {
+    setDictations((prev) => pruneByAge(prev, settings.dictationRetentionDays));
+    // закреплённые записи буфера не трогаем — их сохраняют намеренно
+    setClipboard((prev) => pruneByAge(prev, settings.clipboardRetentionDays, { keepPinned: true }));
+  }, [
+    settings.dictationRetentionDays,
+    settings.clipboardRetentionDays,
+    setDictations,
+    setClipboard,
+  ]);
+
   // Слияние настроек по умолчанию (после добавления новых полей) — один раз
   useEffect(() => {
     if (merged) return;
     setSettings((prev) => ({ ...DEFAULT_SETTINGS, ...prev }));
     setMerged(true);
   }, [merged, setSettings]);
+
+  // «Свернуть в трей при закрытии»: главный процесс при закрытии окна читает
+  // zs:settings из своего хранилища и падает в дефолт, если веб-сторона туда
+  // ничего не положила. Синхронизируем — иначе тумблер был чистой декорацией.
+  useEffect(() => {
+    const bridge = typeof window !== 'undefined' ? window.zspeakly?.store : null;
+    if (!bridge?.set) return;
+    try {
+      bridge.set('zs:settings', settings);
+    } catch (err) {
+      console.warn('[settings] не удалось передать настройки в главный процесс', err);
+    }
+  }, [settings]);
 
   useEffect(() => {
     const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');

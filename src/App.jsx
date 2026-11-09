@@ -76,6 +76,23 @@ export default function App() {
   }, []);
 
   // Команды из трея / меню Electron
+  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
+  // Теперь реально переключается через data-theme на <html>.
+  useEffect(() => {
+    const theme = settings.theme === 'system' ? 'system' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
+  }, [settings.theme]);
+
+  // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
+  // отдельно. Раньше это происходило только при ручном щелчке тумблера —
+  // после переезда профиля или переустановки автозапуск молча терялся.
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.setAutoLaunch) return;
+    bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
+  }, [settings.autoLaunch]);
+
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onCommand) return undefined;
@@ -100,6 +117,36 @@ export default function App() {
       }
     });
   }, []);
+
+  // Обновление приходит само: слушаем статус апдейтера на уровне приложения,
+  // а не только внутри «О программе». Иначе человек узнавал о новой версии,
+  // лишь случайно открыв настройки.
+  useEffect(() => {
+    const bridge = typeof window !== 'undefined' ? window.zspeakly?.native : null;
+    if (!bridge?.onUpdateStatus) return undefined;
+    let announced = null;
+    return bridge.onUpdateStatus((next) => {
+      if (next.status === 'downloaded' && announced !== next.version) {
+        announced = next.version;
+        push({
+          title: `Обновление ${next.version} загружено`,
+          description: 'Перезапустите приложение, чтобы применить — или нажмите здесь.',
+          tone: 'success',
+          ttl: 12000,
+          action: { label: 'Перезапустить', onClick: () => bridge.installUpdate?.() },
+        });
+      }
+      if (next.status === 'available' && announced !== next.version) {
+        announced = next.version;
+        push({
+          title: `Доступна версия ${next.version}`,
+          description: 'Скачиваю в фоне — можно продолжать работу.',
+          tone: 'success',
+          ttl: 9000,
+        });
+      }
+    });
+  }, [push]);
 
   const openPresets = useCallback(() => {
     navigate('hotkeys');

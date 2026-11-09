@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.3.1',
+  version: '1.4.0',
   build: '2026.11.09',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -160,7 +160,6 @@ export const DEFAULT_SETTINGS = {
   clipboardMonitor: true,
   clipboardMaxItems: 10000,
   clipboardRetentionDays: 30,
-  retentionMonths: 1,
   dictationRetentionDays: 30,
   whisperModel: 'small',
   audioDeviceId: 'default',

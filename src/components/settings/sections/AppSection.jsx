@@ -43,7 +43,10 @@ export default function AppSection() {
         <div className="setting-row">
           <div className="setting-row__label">
             Плавающий индикатор записи
-            <div className="setting-row__desc">Показывает «Слушаю…» с уровнем микрофона поверх окон.</div>
+            <div className="setting-row__desc">
+              Показывает «Слушаю…» с уровнем микрофона поверх окон. Выключите, если мешает, —
+              запись при этом работает как обычно.
+            </div>
           </div>
           <Toggle
             checked={settings.showFloatingIndicator !== false}

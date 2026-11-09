@@ -3,10 +3,15 @@
 import { useEffect, useRef } from 'react';
 import { Mic, Square, X } from 'lucide-react';
 import { useDictation } from '../../state/DictationProvider.jsx';
+import { useAppData } from '../../state/AppDataProvider.jsx';
 
 export default function DictationHUD() {
   const { state, draft, level, elapsed, stop, setHudOpen, error } = useDictation();
-  const open = state === 'listening' || state === 'processing';
+  const { settings } = useAppData();
+  // настройка «Плавающий индикатор записи»: выключили — плашки нет,
+  // но ошибки показываем всегда, иначе человек не поймёт, почему тишина
+  const indicatorOn = settings.showFloatingIndicator !== false;
+  const open = (state === 'listening' || state === 'processing') && indicatorOn;
   const meterRef = useRef(null);
 
   useEffect(() => {
