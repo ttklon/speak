@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button } from '../../ui/Controls.jsx';
 import { APP } from '../../../lib/config.js';
 import { ENGINE_LABEL, IS_ELECTRON } from '../../../lib/constants.js';
+import { plural } from '../../../lib/ai/style.js';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import UpdateRow from './UpdateRow.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
@@ -64,7 +65,9 @@ export default function AboutSection() {
         <div className="kv-row">
           <span className="kv-row__key">Данные</span>
           <span className="kv-row__value">
-            {dictations.length} диктовок · {dictionary.length} слов · {clipboard.length} в буфере
+            {dictations.length} {plural(dictations.length, 'диктовка', 'диктовки', 'диктовок')} ·{' '}
+            {dictionary.length} {plural(dictionary.length, 'слово', 'слова', 'слов')} ·{' '}
+            {clipboard.length} в буфере
           </span>
         </div>
         <div className="kv-row">

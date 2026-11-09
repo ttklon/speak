@@ -1,6 +1,7 @@
 import { TriangleAlert } from 'lucide-react';
 import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
+import { plural } from '../../../lib/ai/style.js';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
@@ -97,7 +98,8 @@ export default function DataSection({ onOpenSection }) {
           <div className="setting-row__label">
             Всего записей
             <div className="setting-row__desc">
-              {dictations.length} диктовок · {clipboard.length} элементов буфера
+              {dictations.length} {plural(dictations.length, 'диктовка', 'диктовки', 'диктовок')} ·{' '}
+              {clipboard.length} {plural(clipboard.length, 'элемент', 'элемента', 'элементов')} буфера
             </div>
           </div>
           <span className="setting-row__value">{formatBytes(storageSize)}</span>
