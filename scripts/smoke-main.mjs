@@ -186,6 +186,32 @@ await check('hotkey:set регистрирует глобальные сочет
   }
   if (registered.includes('Control+Alt+X')) throw new Error('выключенная инструкция зарегистрирована');
 });
+await check('голосовые сочетания регистрируются по-настоящему', () => {
+  registered.length = 0;
+  handlers.get('hotkey:set')({}, {
+    dictationKey: 'Control+Alt+Space',
+    textActions: [],
+    voiceHotkeys: [
+      { id: 'dictation', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+      { id: 'hands-free', keys: ['Ctrl', 'Alt', 'L'], enabled: true },
+      { id: 'agent', keys: ['Ctrl', 'Alt', 'G'], enabled: true },
+      { id: 'screen-aware', keys: ['Ctrl', 'Alt', 'S'], enabled: true },
+      { id: 'off-one', keys: ['Ctrl', 'Alt', 'Z'], enabled: false },
+    ],
+  });
+  for (const accel of ['Control+Alt+L', 'Control+Alt+G', 'Control+Alt+S']) {
+    if (!registered.includes(accel)) throw new Error(`${accel} не зарегистрирован: ${registered.join(' ')}`);
+  }
+  if (registered.includes('Control+Alt+Z')) throw new Error('выключенное сочетание зарегистрировано');
+});
+
+await check('сочетания сохраняются в настройки главного процесса', () => {
+  const saved = (handlers.get('store:get')({}, 'zs:settings') || {}).voiceHotkeys || [];
+  if (!saved.some((h) => h.id === 'agent' && h.enabled)) {
+    throw new Error('список сочетаний не сохранился — после перезапуска вернулись бы прежние');
+  }
+});
+
 await check('замена выделения пишет в буфер', async () => {
   await handlers.get('text:replace-selection')({}, 'готовый текст');
   if (clipboardText.value !== 'готовый текст') throw new Error(`в буфере: ${clipboardText.value}`);

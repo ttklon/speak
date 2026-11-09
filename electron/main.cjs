@@ -233,6 +233,74 @@ function accelerator(keys = []) {
   return keys.map((k) => map[k] || k).join('+');
 }
 
+/**
+ * Голосовые сочетания из раздела «Горячие клавиши». Раньше список был только
+ * подписями в интерфейсе: тумблеры включались, клавиши не работали.
+ * Теперь каждое включённое сочетание регистрируется по-настоящему:
+ *   • диктовка — удержание (down/up) или переключатель (toggle);
+ *   • «свободные руки» — один раз нажал, говоришь, ещё раз — стоп;
+ *   • «агент» — двойное нажатие открывает короткий вопрос к локальной модели;
+ *   • «с учётом экрана» — удержание, при старте снимается контекст экрана.
+ */
+function registerVoiceHotkeys(settings = {}) {
+  const list = Array.isArray(settings.voiceHotkeys) ? settings.voiceHotkeys : [];
+  for (const hk of list) {
+    if (!hk?.enabled || !hk.keys?.length) continue;
+    const accel = hk.id === 'dictation' ? settings.dictationKey || accelerator(hk.keys) : accelerator(hk.keys);
+    if (!accel) continue;
+    try {
+      if (hk.id === 'dictation' || hk.id === 'screen-aware') {
+        // удержание: нажали — слушаем, отпустили — распознаём
+        globalShortcut.register(accel, () => {
+          showWindowForDictation();
+          mainWindow?.webContents.send('hotkey', {
+            type: 'down',
+            mode: hk.mode === 'toggle' ? 'toggle' : 'hold',
+            screenAware: hk.id === 'screen-aware',
+          });
+        });
+      } else if (hk.id === 'hands-free') {
+        globalShortcut.register(accel, () => {
+          showWindowForDictation();
+          mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle' });
+        });
+      } else if (hk.id === 'agent') {
+        // двойное нажатие = «агент», одиночное = обычная диктовка
+        let lastAt = 0;
+        let timer = null;
+        globalShortcut.register(accel, () => {
+          const now = Date.now();
+          if (now - lastAt < 420) {
+            clearTimeout(timer);
+            lastAt = 0;
+            showWindowForDictation();
+            mainWindow?.webContents.send('hotkey', { type: 'agent' });
+            return;
+          }
+          lastAt = now;
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            if (lastAt === now) {
+              showWindowForDictation();
+              mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle' });
+            }
+          }, 430);
+        });
+      }
+    } catch (err) {
+      console.warn('[hotkeys] не удалось зарегистрировать', hk.id, accel, err.message);
+      mainWindow?.webContents.send('hotkey:conflict', { id: hk.id, keys: hk.keys, reason: err.message });
+    }
+  }
+}
+
+/** Диктовка из трея или с клавиши: окно должно быть видно. */
+function showWindowForDictation() {
+  if (!mainWindow?.isVisible()) mainWindow?.show();
+  mainWindow?.showInactive();
+  windowWasHiddenForDictation = true;
+}
+
 function registerShortcuts(settings = {}) {
   globalShortcut.unregisterAll();
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
@@ -241,6 +309,7 @@ function registerShortcuts(settings = {}) {
   } catch (err) {
     console.warn('[hotkeys] dictation failed', err.message);
   }
+  registerVoiceHotkeys(settings);
   try {
     globalShortcut.register('Control+Shift+V', () => navigate('clipboard'));
     globalShortcut.register('Control+,', () => sendCommand('settings'));
@@ -547,15 +616,35 @@ function registerIpc() {
   });
 
   ipcMain.handle('hotkey:set', (_e, payload) => {
-    // payload: строка-акселератор (диктовка) или { dictationKey, textActions }
+    // payload: строка-акселератор (диктовка) или { dictationKey, textActions, voiceHotkeys }
     if (!payload) return false;
+    const current = store.get('zs:settings') || {};
     if (typeof payload === 'string') {
-      const current = store.get('zs:settings') || {};
       registerShortcuts({ ...current, dictationKey: payload });
       return true;
     }
-    registerShortcuts(payload);
+    // сохраняем, иначе после перезапуска сочетания вернутся к прежним
+    store.set('zs:settings', { ...current, ...payload });
+    registerShortcuts({ ...current, ...payload });
     return true;
+  });
+
+  // Контекст экрана для «диктовки с учётом экрана»: один снимок, без записи.
+  ipcMain.handle('screen:capture', async () => {
+    try {
+      const { desktopCapturer } = require('electron');
+      const display = screen.getPrimaryDisplay();
+      const { width, height } = display.size;
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: Math.round(width / 2), height: Math.round(height / 2) },
+      });
+      const source = sources[0];
+      if (!source?.thumbnail) return { ok: false, reason: 'экран недоступен' };
+      return { ok: true, image: source.thumbnail.toDataURL(), width, height };
+    } catch (err) {
+      return { ok: false, reason: String(err?.message || err) };
+    }
   });
 
   // ── Диагностика: логи, статус, ручная отправка ─────────────────────
@@ -972,6 +1061,7 @@ app.whenReady().then(() => {
   registerShortcuts({
     dictationKey: settings.dictationKey || 'Control+Alt+Space',
     textActions: settings.textActions || [],
+    voiceHotkeys: settings.voiceHotkeys || [],
   });
   if (settings.clipboardMonitor !== false) startClipboardWatch();
 
