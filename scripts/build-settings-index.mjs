@@ -43,9 +43,12 @@ function extractRows(source) {
     const label = body.match(/className="setting-row__label"[^>]*>\s*([^<>\n{][^<>\n]*)/);
     const desc = body.match(/className="setting-row__desc"[^>]*>\s*([^<>\n{][^<>\n]*)/);
     if (!label) continue;
+    // описание с JSX-выражением — это код, а не текст: в поиске он бесполезен
+    const rawDesc = (desc?.[1] || '').trim().replace(/\s+/g, ' ');
+    const descDone = /[{}<>]/.test(rawDesc) ? '' : rawDesc;
     rows.push({
       title: label[1].trim().replace(/\s+/g, ' '),
-      desc: (desc?.[1] || '').trim().replace(/\s+/g, ' '),
+      desc: descDone,
     });
   }
   return rows;

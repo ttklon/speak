@@ -65,7 +65,7 @@ export const SETTING_ENTRIES = [
     "section": "app",
     "sectionLabel": "Приложение",
     "title": "Автозапуск с Windows",
-    "desc": "{isElectron()"
+    "desc": ""
   },
   {
     "section": "app",
@@ -155,7 +155,7 @@ export const SETTING_ENTRIES = [
     "section": "data",
     "sectionLabel": "Данные и разрешения",
     "title": "Всего записей",
-    "desc": "{dictations.length} диктовок · {clipboard.length} элементов буфера"
+    "desc": ""
   },
   {
     "section": "data",
