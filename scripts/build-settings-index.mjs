@@ -21,6 +21,7 @@ const SECTION_LABELS = {
   app: 'Приложение',
   features: 'Функции',
   data: 'Данные и разрешения',
+  diagnostics: 'Диагностика',
   network: 'Сеть',
   about: 'О программе',
 };
@@ -30,6 +31,7 @@ const SECTION_FILES = {
   app: 'AppSection.jsx',
   features: 'FeaturesSection.jsx',
   data: 'DataSection.jsx',
+  diagnostics: 'DiagnosticsSection.jsx',
   network: 'NetworkSection.jsx',
   about: 'AboutSection.jsx',
 };

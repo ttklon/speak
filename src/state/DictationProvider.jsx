@@ -9,15 +9,28 @@ import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS } from '../lib/ai/textops.js';
 import { playCue } from '../lib/feedback.js';
+import { diag } from '../lib/diagnostics.js';
+import { useToast } from './ToastProvider.jsx';
 
 /** Предпросмотр диктовки: читаем результат системным голосом Windows. */
-function speak(text, language = 'ru') {
+function speak(text, language = 'ru', voiceURI = '') {
   if (!text || typeof speechSynthesis === 'undefined') return;
   try {
     speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = language === 'ru' ? 'ru-RU' : language === 'en' ? 'en-US' : language;
+    const map = {
+      ru: 'ru-RU', en: 'en-US', de: 'de-DE', es: 'es-ES', fr: 'fr-FR',
+      zh: 'zh-CN', ja: 'ja-JP', tr: 'tr-TR', kk: 'kk-KZ', uk: 'uk-UA',
+    };
+    utter.lang = map[language] || language;
     utter.rate = 1.02;
+    if (voiceURI) {
+      const match = speechSynthesis.getVoices?.().find((v) => v.voiceURI === voiceURI);
+      if (match) {
+        utter.voice = match;
+        utter.lang = match.lang || utter.lang;
+      }
+    }
     speechSynthesis.speak(utter);
   } catch {
     /* голоса нет — молча пропускаем */
@@ -52,6 +65,22 @@ export function DictationProvider({ children }) {
   }, [settings, dictionary]);
 
   const engine = useMemo(() => engineName(), []);
+  const { push: pushToast } = useToast();
+
+  // ошибка не должна висеть на экране навсегда: 12 секунд — и убираем
+  useEffect(() => {
+    if (!error) return undefined;
+    const t = setTimeout(() => setError(null), 12000);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  // Обработка «затянулась»: плашка не должна показывать 0.0 с и «Транскрибирую…»
+  // без движения — сообщаем, сколько уже ждём.
+  useEffect(() => {
+    if (state !== 'processing') return undefined;
+    const t = setInterval(() => setElapsed(Date.now() - startedAt.current), 500);
+    return () => clearInterval(t);
+  }, [state]);
 
   const finish = useCallback(
     (text) => {
@@ -65,7 +94,6 @@ export function DictationProvider({ children }) {
       const cleaned = OPS.clean(postProcess(applyDictionary(raw, dictRef.current), {}));
       const durationMs = Math.max(400, Date.now() - startedAt.current);
       const item = {
-        id: `d_${Date.now().toString(36)}`,
         text: cleaned,
         durationMs,
         words: words(cleaned),
@@ -75,6 +103,13 @@ export function DictationProvider({ children }) {
         language: settingsRef.current.language,
         source: 'dictation',
       };
+      // событие в журнал: видно, что движок реально вернул текст, а не «тишину»
+      diag.info('stt', cleaned ? 'Диктовка распознана' : 'Пустой результат распознавания', {
+        chars: cleaned.length,
+        words: item.words,
+        durationMs,
+        engine: engineName(),
+      });
       setState(cleaned ? 'done' : 'idle');
       setDraft('');
       draftRef.current = '';
@@ -83,7 +118,9 @@ export function DictationProvider({ children }) {
         setLast(item);
         addDictation(item);
         recordWords(item.words, durationMs);
-        if (settingsRef.current.readAloud) speak(cleaned, settingsRef.current.language);
+        if (settingsRef.current.readAloud) {
+          speak(cleaned, settingsRef.current.language, settingsRef.current.readAloudVoice || '');
+        }
         // нативное уведомление Windows: «готово, вставлено» — по настройке
         if (settingsRef.current.notifications && window.zspeakly?.native?.notify) {
           window.zspeakly.native
@@ -148,11 +185,35 @@ export function DictationProvider({ children }) {
         },
         onLevel: (v) => setLevel(v),
         onError: (err) => {
+          // каждая ошибка движка должна быть видна в диагностике, иначе
+          // «не работает» невозможно разобрать постфактум
+          diag.warn('stt', err?.title || err?.code || 'Ошибка распознавания', {
+            code: err?.code,
+            hint: err?.hint,
+          });
           setError(err);
-          if (err.code === 'not-allowed' || err.code === 'service-not-allowed' || err.code === 'network') {
-            recRef.current?.abort?.();
+          // и в тосте: плашка могла быть скрыта или уже закрыться
+          if (err?.title && !/fallback|демо/i.test(err.title)) {
+            pushToast({
+              title: err.title,
+              description: err.hint || '',
+              tone: 'warn',
+              ttl: 9000,
+            });
+          }
+          // Движка нет / он недоступен — запись продолжать бессмысленно:
+          // иначе человек говорит в пустоту и ждёт результата.
+          const fatal = ['not-allowed', 'service-not-allowed', 'network', 'web-unavailable', 'engine-missing'];
+          if (fatal.includes(err.code)) {
+            const rec = recRef.current;
             recRef.current = null;
+            try {
+              rec?.abort?.();
+            } catch {
+              /* ignore */
+            }
             setState('idle');
+            setLevel(0);
           }
         },
         onEnd: ({ text }) => {
@@ -170,37 +231,78 @@ export function DictationProvider({ children }) {
         },
       });
       recRef.current = recognizer;
-      try {
-        recognizer.start();
-      } catch (err) {
+      // start() у нативного движка асинхронный (нужно разрешение на микрофон)
+      const failStart = (err) => {
         console.warn('[dictation] start failed', err);
-        setError({ code: 'start-failed', title: 'Не удалось начать запись', hint: String(err) });
+        diag.error('stt', 'Не удалось начать запись', { reason: String(err?.message || err) });
         recRef.current = null;
         setState('idle');
+        setLevel(0);
+      };
+      try {
+        const started = recognizer.start();
+        if (started && typeof started.then === 'function') started.catch(failStart);
+      } catch (err) {
+        failStart(err);
       }
     },
     [finish],
   );
 
-  const stop = useCallback(() => {
+  const stop = useCallback(async () => {
     const rec = recRef.current;
     setState('processing');
     setLevel(0);
     if (rec && settingsRef.current.soundFeedback !== false) playCue('stop');
     if (!rec) return;
-    const fallbackText = recRef.current?.text || draftRef.current;
-    const result = rec.stop?.();
-    if (result && typeof result.then !== 'function' && result.text !== undefined) {
-      finish(result.text || fallbackText);
-    }
+    const fallbackText = rec.text || draftRef.current;
     recRef.current = null;
     clearTimeout(stopFallback.current);
+
+    // Нативный whisper.cpp останавливается АСИНХРОННО: сначала закрывается
+    // микрофон, потом main-процесс гоняет whisper-cli. Раньше результат-
+    // промис игнорировался, состояние «обрабатываю…» висело вечно и ничего
+    // не транскрибировалось — ровно та жалоба, что пришла от пользователя.
+    let result;
+    try {
+      result = rec.stop?.();
+      if (result && typeof result.then === 'function') result = await result;
+    } catch (err) {
+      console.warn('[dictation] stop failed', err);
+      diag.error('stt', 'Не удалось завершить запись', { reason: String(err?.message || err) });
+      setError({ code: 'stop-failed', title: 'Не удалось завершить запись', hint: String(err) });
+      setState('idle');
+      return;
+    }
+
+    const text = (result && result.text) || fallbackText || '';
+    const item = finish(text);
+    if (!item && text.trim()) return;
+    if (!text.trim()) setState('idle');
   }, [finish]);
 
   const toggle = useCallback(() => {
     if (recRef.current) stop();
     else start({ mode: 'toggle' });
   }, [start, stop]);
+
+  // Страховка: если движок замолчал и не прислал ни конца, ни ошибки,
+  // «обрабатываю…» не должно висеть бесконечно — через 90 секунд сдаёмся
+  // и честно показываем ошибку вместо вечной плашки.
+  useEffect(() => {
+    if (state !== 'processing') return undefined;
+    const t = setTimeout(() => {
+      setError((prev) =>
+        prev || {
+          code: 'stt-timeout',
+          title: 'Распознавание не ответило',
+          hint: 'Проверьте модель в «Настройки → Функции» и отправьте логи из «Настройки → Диагностика».',
+        },
+      );
+      setState('idle');
+    }, 90000);
+    return () => clearTimeout(t);
+  }, [state]);
 
   // Таймер длительности
   useEffect(() => {

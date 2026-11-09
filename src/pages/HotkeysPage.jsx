@@ -45,11 +45,10 @@ export default function HotkeysPage() {
     [presets, instructions],
   );
 
-  useEffect(() => {
-    const bridge = window.zspeakly?.native;
-    if (!bridge?.setDictationHotkey) return;
-    bridge.setDictationHotkey({ dictationKey: settings.dictationKey, textActions });
-  }, [settings.dictationKey, textActions]);
+  // Регистрацией глобальных сочетаний занимается App.jsx: он живёт всё время
+  // работы окна, а страница «Горячие клавиши» — только пока открыта. Раньше
+  // регистрация висела здесь, и после ухода со страницы сочетания оставались
+  // от последнего её рендера.
 
   // Хоткей нажали в системе — выполняем инструкцию здесь, в рендерере
   useEffect(() => {
@@ -66,7 +65,12 @@ export default function HotkeysPage() {
     if (!keys?.length) return;
     if (hk.id === 'dictation') {
       updateSettings({ dictationKeys: keys, dictationKey: toAccelerator(keys) });
-      window.zspeakly?.native?.setDictationHotkey?.(toAccelerator(keys));
+      // Сам акселератор в main уходит отдельным объектом с текстовыми
+      // действиями — иначе регистрация сбрасывалась бы до одной диктовки.
+      window.zspeakly?.native?.setDictationHotkey?.({
+        dictationKey: toAccelerator(keys),
+        textActions,
+      });
     }
     updateHotkey(hk.id, { keys });
     push({ title: 'Сочетание обновлено', description: keysLabel(keys), tone: 'success' });

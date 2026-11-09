@@ -11,7 +11,11 @@ export default function DictationHUD() {
   // настройка «Плавающий индикатор записи»: выключили — плашки нет,
   // но ошибки показываем всегда, иначе человек не поймёт, почему тишина
   const indicatorOn = settings.showFloatingIndicator !== false;
-  const open = (state === 'listening' || state === 'processing') && indicatorOn;
+  // Ошибку показываем даже при выключенном индикаторе и после остановки —
+  // иначе «ничего не произошло» и понять причину невозможно.
+  // Если пользователь сам скрыл плашку, она не всплывает обратно на каждом
+  // такте уровня; новая ошибка всё равно открывает её.
+  const open = Boolean(error) || ((state === 'listening' || state === 'processing') && indicatorOn);
   const meterRef = useRef(null);
 
   useEffect(() => {
@@ -21,6 +25,7 @@ export default function DictationHUD() {
 
   if (!open) return null;
   const seconds = (elapsed / 1000).toFixed(1);
+  const idle = state !== 'listening' && state !== 'processing';
 
   return (
     <div className="hud" role="status" aria-live="polite">
@@ -31,14 +36,16 @@ export default function DictationHUD() {
       </div>
       <div className="hud__body">
         <div className="hud__title">
-          {state === 'processing' ? 'Транскрибирую…' : 'Слушаю…'}
-          <span className="hud__time">{seconds} с</span>
+          {idle ? 'Запись остановлена' : state === 'processing' ? 'Транскрибирую…' : 'Слушаю…'}
+          {idle ? null : <span className="hud__time">{seconds} с</span>}
         </div>
         <div className="hud__text">
           {draft ? (
             <span className="hud__draft">{draft}</span>
           ) : (
-            <span className="hud__hint">Говорите — текст появится здесь</span>
+            <span className="hud__hint">
+              {idle ? 'Причина — ниже. Запись не идёт.' : 'Говорите — текст появится здесь'}
+            </span>
           )}
         </div>
       </div>
@@ -48,8 +55,8 @@ export default function DictationHUD() {
             <Square size={11} fill="currentColor" />
           </button>
         ) : (
-          <span className="hud__btn hud__btn--ghost">
-            <Mic size={12} />
+          <span className="hud__btn hud__btn--ghost" aria-hidden="true">
+            {idle && error ? <X size={12} /> : <Mic size={12} />}
           </span>
         )}
         <button

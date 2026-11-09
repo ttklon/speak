@@ -308,13 +308,19 @@ export function offlineTranslate(text, from = 'ru', to = 'en') {
   out = out.replace(/\s{2,}/g, ' ').trim();
   if (out) out = out[0].toUpperCase() + out.slice(1);
 
-  const translatedWords = out.split(/\s+/).filter((w) => /[а-яё]/i.test(w)).length;
-  const leftover = from === 'ru' ? translatedWords : 0;
+  // Сколько слов реально переведено, а сколько осталось как есть
+  const totalWords = String(text || '').split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  const leftover = out.split(/\s+/).filter((w) => /[а-яё]/i.test(w)).length;
+  const translated = Math.max(0, totalWords - leftover);
   return {
     text: out,
     engine: 'offline',
-    coverage: leftover,
-    note: leftover > 0 ? 'Часть слов осталась без перевода: подключите локальную модель для свободных фраз.' : '',
+    // coverage — доля переведённых слов, в процентах
+    coverage: totalWords ? Math.round((translated / totalWords) * 100) : 100,
+    note:
+      leftover > 0
+        ? 'Часть слов осталась без перевода: подключите локальную модель для свободных фраз.'
+        : '',
   };
 }
 

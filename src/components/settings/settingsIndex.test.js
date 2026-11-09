@@ -4,7 +4,15 @@ import { SETTING_ENTRIES } from './settingsIndex.js';
 describe('индекс настроек', () => {
   it('содержит строки из всех шести разделов', () => {
     const sections = new Set(SETTING_ENTRIES.map((e) => e.section));
-    expect([...sections].sort()).toEqual(['about', 'account', 'app', 'data', 'features', 'network']);
+    expect([...sections].sort()).toEqual([
+      'about',
+      'account',
+      'app',
+      'data',
+      'diagnostics',
+      'features',
+      'network',
+    ]);
   });
 
   it('находит настройки по частым запросам', () => {
@@ -13,6 +21,7 @@ describe('индекс настроек', () => {
     expect(find('уведомл')).toContain('Уведомления');
     expect(find('пароли')).toContain('Скрывать пароли');
     expect(find('обновлен')).toContain('Проверять обновления на GitHub');
+    expect(find('ошибки')).toContain('Отправлять ошибки и логи');
   });
 
   it('не содержит обрезков короче четырёх символов', () => {

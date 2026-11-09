@@ -33,12 +33,14 @@ function guessOp(prompt = '') {
 
 function offlineRun(op, text, settings = {}) {
   switch (op) {
-    case 'translate':
-      return translate(text, {
+    case 'translate': {
+      const result = translate(text, {
         from: settings.language || 'ru',
         to: settings.translateTarget || 'en',
         settings,
       });
+      return result?.text ?? result;
+    }
     case 'formal':
       return OPS.formal(text);
     case 'shorten':

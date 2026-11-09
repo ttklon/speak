@@ -24,6 +24,7 @@ const whisper = require('./whisper.cjs');
 const { createUpdater } = require('./updater.cjs');
 const models = require('./models.cjs');
 const { writeWav } = require('./wav.cjs');
+const { logger } = require('./logger.cjs');
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ZSPEAKLY_DEV_URL || 'http://localhost:5173';
@@ -175,6 +176,8 @@ function createTray() {
     { type: 'separator' },
     { label: 'Мобильное приложение', click: () => sendCommand('mobile') },
     { label: 'О программе', click: () => sendCommand('about') },
+    // Витрина для «пришлите логи, если что-то не работает»
+    { label: 'Диагностика', click: () => sendCommand('diagnostics') },
     { type: 'separator' },
     {
       label: 'Выход',
@@ -241,8 +244,21 @@ function registerShortcuts(settings = {}) {
   try {
     globalShortcut.register('Control+Shift+V', () => navigate('clipboard'));
     globalShortcut.register('Control+,', () => sendCommand('settings'));
-  } catch {
-    /* ignore */
+    // сочетания из раздела «Буфер обмена» — раньше это были только подписи в UI
+    const clipActions = [
+      ['Shift+Control+A', 'screenshot'],
+      ['Shift+Control+R', 'record'],
+      ['Shift+Control+S', 'note'],
+    ];
+    for (const [accel, action] of clipActions) {
+      globalShortcut.register(accel, () => {
+        if (!mainWindow?.isVisible()) mainWindow?.show();
+        mainWindow?.webContents.send('clipboard:action', action);
+        if (action !== 'panel') mainWindow?.webContents.send('navigate', 'clipboard');
+      });
+    }
+  } catch (err) {
+    console.warn('[hotkeys] служебные сочетания не зарегистрированы', err.message);
   }
 
   // AI-инструкции из раздела «Горячие клавиши» (пресеты + свои инструкции)
@@ -401,9 +417,28 @@ function registerIpc() {
   ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {
     const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
     const status = whisper.status(model);
-    if (!status.available) return { ok: false, text: '', reason: status.reason };
-    const raw = Buffer.from(payload?.pcm || []);
-    if (!raw.length) return { ok: false, text: '', reason: 'пустая запись' };
+    if (!status.available) {
+      logger.error('stt', 'Распознавание недоступно', { model, reason: status.reason });
+      return { ok: false, text: '', reason: status.reason };
+    }
+    // ВАЖНО: Buffer.from(Int16Array) копирует ПОБАЙТОВО значения (младший байт),
+    // а не сырые байты — звук превращался в мусор и whisper возвращал пустоту.
+    // Uint8Array/Buffer — уже байты, их можно передавать как есть.
+    const pcmView = payload?.pcm;
+    const raw =
+      pcmView instanceof Uint8Array
+        ? Buffer.from(pcmView.buffer, pcmView.byteOffset, pcmView.byteLength)
+        : Buffer.from(pcmView?.buffer || pcmView || [], pcmView?.byteOffset || 0, pcmView?.byteLength || 0);
+    if (!raw.length) {
+      logger.error('stt', 'Пустая запись пришла в распознавание', { bytes: 0 });
+      return { ok: false, text: '', reason: 'пустая запись' };
+    }
+    logger.info('stt', 'Начало распознавания', {
+      keep: true,
+      model,
+      bytes: raw.length,
+      seconds: payload?.durationMs ? Math.round(payload.durationMs / 100) / 10 : undefined,
+    });
     const dir = path.join(app.getPath('temp'), 'zspeakly');
     fs.mkdirSync(dir, { recursive: true });
     const wav = path.join(dir, `dictation-${Date.now()}.wav`);
@@ -417,8 +452,19 @@ function registerIpc() {
       .slice(0, 40)
       .join(', ');
     try {
+      const started = Date.now();
       const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt });
+      // Пишем только факт и причину — распознанный текст остаётся на устройстве.
+      logger[res?.ok ? 'info' : 'error']('stt', res?.ok ? 'Распознавание завершено' : 'Распознавание не удалось', {
+        keep: true,
+        ms: Date.now() - started,
+        chars: String(res?.text || '').length,
+        reason: res?.reason || '',
+      });
       return res;
+    } catch (err) {
+      logger.error('stt', 'Исключение в распознавании', { stack: String(err?.stack || err) });
+      return { ok: false, text: '', reason: String(err?.message || err) };
     } finally {
       fs.rmSync(wav, { force: true });
     }
@@ -460,7 +506,13 @@ function registerIpc() {
         createdAt: Date.now(),
       };
       mainWindow?.webContents.send('clipboard:item', item);
-      return { ok: true, width: image.getSize().width, height: image.getSize().height };
+      // превью отдаём и вызывающему: заметка со скриншотом строится из него
+      return {
+        ok: true,
+        width: image.getSize().width,
+        height: image.getSize().height,
+        image: item.image,
+      };
     } catch (err) {
       return { ok: false, reason: err.message };
     }
@@ -506,11 +558,121 @@ function registerIpc() {
     return true;
   });
 
+  // ── Диагностика: логи, статус, ручная отправка ─────────────────────
+  ipcMain.handle('diag:log', (_e, payload) => {
+    const level = ['debug', 'info', 'warn', 'error'].includes(payload?.level) ? payload.level : 'info';
+    logger.log(level, payload?.scope, payload?.message, payload?.data);
+    return true;
+  });
+  // Локальный сервер ИИ (Ollama) может стоять на любом порту и адресе:
+  // политика страницы (CSP) такие запросы режет, поэтому оба метода идут
+  // через главный процесс, а он пускает только локальную сеть.
+  const isLocalTarget = (url) => {
+    let target;
+    try {
+      target = new URL(String(url || ''));
+    } catch {
+      return { error: 'некорректный адрес' };
+    }
+    if (!['http:', 'https:'].includes(target.protocol)) return { error: 'разрешены только http и https' };
+    const host = target.hostname;
+    const local =
+      ['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'].includes(host) ||
+      host.endsWith('.local') ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    if (!local) return { error: 'разрешены только локальные адреса' };
+    return { target };
+  };
+
+  // Проверка локального сервера ИИ (Ollama) из «Сеть». Из окна обычный fetch
+  // упирается в CSP страницы, поэтому запрос идёт из главного процесса.
+  ipcMain.handle('http:get', async (_e, url) => {
+    const { target, error } = isLocalTarget(url);
+    if (error) return { ok: false, status: 0, reason: error };
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(target.toString(), { signal: controller.signal });
+      clearTimeout(timer);
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = { raw: text.slice(0, 500) };
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (err) {
+      return { ok: false, status: 0, reason: String(err?.message || err) };
+    }
+  });
+
+  // POST для локальной модели: /api/generate и подобные
+  ipcMain.handle('http:post', async (_e, { url, body, timeout } = {}) => {
+    const { target, error } = isLocalTarget(url);
+    if (error) return { ok: false, status: 0, reason: error };
+    try {
+      const controller = new AbortController();
+      const limit = Math.min(Math.max(Number(timeout) || 8000, 1000), 120000);
+      const timer = setTimeout(() => controller.abort(), limit);
+      const res = await fetch(target.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: typeof body === 'string' ? body : JSON.stringify(body || {}),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = { raw: text.slice(0, 2000) };
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (err) {
+      const aborted = err?.name === 'AbortError';
+      return {
+        ok: false,
+        status: 0,
+        reason: aborted ? 'локальная модель не ответила вовремя' : String(err?.message || err),
+      };
+    }
+  });
+
+  ipcMain.handle('diag:status', () => logger.status());
+  ipcMain.handle('diag:recent', (_e, limit) => logger.recent(limit));
+  ipcMain.handle('diag:set-enabled', (_e, enabled) => {
+    logger.setEnabled(Boolean(enabled));
+    logger.info('diagnostics', enabled ? 'Отправка диагностики включена' : 'Отправка диагностики выключена', {
+      keep: true,
+    });
+    return logger.status();
+  });
+  ipcMain.handle('diag:send-now', async () => logger.sendNow());
+  ipcMain.handle('diag:ping', async () => logger.ping());
+  ipcMain.handle('diag:clear', async () => logger.clear());
+
+  ipcMain.handle('app:open-logs', async () => {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const err = await shell.openPath(dir);
+    return { ok: !err, path: dir, reason: err || '' };
+  });
+
   ipcMain.handle('app:open-data-folder', async () => {
+    // Возвращаем объект, а не boolean: раньше UI показывал «не удалось»,
+    // потому что `if (opened)` было false при любом успехе.
     const target = app.getPath('userData');
-    fs.mkdirSync(target, { recursive: true });
-    const err = await shell.openPath(target);
-    return !err;
+    try {
+      fs.mkdirSync(target, { recursive: true });
+      const err = await shell.openPath(target);
+      return err ? { ok: false, path: target, reason: err } : { ok: true, path: target };
+    } catch (err) {
+      return { ok: false, path: target, reason: String(err?.message || err) };
+    }
   });
   ipcMain.handle('app:auto-launch', (_e, enabled) => {
     app.setLoginItemSettings({ openAtLogin: Boolean(enabled), args: ['--hidden'] });

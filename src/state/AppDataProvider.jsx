@@ -111,8 +111,20 @@ export function AppDataProvider({ children }) {
       bridge.set('zs:settings', settings);
     } catch (err) {
       console.warn('[settings] не удалось передать настройки в главный процесс', err);
+    }  }, [settings]);
+
+  // Словарь нужен main-процессу: слова уходят в whisper как prompt, иначе
+  // имена и термины распознаются «как слышится». Раньше main читал zs:dictionary,
+  // а писал туда только рендерер через localStorage — в Electron словарь не доезжал.
+  useEffect(() => {
+    const bridge = typeof window !== 'undefined' ? window.zspeakly?.store : null;
+    if (!bridge?.set) return;
+    try {
+      bridge.set('zs:dictionary', dictionary);
+    } catch (err) {
+      console.warn('[dictionary] не удалось передать словарь в главный процесс', err);
     }
-  }, [settings]);
+  }, [dictionary]);
 
   useEffect(() => {
     const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');

@@ -3,7 +3,7 @@ import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
-import { ENGINE_LABEL } from '../../../lib/constants.js';
+import { engineName } from '../../../lib/recognition/engine.js';
 
 export default function NetworkSection() {
   const { settings, updateSettings } = useAppData();
@@ -24,10 +24,21 @@ export default function NetworkSection() {
 
   const check = async () => {
     setStatus('checking');
+    // В окне Electron запрос к localhost идёт мимо политики страницы,
+    // иначе адрес Ollama пришлось бы вписывать в CSP.
+    const viaNative = window.zspeakly?.native?.httpGet;
     try {
-      const res = await fetch(`${settings.aiEndpoint.replace(/\/$/, '')}/api/tags`, { method: 'GET' });
+      const url = `${String(settings.aiEndpoint || '').replace(/\/$/, '')}/api/tags`;
+      const res = viaNative
+        ? await viaNative(url)
+        : await fetch(url, { method: 'GET' }).then(async (r) => ({
+            ok: r.ok,
+            status: r.status,
+            data: await r.json().catch(() => null),
+          }));
+      if (!res?.ok) throw new Error(`bad status ${res?.status ?? '?'}`);
       if (!res.ok) throw new Error('bad status');
-      const data = await res.json();
+      const data = res.data || {};
       setStatus('ok');
       push({
         title: 'Локальная модель доступна',
@@ -38,7 +49,7 @@ export default function NetworkSection() {
       setStatus('fail');
       push({
         title: 'Локальная модель недоступна',
-        description: 'ZSpeakly продолжит работать офлайн-правилами.',
+        description: `Проверьте адрес ${settings.aiEndpoint}. Диктовка работает и без него.`,
         tone: 'warn',
       });
     }
@@ -60,7 +71,7 @@ export default function NetworkSection() {
         </div>
         <div className="kv-row">
           <span className="kv-row__key">Движок распознавания</span>
-          <span className="kv-row__value">{ENGINE_LABEL}</span>
+          <span className="kv-row__value">{engineName()}</span>
         </div>
         <div className="kv-row">
           <span className="kv-row__key">Локальный сервер ИИ</span>

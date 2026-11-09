@@ -72,6 +72,8 @@ function status(preferredModel = 'small') {
     available: Boolean(bin && model),
     bin,
     model,
+    // чего именно не хватает — чтобы интерфейс мог объяснить это словами
+    missing: !bin ? 'bin' : !model ? 'model' : '',
     reason: !bin ? 'whisper.cpp не найден' : !model ? 'модель ggml не найдена' : '',
   };
 }
@@ -102,33 +104,72 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
 
     const child = spawn(bin, args, { windowsHide: true });
     let stderr = '';
+    let stdout = '';
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
     const timer = setTimeout(() => {
       child.kill();
-      resolve({ ok: false, text: '', reason: 'таймаут распознавания' });
+      finish({ ok: false, text: '', reason: 'таймаут распознавания' });
     }, timeout);
 
     child.stderr.on('data', (d) => {
       stderr += d.toString();
+      // старые сборки whisper.cpp пишут расшифровку в stderr, а не в файл
+      if (stderr.length > 20000) stderr = stderr.slice(-20000);
+    });
+    child.stdout?.on('data', (d) => {
+      stdout += d.toString();
+      if (stdout.length > 40000) stdout = stdout.slice(-40000);
     });
     child.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ ok: false, text: '', reason: err.message });
+      finish({ ok: false, text: '', reason: err.message });
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
+      // 1) файл -otxt, если сборка его пишет
       try {
         const txt = `${wavPath}.out.txt`;
         if (fs.existsSync(txt)) {
           const text = fs.readFileSync(txt, 'utf8').trim();
           fs.unlinkSync(txt);
-          resolve({ ok: true, text, code });
-          return;
+          if (text) {
+            finish({ ok: true, text, code });
+            return;
+          }
         }
       } catch (err) {
-        resolve({ ok: false, text: '', reason: err.message });
+        finish({ ok: false, text: '', reason: err.message });
         return;
       }
-      resolve({ ok: false, text: '', reason: stderr.slice(-400) || `код ${code}` });
+      // 2) вывод процесса: убираем служебные строки whisper.cpp
+      const fromLog = (blob) =>
+        blob
+          .split(/\r?\n/)
+          .map((line) => line.replace(/^\s*\[[^\]]*\]\s*/, '').trim())
+          .filter((line) => line)
+          .filter(
+            (line) =>
+              !/^(whisper_|ggml_|system_info|main:|output_|load_|mem_|init:)/i.test(line) &&
+              !/^error:/i.test(line) &&
+              !/^\s*(warning|using|processing|auto-detected)/i.test(line),
+          )
+          .join(' ')
+          .trim();
+      const text = fromLog(stdout) || fromLog(stderr);
+      if (text) {
+        finish({ ok: true, text, code });
+        return;
+      }
+      const reason = (stderr || stdout).slice(-400).trim();
+      finish({
+        ok: false,
+        text: '',
+        reason: reason || `whisper.cpp завершился с кодом ${code}`,
+      });
     });
   });
 }
