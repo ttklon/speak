@@ -61,7 +61,12 @@ export default function DictationHUD() {
           <span key={i} className="hud__bar" style={{ '--i': i }} />
         ))}
       </div>
-      {error ? <div className="hud__error">{error.title}</div> : null}
+      {error ? (
+        <div className="hud__error">
+          <strong>{error.title}</strong>
+          {error.hint ? <span className="hud__error-hint">{error.hint}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

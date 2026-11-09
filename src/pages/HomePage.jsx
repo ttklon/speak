@@ -35,10 +35,20 @@ export default function HomePage() {
   const [snippet, setSnippet] = useState(null);
   const [editing, setEditing] = useState(null);
 
+  // источник правды — строка-акселератор из настроек («Control+Alt+Space»);
+  // массив dictationKeys может быть устаревшим после смены сочетания
   const dictationKey =
+    (settings.dictationKey
+      ? settings.dictationKey
+          .split('+')
+          .map((k) => ({ Control: 'Ctrl', Command: 'Cmd', Super: 'Win' })[k] || k)
+      : null) ||
     settings.dictationKeys ||
     voiceHotkeys.find((h) => h.id === 'dictation')?.keys ||
     ['Ctrl', 'Alt', 'Space'];
+
+  // Ctrl+Shift+V открывает панель буфера (см. registerShortcuts в main-процессе)
+  const clipboardKey = ['Ctrl', 'Shift', 'V'];
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -77,11 +87,10 @@ export default function HomePage() {
           просто <span className="hero__badge">ZSpeakly</span>.
         </h1>
         <p className="hero__sub">
-          Удерживайте клавишу{' '}
-          <kbd className="inline-key">{keysLabel(dictationKey.slice(-1))}</kbd> для диктовки. Дважды нажмите
-          клавишу{' '}
-          <kbd className="inline-key">{keysLabel(dictationKey.slice(0, 2))}</kbd>, чтобы открыть панель
-          буфера обмена.
+          Для диктовки — <kbd className="inline-key">{keysLabel(dictationKey)}</kbd>. Панель буфера
+          обмена открывается по{' '}
+          <kbd className="inline-key">{keysLabel(clipboardKey)}</kbd>, настройки — по{' '}
+          <kbd className="inline-key">Ctrl + ,</kbd>.
         </p>
 
         <div className="hero__stats">

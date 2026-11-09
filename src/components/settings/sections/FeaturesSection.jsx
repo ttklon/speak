@@ -9,8 +9,14 @@ import ModelManager from './ModelManager.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 
 export default function FeaturesSection() {
-  const { settings, updateSettings } = useAppData();
+  const { settings, updateSettings, presets } = useAppData();
   const { push } = useToast();
+
+  // сочетание показываем настоящее, из настроек, а не захардкоженное
+  const translateKeys = (() => {
+    const hit = (presets || []).find((p) => p.id === 'to-english' || /англ/i.test(p.prompt || ''));
+    return hit?.keys?.length ? hit.keys.join(' + ') : '';
+  })();
   const [showLanguages, setShowLanguages] = useState(false);
 
   return (
@@ -96,7 +102,7 @@ export default function FeaturesSection() {
         <div className="settings-group__title">Язык перевода для инструкций</div>
         <div className="settings-group__desc">
           Куда переводить выделенный текст, когда срабатывает инструкция «Перевести на английский»
-          (Ctrl+Alt+E).
+          {translateKeys ? ` (${translateKeys})` : ''}.
         </div>
         <div className="setting-row">
           <div className="setting-row__label">Переводить на</div>

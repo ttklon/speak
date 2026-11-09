@@ -4,7 +4,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createRecognizer, engineName, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
+import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS } from '../lib/ai/textops.js';
@@ -106,6 +106,25 @@ export function DictationProvider({ children }) {
       setState('listening');
       if (opts.mode) setMode(opts.mode);
       setHudOpen(true);
+
+      // На свежей установке движок или модель могут быть не скачаны.
+      // Предупреждаем сразу — иначе человек наговорит минуту и получит пустоту.
+      if (hasNativeStt() && window.zspeakly?.native?.sttStatus) {
+        window.zspeakly.native
+          .sttStatus(settingsRef.current.whisperModel)
+          .then((st) => {
+            if (st && st.available === false) {
+              setError({
+                code: 'engine-missing',
+                title: 'Движок распознавания не установлен',
+                hint: `${
+                  !st.bin ? 'Нет whisper.cpp' : 'Нет модели'
+                } — скачайте в «Настройки → Функции → Модель распознавания».`,
+              });
+            }
+          })
+          .catch(() => {});
+      }
 
       const recognizer = createRecognizer({
         lang: langTag(settingsRef.current.language),

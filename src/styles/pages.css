@@ -2404,3 +2404,17 @@ button.plan-card--action:hover .plan-card__title {
     background: transparent;
   }
 }
+
+/* Ошибка в HUD: заголовок + конкретная подсказка, что делать */
+.hud__error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 420px;
+}
+
+.hud__error-hint {
+  color: var(--text-3, #9a9a9a);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
