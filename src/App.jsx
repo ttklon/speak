@@ -22,7 +22,7 @@ const PAGES = {
 
 export default function App() {
   const route = useRoute();
-  const { settings, updateSettings, presets, instructions } = useAppData();
+  const { settings, updateSettings, presets, instructions, voiceHotkeys } = useAppData();
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('account');
@@ -124,9 +124,17 @@ export default function App() {
       .setDictationHotkey({
         dictationKey: settings.dictationKey || 'Control+Alt+Space',
         textActions,
+        // голосовые сочетания: раньше они были только подписями в интерфейсе
+        voiceHotkeys: (voiceHotkeys || []).map((h) => ({
+          id: h.id,
+          title: h.title,
+          keys: h.keys,
+          enabled: Boolean(h.enabled),
+          mode: h.mode || (h.id === 'hands-free' ? 'toggle' : 'hold'),
+        })),
       })
       .catch?.(() => {});
-  }, [presets, instructions, settings.dictationKey]);
+  }, [presets, instructions, settings.dictationKey, voiceHotkeys]);
 
   useEffect(() => {
     const bridge = window.zspeakly?.native;
@@ -148,6 +156,15 @@ export default function App() {
         setSettingsSection('about');
         setSettingsOpen(true);
       }
+    });
+  }, []);
+
+  // Сочетание занято другой программой — сказать вслух, а не молчать
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.onHotkeyConflict) return undefined;
+    return bridge.onHotkeyConflict((payload) => {
+      window.dispatchEvent(new CustomEvent('zs:hotkey-conflict', { detail: payload }));
     });
   }, []);
 

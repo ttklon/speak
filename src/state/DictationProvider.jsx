@@ -7,7 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
-import { OPS } from '../lib/ai/textops.js';
+import { OPS, llmRewrite } from '../lib/ai/textops.js';
 import { playCue } from '../lib/feedback.js';
 import { diag } from '../lib/diagnostics.js';
 import { useToast } from './ToastProvider.jsx';
@@ -58,6 +58,8 @@ export function DictationProvider({ children }) {
   const dictRef = useRef(dictionary);
   const stopFallback = useRef(null);
   const finishing = useRef(false);
+  // кадр экрана для «диктовки с учётом экрана» (в памяти, не на диске)
+  const screenContextRef = useRef(null);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -146,6 +148,19 @@ export function DictationProvider({ children }) {
       setState('listening');
       if (opts.mode) setMode(opts.mode);
       setHudOpen(true);
+      // «диктовка с учётом экрана»: один снимок экрана, чтобы подсказать
+      // распознаванию контекст (термины, имена). Снимок не сохраняется на диск.
+      if (opts.screenAware && window.zspeakly?.native?.captureScreen) {
+        window.zspeakly.native
+          .captureScreen()
+          .then((shot) => {
+            if (shot?.ok) {
+              screenContextRef.current = shot.image;
+              diag.info('stt', 'Контекст экрана снят для диктовки', { width: shot.width, height: shot.height });
+            }
+          })
+          .catch(() => {});
+      }
       // настройка «Звуковой отклик» — короткий сигнал на старте
       if (settingsRef.current.soundFeedback !== false) playCue('start');
 
@@ -281,6 +296,58 @@ export function DictationProvider({ children }) {
     if (!text.trim()) setState('idle');
   }, [finish]);
 
+  /**
+   * «Режим агента»: двойное нажатие сочетания — задаём короткий вопрос
+   * локальной модели (Ollama) по выделенному тексту или последней диктовке.
+   * Полностью офлайн; если модель недоступна — честный тост, а не тишина.
+   */
+  const askAgent = useCallback(async () => {
+    const question = String(finalRef.current || draftRef.current || '').trim();
+    const base = question || 'Кратко перескажи этот текст и назови главное действие.';
+    const settingsNow = settingsRef.current || {};
+    if (!settingsNow.aiEndpoint) {
+      pushToast({
+        title: 'Агент не настроен',
+        description: 'Укажите адрес локальной модели в «Настройки → Сеть».',
+        tone: 'warn',
+        ttl: 9000,
+      });
+      return;
+    }
+    setState('processing');
+    diag.info('agent', 'Запрос к локальной модели', { chars: base.length });
+    try {
+      const source = await (window.zspeakly?.native?.readSelection?.() || Promise.resolve(''));
+      const prompt = source && String(source).trim()
+        ? `Контекст:\n${String(source).slice(0, 4000)}\n\nВопрос: ${base}`
+        : base;
+      const answer = await llmRewrite({
+        endpoint: settingsNow.aiEndpoint,
+        model: settingsNow.aiModel,
+        system: 'Ответь коротко и по делу, без вступлений.',
+        text: prompt,
+        timeout: 20000,
+      });
+      if (!answer) {
+        diag.warn('agent', 'Локальная модель не ответила');
+        pushToast({
+          title: 'Модель не ответила',
+          description: 'Проверьте, запущен ли Ollama: «Настройки → Сеть → Проверить соединение».',
+          tone: 'warn',
+          ttl: 9000,
+        });
+        setState('idle');
+        return;
+      }
+      const item = finish(answer);
+      if (item) pushToast({ title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' });
+    } catch (err) {
+      diag.error('agent', 'Ошибка агента', { reason: String(err?.message || err) });
+      pushToast({ title: 'Агент не сработал', description: String(err?.message || err), tone: 'warn' });
+      setState('idle');
+    }
+  }, [finish, pushToast]);
+
   const toggle = useCallback(() => {
     if (recRef.current) stop();
     else start({ mode: 'toggle' });
@@ -316,9 +383,13 @@ export function DictationProvider({ children }) {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onHotkey) return undefined;
     const off = bridge.onHotkey((payload) => {
-      if (payload?.type === 'down') start({ mode: 'hold' });
+      if (payload?.type === 'down') {
+        // «с учётом экрана»: снимаем контекст один раз на старте записи
+        start({ mode: payload.mode === 'toggle' ? 'toggle' : 'hold', screenAware: payload.screenAware });
+      }
       if (payload?.type === 'up') stop();
       if (payload?.type === 'toggle') toggle();
+      if (payload?.type === 'agent') askAgent();
     });
     return off;
   }, [start, stop, toggle]);
@@ -367,8 +438,9 @@ export function DictationProvider({ children }) {
       clearError: () => setError(null),
       setHudOpen,
       formatK,
+      askAgent,
     }),
-    [state, draft, level, error, last, mode, elapsed, hudOpen, engine, start, stop, toggle, finish],
+    [state, draft, level, error, last, mode, elapsed, hudOpen, engine, start, stop, toggle, finish, askAgent],
   );
 
   return <DictationContext.Provider value={value}>{children}</DictationContext.Provider>;

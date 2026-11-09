@@ -50,6 +50,21 @@ export default function HotkeysPage() {
   // регистрация висела здесь, и после ухода со страницы сочетания оставались
   // от последнего её рендера.
 
+  // Сочетание, занятое другой программой: показываем прямо в разделе
+  useEffect(() => {
+    const onConflict = (e) => {
+      const d = e.detail || {};
+      push({
+        title: 'Сочетание занято',
+        description: `${keysLabel(d.keys || [])} уже использует другая программа — выберите другое.`,
+        tone: 'warn',
+        ttl: 10000,
+      });
+    };
+    window.addEventListener('zs:hotkey-conflict', onConflict);
+    return () => window.removeEventListener('zs:hotkey-conflict', onConflict);
+  }, [push]);
+
   // Хоткей нажали в системе — выполняем инструкцию здесь, в рендерере
   useEffect(() => {
     const bridge = window.zspeakly?.native;
@@ -60,17 +75,16 @@ export default function HotkeysPage() {
     });
   }, [presets, instructions, runAction]);
 
-  /** Сохраняет сочетание: локально, в настройки и в глобальные хоткеи Electron. */
+  /**
+   * Сохраняет сочетание. В главный процесс ничего не шлём: App.jsx держит
+   * единый список (диктовка + голосовые сочетания + инструкции) и сам
+   * перерегистрирует всё при изменении — иначе один отправитель затирал
+   * сочетания другого.
+   */
   const applyCombo = (hk, keys) => {
     if (!keys?.length) return;
     if (hk.id === 'dictation') {
       updateSettings({ dictationKeys: keys, dictationKey: toAccelerator(keys) });
-      // Сам акселератор в main уходит отдельным объектом с текстовыми
-      // действиями — иначе регистрация сбрасывалась бы до одной диктовки.
-      window.zspeakly?.native?.setDictationHotkey?.({
-        dictationKey: toAccelerator(keys),
-        textActions,
-      });
     }
     updateHotkey(hk.id, { keys });
     push({ title: 'Сочетание обновлено', description: keysLabel(keys), tone: 'success' });

@@ -59,7 +59,8 @@ export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'agent',
     title: 'Режим агента',
-    description: 'Двойное нажатие — короткий вопрос локальному агенту (Ollama, без облака)',
+    description:
+      'Двойное нажатие — короткий вопрос локальной модели (Ollama): ответ по выделенному тексту. Без облака; без модели честно скажет, что её нет.',
     keys: ['Ctrl', 'Alt', 'Space'],
     double: true,
     enabled: false,
@@ -69,7 +70,7 @@ export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'hands-free',
     title: 'Режим свободных рук',
-    description: 'Нажмите один раз для старта/остановки',
+    description: 'Нажали один раз — говорите, нажали ещё раз — текст распознан и вставлен.',
     keys: ['Ctrl', 'Alt', 'L'],
     mode: 'toggle',
     enabled: false,
