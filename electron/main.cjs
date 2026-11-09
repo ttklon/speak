@@ -651,6 +651,15 @@ function registerIpc() {
     });
     return logger.status();
   });
+  ipcMain.handle('diag:set-endpoint', (_e, url) => {
+    const res = logger.setEndpoint(url);
+    if (res.ok) {
+      // запоминаем в настройках, чтобы адрес пережил перезапуск
+      const current = store.get('zs:settings') || {};
+      store.set('zs:settings', { ...current, diagEndpoint: res.endpoint });
+    }
+    return { ...res, status: logger.status() };
+  });
   ipcMain.handle('diag:send-now', async () => logger.sendNow());
   ipcMain.handle('diag:ping', async () => logger.ping());
   ipcMain.handle('diag:clear', async () => logger.clear());
@@ -860,6 +869,53 @@ app.on('before-quit', () => {
 
 app.whenReady().then(() => {
   store = new JsonStore();
+
+  // ── Инициализация журнала ─────────────────────────────────────────────
+  // Без неё диагностика «включена», но пишет в никуда: файла нет, отправлять
+  // нечего. Здесь же задаём installId (случайный, не связан с человеком),
+  // версию, платформу и состояние движка — ровно то, что нужно для разбора.
+  const saved = store.get('zs:settings') || {};
+  const engineInfo = (() => {
+    try {
+      return whisper.status(saved.whisperModel || 'small');
+    } catch {
+      return { available: false, reason: 'неизвестно' };
+    }
+  })();
+  const appVersion = (() => {
+    try {
+      return app.getVersion?.() || '';
+    } catch {
+      return '';
+    }
+  })();
+  logger.init({
+    dir: app.getPath('userData'),
+    // выключенный тумблер уважаем; свой адрес приёмника — тоже
+    enabled: saved.diagnostics !== false,
+    endpoint: saved.diagEndpoint === undefined ? undefined : saved.diagEndpoint,
+    context: {
+      version: appVersion,
+      channel: saved.updateChannel || 'stable',
+      platform: process.platform,
+      arch: process.arch,
+      electron: process.versions?.electron || '',
+      engine: engineInfo.available ? 'whisper.cpp' : engineInfo.reason || 'нет',
+    },
+  });
+  const storedId = store.get('zs:installId');
+  if (storedId && typeof storedId === 'string') logger.setInstallId(storedId);
+  else {
+    const fresh = logger.newInstallId();
+    store.set('zs:installId', fresh);
+    logger.setInstallId(fresh);
+  }
+  logger.info('app', 'Запуск ZSpeakly', {
+    keep: true,
+    version: appVersion,
+    engine: engineInfo.available ? 'whisper.cpp' : 'нет',
+  });
+
   registerIpc();
   createWindow();
   createTray();
@@ -916,5 +972,14 @@ app.on('will-quit', () => {
 
 process.on('uncaughtException', (err) => {
   console.error('[main] uncaught', err);
+  logger.error('main', 'Необработанная ошибка', { stack: String(err?.stack || err) });
   dialog.showErrorBox?.('ZSpeakly', String(err?.message || err));
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandled rejection', reason);
+  logger.error('main', 'Необработанный промис', {
+    reason: String(reason?.message || reason),
+    stack: String(reason?.stack || ''),
+  });
 });

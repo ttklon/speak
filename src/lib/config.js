@@ -174,6 +174,12 @@ export const DEFAULT_SETTINGS = {
   hidePasswords: true,
 };
 
+/**
+ * Приёмник журналов по умолчанию. Совпадает с electron/logger.cjs; нужен
+ * интерфейсу, чтобы показать адрес и подставить его кнопкой «По умолчанию».
+ */
+export const LOG_ENDPOINT = 'https://zspeakly-logs.ttklon.workers.dev/v1/events';
+
 export const MODELS = [
   { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '300 МБ', speed: '0.4×', quality: '85% ru' },
   { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '600 МБ', speed: '0.8×', quality: '93% ru' },
@@ -197,6 +203,7 @@ export default {
   NAV,
   CLIPBOARD_TABS,
   LANGUAGES,
+  LOG_ENDPOINT,
   DEFAULT_VOICE_HOTKEYS,
   DEFAULT_AI_PRESETS,
   CLIPBOARD_HOTKEYS,

@@ -6,6 +6,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 import { localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
+import { LOG_ENDPOINT as DEFAULT_LOG_ENDPOINT } from '../../../lib/config.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -27,6 +28,9 @@ export default function DiagnosticsSection() {
   const [status, setStatus] = useState(null);
   const [events, setEvents] = useState([]);
   const [busy, setBusy] = useState('');
+  // черновик адреса приёмника: применяется по кнопке, чтобы не дёргать
+  // сеть на каждом нажатии клавиши
+  const [endpointDraft, setEndpointDraft] = useState('');
 
   const refresh = useCallback(async () => {
     const bridge = window.zspeakly?.native;
@@ -47,6 +51,41 @@ export default function DiagnosticsSection() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // адрес берём из настроек главного процесса: он же переживает перезапуск
+  useEffect(() => {
+    const current = status?.endpoint;
+    if (typeof current === 'string') setEndpointDraft(current);
+  }, [status?.endpoint]);
+
+  const saveEndpoint = async () => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.diagSetEndpoint) {
+      push({ title: 'Только в приложении', description: 'В браузере адрес не меняется.', tone: 'warn' });
+      return;
+    }
+    setBusy('endpoint');
+    try {
+      const res = await bridge.diagSetEndpoint(endpointDraft.trim());
+      if (res?.ok) {
+        setStatus(res.status || null);
+        setEndpointDraft(res.endpoint || '');
+        push({
+          title: res.endpoint ? 'Адрес приёмника сохранён' : 'Отправка отключена',
+          description: res.endpoint
+            ? 'Проверьте канал кнопкой «Проверить канал».'
+            : 'События останутся только в локальном журнале.',
+          tone: 'success',
+        });
+      } else {
+        push({ title: 'Адрес не принят', description: res?.reason || '', tone: 'warn' });
+      }
+    } catch (err) {
+      push({ title: 'Не удалось сохранить', description: String(err?.message || err), tone: 'warn' });
+    } finally {
+      setBusy('');
+    }
+  };
 
   const toggleEnabled = (value) => {
     updateSettings({ diagnostics: value });
@@ -194,6 +233,46 @@ export default function DiagnosticsSection() {
           Если приёмник ещё не развёрнут или недоступен, отправка просто не удаётся — события
           остаются в журнале. Кнопка «Скопировать ошибки» кладёт последние строки в буфер: их можно
           прислать разработчику в чат, и этого хватит, чтобы найти причину.
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Адрес приёмника
+            <div className="setting-row__desc">
+              По умолчанию — сервер ZSpeakly. Можно указать свой (например, развёрнутый из папки
+              server) или очистить поле, чтобы ничего не отправлять.
+            </div>
+          </div>
+          <div className="row-8">
+            <input
+              className="input settings-inline-input"
+              style={{ width: 300 }}
+              placeholder="https://…/v1/events"
+              value={endpointDraft}
+              onChange={(e) => setEndpointDraft(e.target.value)}
+            />
+            <Button
+              variant="white"
+              size="sm"
+              onClick={saveEndpoint}
+              disabled={busy === 'endpoint' || !isElectron()}
+            >
+              {busy === 'endpoint' ? 'Сохраняю…' : 'Сохранить'}
+            </Button>
+            <Button
+              variant="bare"
+              size="sm"
+              onClick={() => {
+                setEndpointDraft(DEFAULT_LOG_ENDPOINT);
+                push({
+                  title: 'Адрес по умолчанию подставлен',
+                  description: 'Нажмите «Сохранить», чтобы применить.',
+                  tone: 'info',
+                });
+              }}
+            >
+              По умолчанию
+            </Button>
+          </div>
         </div>
         <div className="kv-row">
           <span className="kv-row__key">Последняя отправка</span>

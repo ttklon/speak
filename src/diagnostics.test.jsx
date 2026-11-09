@@ -88,6 +88,40 @@ describe('воркер: приёмник журналов', () => {
     expect(worker.parseBatch(null)).toEqual([]);
   });
 
+  it('хранит события без внешней базы и отдаёт их списком', async () => {
+    // state без SQLite → срабатывает резервный путь на обычном хранилище
+    const kv = new Map();
+    const state = {
+      storage: {
+        get: async (k) => kv.get(k),
+        put: async (k, v) => kv.set(k, v),
+      },
+    };
+    const store = new worker.LogStore(state, {});
+    const append = await store.fetch(
+      new Request('https://log-store/append', {
+        method: 'POST',
+        body: JSON.stringify({
+          installId: 'abc',
+          app: { version: '1.4.1' },
+          events: [{ at: 1, level: 'error', scope: 'stt', message: 'сбой' }],
+        }),
+      }),
+    );
+    expect((await append.json()).stored).toBe(1);
+
+    const list = await store.fetch(new Request('https://log-store/list?limit=10'));
+    const data = await list.json();
+    expect(data.events[0].message).toBe('сбой');
+    expect(data.events[0].version).toBe('1.4.1');
+  });
+
+  it('страница /admin закрыта ключом, если ключ задан', async () => {
+    const res = await worker.default.fetch(new Request('https://logs.test/admin'), { LOGS_SECRET: 'k' });
+    expect(res.status).toBe(401);
+    expect(await res.text()).toContain('Неверный ключ');
+  });
+
   it('отдаёт health-ответ без обращения к репозиторию', async () => {
     const res = await worker.default.fetch(new Request('https://logs.test/health'), {});
     expect(res.status).toBe(200);
