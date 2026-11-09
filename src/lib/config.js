@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.4.2',
+  version: '1.4.3',
   build: '2026.11.09',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -175,10 +175,11 @@ export const DEFAULT_SETTINGS = {
 };
 
 /**
- * Приёмник журналов по умолчанию. Совпадает с electron/logger.cjs; нужен
- * интерфейсу, чтобы показать адрес и подставить его кнопкой «По умолчанию».
+ * Приёмник журналов. Пустая строка по умолчанию: приложению не нужен ни сервер,
+ * ни аккаунт — журнал лежит на компьютере, отчёт сохраняется одной кнопкой.
+ * Если у пользователя есть свой приёмник (см. server/), он вписывает адрес сам.
  */
-export const LOG_ENDPOINT = 'https://zspeakly-logs.ttklon.workers.dev/v1/events';
+export const LOG_ENDPOINT = '';
 
 export const MODELS = [
   { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '300 МБ', speed: '0.4×', quality: '85% ru' },

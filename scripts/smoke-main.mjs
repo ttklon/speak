@@ -64,7 +64,7 @@ const electronStub = {
     on: () => {},
     whenReady: () => Promise.resolve(),
     quit: () => {},
-    getVersion: () => '1.4.2',
+    getVersion: () => '1.4.3',
     getName: () => 'ZSpeakly',
     getPath: () => userData,
     getAppPath: () => process.cwd(),
@@ -267,6 +267,25 @@ await check('хоткей диктовки показывает скрытое �
   entry.fn();
 });
 
+
+await check('отчёт диагностики сохраняется файлом на Рабочем столе', async () => {
+  const save = handlers.get('diag:save-report');
+  if (!save) throw new Error('нет канала diag:save-report');
+  const res = await save({});
+  if (!res?.ok) throw new Error(res?.reason || 'не сохранилось');
+  if (!fs.existsSync(res.path)) throw new Error('файла нет по указанному пути');
+  const text = fs.readFileSync(res.path, 'utf8');
+  if (!text.includes('отчёт диагностики')) throw new Error('в файле нет заголовка отчёта');
+  if (!text.includes('система:')) throw new Error('в отчёте нет окружения');
+  fs.rmSync(res.path, { force: true });
+});
+
+await check('по умолчанию наружу ничего не отправляется', async () => {
+  const status = await handlers.get('diag:status')({});
+  if (status.endpointConfigured) throw new Error('адрес приёмника задан по умолчанию');
+  const res = await handlers.get('diag:send-now')({});
+  if (res?.ok) throw new Error('отправка прошла без настроенного приёмника');
+});
 
 console.log(`\nOK (${ok.length}):`);
 ok.forEach((n) => console.log('  ✓', n));

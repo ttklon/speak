@@ -35,6 +35,25 @@ describe('logger: редакция личных данных', () => {
   });
 });
 
+describe('logger: отчёт для пользователя', () => {
+  it('содержит окружение и события, но не личные данные', () => {
+    logger.init({
+      dir: '',
+      endpoint: '',
+      context: { version: '1.4.3', platform: 'win32', arch: 'x64', engine: 'нет' },
+    });
+    logger.setSilent(true);
+    logger.clear();
+    logger.error('stt', 'Сбой у ivan@mail.ru, путь C:\\Users\\Ivan\\x', { bytes: 10 });
+    const report = logger.report();
+    expect(report).toContain('отчёт диагностики');
+    expect(report).toContain('версия: 1.4.3');
+    expect(report).toContain('отправка на сервер: выключена');
+    expect(report).not.toContain('ivan@mail.ru');
+    expect(report).not.toContain('Ivan');
+  });
+});
+
 describe('logger: отправка', () => {
   beforeEach(() => {
     logger.init({ dir: '', enabled: true, context: { version: '1.4.1' } });
@@ -49,6 +68,16 @@ describe('logger: отправка', () => {
     expect(res.ok).toBe(false);
     expect(spy).not.toHaveBeenCalled();
     logger.setEnabled(true);
+    spy.mockRestore();
+  });
+
+  it('без настроенного адреса отправка не идёт никуда', async () => {
+    logger.init({ dir: '', endpoint: '', enabled: true });
+    const spy = vi.spyOn(globalThis, 'fetch');
+    logger.error('stt', 'проверка');
+    const res = await logger.sendNow();
+    expect(res.ok).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
 

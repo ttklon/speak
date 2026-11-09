@@ -25,7 +25,10 @@ const crypto = require('node:crypto');
 
 // Куда отправлять журналы. Меняется из «Настройки → Диагностика»,
 // переменной окружения ZSPEAKLY_LOG_ENDPOINT или остаётся по умолчанию.
-const DEFAULT_ENDPOINT = 'https://zspeakly-logs.ttklon.workers.dev/v1/events';
+// По умолчанию отправки нет: приложению не нужны ни сервер, ни аккаунт.
+// Журнал пишется на диск, а отчёт можно сохранить одной кнопкой в «Диагностике».
+// Кто хочет свой приёмник — вписывает адрес в настройках (или ZSPEAKLY_LOG_ENDPOINT).
+const DEFAULT_ENDPOINT = '';
 
 const MAX_MEMORY = 400; // событий в памяти
 const MAX_FILE_BYTES = 512 * 1024; // на диске держим не больше полумегабайта
@@ -332,6 +335,36 @@ const logger = {
     }
     return true;
   },
+  /**
+   * Готовый текстовый отчёт для файла или буфера: журнал + окружение.
+   * Именно это человек прикладывает, когда что-то «не работает».
+   */
+  report({ limit = 200 } = {}) {
+    const lines = [];
+    const c = context || {};
+    lines.push('ZSpeakly — отчёт диагностики');
+    lines.push(`создан: ${new Date().toISOString()}`);
+    lines.push(`версия: ${c.version || '?'} · канал: ${c.channel || 'stable'}`);
+    lines.push(`система: ${c.platform || process.platform} ${c.arch || process.arch} · Electron ${c.electron || '?'}`);
+    lines.push(`движок распознавания: ${c.engine || '?'}`);
+    lines.push(`отправка на сервер: ${enabled && endpoint ? 'включена' : 'выключена'}`);
+    lines.push(`идентификатор установки: ${installId}`);
+    lines.push(`журнал: ${filePath || '—'}`);
+    lines.push('');
+    lines.push(`── последние события (${Math.min(limit, buffered.length)}) ──`);
+    const rows = buffered.slice(-limit);
+    if (!rows.length) lines.push('событий нет');
+    for (const e of rows) {
+      const when = new Date(e.at).toISOString();
+      const data = e.data && Object.keys(e.data).length ? ` ${JSON.stringify(e.data)}` : '';
+      lines.push(`${when} ${String(e.level || 'info').toUpperCase()} [${e.scope || 'app'}] ${e.message}${data}`);
+    }
+    lines.push('');
+    lines.push('Личных данных в отчёте нет: текст диктовки, буфер обмена, аудио,');
+    lines.push('почта и домашние пути вырезаны до записи.');
+    return lines.join('\n');
+  },
+
   /** Ручная отправка: кнопка «Отправить логи сейчас». */
   async sendNow() {
     // force — только для ручной кнопки, но выключенный тумблер уважаем:

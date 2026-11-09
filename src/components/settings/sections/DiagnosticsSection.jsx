@@ -6,7 +6,6 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 import { localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
-import { LOG_ENDPOINT as DEFAULT_LOG_ENDPOINT } from '../../../lib/config.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -97,6 +96,32 @@ export default function DiagnosticsSection() {
         : 'Наружу больше ничего не уходит. Журнал остаётся на этом компьютере.',
       tone: value ? 'success' : 'warn',
     });
+  };
+
+  // Главная кнопка: сохранить отчёт на Рабочий стол. Ничего не нужно
+  // настраивать и никуда входить — файл сразу видно в проводнике.
+  const saveReport = async () => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.diagSaveReport) {
+      push({ title: 'Только в приложении', description: 'Открыть Windows-сборку ZSpeakly.', tone: 'warn' });
+      return;
+    }
+    setBusy('report');
+    try {
+      const res = await bridge.diagSaveReport();
+      if (res?.ok) {
+        push({
+          title: 'Отчёт сохранён',
+          description: 'Файл на Рабочем столе — его можно отправить в чат поддержки.',
+          tone: 'success',
+        });
+      } else {
+        push({ title: 'Не удалось сохранить отчёт', description: res?.reason || '', tone: 'warn' });
+      }
+    } finally {
+      setBusy('');
+      refresh();
+    }
   };
 
   const sendNow = async () => {
@@ -217,8 +242,8 @@ export default function DiagnosticsSection() {
               : settings.diagnostics === false
                 ? 'выключено: наружу ничего не уходит'
                 : status?.endpointConfigured
-                  ? 'включено, приёмник настроен'
-                  : 'включено, но приёмник ещё не развёрнут — события копятся локально'}
+                  ? 'журнал пишется на этом компьютере, отправка на сервер включена'
+                  : 'журнал пишется на этом компьютере; отправка на сервер выключена — отчёт сохраняется одной кнопкой'}
           </span>
         </div>
         <div className="kv-row">
@@ -230,16 +255,18 @@ export default function DiagnosticsSection() {
           <span className="kv-row__value">{status?.installId || 'локальный'}</span>
         </div>
         <div className="settings-group__desc">
-          Если приёмник ещё не развёрнут или недоступен, отправка просто не удаётся — события
-          остаются в журнале. Кнопка «Скопировать ошибки» кладёт последние строки в буфер: их можно
-          прислать разработчику в чат, и этого хватит, чтобы найти причину.
+          По умолчанию ничего никуда не уходит: журнал лежит на этом компьютере. Если что-то не
+          работает — нажмите «Сохранить отчёт в файл»: на Рабочем столе появится текстовый файл
+          с журналом и окружением, его достаточно приложить к сообщению. Кнопка «Скопировать
+          ошибки» делает то же самое, но в буфер обмена. Отправка на сервер нужна только тем,
+          у кого он есть.
         </div>
         <div className="setting-row">
           <div className="setting-row__label">
             Адрес приёмника
             <div className="setting-row__desc">
               По умолчанию — сервер ZSpeakly. Можно указать свой (например, развёрнутый из папки
-              server) или очистить поле, чтобы ничего не отправлять.
+              server). Пустое поле — ничего не отправлять: журнал остаётся на компьютере.
             </div>
           </div>
           <div className="row-8">
@@ -262,15 +289,13 @@ export default function DiagnosticsSection() {
               variant="bare"
               size="sm"
               onClick={() => {
-                setEndpointDraft(DEFAULT_LOG_ENDPOINT);
-                push({
-                  title: 'Адрес по умолчанию подставлен',
-                  description: 'Нажмите «Сохранить», чтобы применить.',
-                  tone: 'info',
-                });
+                // «только на этом компьютере» — состояние по умолчанию
+                setEndpointDraft('');
+                saveEndpoint('');
               }}
+              disabled={busy === 'endpoint' || !isElectron()}
             >
-              По умолчанию
+              Только на компьютере
             </Button>
           </div>
         </div>
@@ -283,7 +308,10 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="row-8" style={{ flexWrap: 'wrap', marginTop: 8 }}>
-          <Button variant="white" size="sm" onClick={sendNow} disabled={busy === 'send' || !isElectron()}>
+          <Button variant="white" size="sm" onClick={saveReport} disabled={busy === 'report' || !isElectron()}>
+            {busy === 'report' ? 'Сохраняю…' : 'Сохранить отчёт в файл'}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy === 'send' || !isElectron()}>
             {busy === 'send' ? 'Отправляю…' : 'Отправить сейчас'}
           </Button>
           <Button variant="ghost" size="sm" onClick={ping} disabled={busy === 'ping' || !isElectron()}>
