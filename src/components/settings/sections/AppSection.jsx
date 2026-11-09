@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
@@ -9,6 +10,15 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 export default function AppSection() {
   const { settings, updateSettings, resetAll } = useAppData();
   const { push } = useToast();
+  // голоса Windows подгружаются асинхронно — слушаем onvoiceschanged
+  const [voices, setVoices] = useState([]);
+  useEffect(() => {
+    if (typeof speechSynthesis === 'undefined') return undefined;
+    const load = () => setVoices(speechSynthesis.getVoices?.() || []);
+    load();
+    speechSynthesis.addEventListener?.('voiceschanged', load);
+    return () => speechSynthesis.removeEventListener?.('voiceschanged', load);
+  }, []);
 
   return (
     <div>
@@ -72,11 +82,31 @@ export default function AppSection() {
               if (v && typeof speechSynthesis !== 'undefined') {
                 const v0 = new SpeechSynthesisUtterance('Предпросмотр диктовки включён');
                 v0.lang = 'ru-RU';
+                const chosen = voices.find((x) => x.voiceURI === settings.readAloudVoice);
+                if (chosen) v0.voice = chosen;
                 speechSynthesis.speak(v0);
               }
             }}
           />
         </div>
+        {settings.readAloud ? (
+          <div className="setting-row">
+            <div className="setting-row__label">
+              Голос
+              <div className="setting-row__desc">
+                {voices.length
+                  ? 'Каким голосом читать результат. Список — из установленных в Windows.'
+                  : 'Системные голоса ещё не загрузились или не установлены — читать будет голос по умолчанию.'}
+              </div>
+            </div>
+            <Select
+              value={settings.readAloudVoice || ''}
+              onChange={(v) => updateSettings({ readAloudVoice: v })}
+              options={[{ value: '', label: 'Системный' }, ...voices.map((v) => ({ value: v.voiceURI, label: v.name }))]}
+              width={200}
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="settings-group">

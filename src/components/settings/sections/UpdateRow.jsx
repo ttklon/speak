@@ -73,10 +73,14 @@ export default function UpdateRow() {
           <button
             type="button"
             className="link-btn"
-            onClick={() =>
-              window.zspeakly?.native?.openExternal?.('https://github.com/ttklon/speak/releases') ??
-              window.open('https://github.com/ttklon/speak/releases', '_blank', 'noreferrer')
-            }
+            onClick={() => {
+              // ?? не годится: мост возвращает промис даже при отказе, и тогда
+              // window.open сработал бы вторым окном
+              const url = 'https://github.com/ttklon/speak/releases';
+              const viaBridge = window.zspeakly?.native?.openExternal;
+              if (viaBridge) viaBridge(url).catch?.(() => window.open(url, '_blank', 'noreferrer'));
+              else window.open(url, '_blank', 'noreferrer');
+            }}
           >
             Открыть релизы
           </button>

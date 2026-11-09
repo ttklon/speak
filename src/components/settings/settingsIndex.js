@@ -52,6 +52,12 @@ export const SETTING_ENTRIES = [
   {
     "section": "app",
     "sectionLabel": "Приложение",
+    "title": "Голос",
+    "desc": ""
+  },
+  {
+    "section": "app",
+    "sectionLabel": "Приложение",
     "title": "Звуковой отклик",
     "desc": "Короткий сигнал при старте и остановке записи."
   },
@@ -100,8 +106,8 @@ export const SETTING_ENTRIES = [
   {
     "section": "features",
     "sectionLabel": "Функции",
-    "title": "Дополнительные варианты",
-    "desc": ""
+    "title": "Точность на языках",
+    "desc": "Whisper распознаёт один язык за раз — выберите основной выше. Модель small и medium"
   },
   {
     "section": "features",
@@ -137,7 +143,7 @@ export const SETTING_ENTRIES = [
     "section": "data",
     "sectionLabel": "Данные и разрешения",
     "title": "Хранить",
-    "desc": ""
+    "desc": "Старые расшифровки удаляются автоматически — сразу при смене срока и при запуске."
   },
   {
     "section": "data",

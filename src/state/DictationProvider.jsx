@@ -10,14 +10,25 @@ import { useAppData } from './AppDataProvider.jsx';
 import { OPS } from '../lib/ai/textops.js';
 import { playCue } from '../lib/feedback.js';
 
-/** Предпросмотр диктовки: читаем результат системным голосом Windows. */
-function speak(text, language = 'ru') {
+/**
+ * Предпросмотр диктовки: читаем результат системным голосом Windows.
+ * `voiceURI` — выбранный в настройках голос (пусто = голос системы по умолчанию).
+ */
+function speak(text, language = 'ru', voiceURI = '') {
   if (!text || typeof speechSynthesis === 'undefined') return;
   try {
     speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = language === 'ru' ? 'ru-RU' : language === 'en' ? 'en-US' : language;
+    const map = { ru: 'ru-RU', en: 'en-US', de: 'de-DE', es: 'es-ES', fr: 'fr-FR', zh: 'zh-CN', ja: 'ja-JP', tr: 'tr-TR', kk: 'kk-KZ', uk: 'uk-UA' };
+    utter.lang = map[language] || language;
     utter.rate = 1.02;
+    if (voiceURI) {
+      const match = speechSynthesis.getVoices?.().find((v) => v.voiceURI === voiceURI);
+      if (match) {
+        utter.voice = match;
+        utter.lang = match.lang || utter.lang;
+      }
+    }
     speechSynthesis.speak(utter);
   } catch {
     /* голоса нет — молча пропускаем */
@@ -83,7 +94,9 @@ export function DictationProvider({ children }) {
         setLast(item);
         addDictation(item);
         recordWords(item.words, durationMs);
-        if (settingsRef.current.readAloud) speak(cleaned, settingsRef.current.language);
+        if (settingsRef.current.readAloud) {
+          speak(cleaned, settingsRef.current.language, settingsRef.current.readAloudVoice || '');
+        }
         // нативное уведомление Windows: «готово, вставлено» — по настройке
         if (settingsRef.current.notifications && window.zspeakly?.native?.notify) {
           window.zspeakly.native

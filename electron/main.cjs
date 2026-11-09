@@ -506,6 +506,24 @@ function registerIpc() {
     return true;
   });
 
+  ipcMain.handle('app:open-docs', async () => {
+    // docs лежат рядом с приложением (в репозитории) или в распакованном asar
+    const candidates = [
+      path.join(process.resourcesPath || '', 'app', 'docs'),
+      path.join(process.resourcesPath || '', 'docs'),
+      path.join(app.getAppPath(), 'docs'),
+    ];
+    const found = candidates.find((dir) => {
+      try {
+        return fs.existsSync(dir);
+      } catch {
+        return false;
+      }
+    });
+    if (!found) return { ok: false, reason: 'В сборке нет папки docs — открываю сайт репозитория' };
+    const err = await shell.openPath(found);
+    return err ? { ok: false, reason: err } : { ok: true, path: found };
+  });
   ipcMain.handle('app:open-data-folder', async () => {
     const target = app.getPath('userData');
     fs.mkdirSync(target, { recursive: true });

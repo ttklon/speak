@@ -1,6 +1,4 @@
-import { useState } from 'react';
-import { Check } from 'lucide-react';
-import { Button, Select } from '../../ui/Controls.jsx';
+import { Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { LANGUAGES } from '../../../lib/config.js';
@@ -17,7 +15,6 @@ export default function FeaturesSection() {
     const hit = (presets || []).find((p) => p.id === 'to-english' || /англ/i.test(p.prompt || ''));
     return hit?.keys?.length ? hit.keys.join(' + ') : '';
   })();
-  const [showLanguages, setShowLanguages] = useState(false);
 
   return (
     <div>
@@ -75,27 +72,15 @@ export default function FeaturesSection() {
           />
         </div>
         <div className="setting-row">
-          <div className="setting-row__label">Дополнительные варианты</div>
-          <Button variant="ghost" size="sm" onClick={() => setShowLanguages((v) => !v)}>
-            {showLanguages ? 'Скрыть' : 'Выбрать варианты'}
-          </Button>
-        </div>
-        {showLanguages ? (
-          <div className="lang-list">
-            {LANGUAGES.map((l) => (
-              <button
-                key={l.id}
-                type="button"
-                className={`lang-item ${settings.language === l.id ? 'is-active' : ''}`}
-                onClick={() => updateSettings({ language: l.id })}
-              >
-                <span>{l.label}</span>
-                <span className="lang-item__native">{l.native}</span>
-                {settings.language === l.id ? <Check size={12} style={{ color: 'var(--green)' }} /> : null}
-              </button>
-            ))}
+          <div className="setting-row__label">
+            Точность на языках
+            <div className="setting-row__desc">
+              Whisper распознаёт один язык за раз — выберите основной выше. Модель small и medium
+              заметно точнее на смешанной русско-английской речи.
+            </div>
           </div>
-        ) : null}
+          <span className="settings-foot__hint">{LANGUAGES.length} языков доступно</span>
+        </div>
       </div>
 
       <div className="settings-group">

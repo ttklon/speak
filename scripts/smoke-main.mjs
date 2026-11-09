@@ -238,6 +238,13 @@ await check('app:open-external пускает только наши ссылки
   }
 });
 
+await check('app:open-docs открывает папку docs или честно говорит, что её нет', async () => {
+  const res = await handlers.get('app:open-docs')({});
+  if (typeof res !== 'object' || res === null) throw new Error('канал ничего не вернул');
+  if (res.ok === false && !res.reason) throw new Error('отказ без причины');
+  if (res.ok === true && !res.path) throw new Error('успех без пути');
+});
+
 await check('clipboard:write кладёт картинку, а не только текст', async () => {
   const ok = await handlers.get('clipboard:write')({}, {
     image: 'data:image/png;base64,iVBORw0KGgo=',

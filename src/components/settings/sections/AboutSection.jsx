@@ -11,6 +11,17 @@ export default function AboutSection() {
   const { dictations, dictionary, clipboard, settings } = useAppData();
   const { push } = useToast();
   const [stt, setStt] = useState(null);
+  // Папка docs лежит внутри приложения — открываем её в системном проводнике,
+  // а если её нет в сборке, ведём на страницу документации в репозитории.
+  const openDocs = async () => {
+    const res = await window.zspeakly?.native?.openDocs?.();
+    if (res && res.ok === false) {
+      push({ title: 'Документация', description: res.reason || 'Открываю страницу в браузере', tone: 'warn' });
+      window.zspeakly?.native?.openExternal?.(`${APP.repo}/tree/main/docs`)?.catch?.(() => {});
+    } else if (!window.zspeakly?.native?.openDocs) {
+      window.open?.(`${APP.repo}/tree/main/docs`, '_blank', 'noopener');
+    }
+  };
 
   // На Windows спрашиваем main-процесс: нашлись ли whisper-cli.exe и модель
   useEffect(() => {
@@ -90,9 +101,18 @@ export default function AboutSection() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => window.open?.(APP.repo, '_blank')}
+            onClick={() => {
+              // в Electron window.open блокируется — идём через мост,
+              // у него есть allowlist доменов; в браузере хватает window.open
+              const bridge = window.zspeakly?.native?.openExternal;
+              if (bridge) bridge(APP.repo).catch?.(() => {});
+              else window.open?.(APP.repo, '_blank', 'noopener');
+            }}
           >
             Открыть репозиторий
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => openDocs()}>
+            Открыть документацию
           </Button>
         </div>
         <UpdateRow />

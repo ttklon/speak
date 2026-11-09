@@ -38,11 +38,17 @@ export default function DataSection({ onOpenSection }) {
       <div className="settings-group">
         <div className="settings-group__title">Диктовки</div>
         <div className="setting-row">
-          <div className="setting-row__label">Хранить</div>
+          <div className="setting-row__label">
+            Хранить
+            <div className="setting-row__desc">
+              Старые расшифровки удаляются автоматически — сразу при смене срока и при запуске.
+            </div>
+          </div>
           <Select
             value={String(settings.dictationRetentionDays)}
             onChange={(v) => updateSettings({ dictationRetentionDays: Number(v) })}
             options={[
+              { value: '1', label: '24 часа' },
               { value: '7', label: '1 неделя' },
               { value: '30', label: '1 месяц' },
               { value: '90', label: '3 месяца' },
