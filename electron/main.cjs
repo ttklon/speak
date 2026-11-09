@@ -546,6 +546,10 @@ function registerIpc() {
   });
 
   ipcMain.handle('update:check', () => updater?.check() || { status: 'unavailable', reason: 'updater не готов' });
+  ipcMain.handle('update:channel', (_e, channel) => {
+    updater?.setChannel?.(channel);
+    return true;
+  });
   ipcMain.handle('update:download', () => updater?.download() || { status: 'error', reason: 'updater не готов' });
   ipcMain.handle('update:install', () => Boolean(updater?.install()));
   ipcMain.handle('app:notify', (_e, payload) => showNotification(payload));
@@ -699,6 +703,7 @@ app.whenReady().then(() => {
 
   updater = createUpdater({
     onStatus: (state) => mainWindow?.webContents.send('update:status', state),
+    channel: (store.get('zs:settings') || {}).updateChannel || 'stable',
   });
   // тихая проверка раз в сутки при наличии сети (настройка checkUpdates)
   const initial = store.get('zs:settings') || {};

@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     downloadEngine: () => ipcRenderer.invoke('models:download-engine'),
     onModelProgress: (cb) => on('model:progress', cb),
     checkUpdates: () => ipcRenderer.invoke('update:check'),
+    setUpdateChannel: (channel) => ipcRenderer.invoke('update:channel', channel),
     downloadUpdate: () => ipcRenderer.invoke('update:download'),
     installUpdate: () => ipcRenderer.invoke('update:install'),
     onUpdateStatus: (cb) => on('update:status', cb),

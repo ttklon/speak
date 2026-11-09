@@ -11,8 +11,9 @@
 
 const isDev = process.env.NODE_ENV !== 'production' && !require('electron').app.isPackaged;
 
-function createUpdater({ onStatus } = {}) {
+function createUpdater({ onStatus, channel: initialChannel = 'stable' } = {}) {
   let updater = null;
+  let channel = initialChannel === 'beta' ? 'beta' : 'stable';
   let lastState = { status: 'idle', version: null, percent: 0, reason: '' };
 
   const push = (patch) => {
@@ -24,14 +25,31 @@ function createUpdater({ onStatus } = {}) {
     }
   };
 
+  // Канал: stable — только релизы, beta — вместе с предрелизами.
+  // Выставляется и при создании, и на лету (переключатель в настройках).
+  function applyChannel(target) {
+    if (target) target.allowPrerelease = channel === 'beta';
+  }
+
+  /** Сменить канал на лету. */
+  function setChannel(next) {
+    channel = next === 'beta' ? 'beta' : 'stable';
+    applyChannel(updater);
+    return channel;
+  }
+
   function load() {
-    if (updater) return updater;
+    if (updater) {
+      applyChannel(updater);
+      return updater;
+    }
     try {
       // require внутри функции: electron-updater тянет electron и падает в тестах
       const { autoUpdater } = require('electron-updater');
       autoUpdater.autoDownload = false;
       autoUpdater.autoInstallOnAppQuit = true;
       autoUpdater.logger = null;
+      applyChannel(autoUpdater);
 
       autoUpdater.on('checking-for-update', () => push({ status: 'checking', percent: 0 }));
       autoUpdater.on('update-available', (info) =>
@@ -95,7 +113,7 @@ function createUpdater({ onStatus } = {}) {
     return true;
   }
 
-  return { check, download, install, state: () => lastState };
+  return { check, download, install, setChannel, state: () => lastState, channel: () => channel };
 }
 
 module.exports = { createUpdater };

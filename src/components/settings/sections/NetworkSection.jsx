@@ -111,7 +111,19 @@ export default function NetworkSection() {
           <div className="setting-row__label">Канал</div>
           <Select
             value={settings.updateChannel || 'stable'}
-            onChange={(v) => updateSettings({ updateChannel: v })}
+            onChange={(v) => {
+              updateSettings({ updateChannel: v });
+              // сообщаем апдейтеру: бета-канал включается сразу
+              window.zspeakly?.native?.setUpdateChannel?.(v);
+              push({
+                title: v === 'beta' ? 'Бета-канал включён' : 'Стабильный канал',
+                description:
+                  v === 'beta'
+                    ? 'Приложение будет видеть и предрелизные версии.'
+                    : 'Только проверенные релизы.',
+                tone: 'success',
+              });
+            }}
             options={[
               { value: 'stable', label: 'Стабильный' },
               { value: 'beta', label: 'Бета' },

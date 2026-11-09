@@ -24,7 +24,8 @@
     "test:main": "node scripts/smoke-main.mjs",
     "settings:index": "node scripts/build-settings-index.mjs",
     "settings:index:check": "node scripts/build-settings-index.mjs --check",
-    "check:ipc": "node scripts/check-ipc.mjs"
+    "check:ipc": "node scripts/check-ipc.mjs",
+    "test:updater": "node scripts/smoke-updater.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

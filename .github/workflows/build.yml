@@ -48,6 +48,15 @@ jobs:
       - name: Smoke main process
         run: npm run test:main
 
+      - name: Контракт IPC (нет каналов без обработчика)
+        run: npm run check:ipc
+
+      - name: Каналы обновлений
+        run: npm run test:updater
+
+      - name: Индекс настроек актуален
+        run: npm run settings:index:check
+
       - name: Build renderer
         run: npm run build
 
