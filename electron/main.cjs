@@ -549,6 +549,22 @@ function registerIpc() {
   ipcMain.handle('update:download', () => updater?.download() || { status: 'error', reason: 'updater не готов' });
   ipcMain.handle('update:install', () => Boolean(updater?.install()));
   ipcMain.handle('app:notify', (_e, payload) => showNotification(payload));
+
+  // Открыть ссылку в браузере. Белый список: приложение не должно уметь
+  // открывать произвольные адреса (это дырка, если в UI попадёт чужой текст).
+  ipcMain.handle('app:open-external', (_e, rawUrl) => {
+    const url = String(rawUrl || '');
+    const allowed = [
+      'https://github.com/ttklon/speak',
+      'https://github.com/ttklon/speak/releases',
+    ];
+    if (!allowed.some((base) => url === base || url.startsWith(`${base}/`))) {
+      console.warn('[open-external] отклонено:', url.slice(0, 120));
+      return false;
+    }
+    require('electron').shell.openExternal(url);
+    return true;
+  });
   ipcMain.handle('app:noop', () => null);
 
   // Выбор источника для getDisplayMedia (запись экрана / системный звук)

@@ -67,7 +67,23 @@ export default function UpdateRow() {
           Перезапустить и обновить
         </Button>
       ) : null}
-      <span className="settings-foot__hint">Установлено {APP.version} · сборка {APP.build}</span>
+      {state.status === 'unavailable' ? (
+        <span className="settings-foot__hint settings-foot__hint--warn">
+          {state.reason}. Новую версию можно взять на GitHub — там же, где скачали эту.{' '}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() =>
+              window.zspeakly?.native?.openExternal?.('https://github.com/ttklon/speak/releases') ??
+              window.open('https://github.com/ttklon/speak/releases', '_blank', 'noreferrer')
+            }
+          >
+            Открыть релизы
+          </button>
+        </span>
+      ) : (
+        <span className="settings-foot__hint">Установлено {APP.version} · сборка {APP.build}</span>
+      )}
     </div>
   );
 }

@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     screenshot: () => ipcRenderer.invoke('clipboard:screenshot'),
     writeClipboard: (payload) => ipcRenderer.invoke('clipboard:write', payload),
     openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
+    openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
     setAutoLaunch: (enabled) => ipcRenderer.invoke('app:auto-launch', enabled),
     setDictationHotkey: (payload) => ipcRenderer.invoke('hotkey:set', payload),
     notify: (payload) => ipcRenderer.invoke('app:notify', payload),

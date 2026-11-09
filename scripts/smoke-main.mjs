@@ -222,6 +222,22 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
   }
 });
 
+await check('app:open-external пускает только наши ссылки', async () => {
+  const opened = [];
+  const okOwn = await handlers.get('app:open-external')({}, 'https://github.com/ttklon/speak/releases');
+  if (!okOwn) throw new Error('своя ссылка отклонена');
+  for (const bad of [
+    'https://evil.example/x',
+    'https://github.com/other/repo',
+    'javascript:alert(1)',
+    'file:///C:/Windows/System32/calc.exe',
+  ]) {
+    const res = await handlers.get('app:open-external')({}, bad);
+    if (res) throw new Error(`пропущена чужая ссылка: ${bad}`);
+    opened.push(bad);
+  }
+});
+
 await check('clipboard:write кладёт картинку, а не только текст', async () => {
   const ok = await handlers.get('clipboard:write')({}, {
     image: 'data:image/png;base64,iVBORw0KGgo=',
