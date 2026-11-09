@@ -81,6 +81,13 @@ export default function ModelManager() {
     <div className="settings-group">
       <div className="settings-group__title">Модель распознавания</div>
       <div className="settings-group__desc">
+        {/* на свежей установке движка и модели нет — говорим об этом прямо */}
+        {status && (!status.bin || !Object.values(status.models || {}).some((m) => m.downloaded)) ? (
+          <span className="model-setup-note">
+            Для офлайн-диктовки нужны две вещи: движок whisper.cpp (≈20 МБ) и модель (от 75 МБ).
+            Скачиваются сюда же, один раз — дальше всё работает без интернета.
+          </span>
+        ) : null}
         Движок сейчас: {engineName()}.
         {status ? (
           <>
