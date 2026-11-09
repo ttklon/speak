@@ -660,6 +660,29 @@ function registerIpc() {
     }
     return { ...res, status: logger.status() };
   });
+  // «Сохранить отчёт»: один клик, никаких диалогов и аккаунтов — файл на
+  // Рабочем столе и проводник с выделенным файлом.
+  ipcMain.handle('diag:save-report', async () => {
+    try {
+      const text = logger.report({ limit: 300 });
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      const dir = app.getPath('desktop') || app.getPath('documents');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `zspeakly-отчёт-${stamp}.txt`);
+      fs.writeFileSync(file, text, 'utf8');
+      // показать файл в проводнике — но не считать это частью сохранения
+      try {
+        shell.showItemInFolder?.(file);
+      } catch {
+        /* окно не открылось — файл всё равно на месте */
+      }
+      logger.info('diagnostics', 'Отчёт сохранён', { keep: true, file: '<home>\zspeakly-report.txt' });
+      return { ok: true, path: file };
+    } catch (err) {
+      logger.error('diagnostics', 'Не удалось сохранить отчёт', { reason: String(err?.message || err) });
+      return { ok: false, reason: String(err?.message || err) };
+    }
+  });
   ipcMain.handle('diag:send-now', async () => logger.sendNow());
   ipcMain.handle('diag:ping', async () => logger.ping());
   ipcMain.handle('diag:clear', async () => logger.clear());
