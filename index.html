@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      CSP: только локальное. connect-src включает Ollama (localhost:11434) и
+      HMR Vite; media-src разрешает blob: для записи экрана и микрофона.
+    -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:; connect-src 'self' ws: wss: http://localhost:5173 http://127.0.0.1:11434 http://localhost:11434; object-src 'none'" />
+    <title>ZSpeakly</title>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot">
+        <div class="boot-logo">Z</div>
+        <div class="boot-text">ZSpeakly запускается…</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

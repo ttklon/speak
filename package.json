@@ -1,0 +1,91 @@
+{
+  "name": "zspeakly",
+  "productName": "ZSpeakly",
+  "version": "1.4.0",
+  "private": true,
+  "description": "ZSpeakly — офлайн голосовой ввод для Windows 11: диктовка в любое поле, словарь, AI-инструкции и буфер обмена.",
+  "author": {
+    "name": "ZSpeakly",
+    "email": "hello@zspeakly.local"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173",
+    "electron:dev": "node scripts/dev-electron.mjs",
+    "electron": "electron .",
+    "dist:win": "npm run build && electron-builder --win nsis portable",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "test": "vitest run",
+    "icons": "node scripts/make-icons.mjs",
+    "test:main": "node scripts/smoke-main.mjs",
+    "settings:index": "node scripts/build-settings-index.mjs",
+    "settings:index:check": "node scripts/build-settings-index.mjs --check",
+    "check:ipc": "node scripts/check-ipc.mjs",
+    "test:updater": "node scripts/smoke-updater.mjs"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "electron-updater": "^6.8.11"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "jsdom": "^25.0.1",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "app.zspeakly.desktop",
+    "productName": "ZSpeakly",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "icons"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "icons/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icons/icon.ico",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ZSpeakly",
+      "artifactName": "ZSpeakly-Setup-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "ZSpeakly-${version}-portable.exe"
+    }
+  }
+}

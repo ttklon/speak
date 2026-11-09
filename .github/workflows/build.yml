@@ -3,60 +3,289 @@ name: Build ZSpeakly
 on:
   push:
     branches: [main, "arena/**"]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    # ТВОЙ Windows-ПК — self-hosted runner с метками speak,windows
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 30
-
+  # 1. Быстрые проверки: тесты + сборка рендерера + смоук main-процесса
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET 8 SDK
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-node@v4
         with:
-          dotnet-version: "8.0.x"
+          node-version: "22"
+          cache: npm
 
-      - name: Info
+      - name: Install
+        env:
+          # electron-builder скачивает бинарник сам (с ретраями);
+          # пост-установка electron тянет 100 МБ и рвёт всю сборку
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        # сеть на раннере иногда рвётся: до трёх попыток, потом npm install
         run: |
-          dotnet --info
-          dotnet --list-sdks
-        shell: pwsh
+          for i in 1 2 3; do
+            if npm ci --no-audit --no-fund; then exit 0; fi
+            echo "::warning title=npm::попытка $i не удалась, повтор"
+            sleep 10
+          done
+          npm install --no-audit --no-fund
 
-      - name: Restore
-        run: dotnet restore
-        shell: pwsh
+      - name: Icons
+        run: npm run icons
 
-      - name: Build Release
-        run: dotnet build --no-restore -c Release --nologo -v minimal
-        shell: pwsh
+      - name: Tests (vitest)
+        run: npm test
 
-      - name: Test (если есть)
-        run: |
-          if (Test-Path "tests") { dotnet test --no-build -c Release } else { echo "tests/ нет — пропускаем" }
-        shell: pwsh
+      - name: Smoke main process
+        run: npm run test:main
 
-      - name: Publish win-x64 (framework-dependent, лёгкий ~25 МБ)
-        # single-file требует отдельного prepare, делаем обычный publish
-        run: dotnet publish src/ZSpeakly.App/ZSpeakly.App.csproj -c Release -r win-x64 --self-contained false -o publish-win-x64 || echo "src/ZSpeakly.App ещё не создан — пропускаем publish"
-        shell: pwsh
+      - name: Контракт IPC (нет каналов без обработчика)
+        run: npm run check:ipc
 
-      - name: Upload artifact
-        if: hashFiles('publish-win-x64/**') != ''
+      - name: Каналы обновлений
+        run: npm run test:updater
+
+      - name: Индекс настроек актуален
+        run: npm run settings:index:check
+
+      - name: Build renderer
+        run: npm run build
+
+      - name: Upload renderer
         uses: actions/upload-artifact@v4
         with:
-          name: ZSpeakly-win-x64
-          path: publish-win-x64/
+          name: zspeakly-dist
+          path: dist/
           retention-days: 7
 
-      - name: Summary
+  # 2. Сборка установщика для Windows
+  package:
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        # пост-установка electron тянет 100 МБ и часто отваливается;
+        # бинарник качаем отдельным шагом с проверкой результата
+        # сеть на раннере рвётся: до трёх попыток, потом npm install
         run: |
-          echo "### ZSpeakly build OK" >> $env:GITHUB_STEP_SUMMARY
-          echo "Ветка: $env:GITHUB_REF_NAME" >> $env:GITHUB_STEP_SUMMARY
-          echo "Runner: $env:RUNNER_NAME ($env:RUNNER_OS)" >> $env:GITHUB_STEP_SUMMARY
+          for i in 1 2 3; do
+            if npm ci --no-audit --no-fund; then exit 0; fi
+            echo "::warning title=npm::попытка $i не удалась, повтор"
+            sleep 10
+          done
+          npm install --no-audit --no-fund
+
+      - name: Icons
+        run: npm run icons
+
+      - name: Кэш Electron (переживает сетевые сбои раннера)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+            ~/AppData/Local/electron-builder-binaries
+          key: electron-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-cache-${{ runner.os }}-
+
+      - name: Прогреть бинарник Electron (с ретраями)
+        shell: bash
+        # electron-builder скачивает Electron сам; делаем это заранее и с повторами,
+        # чтобы сбой сети не валил всю упаковку
+        run: |
+          check() {
+            node -e "try{const p=require('electron');process.exit(p&&p.length>3?0:1)}catch(e){process.exit(1)}" 2>/dev/null
+          }
+          for i in 1 2 3 4 5 6; do
+            echo "::notice title=electron::прогрев, попытка $i"
+            check && break
+            if [ ! -f node_modules/electron/dist/electron.exe ]; then
+              node node_modules/electron/install.js || true
+            fi
+            sleep 20
+          done
+          if check; then
+            echo "::notice::бинарник Electron на месте: $(node -e "process.stdout.write(require('electron'))")"
+          else
+            echo "::warning title=electron::бинарник не скачался, electron-builder попробует сам"
+          fi
+
+      - name: Прогреть бинарники electron-builder (NSIS и др.)
+        shell: bash
+        # nsis/winCodeSign качаются с github releases и иногда отдают 504 —
+        # повторяем до пяти раз, дальше настоящая упаковка тоже с повторами
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "::notice title=electron-builder::прогрев бинарников, попытка $i"
+            npx electron-builder --win nsis --publish never > warmup.log 2>&1 || true
+            if [ -z "$(grep -E 'status code 50[0-9]|Cannot|ENOTFOUND|ETIMEDOUT' warmup.log)" ]; then
+              echo "::notice::бинарники на месте"
+              exit 0
+            fi
+            sleep 25
+          done
+          echo "::warning title=electron-builder::бинарники не скачались заранее, пробуем в самой упаковке"
+
+      - name: Build + package (NSIS + portable)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          DEBUG: electron-builder
+        run: |
+          npm run build 2>&1 | Tee-Object -FilePath build-renderer.log
+
+          # Загрузка бинарника Electron иногда падает на сетевом сбое раннера:
+          # три попытки, между ними — пауза. Это не ошибка нашего кода.
+          $attempt = 0
+          $ok = $false
+          while ($attempt -lt 3 -and -not $ok) {
+            $attempt++
+            Write-Host "::notice title=electron-builder::попытка $attempt из 3"
+            # --publish never: релиз публикуем отдельным job только по тегу
+            # указываем готовый дистрибутив из node_modules: electron-builder
+            # не будет ничего скачивать и не упадёт на сетевом сбое раннера
+            $dist = (node -e "process.stdout.write(require('electron'))" | Select-Object -Last 1)
+            Write-Host "::notice title=electron::дистрибутив $dist"
+            if (-not (Test-Path $dist)) { Write-Host "::error title=electron::дистрибутив не найден: $dist"; }
+            Remove-Item -Recurse -Force dist-electron -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path dist-electron | Out-Null
+            Copy-Item -Recurse -Force $dist dist-electron/win-unpacked
+            npx electron-builder --win nsis portable --publish never 2>&1 | Tee-Object -FilePath build-package.log
+            if ($LASTEXITCODE -eq 0) { $ok = $true }
+            elseif ($attempt -lt 3) {
+              # Повторяем на любой сбой упаковки: основная причина — сеть раннера
+              # при скачивании бинарника Electron (ERR_ELECTRON_BUILDER_CANNOT_EXECUTE).
+              $log = Get-Content build-package.log -Raw
+              $hint = ($log -split "`n" | Where-Object { $_ -match 'Error|error|failed|Cannot' } | Select-Object -Last 1)
+              Write-Host "::warning title=electron-builder::попытка $attempt не удалась: $hint"
+              Start-Sleep -Seconds 30
+            }
+          }
+
+          if (-not $ok) {
+            $all = Get-Content build-package.log -ErrorAction SilentlyContinue
+            $all | Where-Object { $_ -match '⨯|Error|error:|failed|Cannot|cannot|ENOENT|EPERM' } |
+              Select-Object -First 20 | ForEach-Object {
+                $line = ($_ -replace '[\r\n]+', ' ').Trim()
+                if ($line) { Write-Host "::warning title=electron-builder::$line" }
+              }
+
+            # NSIS и winCodeSign качаются с GitHub CDN и иногда отдают 504 —
+            # это сбой на их стороне. Тогда собираем дистрибутив без инсталлятора:
+            # ZIP с уже распакованным приложением остаётся полностью рабочим.
+            Write-Host "::warning title=electron-builder::NSIS недоступен, собираем portable ZIP"
+            npx electron-builder --win dir --publish never 2>&1 | Tee-Object -FilePath build-zip.log
+            if ($LASTEXITCODE -ne 0) {
+              Get-Content build-zip.log -Tail 20 | ForEach-Object {
+                $line = ($_ -replace '[\r\n]+', ' ').Trim()
+                if ($line) { Write-Host "::error title=electron-builder::$line" }
+              }
+              exit 1
+            }
+            $unpacked = Get-ChildItem dist-electron -Directory -Filter 'win-unpacked' -ErrorAction SilentlyContinue
+            $source = if ($unpacked) { $unpacked.FullName } else { 'release/win-unpacked' }
+            if (-not (Test-Path $source)) {
+              Write-Host "::error title=electron-builder::распакованное приложение не найдено"
+              exit 1
+            }
+            $zip = "release/ZSpeakly-$(node -p "require('./package.json').version")-win-x64.zip"
+            Compress-Archive -Path "$source\*" -DestinationPath $zip -Force
+            Write-Host "::notice title=package::собран ZIP: $zip"
+            exit 0
+          }
+
+      - name: Verify artifacts
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release -Filter *.exe -ErrorAction SilentlyContinue
+          $zip = Get-ChildItem release -Filter *.zip -ErrorAction SilentlyContinue
+          Write-Host "Найдено exe: $($exe.Count), zip: $($zip.Count)"
+          @($exe) + @($zip) | ForEach-Object { if ($_) { Write-Host " - $($_.Name) $([math]::Round($_.Length/1MB,1)) МБ" } }
+          if (-not $exe -and -not $zip) { throw "Ни установщика, ни ZIP не собралось" }
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            build-package.log
+            build-renderer.log
+          retention-days: 3
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: zspeakly-win-x64
+          path: |
+            release/*.exe
+            release/*.zip
+            release/*.blockmap
+            release/latest.yml
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          echo "### ZSpeakly — сборка установщика" >> $env:GITHUB_STEP_SUMMARY
+          echo "" >> $env:GITHUB_STEP_SUMMARY
+          echo "Ветка: ``$env:GITHUB_REF_NAME`` · коммит ``$env:GITHUB_SHA.Substring(0,7)``" >> $env:GITHUB_STEP_SUMMARY
+          echo "" >> $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem release -Include *.exe, *.zip -ErrorAction SilentlyContinue | ForEach-Object {
+            echo "- **$($_.Name)** — $([math]::Round($_.Length/1MB,1)) МБ" >> $env:GITHUB_STEP_SUMMARY
+          }
+          echo "" >> $env:GITHUB_STEP_SUMMARY
+          echo "Скачать: вкладка **Actions** → этот запуск → *Artifacts* → ``zspeakly-win-x64``." >> $env:GITHUB_STEP_SUMMARY
+
+  # 3. По тегу v* — публикуем релиз с установщиками
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zspeakly-win-x64
+          path: artifacts
+
+      - name: Проверка артефактов
+        run: |
+          ls -la artifacts
+          test -f artifacts/latest.yml || echo "::warning::latest.yml не собрался — автообновление не увидит версию"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ZSpeakly ${{ github.ref_name }}
+          draft: false
+          generate_release_notes: true
+          files: |
+            artifacts/*.exe
+            artifacts/*.zip
+            artifacts/*.blockmap
+            artifacts/latest.yml

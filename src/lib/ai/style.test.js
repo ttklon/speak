@@ -1,0 +1,68 @@
+import { describe, expect, it } from 'vitest';
+import { analyzeStyle, applyStyle, describeStyle, stylePrompt, plural } from './style.js';
+
+const sample = (text) => ({ id: String(Math.random()), text, createdAt: Date.now() });
+
+describe('стиль письма', () => {
+  it('пустая история — нейтральный профиль', () => {
+    const s = analyzeStyle([]);
+    expect(s.samples).toBe(0);
+    expect(describeStyle(s)).toMatch(/продиктуйте/i);
+    expect(stylePrompt(s)).toBe('');
+  });
+
+  it('ловит обращение на «ты» и дружелюбный тон', () => {
+    const s = analyzeStyle([
+      sample('Привет, ты как? Давай созвонимся, спасибо!'),
+      sample('Ты посмотри задачи, окей? Класс, спасибо.'),
+      sample('Привет, скинь файл, пожалуйста. Ты успеешь?'),
+    ]);
+    expect(s.samples).toBe(3);
+    expect(s.address).toBe('ты');
+    expect(s.tone).toBe('friendly');
+    expect(describeStyle(s)).toContain('на «ты»');
+    expect(stylePrompt(s)).toContain('на «ты»');
+  });
+
+  it('ловит деловой тон и «вы»', () => {
+    const s = analyzeStyle([
+      sample('Здравствуйте, коллеги. Направляю вам отчёт, прошу проверить.'),
+      sample('Уважаемые коллеги, необходимо согласовать смету. Вам направляю детали.'),
+    ]);
+    expect(s.address).toBe('вы');
+    expect(s.tone).toBe('formal');
+    expect(describeStyle(s)).toContain('на «вы»');
+  });
+
+  it('считает длину предложения и эмодзи', () => {
+    const s = analyzeStyle([sample('Сегодня коротко. Завтра тоже коротко 🙂. Послезавтра работаем.')]);
+    expect(s.avgSentence).toBeGreaterThan(0);
+    expect(s.emoji).toBe(true);
+    expect(stylePrompt(s)).toContain('эмодзи');
+  });
+
+  it('игнорирует слишком короткие записи', () => {
+    const s = analyzeStyle([sample('ок'), sample('да')]);
+    expect(s.samples).toBe(0);
+  });
+
+  it('подстраивает обращение и канцелярит, не ломая падежи', () => {
+    const st = { ...analyzeStyle([{ text: 'Привет, ты как? Я думал ты уже дома, пиши мне.' }]), emoji: false };
+    expect(applyStyle('Вы можете осуществить это в целях экономии', st)).toBe('Ты можешь сделать это чтобы экономии');
+    expect(applyStyle('Направляю вам отчёт, Ваша задача готова', st)).toBe('Направляю тебе отчёт, Твоя задача готова');
+    // падежи не превращаются в кашу
+    expect(applyStyle('Ваш отчёт и ваши планы', st)).toBe('Твой отчёт и твои планы');
+  });
+
+  it('не трогает текст без истории диктовок', () => {
+    expect(applyStyle('Вы можете', { samples: 0 })).toBe('Вы можете');
+  });
+
+  it('склоняет числительные по-русски', () => {
+    expect(plural(1, 'текст', 'текста', 'текстов')).toBe('текст');
+    expect(plural(21, 'текст', 'текста', 'текстов')).toBe('текст');
+    expect(plural(2, 'текст', 'текста', 'текстов')).toBe('текста');
+    expect(plural(13, 'текст', 'текста', 'текстов')).toBe('текстов');
+    expect(plural(21, 'текст', 'текста', 'текстов')).not.toBe('текстов');
+  });
+});

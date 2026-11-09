@@ -1,11 +1,14 @@
 # ZSpeakly ignores
+node_modules/
+dist/
+release/
 publish/
 publish-win-x64/
-models/*.bin
-models/*.gguf
-models/*.onnx
-!models/.gitkeep
-bin/
+# веса и бинарники не коммитим, но README внутри папок оставляем
+models/*
+!models/README.md
+bin/*
+!bin/README.md
 obj/
 .vs/
 *.user
@@ -15,3 +18,11 @@ obj/
 TestResults/
 actions-runner/
 _work/
+.vite/
+coverage/
+.DS_Store
+Thumbs.db
+*.tmp
+*.deb
+*.AppImage
+*.snap
