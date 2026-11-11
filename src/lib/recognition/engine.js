@@ -298,7 +298,14 @@ export function createRecognizer(opts = {}) {
         userStopped = true;
         clearTimeout(watchdog);
         const res = active?.stop?.();
-        return res && typeof res.text === 'string' ? res : { text: active?.text || '' };
+        const payload = res && typeof res.text === 'string' ? res : { text: active?.text || '' };
+        // Web Speech может закончиться без текста и без ошибки (нет сети,
+        // микрофон молчит). Раньше в этом случае не происходило вообще ничего:
+        // человек говорил, нажимал «стоп» и не понимал, что случилось.
+        if (!String(payload.text || '').trim()) {
+          onError?.({ code: 'no-speech', ...describeRecognitionError('no-speech') });
+        }
+        return payload;
       },
       abort() {
         active?.abort?.();

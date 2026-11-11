@@ -890,6 +890,67 @@ async function scenarioDiagnostics(browser) {
   await page.close();
 }
 
+// В браузере моста нет: отчёт должен скачиваться файлом, а не молчать.
+async function scenarioDiagnosticsBrowser(browser) {
+  const page = await openPage(browser, '#/settings?section=diagnostics&from=home', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__downloads = [];
+    const nativeCreate = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob) => {
+      window.__downloads.push({ name: 'blob', size: blob.size, type: blob.type });
+      return nativeCreate(blob);
+    };
+    const nativeClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function click() {
+      if (this.download) window.__downloads.push({ name: this.download, href: String(this.href).slice(0, 5) });
+      return nativeClick.call(this);
+    };
+    delete window.zspeakly;
+  });
+  const clicked = await clickIn(page, '', 'Сохранить отчёт в файл');
+  await sleep(500);
+  const info = await page.evaluate(() => ({
+    downloads: window.__downloads,
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+  }));
+  const file = info.downloads.find((d) => d.name === 'zspeakly-report.txt');
+  const blob = info.downloads.find((d) => d.name === 'blob');
+  record(
+    'сценарии',
+    'диагностика в браузере: отчёт скачивается файлом',
+    clicked && Boolean(file) && Boolean(blob) && blob.size > 100 && /Отчёт скачан/i.test(info.toast),
+    `${JSON.stringify(info.downloads)} | ${info.toast}`,
+  );
+  // «Открыть репозиторий» живёт в разделе «О программе» — переходим туда
+  await page.evaluate(() => {
+    window.__opened = [];
+    const nativeOpen = window.open;
+    window.open = (url, target) => {
+      window.__opened.push({ url, target });
+      return null;
+    };
+    return nativeOpen ? true : true;
+  });
+  await clickIn(page, '', 'О программе');
+  await sleep(600);
+  const opened = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.settings-main button')].find((b) => /Открыть репозиторий/i.test(b.innerText));
+    if (!btn) return { found: false, opened: window.__opened };
+    btn.click();
+    return { found: true, opened: window.__opened };
+  });
+  record(
+    'сценарии',
+    'о программе: «Открыть репозиторий» открывает ссылку',
+    opened.found && opened.opened.some((o) => /github\.com\/ttklon\/speak/.test(o.url) && o.target === '_blank'),
+    JSON.stringify(opened),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'диагностика в браузере: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioNetwork(browser) {
   const page = await openPage(browser, '#/settings?section=network&from=home', { settle: 450 });
   takeErrors(page);
@@ -2013,6 +2074,7 @@ async function main() {
       ['модели', scenarioModels],
       ['микрофон', scenarioMic],
       ['диагностика', scenarioDiagnostics],
+      ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['сеть', scenarioNetwork],
       ['буфер: удаление и очистка', scenarioClipboardDanger],
       ['словарь: поиск и вкладки', scenarioDictionaryExtras],

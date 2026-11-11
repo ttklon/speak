@@ -11,6 +11,9 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
   const { push } = useToast();
   const [hovered, setHovered] = useState(null);
 
+  // Имя задаётся при первом запуске и живёт в настройках; профиль может быть
+  // пустым (старые установки) — тогда подпись совпадает с приветствием «Привет, Имя».
+  const displayName = profile?.name || settings.userName || '';
   const go = (id) => navigate(id);
 
   return (
@@ -51,8 +54,8 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
         </button>
 
         <button type="button" className="profile" onClick={onOpenProfile} title="Профиль">
-          <span className="profile__avatar">{(profile?.name || 'Z')[0].toUpperCase()}</span>
-          <span className="profile__email">{profile?.name || 'локальный профиль'}</span>
+          <span className="profile__avatar">{(displayName || 'Z')[0].toUpperCase()}</span>
+          <span className="profile__email">{displayName || 'локальный профиль'}</span>
           <User size={12} className="profile__logout" />
         </button>
       </div>

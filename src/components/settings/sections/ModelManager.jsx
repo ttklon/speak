@@ -21,7 +21,16 @@ export default function ModelManager() {
   const [busy, setBusy] = useState(null);
 
   const refresh = async ({ silent = true } = {}) => {
-    if (!bridge?.modelsStatus) return null;
+    if (!bridge?.modelsStatus) {
+      if (!silent) {
+        push({
+          title: 'Модели — в установленном приложении',
+          description: 'В браузере нет доступа к файлам модели: скачайте её в Windows-сборке ZSpeakly.',
+          tone: 'warn',
+        });
+      }
+      return null;
+    }
     try {
       const next = await bridge.modelsStatus();
       // если main вернул не то, что ждём — не роняем плашку в «неизвестно»
@@ -223,7 +232,7 @@ export default function ModelManager() {
           variant="ghost"
           size="sm"
           onClick={importModel}
-          disabled={!bridge?.importModel || Boolean(busy)}
+          disabled={Boolean(busy)}
         >
           Указать файл модели
         </Button>
@@ -231,7 +240,6 @@ export default function ModelManager() {
           variant="bare"
           size="sm"
           onClick={() => refresh({ silent: false })}
-          disabled={!bridge?.modelsStatus}
           logo={null}
         >
           Обновить статус

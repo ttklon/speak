@@ -6,6 +6,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 import { localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
+import { APP } from '../../../lib/config.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -103,7 +104,41 @@ export default function DiagnosticsSection() {
   const saveReport = async () => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.diagSaveReport) {
-      push({ title: 'Только в приложении', description: 'Открыть Windows-сборку ZSpeakly.', tone: 'warn' });
+      // В браузере (превью) отчёт можно честно скачать файлом: Blob + <a download>.
+      // Раньше кнопка просто упиралась в «только в приложении».
+      try {
+        const events = localEvents()
+          .slice(-200)
+          .map((e) => `[${new Date(e.at).toLocaleString('ru-RU')}] ${e.level}/${e.scope}: ${e.message}`)
+          .join('\n');
+        const text = [
+          'ZSpeakly — отчёт о работе (браузер)',
+          `Версия: ${APP?.version || '—'} · ${APP?.build || ''}`,
+          `Браузер: ${navigator.userAgent}`,
+          `Язык: ${navigator.language} · Платформа: ${navigator.platform || '—'}`,
+          `Экран: ${window.screen?.width}×${window.screen?.height}`,
+          `Адрес: ${location.origin}`,
+          '',
+          `Событий в журнале: ${events ? events.split('\n').length : 0}`,
+          events || 'журнал пуст',
+        ].join('\n');
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'zspeakly-report.txt';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        push({
+          title: 'Отчёт скачан',
+          description: 'Файл zspeakly-report.txt в папке загрузок браузера.',
+          tone: 'success',
+        });
+      } catch (err) {
+        push({ title: 'Не удалось сохранить отчёт', description: String(err?.message || err), tone: 'warn' });
+      }
       return;
     }
     setBusy('report');
@@ -282,7 +317,7 @@ export default function DiagnosticsSection() {
               variant="white"
               size="sm"
               onClick={saveEndpoint}
-              disabled={busy === 'endpoint' || !isElectron()}
+              disabled={busy === 'endpoint'}
             >
               {busy === 'endpoint' ? 'Сохраняю…' : 'Сохранить'}
             </Button>
@@ -294,7 +329,7 @@ export default function DiagnosticsSection() {
                 setEndpointDraft('');
                 saveEndpoint('');
               }}
-              disabled={busy === 'endpoint' || !isElectron()}
+              disabled={busy === 'endpoint'}
             >
               Только на компьютере
             </Button>
@@ -309,13 +344,13 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="row-8" style={{ flexWrap: 'wrap', marginTop: 8 }}>
-          <Button variant="white" size="sm" onClick={saveReport} disabled={busy === 'report' || !isElectron()}>
+          <Button variant="white" size="sm" onClick={saveReport} disabled={busy === 'report'}>
             {busy === 'report' ? 'Сохраняю…' : 'Сохранить отчёт в файл'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy === 'send' || !isElectron()}>
+          <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy === 'send'}>
             {busy === 'send' ? 'Отправляю…' : 'Отправить сейчас'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={ping} disabled={busy === 'ping' || !isElectron()}>
+          <Button variant="ghost" size="sm" onClick={ping} disabled={busy === 'ping'}>
             {busy === 'ping' ? 'Проверяю…' : 'Проверить канал'}
           </Button>
           <Button variant="ghost" size="sm" onClick={copyLogs}>
