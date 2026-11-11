@@ -84,6 +84,7 @@
 | `lib/ai/textops.js` | Офлайн-операции: `clean`, `formal`, `shorten`, `bullets`, `searchQuery`, `lowerTerms`, `summary`, `todos`; `llmRewrite()` через Ollama с бэкоффом 60 с (`llmIsDown`/`resetLlmBackoff`): после таймаута следующие запросы не ждут, инструкции идут офлайн |
 | `lib/ai/vision.js` | Экранный контекст: `describeScreen()` шлёт скриншот в локальную модель (`images[]`), `mergePromptParts()` собирает подсказку (термины ≤300 симв. + словарь), различает «модель без картинок» (400) и «модели нет» (404) |
 | `lib/ai/instructions.js` | Исполнитель инструкций: LLM, иначе офлайн-операция по промпту/названию |
+| `lib/feedback.js` | Звуковые отклики старт/стоп/ошибка через WebAudio и «эффект печати» `typeOut()` (по словам, отменяется `AbortSignal`) |
 | `lib/ai/style.js` | Профиль стиля по истории (длина фраз, «ты/вы», эмодзи, вводные) и подстройка текста |
 | `lib/translate.js` | Перевод: Ollama, иначе словари ru↔en и пометка покрытия |
 | `lib/dictionary/learn.js` | Обучение словаря по правкам (Левенштейн, стоп-слова, лимит 5) |
@@ -280,7 +281,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ## 12. Проверки перед коммитом
 
 ```bash
-npm test                  # 100 тестов (vitest + jsdom)
+npm test                  # 105 тестов (vitest + jsdom)
 npm run test:main         # 24 смоук-проверки main-процесса
 npm run test:ui           # E2E: обход кнопок, 40 сценариев, контраст/вёрстка
 npm run check:ipc         # ни одного канала без обработчика
