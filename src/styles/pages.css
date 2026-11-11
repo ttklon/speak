@@ -953,7 +953,9 @@
 
 .clip-hotkeys {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* на узком окне четыре колонки не влезали и уезжали за край — колонки
+     подстраиваются под ширину, а не пытаются уместиться любой ценой */
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   gap: 8px;
   margin-bottom: 18px;
 }
@@ -962,6 +964,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   padding: 9px 11px;
   border-radius: var(--radius-card);
   border: 1px solid rgba(var(--overlay-rgb), 0.06);
@@ -995,6 +998,7 @@
 .clip-hotkey__keys {
   margin-top: 3px;
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
 }
 

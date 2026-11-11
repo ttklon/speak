@@ -131,7 +131,8 @@ async function openPage(browser, route = '#/home', opts = {}) {
     else req.abort();
   });
 
-  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+  const view = opts.viewport || { width: 1280, height: 800 };
+  await page.setViewport({ width: view.width, height: view.height, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(installMockBridge);
   const settings = { ...SEED_SETTINGS, ...(opts.settings || {}) };
   await page.evaluateOnNewDocument(([seed, fresh, extra]) => {
@@ -1483,6 +1484,27 @@ async function scenarioVisualAudit(browser) {
   }
   record('вид', 'контраст текста не ниже 3:1 в обеих темах', contrastFails.length === 0, contrastFails.slice(0, 6).join('; '));
   record('вид', 'ничего не вылезает за окно', overflowFails.length === 0, overflowFails.slice(0, 6).join('; '));
+
+  // ноутбук и узкое окно: интерфейс не должен разваливаться при уменьшении
+  const narrowFails = [];
+  const narrowPages = [
+    ['#/home', 'главная'],
+    ['#/dictionary', 'словарь'],
+    ['#/clipboard', 'буфер'],
+    ['#/settings?section=app&from=home', 'настройки'],
+  ];
+  for (const viewport of [
+    { width: 1024, height: 700 },
+    { width: 900, height: 640 },
+  ]) {
+    for (const [route, label] of narrowPages) {
+      const page = await openPage(browser, route, { settle: 400, viewport });
+      const overflow = await page.evaluate(auditOverflow);
+      await page.close();
+      for (const o of overflow.slice(0, 2)) narrowFails.push(`${viewport.width}px/${label}: ${o.cls} (+${o.over}px)`);
+    }
+  }
+  record('вид', 'в узком окне (1024 и 900 px) ничего не обрезается', narrowFails.length === 0, narrowFails.slice(0, 6).join('; '));
 }
 
 /* ── настройки, которые должны что-то менять ──────────────────────────── */
