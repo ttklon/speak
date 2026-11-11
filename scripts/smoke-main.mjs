@@ -316,6 +316,37 @@ await check('хоткей диктовки показывает скрытое �
 });
 
 
+await check('мониторинг буфера присылает новое копирование в окно', async () => {
+  clipboardText.value = 'скопировано из блокнота';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+  if (!item) throw new Error('событие clipboard:item не пришло');
+  if (item.payload.text !== 'скопировано из блокнота') throw new Error(`текст не тот: ${item.payload.text}`);
+  if (!item.payload.source) throw new Error('источник не заполнен');
+});
+
+await check('своя вставка не попадает в историю буфера', async () => {
+  await handlers.get('text:insert')({}, 'вставленный диктант');
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const texts = sentEvents.filter((e) => e.ch === 'clipboard:item').map((e) => e.payload.text);
+  if (texts.some((t) => t === 'вставленный диктант')) {
+    throw new Error('диктовка попала в буфер как чужое копирование');
+  }
+});
+
+await check('выключенный мониторинг молчит', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: false });
+  clipboardText.value = 'это не должно попасть в историю';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const texts = sentEvents.filter((e) => e.ch === 'clipboard:item').map((e) => e.payload.text);
+  if (texts.length) throw new Error(`пришло ${texts.length} событий при выключенном мониторинге`);
+  // возвращаем как было, чтобы не влиять на остальные проверки
+  await handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true });
+});
+
 await check('отчёт диагностики сохраняется файлом на Рабочем столе', async () => {
   const save = handlers.get('diag:save-report');
   if (!save) throw new Error('нет канала diag:save-report');

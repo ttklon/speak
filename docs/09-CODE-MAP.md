@@ -105,7 +105,7 @@
 | Путь | Назначение |
 | --- | --- |
 | `scripts/check-ipc.mjs` | Сверяет `invoke/send` из preload с `ipcMain.handle/on` |
-| `scripts/smoke-main.mjs` | Грузит `main.cjs` с заглушкой Electron: 24 проверки — IPC, хоткеи, подсказка whisper (словарь + контекст экрана, ≤500), HTTP к локальной модели, снимок экрана |
+| `scripts/smoke-main.mjs` | Грузит `main.cjs` с заглушкой Electron: 27 проверок — IPC, хоткеи, подсказка whisper (словарь + контекст экрана, ≤500), HTTP к локальной модели, снимок экрана, мониторинг буфера (новое копирование, своя вставка не дублируется, выключенный мониторинг молчит) |
 | `scripts/test-ui.mjs` + `scripts/e2e/mock-bridge.mjs` | E2E в Chromium: мок моста `window.zspeakly` с журналом вызовов, обход всех кнопок/полей на каждом экране, 44 сценария поведения, автопроверка контраста и переполнения в обеих темах, доступных имён у кнопок и видимого фокуса при обходе по Tab |
 | `scripts/capture-screenshots.mjs` | 14 кадров интерфейса (тёмная и светлая темы) прямо из работающего Vite |
 | `scripts/smoke-updater.mjs` | Канал stable/beta реально применяется |
@@ -282,7 +282,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 
 ```bash
 npm test                  # 105 тестов (vitest + jsdom)
-npm run test:main         # 24 смоук-проверки main-процесса
+npm run test:main         # 27 смоук-проверок main-процесса
 npm run test:ui           # E2E: обход кнопок, 40 сценариев, контраст/вёрстка
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений
