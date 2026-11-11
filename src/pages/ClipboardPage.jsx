@@ -297,6 +297,7 @@ export default function ClipboardPage() {
         <div className="clip-head__toggle-wrap">
           <span className="clip-head__state">{settings.clipboardMonitor ? 'Включено' : 'Выключено'}</span>
           <Toggle
+            label="Мониторинг буфера обмена"
             checked={settings.clipboardMonitor}
             onChange={(v) => {
               updateSettings({ clipboardMonitor: v });

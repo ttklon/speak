@@ -1573,6 +1573,65 @@ async function scenarioAiOff(browser) {
   await page.close();
 }
 
+/* ── доступность: имена у кнопок и видимый фокус ─────────────────────── */
+
+const A11Y_ROUTES = [
+  '#/home',
+  '#/dictionary',
+  '#/hotkeys',
+  '#/clipboard',
+  '#/settings?section=app&from=home',
+  '#/settings?section=features&from=home',
+  '#/settings?section=diagnostics&from=home',
+  '#/settings?section=data&from=home',
+  '#/settings?section=network&from=home',
+  '#/settings?section=about&from=home',
+];
+
+async function scenarioAccessibleNames(browser) {
+  const unnamed = [];
+  const duplicateSwitches = [];
+  for (const route of A11Y_ROUTES) {
+    const page = await openPage(browser, route, { settle: 450 });
+    const found = await page.evaluate(() => {
+      const bad = [];
+      document.querySelectorAll('button, [role="button"], [role="switch"]').forEach((el) => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 4 || rect.height < 4) return;
+        const name = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('title') || '').trim();
+        if (!name) bad.push(el.className);
+      });
+      const labels = [...document.querySelectorAll('[role="switch"]')].map((el) => el.getAttribute('aria-label') || '');
+      const dupes = labels.filter((l, i) => l && labels.indexOf(l) !== i);
+      return { bad, dupes };
+    });
+    unnamed.push(...found.bad.map((cls) => `${route}: .${cls.split(' ')[0]}`));
+    duplicateSwitches.push(...found.dupes.map((l) => `${route}: ${l}`));
+    await page.close();
+  }
+  record('доступность', 'у каждой кнопки и переключателя есть имя', unnamed.length === 0, unnamed.slice(0, 3).join(' · '));
+  record('доступность', 'переключатели не дублируют имена', duplicateSwitches.length === 0, duplicateSwitches.slice(0, 3).join(' · '));
+
+  const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 450 });
+  await page.evaluate(() => document.body.focus());
+  const focus = [];
+  for (let i = 0; i < 8; i += 1) {
+    await page.keyboard.press('Tab');
+    const info = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return null;
+      const css = getComputedStyle(el);
+      const outline = css.outlineStyle !== 'none' && parseFloat(css.outlineWidth) > 0;
+      const ring = css.boxShadow && css.boxShadow !== 'none';
+      return { tag: el.tagName.toLowerCase(), name: (el.getAttribute('aria-label') || el.innerText || '').trim().slice(0, 24), visible: outline || ring };
+    });
+    if (info) focus.push(info);
+  }
+  const invisible = focus.filter((f) => !f.visible);
+  record('доступность', 'фокус с клавиатуры виден у каждого элемента', focus.length >= 5 && invisible.length === 0, invisible.map((f) => f.name).join(' · ') || `проверено ${focus.length}`);
+  await page.close();
+}
+
 /* ── запуск ───────────────────────────────────────────────────────────── */
 
 async function main() {
@@ -1675,6 +1734,7 @@ async function main() {
       ['плавающий индикатор', scenarioIndicator],
       ['чтение вслух', scenarioReadAloud],
       ['офлайн без ИИ', scenarioAiOff],
+      ['имена и фокус', scenarioAccessibleNames],
     ];
     for (const [name, fn] of scenarios) {
       try {

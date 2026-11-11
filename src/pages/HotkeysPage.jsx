@@ -209,6 +209,7 @@ export default function HotkeysPage() {
                     <div className="hk-row__desc">{describeStyle(style)}</div>
                   </div>
                   <Toggle
+                    label="Стиль письма"
                     checked={Boolean(settings.useWritingStyle)}
                     onChange={(v) => {
                       updateSettings({ useWritingStyle: v });
