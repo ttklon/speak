@@ -207,7 +207,7 @@ npm run dev        # только UI
 npm run electron:dev
 npm test                    # vitest: 100 тестов
 npm run test:main           # смоук IPC, whisper --prompt, HTTP к Ollama, снимок экрана (24 проверки)
-npm run test:ui             # E2E «нажать всё» в Chromium: кнопки, поля, сценарии, контраст
+npm run test:ui             # E2E «нажать всё» в Chromium: кнопки, поля, сценарии, контраст, доступные имена
 npm run test:updater        # каналы обновлений (stable/beta)
 npm run check:ipc           # нет каналов без обработчика
 npm run settings:index      # пересобрать индекс поиска по настройкам

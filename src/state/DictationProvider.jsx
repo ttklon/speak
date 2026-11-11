@@ -59,6 +59,8 @@ export function DictationProvider({ children }) {
   const dictRef = useRef(dictionary);
   const stopFallback = useRef(null);
   const finishing = useRef(false);
+  // опции текущей диктовки (нужны при остановке: вставлять текст или нет)
+  const sessionOpts = useRef({});
   // кадр экрана для «диктовки с учётом экрана» (в памяти, не на диске)
   const screenContextRef = useRef(null);
   // термины, которые локальная модель разглядела на экране: уходят в whisper
@@ -89,7 +91,7 @@ export function DictationProvider({ children }) {
   }, [state]);
 
   const finish = useCallback(
-    (text) => {
+    (text, { insert = true } = {}) => {
       // защита от двойного завершения (web-движок + фолбэк)
       if (finishing.current) return null;
       finishing.current = true;
@@ -128,6 +130,13 @@ export function DictationProvider({ children }) {
         setLast(item);
         addDictation(item);
         recordWords(item.words, durationMs);
+        // Вставка в активное окно. Раньше она жила только в onEnd движка,
+        // и при остановке через кнопку или отпускание хоткея текст молча
+        // оставался в истории — в приложении он не появлялся.
+        const native = window.zspeakly?.native;
+        if (insert && sessionOpts.current.insert !== false && native?.insertText) {
+          native.insertText(cleaned);
+        }
         if (settingsRef.current.readAloud) {
           speak(cleaned, settingsRef.current.language, settingsRef.current.readAloudVoice || '');
         }
@@ -147,6 +156,7 @@ export function DictationProvider({ children }) {
   const start = useCallback(
     (opts = {}) => {
       if (recRef.current) return;
+      sessionOpts.current = opts;
       setError(null);
       setDraft('');
       draftRef.current = '';
@@ -275,9 +285,6 @@ export function DictationProvider({ children }) {
           setTimeout(() => {
             const item = finish(text);
             if (opts.onResult) opts.onResult(item);
-            if (opts.insert !== false && item?.text && window.zspeakly?.native?.insertText) {
-              window.zspeakly.native.insertText(item.text);
-            }
           }, 260);
         },
       });
@@ -380,7 +387,7 @@ export function DictationProvider({ children }) {
         setState('idle');
         return;
       }
-      const item = finish(answer);
+      const item = finish(answer, { insert: false });
       if (item) pushToast({ title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' });
     } catch (err) {
       diag.error('agent', 'Ошибка агента', { reason: String(err?.message || err) });

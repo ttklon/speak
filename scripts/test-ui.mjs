@@ -464,6 +464,10 @@ async function scenarioDictation(browser) {
   );
   record('сценарии', 'диктовка: старт и стоп добавляют запись', recording && after === before + 1, `${before} → ${after} в истории`);
   record('сценарии', 'диктовка: распознанный текст попадает в историю', /Проверка диктовки/i.test(added));
+  const inserts = await page.evaluate(() =>
+    (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').map((c) => String(c.args?.[0] || '')),
+  );
+  record('сценарии', 'диктовка: текст вставляется в активное окно', inserts.length === 1 && /Проверка диктовки/i.test(inserts[0]), `вставок: ${inserts.length}`);
   record('сценарии', 'диктовка не пишет в консоль ошибок', errors.length === 0, errors[0] || '');
   await page.close();
 }
@@ -1573,6 +1577,62 @@ async function scenarioAiOff(browser) {
   await page.close();
 }
 
+/* ── диктовка с учётом экрана ─────────────────────────────────────────── */
+
+async function scenarioScreenAware(browser) {
+  // 1. Модель не настроена: снимок всё равно снимается, диктовка идёт дальше
+  const page = await openPage(browser, '#/home', { settings: { aiProcessing: false } });
+  await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+  await sleep(1400);
+  const during = await bridgeCalls(page);
+  await emit(page, 'hotkey', { type: 'up' });
+  await sleep(2600);
+  const after = await bridgeCalls(page);
+  const inserted = await page.evaluate(() =>
+    (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+  );
+  record('экран', 'снимок экрана делается на старте screen-aware диктовки', during.includes('screen:capture'));
+  record('экран', 'без модели текст всё равно распознан и вставлен', inserted === 1, `вставок: ${inserted}`);
+  record('экран', 'без модели запрос к нейросети не уходит', !after.some((c) => c === 'http:post'));
+  await page.close();
+
+  // 2. Модель настроена: кадр уходит в неё, а термины с экрана — подсказкой для распознавания
+  const page2 = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiModel: 'qwen2.5:0.5b' },
+  });
+  // журнал мока хранит только адрес, а нам нужен сам кадр — оборачиваем мост
+  await page2.evaluate(() => {
+    const native = window.zspeakly.native;
+    const original = native.httpPost;
+    window.__vision = [];
+    native.httpPost = (payload) => {
+      const body = payload?.body || {};
+      window.__vision.push({
+        url: payload?.url || '',
+        images: Array.isArray(body.images) ? body.images.length : 0,
+        imagePrefix: String(body.images?.[0] || '').slice(0, 12),
+      });
+      return original(payload);
+    };
+  });
+  await emit(page2, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+  await sleep(2000);
+  const vision = await page2.evaluate(() => window.__vision || []);
+  await emit(page2, 'hotkey', { type: 'up' });
+  await sleep(2600);
+  const sttPrompt = await page2.evaluate(() => {
+    const call = [...(window.__bridgeCalls || [])].reverse().find((c) => c.channel === 'stt:transcribe-pcm');
+    return String(call?.args?.[0]?.contextPrompt || '');
+  });
+  const inserted2 = await page2.evaluate(() =>
+    (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+  );
+  record('экран', 'кадр уходит в локальную модель как изображение', vision.some((v) => v.images > 0 && /\/api\/generate$/.test(v.url)), JSON.stringify(vision[0] || {}).slice(0, 80));
+  record('экран', 'термины с экрана подсказывают распознавание', /Атлас|задач/i.test(sttPrompt), sttPrompt.slice(0, 60));
+  record('экран', 'диктовка с экранным контекстом вставляет текст один раз', inserted2 === 1, `вставок: ${inserted2}`);
+  await page2.close();
+}
+
 /* ── доступность: имена у кнопок и видимый фокус ─────────────────────── */
 
 const A11Y_ROUTES = [
@@ -1735,6 +1795,7 @@ async function main() {
       ['чтение вслух', scenarioReadAloud],
       ['офлайн без ИИ', scenarioAiOff],
       ['имена и фокус', scenarioAccessibleNames],
+      ['диктовка с учётом экрана', scenarioScreenAware],
     ];
     for (const [name, fn] of scenarios) {
       try {

@@ -103,7 +103,17 @@ export function installMockBridge() {
       return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper' };
     },
     transcribePcm: async (payload) => {
-      record('stt:transcribe-pcm', [Object.keys(payload || {})]);
+      // pcm целиком в журнал не кладём, но всё, что влияет на распознавание,
+      // сохраняем — иначе подсказку с экрана невозможно проверить
+      record('stt:transcribe-pcm', [
+        {
+          keys: Object.keys(payload || {}),
+          lang: payload?.lang,
+          model: payload?.model,
+          useDictionary: payload?.useDictionary,
+          contextPrompt: payload?.contextPrompt,
+        },
+      ]);
       return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper' };
     },
 
@@ -132,8 +142,9 @@ export function installMockBridge() {
       return { image: PIXEL_PNG, kind: 'image', source: 'Снимок экрана' };
     },
     captureScreen: async () => {
+      // как в main.cjs: ok: false без картинки, ok: true с data-URL
       record('screen:capture');
-      return { image: PIXEL_PNG, width: 1280, height: 800 };
+      return { ok: true, image: PIXEL_PNG, width: 1280, height: 800 };
     },
 
     openDataFolder: async () => {
