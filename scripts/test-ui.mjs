@@ -1791,6 +1791,23 @@ async function scenarioScreenAware(browser) {
   record('экран', 'термины с экрана подсказывают распознавание', /Атлас|задач/i.test(sttPrompt), sttPrompt.slice(0, 60));
   record('экран', 'диктовка с экранным контекстом вставляет текст один раз', inserted2 === 1, `вставок: ${inserted2}`);
   await page2.close();
+
+  // 3. Своё сочетание на «с учётом экрана» — переключатель: нажали, ещё раз, стоп
+  const page3 = await openPage(browser, '#/home', { settings: { aiProcessing: false } });
+  await emit(page3, 'hotkey', { type: 'toggle', screenAware: true });
+  await sleep(1200);
+  const toggledOn = await page3.evaluate(() => ({
+    listening: /Слушаю/i.test(document.body.innerText),
+    captured: (window.__bridgeCalls || []).some((c) => c.channel === 'screen:capture'),
+  }));
+  await emit(page3, 'hotkey', { type: 'toggle', screenAware: true });
+  await sleep(2400);
+  const toggledOff = await page3.evaluate(() => ({
+    inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+    idle: !/Слушаю|Транскрибирую/i.test(document.body.innerText),
+  }));
+  record('экран', 'своё сочетание screen-aware работает переключателем', toggledOn.listening && toggledOn.captured && toggledOff.inserts === 1 && toggledOff.idle, `вставок: ${toggledOff.inserts}`);
+  await page3.close();
 }
 
 /* ── доступность: имена у кнопок и видимый фокус ─────────────────────── */

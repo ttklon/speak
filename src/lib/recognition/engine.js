@@ -237,7 +237,7 @@ export function createRecognizer(opts = {}) {
           return { text: '', reason: 'no-audio' };
         }
         if (durationMs < 350) {
-          onError?.({ code: 'too-short', title: 'Слишком короткая запись', hint: 'Удерживайте клавишу чуть дольше и говорите сразу.' });
+          onError?.({ code: 'too-short', title: 'Слишком короткая запись', hint: 'Говорите сразу после нажатия и не останавливайте запись так быстро.' });
           onEnd?.({ text: '' });
           return { text: '', reason: 'too-short' };
         }

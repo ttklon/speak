@@ -69,8 +69,8 @@ export default function OnboardingModal() {
         <div className="onboarding__hint">
           <Mic size={12} />
           <span>
-            Диктовка — {keysLabel(settings.dictationKeys || ['Ctrl', 'Alt', 'Space'])}. Удерживайте клавишу и
-            говорите.
+            Диктовка — {keysLabel(settings.dictationKeys || ['Ctrl', 'Alt', 'Space'])}. Нажмите, говорите,
+            нажмите ещё раз — текст вставится.
           </span>
         </div>
       </div>

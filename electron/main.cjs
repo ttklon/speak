@@ -318,14 +318,15 @@ function registerVoiceHotkeys(settings = {}) {
     if (accel === dictKey && (hk.id === 'dictation' || hk.id === 'agent')) continue;
     const info = { id: hk.id, keys: hk.keys };
     if (hk.id === 'dictation' || hk.id === 'screen-aware') {
-      // удержание: нажали — слушаем, отпустили — распознаём
+      // глобальные сочетания не присылают отпускание клавиши, поэтому это
+      // переключатель: нажали — слушаем, нажали ещё раз — распознаём
       registerAccel(
         accel,
         () => {
           showWindowForDictation();
           mainWindow?.webContents.send('hotkey', {
-            type: 'down',
-            mode: hk.mode === 'toggle' ? 'toggle' : 'hold',
+            type: 'toggle',
+            mode: 'toggle',
             screenAware: hk.id === 'screen-aware',
           });
         },

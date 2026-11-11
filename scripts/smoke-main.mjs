@@ -279,6 +279,32 @@ await check('одиночное нажатие диктовки запускае
   await new Promise((r) => setTimeout(r, 600));
 });
 
+await check('своё сочетание диктовки и screen-aware работают переключателем', () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    // своё сочетание диктовки живёт в dictationKey — так его пишет раздел
+    dictationKey: 'Control+Alt+D',
+    textActions: [],
+    voiceHotkeys: [{ id: 'screen-aware', keys: ['Ctrl', 'Alt', 'S'], enabled: true }],
+  });
+  const dict = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+D');
+  const aware = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+S');
+  if (!dict || !aware) throw new Error('сочетания не зарегистрированы');
+  // диктовка: первое нажатие — старт, второе — стоп (глобальное сочетание
+  // не присылает отпускание клавиши, поэтому «удержание» невозможно)
+  dict.fn();
+  dict.fn();
+  aware.fn();
+  const payloads = sentEvents.filter((e) => e.ch === 'hotkey').map((e) => e.payload);
+  const types = payloads.map((p) => p?.type);
+  if (types[0] !== 'down' || types[1] !== 'up') throw new Error(`диктовка не переключается: ${JSON.stringify(types)}`);
+  if (types[2] !== 'toggle') throw new Error(`screen-aware не переключатель: ${JSON.stringify(types)}`);
+  if (!payloads[2]?.screenAware) throw new Error('screen-aware потерял флаг экрана');
+  if (!registered.includes('Control+Alt+D')) throw new Error('своё сочетание диктовки не зарегистрировано');
+});
+
 await check('занятое сочетание не пропадает молча — приходит hotkey:conflict', () => {
   registered.length = 0;
   globalShortcutRegs.length = 0;

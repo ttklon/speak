@@ -436,7 +436,11 @@ export function DictationProvider({ children }) {
         start({ mode: payload.mode === 'toggle' ? 'toggle' : 'hold', screenAware: payload.screenAware });
       }
       if (payload?.type === 'up') stop();
-      if (payload?.type === 'toggle') toggle();
+      if (payload?.type === 'toggle') {
+        // «диктовка с учётом экрана» на своём сочетании тоже переключатель
+        if (payload.screenAware && !recRef.current) start({ mode: 'toggle', screenAware: true });
+        else toggle();
+      }
       if (payload?.type === 'agent') askAgent();
     });
     return off;
