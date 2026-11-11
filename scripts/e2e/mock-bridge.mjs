@@ -138,8 +138,9 @@ export function installMockBridge() {
       return true;
     },
     screenshot: async () => {
+      // как в main.cjs: ok + размеры + превью, событие не дублируется
       record('clipboard:screenshot');
-      return { image: PIXEL_PNG, kind: 'image', source: 'Снимок экрана' };
+      return { ok: true, image: PIXEL_PNG, width: 1280, height: 800, source: 'Снимок экрана' };
     },
     captureScreen: async () => {
       // как в main.cjs: ok: false без картинки, ok: true с data-URL

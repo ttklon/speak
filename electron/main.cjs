@@ -655,20 +655,14 @@ function registerIpc() {
       if (!source) return { ok: false, reason: 'экран недоступен' };
       const image = source.thumbnail;
       clipboard.writeImage(image);
-      const item = {
-        kind: 'image',
-        text: '',
-        image: image.resize({ width: 480 }).toDataURL(),
-        source: `Снимок экрана — ${source.name || 'дисплей'}`,
-        createdAt: Date.now(),
-      };
-      mainWindow?.webContents.send('clipboard:item', item);
-      // превью отдаём и вызывающему: заметка со скриншотом строится из него
+      // Событие clipboard:item здесь НЕ отправляем: рендерер сам добавляет
+      // снимок по ответу (иначе каждый снимок попадал в историю дважды).
       return {
         ok: true,
         width: image.getSize().width,
         height: image.getSize().height,
-        image: item.image,
+        image: image.resize({ width: 480 }).toDataURL(),
+        source: `Снимок экрана — ${source.name || 'дисплей'}`,
       };
     } catch (err) {
       return { ok: false, reason: err.message };

@@ -16,6 +16,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// приложение стартует с чистой историей; для снимков нужен демонстрационный
+// набор (он же используется в тестах) — иначе экраны будут пустыми
+import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../src/lib/seed.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'docs', 'screenshots');
@@ -121,9 +124,28 @@ async function main() {
 
     // первый запуск в превью показывает онбординг — для снимков он не нужен
     const settings = { onboarded: true, userName: 'Максим', ...(shot.settings || {}) };
-    await page.evaluateOnNewDocument((data) => {
-      localStorage.setItem('zs:zs.settings', JSON.stringify(data));
-    }, settings);
+    await page.evaluateOnNewDocument(
+      (data) => {
+        localStorage.setItem('zs:zs.settings', JSON.stringify(data.settings));
+        localStorage.setItem('zs:zs.dictations', JSON.stringify(data.dictations));
+        localStorage.setItem('zs:zs.clipboard', JSON.stringify(data.clipboard));
+        localStorage.setItem('zs:zs.dictionary', JSON.stringify(data.dictionary));
+        localStorage.setItem(
+          'zs:zs.stats',
+          JSON.stringify({
+            wordsTotal: data.dictations.reduce((sum, d) => sum + (d.words || 0), 0),
+            secondsTotal: data.dictations.reduce((sum, d) => sum + (d.durationMs || 0) / 1000, 0),
+            sessions: data.dictations.length,
+          }),
+        );
+      },
+      {
+        settings,
+        dictations: buildSeedDictations(),
+        clipboard: buildSeedClipboard(),
+        dictionary: SEED_DICTIONARY,
+      },
+    );
 
     await page.goto(`${BASE}/${shot.hash}`, { waitUntil: 'networkidle2', timeout: 45000 });
     await pause(700);

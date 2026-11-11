@@ -7,7 +7,7 @@ import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 
 export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPresets }) {
-  const { profile } = useAppData();
+  const { profile, settings } = useAppData();
   const { push } = useToast();
   const [hovered, setHovered] = useState(null);
 
@@ -27,7 +27,9 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
           >
             <Icon name={item.icon} size={15} strokeWidth={1.6} className="nav-item__icon" />
             <span className="nav-item__label">{item.label}</span>
-            {item.badge ? <span className="badge-new">{item.badge}</span> : null}
+            {item.badge && !(item.id === 'clipboard' && settings.seenClipboard) ? (
+              <span className="badge-new">{item.badge}</span>
+            ) : null}
           </button>
         ))}
       </nav>

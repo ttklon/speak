@@ -67,11 +67,8 @@ export default function ClipboardPage() {
     return bridge.onClipboardAction((action) => {
       if (action === 'note') {
         const run = async () => {
-          const res = await bridge?.screenshot?.();
-          if (!res?.ok) {
-            push({ title: 'Не удалось сделать скриншот', description: res?.reason, tone: 'warn' });
-            return;
-          }
+          const res = await captureScreen();
+          if (!res) return;
           addClipboardItem({
             kind: 'note',
             title: 'Скриншот с заметкой',
@@ -220,7 +217,74 @@ export default function ClipboardPage() {
     }
   };
 
-  /** Скриншот: в Electron — реальный снимок экрана, в браузере — демо-картинка. */
+  /**
+   * Снимок экрана: в приложении — через main (весь экран), в браузере — через
+   * getDisplayMedia (выбор окна/экрана). Возвращает null, если не получилось,
+   * и сам показывает понятную причину.
+   */
+  const captureScreen = async () => {
+    const bridge = window.zspeakly?.native;
+    if (bridge?.screenshot) {
+      const res = await bridge.screenshot();
+      if (!res?.ok) {
+        push({ title: 'Не удалось сделать скриншот', description: res?.reason, tone: 'warn' });
+        return null;
+      }
+      return { image: res.image || '', width: res.width, height: res.height };
+    }
+    const media = navigator.mediaDevices;
+    if (!media?.getDisplayMedia) {
+      push({
+        title: 'Снимок экрана недоступен',
+        description: 'Браузер не даёт захват экрана. В приложении для Windows снимок делает главный процесс.',
+        tone: 'warn',
+      });
+      return null;
+    }
+    let stream;
+    try {
+      stream = await media.getDisplayMedia({ video: { frameRate: 1 }, audio: false });
+    } catch (err) {
+      push({
+        title: 'Снимок не сделан',
+        description: err?.name === 'NotAllowedError' ? 'Выбор экрана отменён.' : String(err?.message || err),
+        tone: 'warn',
+      });
+      return null;
+    }
+    try {
+      const track = stream.getVideoTracks?.()[0];
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+      // ждём первый настоящий кадр, иначе canvas остаётся пустым
+      if (video.readyState < 2) {
+        await new Promise((resolve) => {
+          video.onloadeddata = resolve;
+          setTimeout(resolve, 800);
+        });
+      }
+      const width = video.videoWidth || track?.getSettings?.().width || 0;
+      const height = video.videoHeight || track?.getSettings?.().height || 0;
+      if (!width || !height) {
+        push({ title: 'Снимок не сделан', description: 'Не удалось получить кадр с экрана.', tone: 'warn' });
+        return null;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+      return { image: canvas.toDataURL('image/png'), width, height, label: track?.label || 'браузер' };
+    } catch (err) {
+      push({ title: 'Снимок не сделан', description: String(err?.message || err), tone: 'warn' });
+      return null;
+    } finally {
+      stream.getTracks().forEach((t) => t.stop());
+    }
+  };
+
+  /** Действия плиток хоткеев буфера. */
   const runHotkey = async (id) => {
     if (id === 'panel') {
       navigate('clipboard');
@@ -230,40 +294,16 @@ export default function ClipboardPage() {
       await toggleRecording();
       return;
     }
-    const bridge = window.zspeakly?.native;
-    if (bridge?.screenshot) {
-      const res = await bridge.screenshot();
-      push({
-        title: res?.ok ? 'Скриншот сохранён' : 'Не удалось сделать скриншот',
-        description: res?.ok ? `${res.width}×${res.height} · уже в буфере обмена` : res?.reason,
-        tone: res?.ok ? 'success' : 'warn',
-      });
-      return;
-    }
-    // Браузер: рисуем снимок вкладки через canvas, чтобы превью тоже работало
-    const canvas = document.createElement('canvas');
-    canvas.width = 640;
-    canvas.height = 360;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, 640, 360);
-    grad.addColorStop(0, '#1b1d22');
-    grad.addColorStop(1, '#2b2f38');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 640, 360);
-    ctx.fillStyle = 'rgba(255,255,255,.9)';
-    ctx.font = '600 20px Inter, sans-serif';
-    ctx.fillText('Снимок экрана', 28, 44);
-    ctx.fillStyle = 'rgba(255,255,255,.45)';
-    ctx.font = '13px Inter, sans-serif';
-    ctx.fillText(`${document.title || 'ZSpeakly'} · ${new Date().toLocaleTimeString('ru-RU')}`, 28, 68);
+    const shot = await captureScreen();
+    if (!shot) return;
     addClipboardItem({
       kind: 'image',
       text: '',
-      image: canvas.toDataURL('image/png'),
-      source: 'Снимок экрана — ZSpeakly',
+      image: shot.image,
+      source: `Снимок экрана — ${shot.label || 'ZSpeakly'}`,
       createdAt: Date.now(),
     });
-    push({ title: 'Скриншот сохранён', description: 'В установленной версии снимается весь экран.', tone: 'success' });
+    push({ title: 'Скриншот сохранён', description: `${shot.width}×${shot.height} · в истории буфера`, tone: 'success' });
   };
 
   const copyItem = async (item) => {

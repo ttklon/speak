@@ -13,7 +13,6 @@ import {
   DEFAULT_VOICE_HOTKEYS,
   STORAGE_KEYS,
 } from '../lib/config.js';
-import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../lib/seed.js';
 import { uid } from '../lib/utils.js';
 import { pruneByAge } from '../lib/retention.js';
 
@@ -62,9 +61,13 @@ export function AppDataProvider({ children }) {
   const [settings, setSettings] = usePersistentState(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS, {
     merge: DEFAULT_SETTINGS,
   });
-  const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => buildSeedDictations());
-  const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => SEED_DICTIONARY);
-  const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => buildSeedClipboard());
+  // Новый пользователь начинает с пустой историей, буфером и словарём: раньше
+  // здесь подставлялись демонстрационные записи из видео, и приложение
+  // выглядело так, будто за вас уже что-то надиктовали и накопировали.
+  // Демо-наборы остались только для тестов и скриншотов (src/lib/seed.js).
+  const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => []);
+  const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => []);
+  const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => []);
   const [voiceHotkeys, setVoiceHotkeys] = usePersistentState(STORAGE_KEYS.hotkeys, () => DEFAULT_VOICE_HOTKEYS);
   const [presets, setPresets] = usePersistentState(STORAGE_KEYS.presets, () => DEFAULT_AI_PRESETS);
   const [instructions, setInstructions] = usePersistentState(
@@ -72,12 +75,9 @@ export function AppDataProvider({ children }) {
     () => DEFAULT_CUSTOM_INSTRUCTIONS,
   );
   const [stats, setStats] = usePersistentState(STORAGE_KEYS.stats, () => DEFAULT_STATS);
-  const [profile, setProfile] = usePersistentState(STORAGE_KEYS.profile, () => ({
-    name: '',
-    email: 'me@zspeakly.local',
-    plan: 'Free · безлимит',
-    credits: 0,
-  }));
+  // профиль — только имя: почта, «подписка» и credits были выдуманными
+  // полями из макета и нигде не использовались
+  const [profile, setProfile] = usePersistentState(STORAGE_KEYS.profile, () => ({ name: '' }));
   const [merged, setMerged] = useState(false);
 
   // «Хранить» в настройках данных раньше было декорацией: срок сохранялся,

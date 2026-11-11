@@ -384,6 +384,31 @@ await check('app:open-external пускает только наши ссылки
   }
 });
 
+await check('скриншот не попадает в историю дважды', async () => {
+  const stub = electronStub.desktopCapturer;
+  const original = stub.getSources;
+  stub.getSources = async () => [
+    {
+      name: 'Экран 1',
+      thumbnail: {
+        toDataURL: () => 'data:image/png;base64,QQ==',
+        resize: () => ({ toDataURL: () => 'data:image/png;base64,QQ==' }),
+        getSize: () => ({ width: 1920, height: 1080 }),
+      },
+    },
+  ];
+  sentEvents.length = 0;
+  try {
+    const res = await handlers.get('clipboard:screenshot')({});
+    if (!res?.ok) throw new Error(res?.reason || 'снимок не сделался');
+    if (!res.image || !res.width) throw new Error('нет превью или размеров');
+    const duplicates = sentEvents.filter((e) => e.ch === 'clipboard:item');
+    if (duplicates.length) throw new Error('main сам прислал clipboard:item — в истории будет два снимка');
+  } finally {
+    stub.getSources = original;
+  }
+});
+
 await check('clipboard:write кладёт картинку, а не только текст', async () => {
   const ok = await handlers.get('clipboard:write')({}, {
     image: 'data:image/png;base64,iVBORw0KGgo=',

@@ -29,6 +29,11 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState('account');
   const [profileOpen, setProfileOpen] = useState(false);
 
+  // «НОВОЕ» у буфера — не вечная наклейка: после первого захода гаснет
+  useEffect(() => {
+    if (route.page === 'clipboard' && !settings.seenClipboard) updateSettings({ seenClipboard: true });
+  }, [route.page, settings.seenClipboard, updateSettings]);
+
   const prevPage = useRef(route.page);
   const openedFromHash = useRef(false);
 

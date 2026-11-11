@@ -172,6 +172,7 @@ export const DEFAULT_SETTINGS = {
   soundFeedback: true,
   typingEffect: false,
   showFloatingIndicator: true,
+  seenClipboard: false, // плашка «НОВОЕ» гаснет после первого захода в буфер
   notifications: true,
   // отправка ошибок и служебных логов (без текста диктовки); по умолчанию включена
   diagnostics: true,

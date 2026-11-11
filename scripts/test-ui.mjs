@@ -23,6 +23,8 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import puppeteer from 'puppeteer-core';
 import { installMockBridge } from './e2e/mock-bridge.mjs';
+// демо-наборы больше не подставляются приложением — тесты кладут их сами
+import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../src/lib/seed.js';
 
 const BASE = (process.env.ZS_BASE_URL || 'http://127.0.0.1:5173').replace(/\/$/, '');
 const HEADLESS = process.env.HEADED !== '1';
@@ -135,6 +137,14 @@ async function openPage(browser, route = '#/home', opts = {}) {
   await page.setViewport({ width: view.width, height: view.height, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(installMockBridge);
   const settings = { ...SEED_SETTINGS, ...(opts.settings || {}) };
+  // содержимое по умолчанию: демо-история, демо-буфер и демо-словарь.
+  // Сценарии, которым нужны пустые экраны, передают свои storeSeed.
+  const fixtures = {
+    'zs.dictations': buildSeedDictations(),
+    'zs.clipboard': buildSeedClipboard(),
+    'zs.dictionary': SEED_DICTIONARY,
+    ...(opts.storeSeed || {}),
+  };
   await page.evaluateOnNewDocument(([seed, fresh, extra]) => {
     if (fresh !== false) {
       for (const key of Object.keys(localStorage)) {
@@ -146,7 +156,7 @@ async function openPage(browser, route = '#/home', opts = {}) {
     for (const [key, value] of Object.entries(extra || {})) {
       localStorage.setItem(`mockstore:${key}`, JSON.stringify(value));
     }
-  }, [settings, opts.fresh === false ? false : true, opts.storeSeed || null]);
+  }, [settings, opts.fresh === false ? false : true, fixtures]);
   await page.goto(`${BASE}/${route}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.app-window', { timeout: 15_000 });
   await sleep(opts.settle ?? 250);
@@ -1810,6 +1820,62 @@ async function scenarioScreenAware(browser) {
   await page3.close();
 }
 
+/* ── чистая установка и снимок экрана ─────────────────────────────────── */
+
+async function scenarioFreshInstall(browser) {
+  // ни истории, ни буфера, ни словаря — как у человека, который только что поставил
+  const empty = { 'zs.dictations': [], 'zs.clipboard': [], 'zs.dictionary': [] };
+  const page = await openPage(browser, '#/home', { settle: 600, storeSeed: empty });
+  const home = await page.evaluate(() => ({
+    text: document.body.innerText,
+    dictations: (window.__e2e.read('zs.dictations') || []).length,
+    counters: [...document.querySelectorAll('.stat__value')].map((el) => el.innerText.trim()),
+  }));
+  record('чистая установка', 'история начинается пустой, без чужих записей', home.dictations === 0 && !/Привет, как дела\?/.test(home.text), `записей: ${home.dictations}`);
+  record('чистая установка', 'счётчики на главной начинаются с нуля', home.counters.every((v) => /^0$/.test(v)), home.counters.join(' · '));
+  const badgeBefore = await page.evaluate(() => /НОВОЕ/.test(document.body.innerText));
+  record('чистая установка', 'плашка «НОВОЕ» видна до первого захода в буфер', badgeBefore);
+  record('чистая установка', 'пустая история объясняет, что делать', /наговорите|пока нет|нет записей|начните/i.test(home.text), home.text.match(/[^\n]*(?:пока нет|начните|наговорите)[^\n]*/i)?.[0]?.slice(0, 70) || '');
+
+  await page.goto(`${BASE}/#/clipboard`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-window');
+  await sleep(450);
+  const clip = await page.evaluate(() => document.body.innerText);
+  record('чистая установка', 'пустой буфер говорит «история пуста»', /История буфера пуста/i.test(clip), clip.match(/[^\n]*пуста[^\n]*/i)?.[0] || '');
+  const badgeAfter = await page.evaluate(() => /НОВОЕ/.test(document.body.innerText));
+  const seen = await page.evaluate(() => Boolean((window.__e2e.read('zs.settings') || {}).seenClipboard));
+  record('чистая установка', 'после захода в буфер плашка «НОВОЕ» гаснет', !badgeAfter && seen);
+
+  await page.goto(`${BASE}/#/dictionary`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-window');
+  await sleep(450);
+  const dict = await page.evaluate(() => ({
+    text: document.body.innerText,
+    rows: document.querySelectorAll('.dict-row').length,
+  }));
+  record('чистая установка', 'словарь пуст, но экран не выглядит сломанным', dict.rows === 0 && !/NaN|undefined/.test(dict.text), `${dict.rows} строк`);
+  await page.close();
+}
+
+async function scenarioScreenshotOnce(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500 });
+  const before = await page.evaluate(() => (window.__e2e.read('zs.clipboard') || []).length);
+  await page.evaluate(() => {
+    const tile = [...document.querySelectorAll('.clip-hotkey')].find((el) => /^Скриншот/.test(el.innerText.trim()));
+    tile?.click();
+  });
+  await sleep(900);
+  const after = await page.evaluate(() => ({
+    count: (window.__e2e.read('zs.clipboard') || []).length,
+    first: (window.__e2e.read('zs.clipboard') || [])[0],
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+  }));
+  record('буфер', 'снимок экрана добавляется ровно один раз', after.count === before + 1, `${before} → ${after.count}`);
+  record('буфер', 'снимок экрана — настоящая картинка с размером', Boolean(after.first?.image?.startsWith('data:image')), String(after.first?.source || '').slice(0, 40));
+  record('буфер', 'о снимке сообщается', /Скриншот сохранён/i.test(after.toast), after.toast.slice(0, 50));
+  await page.close();
+}
+
 /* ── доступность: имена у кнопок и видимый фокус ─────────────────────── */
 
 const A11Y_ROUTES = [
@@ -1972,6 +2038,8 @@ async function main() {
       ['чтение вслух', scenarioReadAloud],
       ['офлайн без ИИ', scenarioAiOff],
       ['имена и фокус', scenarioAccessibleNames],
+      ['чистая установка', scenarioFreshInstall],
+      ['снимок экрана', scenarioScreenshotOnce],
       ['диктовка с учётом экрана', scenarioScreenAware],
       ['режимы диктовки', scenarioDictationModes],
       ['связь с main', scenarioMainSync],

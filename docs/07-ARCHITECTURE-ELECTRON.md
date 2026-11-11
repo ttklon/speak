@@ -51,7 +51,8 @@ src/                          renderer (React 18 + Vite)
 2. **Запись.** `createRecognizer()` выбирает движок:
    - native whisper.cpp (если main нашёл бинарник и модель),
    - Web Speech API,
-   - демо-движок (если Web Speech не поднялся за 2 с — сторож `watchdog`).
+   - если Web Speech не поднялся за 2 с (`watchdog`) или недоступен — честная ошибка с подсказкой;
+     выдуманного «демо-текста» нет.
 3. **Живой текст.** `onPartial` обновляет HUD и блок «Живая диктовка».
 4. **Финиш.** `onEnd` → `finish()`: словарь → постобработка → запись в историю → статистика.
 5. **Вставка.** В Electron `native.insertText(text)` кладёт текст в буфер и отправляет `Ctrl+V`
@@ -114,7 +115,7 @@ renderer ──start──▶ main ──spawn──▶ whisper-cli -m ggml-smal
 
 | Процесс | Зачем | Если нет |
 |---|---|---|
-| `whisper-cli.exe` (C++ из whisper.cpp) | офлайн-распознавание | Web Speech или демо-движок |
+| `whisper-cli.exe` (C++ из whisper.cpp) | офлайн-распознавание | Web Speech, иначе честная ошибка |
 | `powershell.exe` (SendKeys) | вставка текста в чужое окно на Windows | текст остаётся в буфере |
 | `tasklist.exe` | имя приложения-источника для буфера | источник = «Системный буфер» |
 
