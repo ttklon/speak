@@ -111,13 +111,20 @@ const electronStub = {
   },
   shell: { openExternal: () => {}, openPath: () => {} },
   dialog: { showErrorBox: () => {} },
-  screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1920, height: 1080 } }) },
+  screen: {
+    getPrimaryDisplay: () => ({
+      size: { width: 1920, height: 1080 },
+      workAreaSize: { width: 1920, height: 1040 },
+    }),
+  },
   session: { defaultSession: { setDisplayMediaRequestHandler: () => {} } },
   desktopCapturer: { getSources: async () => [] },
 };
 
 // перехватываем spawn/execFile — никаких реальных процессов в тесте
 const spawnCalls = [];
+// что «ответит» фейковый whisper (см. cpStub.spawn); null — процесс просто молчит
+const spawnPlan = { answer: null };
 const globalShortcutRegs = [];
 const cpStub = {
   execFile: (file, args, opts, cb) => {
@@ -132,7 +139,22 @@ const cpStub = {
   },
   spawn: (file, args) => {
     spawnCalls.push({ file, args });
-    return { on: () => {}, stdout: { on: () => {} }, stderr: { on: () => {} }, kill: () => {} };
+    const listeners = {};
+    const child = {
+      on: (event, fn) => {
+        if (fn) listeners[event] = fn;
+      },
+      stdout: { on: () => {} },
+      stderr: { on: () => {} },
+      kill: () => {},
+    };
+    // «распознавание»: пишем тот же файл, что ждёт whisper.cjs (-otxt), и закрываемся
+    if (spawnPlan.answer !== null) {
+      const at = (args || []).indexOf('-of');
+      if (at >= 0) fs.writeFileSync(`${args[at + 1]}.txt`, spawnPlan.answer);
+      setTimeout(() => listeners.close?.(0), 0);
+    }
+    return child;
   },
 };
 
@@ -311,6 +333,150 @@ await check('по умолчанию наружу ничего не отправ
   if (status.endpointConfigured) throw new Error('адрес приёмника задан по умолчанию');
   const res = await handlers.get('diag:send-now')({});
   if (res?.ok) throw new Error('отправка прошла без настроенного приёмника');
+});
+
+// ── Экранный контекст и словарь уходят в whisper как --prompt ───────────────
+await check('stt:status честно говорит, что движка нет', async () => {
+  const st = await handlers.get('stt:status')({}, 'small');
+  if (st.available) throw new Error('движок «нашёлся» до установки');
+  if (st.bin || st.model) throw new Error('статус показывает несуществующие файлы');
+});
+
+const whisperBin = path.join(userData, 'bin', 'whisper-cli.exe');
+const whisperModel = path.join(userData, 'models', 'ggml-small.bin');
+fs.mkdirSync(path.dirname(whisperBin), { recursive: true });
+fs.mkdirSync(path.dirname(whisperModel), { recursive: true });
+fs.writeFileSync(whisperBin, 'fake');
+fs.writeFileSync(whisperModel, 'fake');
+
+// «запуск» whisper: планируем ответ фейкового процесса
+const runWhisper = (answer) => {
+  spawnPlan.answer = answer;
+};
+
+await check('пропуск движка: whisper получает --prompt со словарём и контекстом', async () => {
+  await handlers.get('store:set')({}, 'zs:dictionary', [
+    { word: 'ZSpeakly', pronunciation: 'зи-спикли' },
+    { word: 'Алтайтара', pronunciation: 'алтай-тара' },
+  ]);
+  runWhisper('Проверка диктовки');
+  spawnCalls.length = 0;
+  const pcm = new Uint8Array(16000); // 0.5 с тишины
+  const res = await handlers.get('stt:transcribe-pcm')({}, {
+    pcm,
+    durationMs: 500,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+    contextPrompt: 'Список задач, дедлайн, проект «Атлас»',
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  if (!call) throw new Error(`whisper не запускался: ${JSON.stringify(spawnCalls)}`);
+  const i = call.args.indexOf('--prompt');
+  if (i < 0) throw new Error('--prompt не передан');
+  const prompt = call.args[i + 1];
+  if (!prompt.includes('ZSpeakly') || !prompt.includes('Алтайтара')) throw new Error(`словаря нет: ${prompt}`);
+  if (!prompt.includes('Атлас')) throw new Error(`контекста экрана нет: ${prompt}`);
+  if (res?.text !== 'Проверка диктовки') throw new Error(`текст не вернулся: ${JSON.stringify(res)}`);
+});
+
+await check('тумблер словаря работает целиком: без словаря и без подсказки', async () => {
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: new Uint8Array(16000),
+    lang: 'ru',
+    model: 'small',
+    useDictionary: false,
+    contextPrompt: '',
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  if (call.args.includes('--prompt')) throw new Error(`подсказка осталась: ${call.args.join(' ')}`);
+});
+
+await check('подсказка не разрастается: не больше 500 символов', async () => {
+  await handlers.get('store:set')({}, 'zs:dictionary', Array.from({ length: 60 }, (_, i) => ({ word: `Термин${i}` })));
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: new Uint8Array(16000),
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+    contextPrompt: 'О'.repeat(900),
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const prompt = call.args[call.args.indexOf('--prompt') + 1];
+  if (prompt.length > 500) throw new Error(`подсказка ${prompt.length} символов`);
+  // контекст экрана идёт первым — именно он важнее для точности
+  if (!prompt.startsWith('О')) throw new Error('контекст экрана потерялся при обрезке');
+});
+
+await check('пустая запись не запускает whisper', async () => {
+  runWhisper('не должно быть');
+  spawnCalls.length = 0;
+  const res = await handlers.get('stt:transcribe-pcm')({}, { pcm: new Uint8Array(0), lang: 'ru' });
+  if (res?.ok) throw new Error('пустая запись распозналась');
+  if (spawnCalls.some((c) => String(c.file).includes('whisper'))) throw new Error('whisper запущен на пустом файле');
+});
+
+spawnPlan.answer = null;
+
+// ── HTTP к локальной модели: экранный контекст и текст ──────────────────────
+await check('http:post доносит картинку до локальной модели', async () => {
+  const http = await import('node:http');
+  const got = { body: null };
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      got.body = JSON.parse(body || '{}');
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ response: 'Проект «Атлас», дедлайн пятница' }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const res = await handlers.get('http:post')({}, {
+      url: `http://127.0.0.1:${port}/api/generate`,
+      body: { model: 'qwen2.5:0.5b', prompt: 'что на экране?', images: ['data:image/png;base64,AAA'], stream: false },
+      timeout: 4000,
+    });
+    if (!res?.ok) throw new Error(res?.reason || 'запрос не прошёл');
+    if (got.body?.images?.[0] !== 'data:image/png;base64,AAA') throw new Error('картинка не дошла');
+    if (res.data?.response !== 'Проект «Атлас», дедлайн пятница') throw new Error('ответ не разобран');
+  } finally {
+    server.close();
+  }
+});
+
+await check('http:post не пускает наружу', async () => {
+  for (const url of ['https://example.com/api/generate', 'file:///C:/Windows/System32/calc.exe', 'nonsense']) {
+    const res = await handlers.get('http:post')({}, { url, body: {} });
+    if (res?.ok) throw new Error(`пропущен адрес: ${url}`);
+  }
+});
+
+// ── Снимок экрана для контекста ─────────────────────────────────────────────
+await check('screen:capture без источников честно отказывает', async () => {
+  const res = await handlers.get('screen:capture')({});
+  if (res?.ok) throw new Error('вернул картинку без источников');
+  if (!res?.reason) throw new Error('нет причины отказа');
+});
+
+await check('screen:capture отдаёт dataURL, когда экран доступен', async () => {
+  const stub = electronStub.desktopCapturer;
+  const original = stub.getSources;
+  stub.getSources = async () => [{ thumbnail: { toDataURL: () => 'data:image/png;base64,QQ==' } }];
+  try {
+    const res = await handlers.get('screen:capture')({});
+    if (!res?.ok) throw new Error(res?.reason || 'не снялось');
+    if (!String(res.image).startsWith('data:image/png')) throw new Error('не dataURL');
+    if (!(res.width > 0 && res.height > 0)) throw new Error('нет размеров экрана');
+  } finally {
+    stub.getSources = original;
+  }
 });
 
 console.log(`\nOK (${ok.length}):`);

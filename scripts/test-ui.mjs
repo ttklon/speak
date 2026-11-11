@@ -134,14 +134,18 @@ async function openPage(browser, route = '#/home', opts = {}) {
   await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(installMockBridge);
   const settings = { ...SEED_SETTINGS, ...(opts.settings || {}) };
-  await page.evaluateOnNewDocument(([seed, fresh]) => {
+  await page.evaluateOnNewDocument(([seed, fresh, extra]) => {
     if (fresh !== false) {
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith('mockstore:') && key !== 'mockstore:zs.settings') localStorage.removeItem(key);
+        if (key.startsWith('mockstore:')) localStorage.removeItem(key);
       }
     }
     localStorage.setItem('mockstore:zs.settings', JSON.stringify(seed));
-  }, [settings, opts.fresh === false ? false : true]);
+    // готовые данные для сценариев (буфер, словарь, история)
+    for (const [key, value] of Object.entries(extra || {})) {
+      localStorage.setItem(`mockstore:${key}`, JSON.stringify(value));
+    }
+  }, [settings, opts.fresh === false ? false : true, opts.storeSeed || null]);
   await page.goto(`${BASE}/${route}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.app-window', { timeout: 15_000 });
   await sleep(opts.settle ?? 250);
@@ -1058,6 +1062,252 @@ async function scenarioThemeCycle(browser) {
   await page.close();
 }
 
+/* ── события из main-процесса (трей, глобальные хоткеи, буфер) ─────────── */
+
+const emit = (page, channel, payload) =>
+  page.evaluate(([ch, data]) => window.__e2e.emit(ch, data), [channel, payload]);
+
+async function scenarioTrayCommands(browser) {
+  const page = await openPage(browser, '#/home');
+  await emit(page, 'command', 'settings');
+  await sleep(400);
+  const settingsOpen = await page.evaluate(() => Boolean(document.querySelector('.settings-modal')));
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  await emit(page, 'command', 'diagnostics');
+  await sleep(400);
+  const section = await page.evaluate(() => document.querySelector('.settings-main h2')?.innerText || '');
+  await page.keyboard.press('Escape');
+  await sleep(250);
+  await emit(page, 'command', 'clipboard');
+  await sleep(400);
+  const onClipboard = await page.evaluate(() => location.hash.includes('clipboard'));
+  record('события', 'трей открывает настройки, диагностику и буфер', settingsOpen && /Диагностика/.test(section) && onClipboard, section);
+  await page.close();
+}
+
+async function scenarioGlobalHotkey(browser) {
+  const page = await openPage(browser, '#/home');
+  takeErrors(page);
+  await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: false });
+  await sleep(1200);
+  const started = await page.evaluate(() => /Слушаю/i.test(document.body.innerText));
+  await emit(page, 'hotkey', { type: 'up' });
+  await sleep(1800);
+  const stored = await storeOf(page, 'zs.dictations');
+  const before = Array.isArray(stored) ? stored.length : 0;
+  const text = await page.evaluate(() =>
+    [...document.querySelectorAll('.recent__row .recent__text')].map((el) => el.innerText).join(' '),
+  );
+  record('события', 'глобальный хоткей запускает и останавливает диктовку', started && before > 0 && /Проверка диктовки/i.test(text), `${before} записей`);
+  const errors = takeErrors(page);
+  record('события', 'глобальный хоткей без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+async function scenarioClipboardEvent(browser) {
+  const page = await openPage(browser, '#/clipboard');
+  const before = await page.evaluate(() => (window.__e2e.read('zs.clipboard') || []).length);
+  await emit(page, 'clipboard:item', {
+    text: 'скопировано в другой программе',
+    kind: 'text',
+    source: 'Другая программа',
+    createdAt: Date.now(),
+  });
+  await sleep(500);
+  const after = await page.evaluate(() => (window.__e2e.read('zs.clipboard') || []).length);
+  const visible = await page.evaluate(() => /скопировано в другой программе/.test(document.body.innerText));
+  record('события', 'новый элемент из системы появляется в истории буфера', after === before + 1 && visible, `${before} → ${after}`);
+  await page.close();
+}
+
+async function scenarioTextActionEvent(browser) {
+  const page = await openPage(browser, '#/hotkeys', { settle: 400 });
+  takeErrors(page);
+  const presetId = await page.evaluate(() => {
+    const list = window.__e2e.read('zs.presets') || [];
+    return list[0]?.id || null;
+  });
+  if (!presetId) {
+    record('события', 'глобальное сочетание запускает AI-инструкцию', false, 'нет пресетов в сиде');
+    await page.close();
+    return;
+  }
+  await emit(page, 'text-action', presetId);
+  await sleep(1500);
+  const calls = await bridgeCalls(page);
+  const copied = calls.includes('text:replace-selection') || calls.includes('clipboard:write') || calls.includes('text:insert');
+  record('события', 'глобальное сочетание запускает AI-инструкцию и возвращает текст', copied, calls.filter((c) => /text:|clipboard:write/.test(c)).join(','));
+  const errors = takeErrors(page);
+  record('события', 'AI-инструкция по хоткею без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+async function scenarioHotkeyConflict(browser) {
+  const page = await openPage(browser, '#/hotkeys', { settle: 400 });
+  await emit(page, 'hotkey:conflict', { keys: ['Ctrl', 'Alt', 'J'], title: 'Диктовка' });
+  await sleep(500);
+  const toast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+  );
+  record('события', 'занятое сочетание показывается предупреждением', /занято/i.test(toast), toast.slice(0, 80));
+  await page.close();
+}
+
+async function scenarioUpdateEvent(browser) {
+  const page = await openPage(browser, '#/home');
+  await emit(page, 'update:status', { status: 'available', version: '1.5.0' });
+  await sleep(500);
+  const toast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+  );
+  record('события', 'доступное обновление объявляется само', /1\.5\.0/.test(toast), toast.slice(0, 80));
+  await page.close();
+}
+
+async function scenarioModelProgress(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', { settle: 600 });
+  takeErrors(page);
+  await emit(page, 'model:progress', { id: 'tiny', percent: 42 });
+  await sleep(400);
+  await emit(page, 'model:progress', { id: 'tiny', percent: 100, done: true, ok: true });
+  await sleep(600);
+  const body = await page.evaluate(() => document.body.innerText);
+  const toast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+  );
+  record('события', 'прогресс скачивания модели доходит до «скачано»', /Модель скачана|Скачано|скачана/i.test(`${body} ${toast}`), toast.slice(0, 80));
+  const errors = takeErrors(page);
+  record('события', 'прогресс модели без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+/* ── клавиатура, сохранность данных, сроки хранения, пустые состояния ──── */
+
+async function scenarioKeyboard(browser) {
+  const page = await openPage(browser, '#/home');
+  await page.keyboard.down('Control');
+  await page.keyboard.press(',');
+  await page.keyboard.up('Control');
+  await sleep(400);
+  const opened = await page.evaluate(() => Boolean(document.querySelector('.settings-modal')));
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  const closed = await page.evaluate(() => !document.querySelector('.settings-modal'));
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyK');
+  await page.keyboard.up('Control');
+  await sleep(500);
+  const search = await page.evaluate(() => ({
+    onClipboard: location.hash.includes('clipboard'),
+    focused: document.activeElement?.closest('.clip-toolbar') !== null,
+  }));
+  record('клавиатура', 'Ctrl+, открывает настройки, Esc закрывает', opened && closed);
+  record('клавиатура', 'Ctrl+K ведёт в буфер и ставит курсор в поиск', search.onClipboard && search.focused, JSON.stringify(search));
+  await page.close();
+}
+
+async function scenarioPersistence(browser) {
+  const page = await openPage(browser, '#/dictionary', { settle: 350 });
+  await clickText(page, 'Добавить');
+  await sleep(300);
+  const input = await page.$('.modal input');
+  await input.type('Постоянное');
+  await clickIn(page, '.modal', 'Добавить');
+  await sleep(400);
+
+  await page.goto(`${BASE}/#/settings?section=app&from=home`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-window');
+  await sleep(350);
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.select__btn')].find((b) => /Тёмная|Светлая|Как в системе/.test(b.innerText));
+    btn?.click();
+  });
+  await sleep(200);
+  await page.evaluate(() => {
+    const opt = [...document.querySelectorAll('[role="option"]')].find((o) => /Светлая/.test(o.innerText));
+    opt?.click();
+  });
+  await sleep(400);
+
+  // перезагрузка «как после перезапуска приложения»
+  await page.goto(`${BASE}/#/dictionary`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-window');
+  await sleep(500);
+  const state = await page.evaluate(() => ({
+    theme: document.documentElement.dataset.theme,
+    hasWord: /Постоянное/.test(document.body.innerText),
+    stored: JSON.stringify(window.__e2e.read('zs.dictionary') || []).includes('Постоянное'),
+  }));
+  record('данные', 'слово и тема переживают перезапуск', state.theme === 'light' && state.hasWord && state.stored, `${state.theme}, ${state.hasWord}`);
+  await page.close();
+}
+
+async function scenarioRetention(browser) {
+  const now = Date.now();
+  const day = 86400000;
+  const seed = Array.from({ length: 5 }, (_, i) => ({
+    id: `old_${i}`,
+    kind: 'text',
+    text: `старый элемент ${i}`,
+    source: 'Тест',
+    createdAt: now - (40 + i) * day,
+  }));
+  const page = await openPage(browser, '#/clipboard', {
+    settle: 600,
+    settings: { clipboardRetentionDays: 30 },
+    storeSeed: { 'zs.clipboard': seed },
+  });
+  const left = await page.evaluate(() => (window.__e2e.read('zs.clipboard') || []).length);
+  const empty = await page.evaluate(() => /История буфера пуста/i.test(document.body.innerText));
+  record('данные', 'записи старше срока хранения удаляются при запуске', left === 0 || empty, `осталось ${left}`);
+
+  const seedPinned = [{ ...seed[0], id: 'pin_1', pinned: true, text: 'закреплённый старый' }];
+  const page2 = await openPage(browser, '#/clipboard', {
+    settle: 600,
+    settings: { clipboardRetentionDays: 30 },
+    storeSeed: { 'zs.clipboard': seedPinned },
+  });
+  const pinnedLeft = await page2.evaluate(() => (window.__e2e.read('zs.clipboard') || []).filter((i) => i.pinned).length);
+  record('данные', 'закреплённое не удаляется по сроку', pinnedLeft === 1);
+  await page2.close();
+  await page.close();
+}
+
+async function scenarioEmptyStates(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500, storeSeed: { 'zs.clipboard': [] } });
+  const clipEmpty = await page.evaluate(() => /История буфера пуста/i.test(document.body.innerText));
+  await page.goto(`${BASE}/#/dictionary`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-window');
+  await page.evaluate(() => window.__e2e.seed('zs.dictionary', []));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-window');
+  await sleep(500);
+  const dictText = await page.evaluate(() => document.body.innerText);
+  record('данные', 'пустой буфер показывает понятное состояние', clipEmpty);
+  record('данные', 'пустой словарь не выглядит сломанным', /Словарь/i.test(dictText) && !/NaN|undefined/.test(dictText));
+  await page.close();
+}
+
+async function scenarioSttFailure(browser) {
+  const page = await openPage(browser, '#/home');
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.zspeakly.native.transcribePcm = async () => ({ ok: false, text: '', reason: 'движок не установлен' });
+  });
+  await clickText(page, 'Начать диктовку');
+  await sleep(1200);
+  await page.evaluate(() => document.querySelector('[aria-label="Остановить запись"]')?.click());
+  await sleep(1500);
+  const body = await page.evaluate(() => document.body.innerText);
+  const honest = /не распознал|не установлен|проверьте модель/i.test(body);
+  record('ошибки', 'сбой распознавания объясняется, а не молчит', honest, body.match(/[^\n]*(?:не распознал|не установлен)[^\n]*/i)?.[0]?.slice(0, 80) || '');
+  const stored = await page.evaluate(() => (window.__e2e.read('zs.dictations') || []).length);
+  record('ошибки', 'пустая расшифровка не попадает в историю', stored <= 21, `${stored} записей`);
+  await page.close();
+}
+
 /* ── запуск ───────────────────────────────────────────────────────────── */
 
 async function main() {
@@ -1143,6 +1393,18 @@ async function main() {
       ['обновления', scenarioUpdates],
       ['данные и ссылки', scenarioData],
       ['тема: три режима', scenarioThemeCycle],
+      ['трей: команды', scenarioTrayCommands],
+      ['глобальный хоткей', scenarioGlobalHotkey],
+      ['событие буфера', scenarioClipboardEvent],
+      ['AI-инструкция по хоткею', scenarioTextActionEvent],
+      ['занятое сочетание', scenarioHotkeyConflict],
+      ['объявление обновления', scenarioUpdateEvent],
+      ['прогресс модели', scenarioModelProgress],
+      ['клавиатура', scenarioKeyboard],
+      ['сохранность после перезапуска', scenarioPersistence],
+      ['сроки хранения', scenarioRetention],
+      ['пустые состояния', scenarioEmptyStates],
+      ['сбой распознавания', scenarioSttFailure],
     ];
     for (const [name, fn] of scenarios) {
       try {

@@ -67,7 +67,26 @@ export function installMockBridge() {
   const PIXEL_PNG =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
-  const noopSubscription = () => () => {};
+  // Подписки main → renderer. Не заглушки: тест может выстрелить событием
+  // через window.__e2e.emit, и тогда проверяется вся реакция интерфейса.
+  const subscriptions = new Map();
+  const subscribe = (channel) => (cb) => {
+    const list = subscriptions.get(channel) || [];
+    list.push(cb);
+    subscriptions.set(channel, list);
+    return () => {
+      const current = subscriptions.get(channel) || [];
+      subscriptions.set(
+        channel,
+        current.filter((fn) => fn !== cb),
+      );
+    };
+  };
+  const emit = (channel, payload) => {
+    record(`emit:${channel}`, [payload]);
+    for (const fn of subscriptions.get(channel) || []) fn(payload);
+  };
+  const noopSubscription = subscribe;
 
   const native = {
     available: true,
@@ -261,14 +280,14 @@ export function installMockBridge() {
       return { ok: true };
     },
 
-    onModelProgress: noopSubscription,
-    onUpdateStatus: noopSubscription,
-    onHotkeyConflict: noopSubscription,
-    onHotkey: noopSubscription,
-    onTextAction: noopSubscription,
-    onCommand: noopSubscription,
-    onClipboardAction: noopSubscription,
-    onClipboard: noopSubscription,
+    onModelProgress: subscribe('model:progress'),
+    onUpdateStatus: subscribe('update:status'),
+    onHotkeyConflict: subscribe('hotkey:conflict'),
+    onHotkey: subscribe('hotkey'),
+    onTextAction: subscribe('text-action'),
+    onCommand: subscribe('command'),
+    onClipboardAction: subscribe('clipboard:action'),
+    onClipboard: subscribe('clipboard:item'),
   };
 
   window.zspeakly = {
@@ -301,7 +320,7 @@ export function installMockBridge() {
         clipboardText = String(text ?? '');
       },
     },
-    onNavigate: noopSubscription,
+    onNavigate: subscribe('navigate'),
     setZoom: (factor) => record('zoom', [factor]),
   };
 
@@ -316,5 +335,7 @@ export function installMockBridge() {
     countOf: (channel) => calls.filter((c) => c.channel === channel).length,
     seed: (key, value) => writeStore(key, value),
     read: (key) => readStore(key),
+    emit,
+    emitCount: () => (subscriptions.get('x') || []).length,
   };
 }
