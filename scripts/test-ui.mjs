@@ -1639,6 +1639,50 @@ async function scenarioDictationModes(browser) {
   await page2.close();
 }
 
+/* ── настройки доезжают до главного процесса ──────────────────────────── */
+
+async function scenarioMainSync(browser) {
+  const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 500 });
+  const clickSwitchInRow = (title) =>
+    page.evaluate((text) => {
+      const row = [...document.querySelectorAll('.setting-row')].find((r) =>
+        r.querySelector('.setting-row__label')?.innerText.trim().startsWith(text),
+      );
+      const sw = row?.querySelector('[role="switch"]');
+      if (!sw || sw.disabled) return false;
+      sw.click();
+      return true;
+    }, title);
+
+  const tray = await clickSwitchInRow('Свернуть в трей при закрытии');
+  await sleep(500);
+  const mainSettings = await page.evaluate(() => window.__e2e.read('zs:settings') || {});
+  record(
+    'связь с main',
+    '«Свернуть в трей» доезжает до главного процесса',
+    tray && mainSettings.closeToTray === false,
+    `closeToTray=${String(mainSettings.closeToTray)}`,
+  );
+
+  const auto = await clickSwitchInRow('Автозапуск с Windows');
+  await sleep(500);
+  const autoCalls = await page.evaluate(() =>
+    (window.__bridgeCalls || []).filter((c) => c.channel === 'app:auto-launch').map((c) => Boolean(c.args?.[0])),
+  );
+  record('связь с main', 'автозапуск включает систему, а не только тумблер', auto && autoCalls.includes(true), JSON.stringify(autoCalls));
+
+  const close = await page.evaluate(() => {
+    const btn = document.querySelector('[aria-label="Закрыть"]');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(400);
+  const calls = await bridgeCalls(page);
+  record('связь с main', 'крестик закрывает окно через main', close && calls.includes('win:close'));
+  await page.close();
+}
+
 /* ── диктовка с учётом экрана ─────────────────────────────────────────── */
 
 async function scenarioScreenAware(browser) {
@@ -1859,6 +1903,7 @@ async function main() {
       ['имена и фокус', scenarioAccessibleNames],
       ['диктовка с учётом экрана', scenarioScreenAware],
       ['режимы диктовки', scenarioDictationModes],
+      ['связь с main', scenarioMainSync],
     ];
     for (const [name, fn] of scenarios) {
       try {

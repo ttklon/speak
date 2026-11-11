@@ -153,10 +153,9 @@ export default function AppSection() {
           </div>
           <Toggle
             checked={settings.autoLaunch}
-            onChange={(v) => {
-              updateSettings({ autoLaunch: v });
-              window.zspeakly?.native?.setAutoLaunch?.(v);
-            }}
+            // сам вызов main делает эффект в App.jsx — он же синхронизирует
+            // автозапуск при старте, поэтому здесь только настройка
+            onChange={(v) => updateSettings({ autoLaunch: v })}
             disabled={!isElectron()}
           />
         </div>
