@@ -516,15 +516,18 @@ function registerIpc() {
     } catch (err) {
       return { ok: false, text: '', reason: `не записал wav: ${err.message}` };
     }
-    // Словарь — подсказка движку. Если тумблер «Применять словарь при диктовке»
-    // выключен, подсказку не передаём: настройка должна работать целиком.
-    const prompt =
+    // Подсказка движку: термины с экрана (если локальная модель их назвала) +
+    // словарь. Словарь не передаём, когда тумблер «Применять словарь при
+    // диктовке» выключен: настройка должна работать целиком.
+    const context = String(payload?.contextPrompt || '').trim().slice(0, 300);
+    const dictionaryPrompt =
       payload?.useDictionary === false
         ? ''
         : (store?.get('zs:dictionary') || [])
             .map((d) => d.word)
             .slice(0, 40)
             .join(', ');
+    const prompt = [context, dictionaryPrompt].filter(Boolean).join(', ').slice(0, 500);
     try {
       const started = Date.now();
       const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt });

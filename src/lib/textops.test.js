@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OPS, runOp } from './ai/textops.js';
+import { OPS, llmIsDown, llmRewrite, resetLlmBackoff, runOp } from './ai/textops.js';
 import { offlineTranslate, translate } from './translate.js';
 
 describe('постобработка диктовки', () => {
@@ -44,6 +44,22 @@ describe('постобработка диктовки', () => {
     const todos = OPS.todos('Сегодня обсудили релиз. Нужно отправить смету. Проверить бэкап базы.');
     expect(todos.length).toBeGreaterThan(0);
     expect(todos[0].done).toBe(false);
+  });
+});
+
+describe('локальная модель не тормозит офлайн-режим', () => {
+  it('после сбоя следующие запросы не ждут таймаут', async () => {
+    resetLlmBackoff();
+    expect(llmIsDown()).toBe(false);
+    // порт 9 закрыт: первый вызов падает быстро и включает паузу
+    await llmRewrite({ endpoint: 'http://127.0.0.1:9', text: 'привет', timeout: 800 });
+    expect(llmIsDown()).toBe(true);
+    const started = Date.now();
+    const second = await llmRewrite({ endpoint: 'http://127.0.0.1:9', text: 'привет', timeout: 800 });
+    expect(second).toBe(null);
+    expect(Date.now() - started).toBeLessThan(50);
+    resetLlmBackoff();
+    expect(llmIsDown()).toBe(false);
   });
 });
 

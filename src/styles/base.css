@@ -56,6 +56,11 @@
   --shadow-modal: 0 24px 70px rgba(0, 0, 0, 0.62), 0 2px 8px rgba(0, 0, 0, 0.4);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* Цвет «подсветки»: все полупрозрачные рамки и заливки записаны как
+     rgba(var(--overlay-rgb), α). В тёмной теме это белый, в светлой — чёрный,
+     поэтому одни и те же значения работают в обеих темах. */
+  --overlay-rgb: 255, 255, 255;
 }
 
 * {
@@ -148,7 +153,7 @@ a {
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: rgba(var(--overlay-rgb), 0.2) transparent;
 }
 
 .scroll-area::-webkit-scrollbar {
@@ -161,14 +166,14 @@ a {
 }
 
 .scroll-area::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(var(--overlay-rgb), 0.16);
   border: 3px solid transparent;
   background-clip: content-box;
   border-radius: 999px;
 }
 
 .scroll-area::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(var(--overlay-rgb), 0.3);
   background-clip: content-box;
 }
 
@@ -210,6 +215,8 @@ a {
     --bg-key: #f0f0f3;
     --bg-key-edge: #dfdfe4;
     --bg-menu: #ffffff;
+
+    --overlay-rgb: 0, 0, 0;
   }
 }
 
@@ -239,65 +246,6 @@ html[data-theme='light'] {
   --bg-key: #f0f0f3;
   --bg-key-edge: #dfdfe4;
   --bg-menu: #ffffff;
-}
 
-/* ── Светлая тема ──────────────────────────────────────────────
-   Срабатывает, когда Windows в светлом режиме и в настройках выбрано
-   «Как в системе». Пока в настройках «Тёмная», тема не переключается. */
-@media (prefers-color-scheme: light) {
-  html[data-theme='system'] {
-    --bg-app: #e9e9ec;
-    --bg-window: #ffffff;
-    --bg-sidebar: #f4f4f6;
-    --bg-content: #fbfbfc;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f3f3f5;
-    --bg-elevated: #ffffff;
-    --bg-input: #f3f3f5;
-    --bg-active: #e8e8ec;
-    --bg-hover: #eeeef1;
-
-    --border: #dcdce1;
-    --border-soft: #e7e7eb;
-    --border-strong: #c9c9d0;
-
-    --text: #14141a;
-    --text-2: #3b3b45;
-    --text-3: #5b5b66;
-    --text-4: #7b7b87;
-    --text-5: #9a9aa5;
-
-    --bg-toggle-off: #c8c8d0;
-    --bg-key: #f0f0f3;
-    --bg-key-edge: #dfdfe4;
-    --bg-menu: #ffffff;
-  }
-}
-
-html[data-theme='light'] {
-    --bg-app: #e9e9ec;
-    --bg-window: #ffffff;
-    --bg-sidebar: #f4f4f6;
-    --bg-content: #fbfbfc;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f3f3f5;
-    --bg-elevated: #ffffff;
-    --bg-input: #f3f3f5;
-    --bg-active: #e8e8ec;
-    --bg-hover: #eeeef1;
-
-    --border: #dcdce1;
-    --border-soft: #e7e7eb;
-    --border-strong: #c9c9d0;
-
-    --text: #14141a;
-    --text-2: #3b3b45;
-    --text-3: #5b5b66;
-    --text-4: #7b7b87;
-    --text-5: #9a9aa5;
-
-    --bg-toggle-off: #c8c8d0;
-    --bg-key: #f0f0f3;
-    --bg-key-edge: #dfdfe4;
-    --bg-menu: #ffffff;
+  --overlay-rgb: 0, 0, 0;
 }

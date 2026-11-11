@@ -227,9 +227,34 @@ export const OPS = {
   },
 };
 
+/**
+ * «Модель не отвечает» запоминаем на минуту.
+ *
+ * Раньше каждая AI-инструкция при выключенном Ollama висела 6–7 секунд на
+ * таймауте, и только потом срабатывали офлайн-правила. Теперь первый сбой
+ * включает паузу: остальные инструкции сразу идут офлайн. Любой успешный
+ * ответ (или кнопка «Проверить соединение» в «Настройки → Сеть») паузу снимает.
+ */
+const LLM_BACKOFF_MS = 60 * 1000;
+let llmDownUntil = 0;
+
+export function llmIsDown() {
+  return Date.now() < llmDownUntil;
+}
+
+export function resetLlmBackoff() {
+  llmDownUntil = 0;
+}
+
+function markLlm(ok) {
+  llmDownUntil = ok ? 0 : Date.now() + LLM_BACKOFF_MS;
+}
+
 /** Попытка локальной LLM (Ollama). Возвращает null, если недоступна. */
 export async function llmRewrite({ endpoint, model, system, text, timeout = 6000 }) {
   if (!endpoint || !text) return null;
+  // недавно уже не ответила — не тратим время человека
+  if (llmIsDown()) return null;
   const url = `${endpoint.replace(/\/$/, '')}/api/generate`;
   const body = {
     model: model || 'qwen2.5:0.5b',
@@ -244,10 +269,15 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
   if (bridge?.httpPost) {
     try {
       const res = await bridge.httpPost({ url, body, timeout });
-      if (!res?.ok) return null;
+      if (!res?.ok) {
+        markLlm(false);
+        return null;
+      }
       const out = String(res.data?.response || '').trim();
+      markLlm(Boolean(out));
       return out || null;
     } catch {
+      markLlm(false);
       return null;
     }
   }
@@ -261,11 +291,16 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      markLlm(false);
+      return null;
+    }
     const data = await res.json();
     const out = (data?.response || '').trim();
+    markLlm(Boolean(out));
     return out || null;
   } catch {
+    markLlm(false);
     return null;
   } finally {
     clearTimeout(t);

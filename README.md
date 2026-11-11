@@ -69,10 +69,23 @@
 
 ### Скриншоты
 
+Сняты с работающего интерфейса: `npm run dev` в одном терминале, затем `npm run screenshots`
+(скрипт `scripts/capture-screenshots.mjs`, headless Chromium, окно 1280×800, ретина ×2).
+Онбординг пропускается сидом `localStorage`, поэтому кадры детерминированы.
+
 | | |
 |---|---|
 | ![Горячие клавиши](docs/screenshots/02-hotkeys.png) | ![Буфер обмена](docs/screenshots/03-clipboard.png) |
-| ![Словарь](docs/screenshots/04-dictionary.png) | ![Настройки](docs/screenshots/06-settings-app.png) |
+| ![Буфер обмена — список](docs/screenshots/05-clipboard-list.png) | ![Словарь](docs/screenshots/04-dictionary.png) |
+| ![Настройки — приложение](docs/screenshots/06-settings-app.png) | ![Настройки — функции](docs/screenshots/07-settings-features.png) |
+| ![Настройки — диагностика](docs/screenshots/08-settings-diagnostics.png) | ![Правка расшифровки с обучением словаря](docs/screenshots/11-correction.png) |
+
+Светлая тема — это не фильтр поверх тёмной: палитра переключается токенами (`--text`, `--bg-elevated`,
+`--overlay-rgb`), поэтому контраст сохраняется во всех окнах, включая модалки.
+
+| | |
+|---|---|
+| ![Светлая тема — главная](docs/screenshots/09-light-home.png) | ![Светлая тема — настройки](docs/screenshots/10-light-settings.png) |
 
 ## Стек
 
@@ -80,8 +93,9 @@
 - **React 18 + Vite 5** — рендерер, MVVM-подобное состояние на контекстах;
 - **Inter / JetBrains Mono** — типографика из видео (локально, без CDN);
 - **lucide-react** — иконки (MIT), без внешних CDN;
-- **Vitest** — 81 тест: текстовые движки, стиль письма, склонения, буфер, рендер всех страниц;
-- **Смоук main-процесса** — `npm run test:main` (11 проверок) запускает настоящий `main.cjs` с
+- **Vitest** — 95 тестов: текстовые движки, стиль письма, склонения, буфер, экранный контекст,
+  бэкофф локальной модели, рендер всех страниц;
+- **Смоук main-процесса** — `npm run test:main` (15 проверок) запускает настоящий `main.cjs` с
   заглушкой Electron: IPC, хоткеи, вставка Ctrl+V в чужое окно, WAV для whisper, картинки в буфере;
 - **Проверка IPC-контракта** — `npm run check:ipc`: каждый канал, который зовёт рендерер, обязан
   иметь обработчик (иначе вызов молча зависал);
@@ -190,7 +204,7 @@ powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
 npm run dev        # только UI
 npm run electron:dev
 npm test                    # vitest: 63 теста
-npm run test:main           # смоук IPC/хоткеев/вставки main-процесса (11 проверок)
+npm run test:main           # смоук IPC/хоткеев/вставки main-процесса (15 проверок)
 npm run test:updater        # каналы обновлений (stable/beta)
 npm run check:ipc           # нет каналов без обработчика
 npm run settings:index      # пересобрать индекс поиска по настройкам

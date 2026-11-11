@@ -4,6 +4,7 @@ import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { engineName } from '../../../lib/recognition/engine.js';
+import { llmIsDown, resetLlmBackoff } from '../../../lib/ai/textops.js';
 
 export default function NetworkSection() {
   const { settings, updateSettings } = useAppData();
@@ -40,6 +41,9 @@ export default function NetworkSection() {
       if (!res.ok) throw new Error('bad status');
       const data = res.data || {};
       setStatus('ok');
+      // модель ответила — снимаем «паузу недоступности», инструкции снова
+      // попробуют её, а не сразу пойдут по офлайн-правилам
+      resetLlmBackoff();
       push({
         title: 'Локальная модель доступна',
         description: `${data.models?.length || 0} моделей в Ollama`,
@@ -77,6 +81,7 @@ export default function NetworkSection() {
           <span className="kv-row__key">Локальный сервер ИИ</span>
           <span className="kv-row__value">
             {status === 'ok' ? 'доступен' : status === 'fail' ? 'недоступен' : 'не проверялся'}
+            {llmIsDown() ? ' · пауза после сбоя: инструкции работают офлайн' : ''}
           </span>
         </div>
       </div>

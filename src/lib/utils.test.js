@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyDictionary,
   captureCombo,
+  dayLabel,
   formatMinutes,
   keysLabel,
   plural,
@@ -106,5 +107,23 @@ describe('поиск', () => {
   });
   it('пустой запрос — ноль', () => {
     expect(searchScore('что угодно', '')).toBe(0);
+  });
+});
+
+describe('dayLabel', () => {
+  const now = new Date(2026, 10, 11, 12, 0, 0);
+
+  it('сегодня и вчера — словами', () => {
+    expect(dayLabel(new Date(2026, 10, 11, 8, 0), now)).toBe('Сегодня');
+    expect(dayLabel(new Date(2026, 10, 10, 23, 0), now)).toBe('Вчера');
+  });
+
+  it('называет число дней, а не только «дня назад»', () => {
+    expect(dayLabel(new Date(2026, 10, 9, 12, 0), now)).toBe('2 дня назад');
+    expect(dayLabel(new Date(2026, 10, 6, 12, 0), now)).toBe('5 дней назад');
+  });
+
+  it('старше недели — дата', () => {
+    expect(dayLabel(new Date(2026, 9, 1, 12, 0), now)).toMatch(/^0?1 /);
   });
 });

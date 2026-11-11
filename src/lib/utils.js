@@ -27,7 +27,7 @@ export function dayLabel(value, now = new Date()) {
   const diff = Math.round((b - a) / 86400000);
   if (diff === 0) return 'Сегодня';
   if (diff === 1) return 'Вчера';
-  if (diff < 7) return `${plural(diff, 'день', 'дня', 'дней')} назад`;
+  if (diff < 7) return `${diff} ${plural(diff, 'день', 'дня', 'дней')} назад`;
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
 }
 

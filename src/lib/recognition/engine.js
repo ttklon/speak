@@ -242,6 +242,10 @@ export function createRecognizer(opts = {}) {
           return { text: '', reason: 'too-short' };
         }
         let res;
+        // подсказка с экрана берётся в последний момент: локальная модель могла
+        // ответить уже после старта записи
+        const contextPrompt =
+          typeof opts.getContextPrompt === 'function' ? String(opts.getContextPrompt() || '') : '';
         try {
           // pcm уходит как Int16Array: main превращает его в сырые байты сам,
           // иначе whisper получает мусор вместо звука (был именно такой баг)
@@ -253,6 +257,7 @@ export function createRecognizer(opts = {}) {
             // тумблер «Применять словарь при диктовке» управляет и подсказкой
             // whisper'у, и заменой слов в готовом тексте
             useDictionary: opts.useDictionary !== false,
+            contextPrompt,
           });
         } catch (err) {
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });

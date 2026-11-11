@@ -81,7 +81,8 @@
 | `lib/recognition/errors.js` | Человеческие тексты ошибок распознавания |
 | `lib/audio/pcmRecorder.js` | `getUserMedia` → `ScriptProcessor` → ресемплинг в 16 кГц → `Int16Array` + RMS-уровень |
 | `lib/audio/devices.js` | Список микрофонов, разрешение, анализатор уровня |
-| `lib/ai/textops.js` | Офлайн-операции: `clean`, `formal`, `shorten`, `bullets`, `searchQuery`, `lowerTerms`, `summary`, `todos`; `llmRewrite()` через Ollama |
+| `lib/ai/textops.js` | Офлайн-операции: `clean`, `formal`, `shorten`, `bullets`, `searchQuery`, `lowerTerms`, `summary`, `todos`; `llmRewrite()` через Ollama с бэкоффом 60 с (`llmIsDown`/`resetLlmBackoff`): после таймаута следующие запросы не ждут, инструкции идут офлайн |
+| `lib/ai/vision.js` | Экранный контекст: `describeScreen()` шлёт скриншот в локальную модель (`images[]`), `mergePromptParts()` собирает подсказку (термины ≤300 симв. + словарь), различает «модель без картинок» (400) и «модели нет» (404) |
 | `lib/ai/instructions.js` | Исполнитель инструкций: LLM, иначе офлайн-операция по промпту/названию |
 | `lib/ai/style.js` | Профиль стиля по истории (длина фраз, «ты/вы», эмодзи, вводные) и подстройка текста |
 | `lib/translate.js` | Перевод: Ollama, иначе словари ru↔en и пометка покрытия |
@@ -96,7 +97,7 @@
 | `lib/router.js` | Hash-роутер (`#/page?param=`) |
 | `lib/config.js` | Единая точка правды: `APP`, `NAV`, `LANGUAGES`, `DEFAULT_SETTINGS`, хоткеи, пресеты, модели, `STORAGE_KEYS` |
 | `components/` | `layout/` (Sidebar, TitleBar), `ui/` (Controls, Modal, Toggle, Icon, DictationHUD), `modals/` (онбординг, профиль, правка, запись сочетания, инструкция), `settings/` (модалка + 7 секций + MicTester + ModelManager + UpdateRow + сгенерированный `settingsIndex.js`) |
-| `styles/` | `base` (палитра из разбора видео), `layout`, `components`, `pages`, `extra` — всего ~4 300 строк |
+| `styles/` | `base` (палитра из разбора видео + светлая тема), `layout`, `components`, `pages`, `extra` — всего ~4 300 строк. Темы: тёмная, светлая и «как в системе» (`html[data-theme]` + `style.colorScheme`); полупрозрачные рамки и заливки записаны как `rgba(var(--overlay-rgb), α)`, так что одна палитра работает в обеих темах |
 
 ### Служебное
 
@@ -277,7 +278,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ## 12. Проверки перед коммитом
 
 ```bash
-npm test                  # 85 тестов (vitest + jsdom)
+npm test                  # 95 тестов (vitest + jsdom)
 npm run test:main         # 15 смоук-проверок main-процесса
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений
@@ -287,12 +288,13 @@ npm run build
 
 ## 13. Известные ограничения
 
-- «Диктовка с учётом экрана» снимает кадр в память, но офлайн-распознавание
-  его не использует: кадр нужен только локальной модели с поддержкой
-  изображений. Подпись в интерфейсе это теперь говорит прямо.
+- «Диктовка с учётом экрана» снимает кадр и отдаёт его локальной модели
+  (`src/lib/ai/vision.js` → `POST {endpoint}/api/generate` с `images[]`),
+  а полученные термины (≤300 симв.) уходят в whisper через `--prompt` вместе
+  со словарём. Если модель без поддержки изображений (HTTP 400) или её нет
+  (404), распознавание работает без контекста — «Диагностика» так и пишет.
 - Офлайн-перевод и офлайн-инструкции работают по словарю и правилам: слова вне
   словаря остаются как есть, приложение показывает покрытие перевода.
-- Тема только тёмная и «как в системе»; светлой нет.
 - Бейдж на иконке задачи Windows не поддерживается — обновляется подсказка трея.
 - `store:get` намеренно существует и как `handle`, и как `on` (sendSync):
   синхронное чтение нужно до первого рендера.

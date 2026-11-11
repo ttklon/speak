@@ -76,12 +76,13 @@ export default function App() {
   }, []);
 
   // Команды из трея / меню Electron
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
+  // Тема: тёмная / светлая / как в системе. Значение уходит в data-theme,
+  // палитра живёт в base.css (светлая там уже была, но выбрать её было нельзя).
   useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
+    const theme = ['light', 'system', 'dark'].includes(settings.theme) ? settings.theme : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
+    document.documentElement.style.colorScheme =
+      theme === 'system' ? 'light dark' : theme === 'light' ? 'light' : 'dark';
   }, [settings.theme]);
 
   // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать

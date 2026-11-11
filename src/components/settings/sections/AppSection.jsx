@@ -45,6 +45,7 @@ export default function AppSection() {
             onChange={(v) => updateSettings({ theme: v })}
             options={[
               { value: 'dark', label: 'Тёмная' },
+              { value: 'light', label: 'Светлая' },
               { value: 'system', label: 'Как в системе' },
             ]}
             width={170}

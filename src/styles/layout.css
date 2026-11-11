@@ -25,7 +25,7 @@ body.web .app-window {
   width: min(1020px, calc(100vw - 48px));
   height: min(660px, calc(100vh - 48px));
   border-radius: var(--radius-window);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(var(--overlay-rgb), 0.06);
   margin: auto;
 }
 
@@ -40,7 +40,7 @@ body.web .app-shell {
   align-items: center;
   flex: none;
   background: var(--bg-window);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(var(--overlay-rgb), 0.03);
   -webkit-app-region: drag;
   user-select: none;
 }
@@ -79,7 +79,7 @@ body.web .app-shell {
 }
 
 .win-btn:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(var(--overlay-rgb), 0.07);
   color: var(--text);
 }
 
@@ -129,7 +129,7 @@ body.web .app-shell {
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--overlay-rgb), 0.04);
   color: var(--text-2);
 }
 
@@ -215,7 +215,7 @@ body.web .app-shell {
   margin: 8px 0 9px;
   height: 2px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--overlay-rgb), 0.1);
   overflow: hidden;
 }
 
@@ -255,7 +255,7 @@ body.web .app-shell {
 
 .sidebar__link:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(var(--overlay-rgb), 0.035);
 }
 
 .sidebar__link-arrow {

@@ -8,6 +8,7 @@ import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } fro
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS, llmRewrite } from '../lib/ai/textops.js';
+import { describeScreen } from '../lib/ai/vision.js';
 import { playCue } from '../lib/feedback.js';
 import { diag } from '../lib/diagnostics.js';
 import { useToast } from './ToastProvider.jsx';
@@ -60,6 +61,9 @@ export function DictationProvider({ children }) {
   const finishing = useRef(false);
   // кадр экрана для «диктовки с учётом экрана» (в памяти, не на диске)
   const screenContextRef = useRef(null);
+  // термины, которые локальная модель разглядела на экране: уходят в whisper
+  // как подсказка. Живут до следующего кадра и нигде не сохраняются.
+  const screenTermsRef = useRef('');
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -155,18 +159,35 @@ export function DictationProvider({ children }) {
       // «диктовка с учётом экрана»: один снимок экрана, чтобы подсказать
       // распознаванию контекст (термины, имена). Снимок не сохраняется на диск.
       if (opts.screenAware && window.zspeakly?.native?.captureScreen) {
+        // кадр нужен только локальной модели с поддержкой изображений: она
+        // называет термины с экрана, а они становятся подсказкой для whisper.
+        // Текст диктовки в запрос не попадает — модели показывают экран.
         window.zspeakly.native
           .captureScreen()
-          .then((shot) => {
-            if (shot?.ok) {
-              screenContextRef.current = shot.image;
-              diag.info('stt', 'Контекст экрана снят для диктовки', {
+          .then(async (shot) => {
+            if (!shot?.ok) return;
+            screenContextRef.current = shot.image;
+            const { aiEndpoint, aiModel, aiProcessing } = settingsRef.current || {};
+            if (!aiEndpoint || aiProcessing === false) {
+              diag.info('stt', 'Контекст экрана снят, но модель не настроена', {
                 keep: true,
                 width: shot.width,
                 height: shot.height,
-                // честно фиксируем, был ли кому передать этот кадр
-                used: Boolean(settingsRef.current.aiEndpoint),
+                used: false,
               });
+              return;
+            }
+            const ctx = await describeScreen(shot.image, { endpoint: aiEndpoint, model: aiModel });
+            if (ctx.ok) {
+              screenTermsRef.current = ctx.terms;
+              diag.info('stt', 'Контекст экрана распознан', {
+                keep: true,
+                terms: ctx.terms.split(',').length,
+                chars: ctx.terms.length,
+              });
+            } else {
+              // не ошибка диктовки: просто распознаём без подсказки с экрана
+              diag.warn('stt', 'Контекст экрана не получен', { reason: ctx.reason });
             }
           })
           .catch(() => {});
@@ -199,6 +220,9 @@ export function DictationProvider({ children }) {
         model: settingsRef.current.whisperModel,
         // словарь идёт в whisper как подсказка только если тумблер включён
         useDictionary: settingsRef.current.dictionaryEnabled !== false,
+        // контекст экрана читаем в момент остановки, а не старта: модель могла
+        // ещё не ответить, когда человек уже отпустил клавишу
+        getContextPrompt: () => (opts.screenAware ? screenTermsRef.current : ''),
         onStart: () => setState('listening'),
         onPartial: ({ text, interim }) => {
           const composed = [text, interim].filter(Boolean).join(' ');
