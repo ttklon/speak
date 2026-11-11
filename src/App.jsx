@@ -10,6 +10,7 @@ import ProfileModal from './components/modals/ProfileModal.jsx';
 import DictationHUD from './components/ui/DictationHUD.jsx';
 import OnboardingModal from './components/modals/OnboardingModal.jsx';
 import { useRoute, navigate, replace } from './lib/router.js';
+import { keysLabel } from './lib/utils.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
 
@@ -143,14 +144,23 @@ export default function App() {
     });
   }, []);
 
-  // Сочетание занято другой программой — сказать вслух, а не молчать
+  // Сочетание занято — сказать вслух, а не молчать. Слушаем на уровне
+  // приложения: конфликт может всплыть при запуске, когда раздел «Горячие
+  // клавиши» ещё не открывали, и раньше сообщение просто терялось.
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onHotkeyConflict) return undefined;
     return bridge.onHotkeyConflict((payload) => {
+      const keys = keysLabel(payload?.keys || []);
+      push({
+        title: payload?.id === 'dictation' ? 'Сочетание диктовки занято' : 'Сочетание занято',
+        description: `${keys || 'Сочетание'} — ${payload?.reason || 'уже используется другой программой'}. Выберите другое в «Горячих клавишах».`,
+        tone: 'warn',
+        ttl: 10000,
+      });
       window.dispatchEvent(new CustomEvent('zs:hotkey-conflict', { detail: payload }));
     });
-  }, []);
+  }, [push]);
 
   // Новые элементы буфера из main-процесса
   useEffect(() => {

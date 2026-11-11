@@ -1196,13 +1196,15 @@ async function scenarioTextActionEvent(browser) {
 }
 
 async function scenarioHotkeyConflict(browser) {
-  const page = await openPage(browser, '#/hotkeys', { settle: 400 });
-  await emit(page, 'hotkey:conflict', { keys: ['Ctrl', 'Alt', 'J'], title: 'Диктовка' });
+  // конфликт всплывает при запуске — сообщение должно быть видно и на главной
+  const page = await openPage(browser, '#/home', { settle: 400 });
+  await emit(page, 'hotkey:conflict', { id: 'dictation', keys: ['Ctrl', 'Alt', 'J'], reason: 'сочетание занято другой программой' });
   await sleep(500);
   const toast = await page.evaluate(() =>
     [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
   );
   record('события', 'занятое сочетание показывается предупреждением', /занято/i.test(toast), toast.slice(0, 80));
+  record('события', 'в предупреждении видно сочетание и причину', /Ctrl\s*\+\s*Alt\s*\+\s*J/.test(toast) && /другой программой/i.test(toast), toast.slice(0, 100));
   await page.close();
 }
 

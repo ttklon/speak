@@ -53,20 +53,8 @@ export default function HotkeysPage() {
   // регистрация висела здесь, и после ухода со страницы сочетания оставались
   // от последнего её рендера.
 
-  // Сочетание, занятое другой программой: показываем прямо в разделе
-  useEffect(() => {
-    const onConflict = (e) => {
-      const d = e.detail || {};
-      push({
-        title: 'Сочетание занято',
-        description: `${keysLabel(d.keys || [])} уже использует другая программа — выберите другое.`,
-        tone: 'warn',
-        ttl: 10000,
-      });
-    };
-    window.addEventListener('zs:hotkey-conflict', onConflict);
-    return () => window.removeEventListener('zs:hotkey-conflict', onConflict);
-  }, [push]);
+  // Тост о занятом сочетании показывает App.jsx — он живёт всё время работы
+  // приложения, поэтому сообщение не теряется, если раздел ещё не открывали.
 
   // Хоткей нажали в системе — выполняем инструкцию здесь, в рендерере
   useEffect(() => {
