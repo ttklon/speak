@@ -33,7 +33,12 @@ export default function AppSection() {
       <div className="settings-group">
         <div className="settings-group__title">Интерфейс</div>
         <div className="setting-row">
-          <div className="setting-row__label">Язык интерфейса</div>
+          <div className="setting-row__label">
+            Язык диктовки
+            <div className="setting-row__desc">
+              Язык распознавания речи. Сам интерфейс пока на русском — здесь выбор на него не влияет.
+            </div>
+          </div>
           <Select
             value={settings.language}
             onChange={(v) => updateSettings({ language: v })}

@@ -180,6 +180,8 @@ export function AppDataProvider({ children }) {
         pronunciation: String(pronunciation || '').trim(),
         createdAt: Date.now(),
       };
+      // то же слово (без учёта регистра) не дублируем, а обновляем: иначе список
+      // рос бы копиями, а whisper получал бы один и тот же термин дважды
       setDictionary((prev) => [entry, ...prev.filter((w) => w.word.toLowerCase() !== clean.toLowerCase())]);
       return entry;
     },

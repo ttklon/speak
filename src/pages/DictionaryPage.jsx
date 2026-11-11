@@ -26,9 +26,15 @@ export default function DictionaryPage() {
   }, [dictionary, query, tab]);
 
   const submit = () => {
+    // слово уже есть — добавление заменит его, поэтому и сообщение другое
+    const exists = dictionary.some((w) => w.word.toLowerCase() === word.trim().toLowerCase());
     const entry = addDictionaryWord(word, pron);
     if (entry) {
-      push({ title: 'Слово добавлено', description: entry.word, tone: 'success' });
+      push({
+        title: exists ? 'Слово обновлено' : 'Слово добавлено',
+        description: exists ? `${entry.word} — уже было в словаре` : entry.word,
+        tone: 'success',
+      });
       setWord('');
       setPron('');
       setOpen(false);

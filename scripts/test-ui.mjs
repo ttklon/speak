@@ -499,6 +499,24 @@ async function scenarioDictionary(browser) {
   await sleep(400);
   const afterDelete = await page.evaluate(() => document.querySelectorAll('.dict-row').length);
   record('сценарии', 'словарь: слово удаляется', removed && afterDelete < after, `${after} → ${afterDelete}`);
+
+  // повторное добавление того же слова не плодит копии и честно говорит «обновлено»
+  await clickText(page, 'Добавить');
+  await sleep(300);
+  const dupInput = await page.$('.modal input');
+  await dupInput.type('Whisper'); // слово из сида — уже есть в словаре
+  await clickText(page, 'Добавить', '.modal button');
+  await sleep(400);
+  const afterDup = await page.evaluate(() => document.querySelectorAll('.dict-row').length);
+  const dupToast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+  );
+  record(
+    'сценарии',
+    'словарь: повтор слова обновляет запись и пишет «обновлено»',
+    afterDup === afterDelete && /обновлено/i.test(dupToast),
+    `${afterDelete} → ${afterDup}, ${dupToast.slice(0, 50)}`,
+  );
   await page.close();
 }
 
@@ -554,6 +572,14 @@ async function scenarioSettingsSections(browser) {
     });
     if (!info.text || info.text < 40) empty.push(`${section} (${info.title || 'пусто'})`);
   }
+  // язык живёт в разделе «Приложение» — возвращаемся туда перед проверкой
+  await page.evaluate(() => {
+    window.location.hash = '#/settings?section=app&from=home';
+  });
+  await sleep(400);
+  const labels = await page.evaluate(() => document.body.innerText);
+  const honestLanguage = /Язык диктовки/.test(labels) && !/Язык интерфейса/.test(labels);
+  record('сценарии', 'настройки: язык называется «диктовки», а не «интерфейса»', honestLanguage);
   const errors = takeErrors(page);
   record('сценарии', 'настройки: все 7 разделов что-то показывают', empty.length === 0, empty.join(', '));
   record('сценарии', 'настройки: без ошибок консоли', errors.length === 0, errors[0] || '');
@@ -971,6 +997,27 @@ async function scenarioHomeExtras(browser) {
     }
   });
   await sleep(300);
+
+  // «Показать всё» разворачивает историю целиком
+  await page.evaluate(() => {
+    const input = document.querySelector('.recent input, input[placeholder*="Поиск"]');
+    if (input) {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  });
+  await sleep(300);
+  const collapsed = await page.evaluate(() => document.querySelectorAll('.recent__row').length);
+  const expandedClick = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.recent button, .link-btn')].find((b) => /ПОКАЗАТЬ ВСЁ/i.test(b.innerText));
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(350);
+  const expanded = await page.evaluate(() => document.querySelectorAll('.recent__row').length);
+  record('сценарии', 'главная: «Показать всё» разворачивает историю', expandedClick && expanded > collapsed, `${collapsed} → ${expanded}`);
 
   await page.evaluate(() => document.querySelector('.recent__row').click());
   await sleep(250);
@@ -1434,6 +1481,98 @@ async function scenarioVisualAudit(browser) {
   record('вид', 'ничего не вылезает за окно', overflowFails.length === 0, overflowFails.slice(0, 6).join('; '));
 }
 
+/* ── настройки, которые должны что-то менять ──────────────────────────── */
+
+async function scenarioHidePasswords(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500, settings: { hidePasswords: true } });
+  const gridDots = await page.evaluate(() =>
+    [...document.querySelectorAll('.clip-card__text')].some((el) => /^•+$/.test(el.innerText.trim())),
+  );
+  await page.evaluate(() => document.querySelector('.clip-toolbar__view button:nth-child(2)').click());
+  await sleep(250);
+  await page.evaluate(() => {
+    const item = [...document.querySelectorAll('.clip-list__item')].find((el) => /•/.test(el.innerText));
+    item?.click();
+  });
+  await sleep(300);
+  const maskedInPreview = await page.evaluate(() => /•{4,}/.test(document.querySelector('.clip-preview')?.innerText || ''));
+  const revealed = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.clip-preview__reveal')].find((b) => /Показать/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(300);
+  const afterReveal = await page.evaluate(() => !/•{4,}/.test(document.querySelector('.clip-preview')?.innerText || ''));
+  record('настройки', 'пароли маскируются в сетке и предпросмотре', gridDots && maskedInPreview);
+  record('настройки', '«Показать» раскрывает пароль', revealed && afterReveal);
+  await page.close();
+}
+
+async function scenarioIndicator(browser) {
+  const page = await openPage(browser, '#/home', { settings: { showFloatingIndicator: false } });
+  await clickText(page, 'Начать диктовку');
+  await sleep(1200);
+  const hud = await page.evaluate(() => Boolean(document.querySelector('.hud')));
+  await page.evaluate(() => document.querySelector('[aria-label="Остановить запись"]')?.click());
+  await sleep(1200);
+  record('настройки', 'выключенный индикатор не показывается при записи', !hud);
+
+  const page2 = await openPage(browser, '#/home', { settings: { showFloatingIndicator: true } });
+  await clickText(page2, 'Начать диктовку');
+  await sleep(1200);
+  const hud2 = await page2.evaluate(() => Boolean(document.querySelector('.hud')));
+  await page2.evaluate(() => document.querySelector('[aria-label="Остановить запись"]')?.click());
+  await sleep(900);
+  record('настройки', 'включённый индикатор показывает «Слушаю…»', hud2);
+  await page.close();
+  await page2.close();
+}
+
+async function scenarioReadAloud(browser) {
+  const page = await openPage(browser, '#/home', { settings: { readAloud: true, soundFeedback: false } });
+  await page.evaluate(() => {
+    window.__spoken = [];
+    window.speechSynthesis = window.speechSynthesis || {};
+    window.speechSynthesis.speak = (utterance) => window.__spoken.push(String(utterance?.text || ''));
+    window.SpeechSynthesisUtterance = window.SpeechSynthesisUtterance || function SpeechSynthesisUtterance(text) {
+      this.text = text;
+    };
+  });
+  await clickText(page, 'Начать диктовку');
+  await sleep(1200);
+  await page.evaluate(() => document.querySelector('[aria-label="Остановить запись"]')?.click());
+  await sleep(2000);
+  const spoken = await page.evaluate(() => window.__spoken || []);
+  const notify = await bridgeCalls(page);
+  record('настройки', '«Читать результат голосом» реально озвучивает текст', spoken.length > 0, spoken[0]?.slice(0, 50) || 'ничего не озвучено');
+  void notify;
+  await page.close();
+}
+
+async function scenarioAiOff(browser) {
+  const page = await openPage(browser, '#/hotkeys', { settle: 400, settings: { aiProcessing: false } });
+  takeErrors(page);
+  const presetId = await page.evaluate(() => (window.__e2e.read('zs.presets') || [])[0]?.id || null);
+  await page.evaluate((id) => window.__e2e.emit('text-action', id), presetId);
+  await sleep(1500);
+  const calls = await bridgeCalls(page);
+  const toast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+  );
+  // офлайн-операция может и не изменить текст — тогда приложение честно пишет «изменений нет»
+  const answered = /Готово|Изменений нет|Нет выделенного/i.test(toast);
+  record(
+    'настройки',
+    'без локальной модели инструкция отвечает офлайн-правилами',
+    answered && !calls.includes('http:post'),
+    `${calls.filter((c) => /http|text:/.test(c)).join(',')} · ${toast.slice(0, 60)}`,
+  );
+  const errors = takeErrors(page);
+  record('настройки', 'офлайн-инструкция без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 /* ── запуск ───────────────────────────────────────────────────────────── */
 
 async function main() {
@@ -1532,6 +1671,10 @@ async function main() {
       ['пустые состояния', scenarioEmptyStates],
       ['сбой распознавания', scenarioSttFailure],
       ['контраст и вёрстка', scenarioVisualAudit],
+      ['маскировка паролей', scenarioHidePasswords],
+      ['плавающий индикатор', scenarioIndicator],
+      ['чтение вслух', scenarioReadAloud],
+      ['офлайн без ИИ', scenarioAiOff],
     ];
     for (const [name, fn] of scenarios) {
       try {
