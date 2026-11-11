@@ -233,6 +233,70 @@ function accelerator(keys = []) {
   return keys.map((k) => map[k] || k).join('+');
 }
 
+// Сочетания, уже занятые внутри приложения: globalShortcut.register на занятое
+// сочетание возвращает false и ничего не сообщает. Из-за этого «Режим агента»
+// и часть инструкций молча не работали — их сочетания совпадали с диктовкой.
+const usedAccels = new Set();
+
+/** Зарегистрировать сочетание или честно сказать, что оно занято. */
+function registerAccel(accel, handler, info = {}) {
+  if (!accel) return false;
+  if (usedAccels.has(accel)) {
+    mainWindow?.webContents.send('hotkey:conflict', {
+      id: info.id || '',
+      keys: info.keys || [],
+      reason: 'сочетание уже занято другой функцией ZSpeakly',
+    });
+    return false;
+  }
+  try {
+    const ok = globalShortcut.register(accel, handler) !== false;
+    if (ok) {
+      usedAccels.add(accel);
+      return true;
+    }
+    mainWindow?.webContents.send('hotkey:conflict', {
+      id: info.id || '',
+      keys: info.keys || [],
+      reason: 'сочетание занято другой программой',
+    });
+    return false;
+  } catch (err) {
+    console.warn('[hotkeys] не удалось зарегистрировать', accel, err.message);
+    mainWindow?.webContents.send('hotkey:conflict', {
+      id: info.id || '',
+      keys: info.keys || [],
+      reason: err.message,
+    });
+    return false;
+  }
+}
+
+// Одиночное нажатие диктовки и двойное («агент») на одном сочетании:
+// глобальные сочетания не дают события отпускания, поэтому различаем по паузе.
+let lastDictPress = 0;
+let dictPressTimer = null;
+
+function onDictationPress(agentOnDouble) {
+  if (!agentOnDouble) {
+    toggleDictation();
+    return;
+  }
+  const now = Date.now();
+  if (now - lastDictPress < 420) {
+    clearTimeout(dictPressTimer);
+    lastDictPress = 0;
+    showWindowForDictation();
+    mainWindow?.webContents.send('hotkey', { type: 'agent' });
+    return;
+  }
+  lastDictPress = now;
+  clearTimeout(dictPressTimer);
+  dictPressTimer = setTimeout(() => {
+    if (lastDictPress === now) toggleDictation();
+  }, 430);
+}
+
 /**
  * Голосовые сочетания из раздела «Горячие клавиши». Раньше список был только
  * подписями в интерфейсе: тумблеры включались, клавиши не работали.
@@ -244,31 +308,45 @@ function accelerator(keys = []) {
  */
 function registerVoiceHotkeys(settings = {}) {
   const list = Array.isArray(settings.voiceHotkeys) ? settings.voiceHotkeys : [];
+  const dictKey = settings.dictationKey || 'Control+Alt+Space';
   for (const hk of list) {
     if (!hk?.enabled || !hk.keys?.length) continue;
-    const accel = hk.id === 'dictation' ? settings.dictationKey || accelerator(hk.keys) : accelerator(hk.keys);
+    const accel = hk.id === 'dictation' ? dictKey : accelerator(hk.keys);
     if (!accel) continue;
-    try {
-      if (hk.id === 'dictation' || hk.id === 'screen-aware') {
-        // удержание: нажали — слушаем, отпустили — распознаём
-        globalShortcut.register(accel, () => {
+    // «Диктовка» уже висит на этом сочетании, а «Агент» с тем же сочетанием
+    // ловится двойным нажатием в её обработчике — второй раз не регистрируем.
+    if (accel === dictKey && (hk.id === 'dictation' || hk.id === 'agent')) continue;
+    const info = { id: hk.id, keys: hk.keys };
+    if (hk.id === 'dictation' || hk.id === 'screen-aware') {
+      // удержание: нажали — слушаем, отпустили — распознаём
+      registerAccel(
+        accel,
+        () => {
           showWindowForDictation();
           mainWindow?.webContents.send('hotkey', {
             type: 'down',
             mode: hk.mode === 'toggle' ? 'toggle' : 'hold',
             screenAware: hk.id === 'screen-aware',
           });
-        });
-      } else if (hk.id === 'hands-free') {
-        globalShortcut.register(accel, () => {
+        },
+        info,
+      );
+    } else if (hk.id === 'hands-free') {
+      registerAccel(
+        accel,
+        () => {
           showWindowForDictation();
           mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle' });
-        });
-      } else if (hk.id === 'agent') {
-        // двойное нажатие = «агент», одиночное = обычная диктовка
-        let lastAt = 0;
-        let timer = null;
-        globalShortcut.register(accel, () => {
+        },
+        info,
+      );
+    } else if (hk.id === 'agent') {
+      // двойное нажатие = «агент», одиночное = обычная диктовка
+      let lastAt = 0;
+      let timer = null;
+      registerAccel(
+        accel,
+        () => {
           const now = Date.now();
           if (now - lastAt < 420) {
             clearTimeout(timer);
@@ -285,11 +363,9 @@ function registerVoiceHotkeys(settings = {}) {
               mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle' });
             }
           }, 430);
-        });
-      }
-    } catch (err) {
-      console.warn('[hotkeys] не удалось зарегистрировать', hk.id, accel, err.message);
-      mainWindow?.webContents.send('hotkey:conflict', { id: hk.id, keys: hk.keys, reason: err.message });
+        },
+        info,
+      );
     }
   }
 }
@@ -303,44 +379,47 @@ function showWindowForDictation() {
 
 function registerShortcuts(settings = {}) {
   globalShortcut.unregisterAll();
+  usedAccels.clear();
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
-  try {
-    globalShortcut.register(dictKey, () => toggleDictation());
-  } catch (err) {
-    console.warn('[hotkeys] dictation failed', err.message);
-  }
-  registerVoiceHotkeys(settings);
-  try {
-    globalShortcut.register('Control+Shift+V', () => navigate('clipboard'));
-    globalShortcut.register('Control+,', () => sendCommand('settings'));
-    // сочетания из раздела «Буфер обмена» — раньше это были только подписи в UI
-    const clipActions = [
-      ['Shift+Control+A', 'screenshot'],
-      ['Shift+Control+R', 'record'],
-      ['Shift+Control+S', 'note'],
-    ];
-    for (const [accel, action] of clipActions) {
-      globalShortcut.register(accel, () => {
+  const voice = Array.isArray(settings.voiceHotkeys) ? settings.voiceHotkeys : [];
+  // «Агент» по умолчанию висит на том же сочетании, что диктовка: различаем
+  // одиночное и двойное нажатие, иначе включённый агент не работал вовсе.
+  const agentOnSameKey = voice.some(
+    (hk) => hk?.id === 'agent' && hk.enabled && hk.keys?.length && accelerator(hk.keys) === dictKey,
+  );
+  registerAccel(dictKey, () => onDictationPress(agentOnSameKey), { id: 'dictation' });
+  registerVoiceHotkeys({ ...settings, dictationKey: dictKey });
+  registerAccel('Control+Shift+V', () => navigate('clipboard'), { id: 'clipboard-panel' });
+  registerAccel('Control+,', () => sendCommand('settings'), { id: 'settings' });
+  // сочетания из раздела «Буфер обмена» — раньше это были только подписи в UI
+  const clipActions = [
+    ['Shift+Control+A', 'screenshot'],
+    ['Shift+Control+R', 'record'],
+    ['Shift+Control+S', 'note'],
+  ];
+  for (const [accel, action] of clipActions) {
+    registerAccel(
+      accel,
+      () => {
         if (!mainWindow?.isVisible()) mainWindow?.show();
         mainWindow?.webContents.send('clipboard:action', action);
         if (action !== 'panel') mainWindow?.webContents.send('navigate', 'clipboard');
-      });
-    }
-  } catch (err) {
-    console.warn('[hotkeys] служебные сочетания не зарегистрированы', err.message);
+      },
+      { id: `clipboard-${action}` },
+    );
   }
 
   // AI-инструкции из раздела «Горячие клавиши» (пресеты + свои инструкции)
   const actions = Array.isArray(settings.textActions) ? settings.textActions : [];
   for (const action of actions) {
     if (!action?.enabled || !action.keys?.length) continue;
-    try {
-      globalShortcut.register(accelerator(action.keys), () => {
+    registerAccel(
+      accelerator(action.keys),
+      () => {
         mainWindow?.webContents.send('text-action', action.id);
-      });
-    } catch (err) {
-      console.warn('[hotkeys] action failed', action.id, err.message);
-    }
+      },
+      { id: action.id, keys: action.keys },
+    );
   }
 }
 

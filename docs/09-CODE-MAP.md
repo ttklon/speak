@@ -55,7 +55,7 @@
 
 | Файл | Что делает |
 | --- | --- |
-| `main.cjs` | Всё ядро: окно 1020×680 без рамки, трей и меню, `globalShortcut`, мониторинг буфера (900 мс), активное окно через PowerShell+C# (`GetForegroundWindow` + `GetWindowThreadProcessId`), вставка `^v` через `SendKeys`, чтение и замена выделения, скриншоты `desktopCapturer`, `setDisplayMediaRequestHandler` с loopback-звуком, регистрация всех IPC, инициализация журнала, тихая проверка обновлений |
+| `main.cjs` | Всё ядро: окно 1020×680 без рамки, трей и меню, `globalShortcut`, мониторинг буфера (900 мс), активное окно через PowerShell+C# (`GetForegroundWindow` + `GetWindowThreadProcessId`), вставка `^v` через `SendKeys`, чтение и замена выделения, скриншоты `desktopCapturer`, `setDisplayMediaRequestHandler` с loopback-звуком, регистрация всех IPC с учётом занятых сочетаний (`registerAccel` + `hotkey:conflict`), различение одиночного и двойного нажатия диктовки для «агента», инициализация журнала, тихая проверка обновлений |
 | `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native`, `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
 | `store.cjs` | `JsonStore`: `%APPDATA%\ZSpeakly\profile.json`, кэш в памяти, `scheduleFlush` 180 мс, атомарная запись `.tmp` → `rename`, `sizeSync()` |
 | `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-{preferred,small,tiny,medium}.bin`; запуск с `-m -f -l --no-timestamps -nt -otxt -of`, `--prompt`, таймаут 120 с; разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк |

@@ -36,10 +36,12 @@ const makeWindow = () => ({
   loadURL: async () => {},
   loadFile: async () => {},
   show: () => {},
+  showInactive: () => {},
   focus: () => {},
   blur: () => {},
   hide: () => {},
   isMinimized: () => false,
+  isVisible: () => true,
   restore: () => {},
   isMaximized: () => false,
   isFocused: () => true,
@@ -96,8 +98,11 @@ const electronStub = {
   globalShortcut: {
     unregisterAll: () => (registered.length = 0),
     register: (acc, fn) => {
+      // как в Electron: занятое сочетание не регистрируется повторно
+      if (registered.includes(acc)) return false;
       registered.push(acc);
       globalShortcutRegs.push({ accel: acc, fn });
+      return true;
     },
   },
   clipboard: {
@@ -227,6 +232,71 @@ await check('голосовые сочетания регистрируются 
   if (registered.includes('Control+Alt+Z')) throw new Error('выключенное сочетание зарегистрировано');
 });
 
+await check('двойное нажатие диктовки открывает агента, если он на том же сочетании', async () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    dictationKey: 'Control+Alt+Space',
+    textActions: [],
+    voiceHotkeys: [
+      { id: 'dictation', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+      { id: 'agent', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+    ],
+  });
+  const dict = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space');
+  if (!dict) throw new Error('диктовка не зарегистрирована');
+  if (registered.filter((a) => a === 'Control+Alt+Space').length !== 1) {
+    throw new Error('сочетание зарегистрировано дважды');
+  }
+  dict.fn();
+  await new Promise((r) => setTimeout(r, 60));
+  dict.fn();
+  await new Promise((r) => setTimeout(r, 80));
+  const agent = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'agent');
+  if (!agent) throw new Error(`агент не сработал: ${JSON.stringify(sentEvents.slice(-3))}`);
+  const downs = sentEvents.filter((e) => e.ch === 'hotkey' && e.payload?.type === 'down').length;
+  if (downs) throw new Error('двойное нажатие запустило ещё и диктовку');
+});
+
+await check('одиночное нажатие диктовки запускает запись', async () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    dictationKey: 'Control+Alt+Space',
+    textActions: [],
+    voiceHotkeys: [{ id: 'agent', keys: ['Ctrl', 'Alt', 'Space'], enabled: true }],
+  });
+  const handler = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space').fn;
+  handler();
+  await new Promise((r) => setTimeout(r, 600));
+  const down = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'down');
+  if (!down) throw new Error('запись не началась');
+  // возвращаем состояние «не записываем», иначе следующая проверка нажмёт «стоп»
+  // (с включённым агентом одиночное нажатие срабатывает через 430 мс)
+  handler();
+  await new Promise((r) => setTimeout(r, 600));
+});
+
+await check('занятое сочетание не пропадает молча — приходит hotkey:conflict', () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    dictationKey: 'Control+Alt+Space',
+    textActions: [{ id: 'shorten', keys: ['Ctrl', 'Alt', 'S'], enabled: true }],
+    voiceHotkeys: [
+      { id: 'screen-aware', keys: ['Ctrl', 'Alt', 'S'], enabled: true },
+      { id: 'agent', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+    ],
+  });
+  const conflicts = sentEvents.filter((e) => e.ch === 'hotkey:conflict');
+  if (!conflicts.length) throw new Error('конфликта не сообщили');
+  const textActionWorks = globalShortcutRegs.some((r) => r.accel === 'Control+Alt+S');
+  if (!textActionWorks) throw new Error('ни одно из сочетаний не зарегистрировалось');
+});
+
 await check('сочетания сохраняются в настройки главного процесса', () => {
   const saved = (handlers.get('store:get')({}, 'zs:settings') || {}).voiceHotkeys || [];
   if (!saved.some((h) => h.id === 'agent' && h.enabled)) {
@@ -298,20 +368,26 @@ await check('clipboard:write кладёт картинку, а не только
 });
 
 await check('хоткей диктовки показывает скрытое окно из трея', async () => {
-  const win = windowInstances.at(-1);
   const visible = { value: false };
-  win.isVisible = () => visible.value;
-  win.show = () => { visible.value = true; };
-  win.showInactive = () => { visible.value = true; };
-  win.hide = () => { visible.value = false; };
+  // подменяем видимость у всех окон: mainWindow мог быть создан не последним
+  for (const win of windowInstances) {
+    win.isVisible = () => visible.value;
+    win.show = () => { visible.value = true; };
+    win.showInactive = () => { visible.value = true; };
+    win.hide = () => { visible.value = false; };
+  }
 
   const regs = [];
   globalShortcutRegs.length = 0;
   await handlers.get('hotkey:set')({}, { dictationKey: 'Control+Alt+Space' });
   const entry = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space');
   if (!entry) throw new Error('хоткей диктовки не зарегистрирован');
+  sentEvents.length = 0;
   entry.fn();
-  if (!visible.value) throw new Error('окно осталось скрытым во время диктовки');
+  await new Promise((r) => setTimeout(r, 50));
+  if (!visible.value) {
+    throw new Error(`окно осталось скрытым: события ${JSON.stringify(sentEvents.map((e) => e.payload))}, окон ${windowInstances.length}`);
+  }
   entry.fn();
 });
 

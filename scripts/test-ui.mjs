@@ -1663,6 +1663,36 @@ async function scenarioDictationModes(browser) {
 
 /* ── настройки доезжают до главного процесса ──────────────────────────── */
 
+async function scenarioResetHotkeys(browser) {
+  const page = await openPage(browser, '#/hotkeys', { settle: 450 });
+  // меняем сочетание диктовки, чтобы сброс было видно
+  await page.evaluate(() => {
+    const list = window.__e2e.read('zs.hotkeys') || [];
+    window.__e2e.seed('zs.hotkeys', list.length ? list : null);
+  });
+  await clickText(page, 'Сбросить все сочетания');
+  await sleep(300);
+  const asked = await page.evaluate(() => /Сбросить все сочетания\?/.test(document.body.innerText));
+  record('хоткеи', 'сброс сочетаний сначала спрашивает подтверждение', asked);
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.modal button')].find((b) => /^Сбросить$/.test(b.innerText.trim()));
+    btn?.click();
+  });
+  await sleep(500);
+  const result = await page.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    keys: (window.__e2e.read('zs.hotkeys') || []).map((h) => `${h.id}:${(h.keys || []).join('+')}`).join(','),
+  }));
+  const defaultDict = /(^|,)dictation:Ctrl\+Alt\+Space(,|$)/.test(result.keys);
+  record(
+    'хоткеи',
+    'после сброса сочетания стандартные и есть сообщение',
+    /Сочетания сброшены/i.test(result.toast) && defaultDict,
+    `${result.keys.slice(0, 60)} · ${result.toast.slice(0, 40)}`,
+  );
+  await page.close();
+}
+
 async function scenarioMainSync(browser) {
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 500 });
   const clickSwitchInRow = (title) =>
@@ -1926,6 +1956,7 @@ async function main() {
       ['диктовка с учётом экрана', scenarioScreenAware],
       ['режимы диктовки', scenarioDictationModes],
       ['связь с main', scenarioMainSync],
+      ['сброс сочетаний', scenarioResetHotkeys],
     ];
     for (const [name, fn] of scenarios) {
       try {

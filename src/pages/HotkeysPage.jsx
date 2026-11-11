@@ -5,6 +5,7 @@ import { Button, Keys, SearchInput, Tabs } from '../components/ui/Controls.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import ShortcutRecorder from '../components/modals/ShortcutRecorder.jsx';
 import AddInstructionModal from '../components/modals/AddInstructionModal.jsx';
+import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
 import { keysLabel, toAccelerator } from '../lib/utils.js';
@@ -34,6 +35,8 @@ export default function HotkeysPage() {
   const [tab, setTab] = useState('voice');
   const [recorder, setRecorder] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
+  // сброс сочетаний затирает настроенные клавиши — спрашиваем подтверждение
+  const [confirmReset, setConfirmReset] = useState(false);
   const [query, setQuery] = useState('');
 
   /** Все включённые AI-инструкции уходят в main-процесс как глобальные хоткеи. */
@@ -228,7 +231,7 @@ export default function HotkeysPage() {
           ))}
 
           <div className="hk-reset">
-            <Button variant="bare" size="sm" icon={<RefreshCw size={12} />} onClick={resetHotkeys}>
+            <Button variant="bare" size="sm" icon={<RefreshCw size={12} />} onClick={() => setConfirmReset(true)}>
               Сбросить все сочетания
             </Button>
           </div>
@@ -355,6 +358,21 @@ export default function HotkeysPage() {
           setAddOpen(false);
           setTab('custom');
         }}
+      />
+      <ConfirmDialog
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={() => {
+          resetHotkeys();
+          push({
+            title: 'Сочетания сброшены',
+            description: 'Голосовые сочетания вернулись к стандартным: диктовка — Ctrl+Alt+Space.',
+            tone: 'success',
+          });
+        }}
+        title="Сбросить все сочетания?"
+        description="Голосовые сочетания вернутся к стандартным. Ваши AI-инструкции и их клавиши останутся как есть."
+        confirmLabel="Сбросить"
       />
     </div>
   );
