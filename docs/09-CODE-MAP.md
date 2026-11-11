@@ -281,7 +281,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ## 12. Проверки перед коммитом
 
 ```bash
-npm test                  # 105 тестов (vitest + jsdom)
+npm test                  # 102 теста (vitest + jsdom)
 npm run test:main         # 27 смоук-проверок main-процесса
 npm run test:ui           # E2E: обход кнопок, 40 сценариев, контраст/вёрстка
 npm run check:ipc         # ни одного канала без обработчика

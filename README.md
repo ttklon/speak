@@ -205,7 +205,7 @@ powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
 ```bash
 npm run dev        # только UI
 npm run electron:dev
-npm test                    # vitest: 105 тестов
+npm test                    # vitest: 102 теста
 npm run test:main           # смоук IPC, whisper --prompt, HTTP к Ollama, снимок экрана, мониторинг буфера (27 проверок)
 npm run test:ui             # E2E «нажать всё» в Chromium: кнопки, поля, сценарии, контраст, доступные имена
 npm run test:updater        # каналы обновлений (stable/beta)
