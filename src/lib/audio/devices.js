@@ -26,16 +26,32 @@ export async function ensureMicPermission() {
   }
 }
 
+/**
+ * Превращает ответ enumerateDevices в пункты списка.
+ *
+ * Chromium (и Windows) отдают устройство с deviceId «default» — это тот же
+ * «Системный по умолчанию», который уже есть отдельным пунктом. Дубли давали
+ * два одинаковых ключа в React-списке (warning «same key») и две строки
+ * «Системный по умолчанию» в настройках.
+ */
+export function normalizeInputs(all = []) {
+  const seen = new Set();
+  const out = [];
+  all
+    .filter((d) => d && d.kind === 'audioinput')
+    .forEach((d, i) => {
+      const id = d.deviceId || `mic-${i}`;
+      if (id === 'default' || id === 'communications' || seen.has(id)) return;
+      seen.add(id);
+      out.push({ id, label: d.label || `Микрофон ${out.length + 1}` });
+    });
+  return out;
+}
+
 export async function listDevices() {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return [];
   try {
-    const all = await navigator.mediaDevices.enumerateDevices();
-    return all
-      .filter((d) => d.kind === 'audioinput')
-      .map((d, i) => ({
-        id: d.deviceId || `mic-${i}`,
-        label: d.label || `Микрофон ${i + 1}`,
-      }));
+    return normalizeInputs(await navigator.mediaDevices.enumerateDevices());
   } catch {
     return [];
   }

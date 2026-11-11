@@ -6,10 +6,13 @@ import { APP, LANGUAGES } from '../../../lib/config.js';
 import { isElectron } from '../../../lib/storage.js';
 import MicTester from './MicTester.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
+import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 export default function AppSection() {
   const { settings, updateSettings, resetAll } = useAppData();
   const { push } = useToast();
+  // сброс удаляет историю, буфер и словарь — спрашиваем подтверждение
+  const [confirmReset, setConfirmReset] = useState(false);
   // голоса Windows подгружаются асинхронно — слушаем onvoiceschanged
   const [voices, setVoices] = useState([]);
   useEffect(() => {
@@ -167,20 +170,25 @@ export default function AppSection() {
         <div className="settings-group__desc">
           Удаляет историю диктовок, буфер, словарь и заметки на этом устройстве.
         </div>
-        <Button
-          variant="danger"
-          size="sm"
-          onClick={() => {
-            resetAll();
-            push({ title: 'Данные сброшены', description: 'ZSpeakly вернулся к настройкам по умолчанию.', tone: 'warn' });
-          }}
-        >
+        <Button variant="danger" size="sm" onClick={() => setConfirmReset(true)}>
           Сбросить все данные
         </Button>
         <div className="settings-foot-hint" style={{ marginTop: 10 }}>
           Версия {APP.version} · сборка {APP.build}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={() => {
+          resetAll();
+          push({ title: 'Данные сброшены', description: 'ZSpeakly вернулся к настройкам по умолчанию.', tone: 'warn' });
+        }}
+        title="Сбросить все данные?"
+        description="История диктовок, буфер обмена, словарь и заметки будут удалены с этого компьютера. Вернуть их не получится."
+        confirmLabel="Сбросить"
+      />
     </div>
   );
 }

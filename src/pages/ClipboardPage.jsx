@@ -17,6 +17,7 @@ import { useAppData } from '../state/AppDataProvider.jsx';
 import { readClipboard, writeClipboard } from '../lib/clipboard.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
+import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
 import { Button, EmptyState, SearchInput } from '../components/ui/Controls.jsx';
 import { CLIPBOARD_TABS, DEFAULT_SETTINGS } from '../lib/config.js';
 import { dayLabel, formatSeconds, kindLabel, timeHM, truncate } from '../lib/utils.js';
@@ -45,6 +46,9 @@ export default function ClipboardPage() {
   const { push } = useToast();
   const [tab, setTab] = useState('all');
   const [view, setView] = useState('grid');
+  // очистка истории — только после подтверждения: один промах мыши не должен
+  // стирать всё, что накопилось за день
+  const [confirmClear, setConfirmClear] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [justCopied, setJustCopied] = useState(null);
@@ -529,14 +533,22 @@ export default function ClipboardPage() {
         <button
           type="button"
           className="link-btn"
-          onClick={() => {
-            clearClipboard();
-            push({ title: 'История очищена', description: 'Закреплённые элементы остались.', tone: 'success' });
-          }}
+          onClick={() => setConfirmClear(true)}
         >
           Очистить историю
         </button>
       </div>
+      <ConfirmDialog
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        onConfirm={() => {
+          clearClipboard();
+          push({ title: 'История очищена', description: 'Закреплённые элементы остались.', tone: 'success' });
+        }}
+        title="Очистить историю буфера?"
+        description={`Будут удалены все незакреплённые элементы (${clipboard.length - clipboard.filter((c) => c.pinned).length} шт.). Закреплённые останутся. Действие нельзя отменить.`}
+        confirmLabel="Очистить"
+      />
     </div>
   );
 }
