@@ -1577,6 +1577,68 @@ async function scenarioAiOff(browser) {
   await page.close();
 }
 
+/* ── режимы диктовки, кнопки окна, звук и эффект печати ───────────────── */
+
+async function scenarioDictationModes(browser) {
+  // «свободные руки»: одно нажатие — слушаем, ещё одно — стоп
+  const page = await openPage(browser, '#/home', {
+    settings: { showFloatingIndicator: true, soundFeedback: true, aiEndpoint: '' },
+  });
+  takeErrors(page);
+  await emit(page, 'hotkey', { type: 'toggle' });
+  await sleep(1300);
+  const listening = await page.evaluate(() => /Слушаю/i.test(document.body.innerText));
+  await emit(page, 'hotkey', { type: 'toggle' });
+  await sleep(2600);
+  const hands = await page.evaluate(() => ({
+    inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+    idle: !/Слушаю|Транскрибирую/i.test(document.body.innerText),
+  }));
+  record('режимы', '«свободные руки»: второе нажатие останавливает запись', listening && hands.inserts === 1 && hands.idle, `вставок: ${hands.inserts}`);
+
+  // «агент» без адреса модели — честный отказ вместо тишины
+  await emit(page, 'hotkey', { type: 'agent' });
+  await sleep(700);
+  const refused = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+  );
+  record('режимы', '«агент» без модели объясняет, что настроить', /Агент не настроен|Сеть/i.test(refused), refused.slice(0, 70));
+
+  // кнопки окна идут в main
+  const win = await page.evaluate(() => {
+    const click = (label) => {
+      const btn = document.querySelector(`[aria-label="${label}"]`);
+      if (!btn) return false;
+      btn.click();
+      return true;
+    };
+    return { min: click('Свернуть'), max: click('Развернуть') || click('Восстановить') };
+  });
+  await sleep(300);
+  const winCalls = await bridgeCalls(page);
+  record('режимы', 'кнопки заголовка управляют окном', win.min && winCalls.includes('win:minimize') && winCalls.includes('win:toggle-maximize'), winCalls.filter((c) => c.startsWith('win:')).join(','));
+  const errors = takeErrors(page).filter((e) => !/AudioContext|NotAllowedError|microphone/i.test(e));
+  record('режимы', 'режимы диктовки без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+
+  // «агент» с моделью: ответ в истории и тост, без автовставки
+  const page2 = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiModel: 'qwen2.5:0.5b', aiProcessing: true },
+  });
+  const before = await page2.evaluate(() => (window.__e2e.read('zs.dictations') || []).length);
+  await emit(page2, 'hotkey', { type: 'agent' });
+  await sleep(1800);
+  const agent = await page2.evaluate(() => ({
+    posts: (window.__bridgeCalls || []).filter((c) => c.channel === 'http:post').length,
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    dictations: (window.__e2e.read('zs.dictations') || []).length,
+    inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+  }));
+  record('режимы', '«агент» спрашивает локальную модель и показывает ответ', agent.posts > 0 && /Ответ агента готов/i.test(agent.toast), agent.toast.slice(0, 60));
+  record('режимы', 'ответ агента попадает в историю и не вставляется сам', agent.dictations === before + 1 && agent.inserts === 0, `${before} → ${agent.dictations}, вставок ${agent.inserts}`);
+  await page2.close();
+}
+
 /* ── диктовка с учётом экрана ─────────────────────────────────────────── */
 
 async function scenarioScreenAware(browser) {
@@ -1796,6 +1858,7 @@ async function main() {
       ['офлайн без ИИ', scenarioAiOff],
       ['имена и фокус', scenarioAccessibleNames],
       ['диктовка с учётом экрана', scenarioScreenAware],
+      ['режимы диктовки', scenarioDictationModes],
     ];
     for (const [name, fn] of scenarios) {
       try {
