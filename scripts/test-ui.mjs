@@ -1308,6 +1308,132 @@ async function scenarioSttFailure(browser) {
   await page.close();
 }
 
+/* ── автопроверка контраста и вёрстки ─────────────────────────────────── */
+
+function auditContrast() {
+  const parse = (value) => {
+    const m = String(value).match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const parts = m[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+    return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+  };
+  const over = (fg, bg) => ({
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1,
+  });
+  const luminance = ({ r, g, b }) => {
+    const f = (c) => {
+      const x = c / 255;
+      return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  };
+  const ratio = (a, b) => {
+    const [l1, l2] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (l1 + 0.05) / (l2 + 0.05);
+  };
+  const backgroundOf = (el) => {
+    let node = el;
+    let result = { r: 255, g: 255, b: 255, a: 1 };
+    const stack = [];
+    while (node && node !== document.documentElement) {
+      const bg = parse(getComputedStyle(node).backgroundColor);
+      if (bg && bg.a > 0) stack.push(bg);
+      node = node.parentElement;
+    }
+    const htmlBg = parse(getComputedStyle(document.documentElement).backgroundColor);
+    stack.push(htmlBg && htmlBg.a > 0 ? htmlBg : { r: 255, g: 255, b: 255, a: 1 });
+    for (let i = stack.length - 1; i >= 0; i -= 1) result = over(stack[i], result);
+    return result;
+  };
+
+  const problems = [];
+  const walker = document.createTreeWalker(document.querySelector('.app-window') || document.body, NodeFilter.SHOW_TEXT);
+  const seen = new Set();
+  let node = walker.nextNode();
+  while (node) {
+    const text = (node.textContent || '').trim();
+    const el = node.parentElement;
+    if (text.length > 1 && el && !seen.has(el)) {
+      seen.add(el);
+      const style = getComputedStyle(el);
+      if (style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0.15) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 2 && rect.height > 2) {
+          let color = parse(style.color);
+          if (color) {
+            if (color.a < 1) color = over(color, backgroundOf(el));
+            const bg = backgroundOf(el);
+            const value = ratio(color, bg);
+            if (value < 3) {
+              problems.push({
+                text: text.slice(0, 40),
+                cls: String(el.className || el.tagName).slice(0, 40),
+                ratio: Math.round(value * 100) / 100,
+              });
+            }
+          }
+        }
+      }
+    }
+    node = walker.nextNode();
+  }
+  return problems;
+}
+
+function auditOverflow() {
+  const win = document.querySelector('.app-window');
+  if (!win) return [];
+  const bounds = win.getBoundingClientRect();
+  const out = [];
+  win.querySelectorAll('*').forEach((el) => {
+    const style = getComputedStyle(el);
+    if (style.position === 'fixed' || style.display === 'none' || style.visibility === 'hidden') return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const overflowRight = rect.right > bounds.right + 1;
+    // многоточие — это не баг: у обрезанного текста scrollWidth всегда больше
+    const ellipsis = style.textOverflow === 'ellipsis' || style.overflow === 'hidden';
+    const ownScroll =
+      !ellipsis && el.scrollWidth > el.clientWidth + 4 && style.overflowX !== 'auto' && style.overflowX !== 'scroll';
+    if (overflowRight || ownScroll) {
+      out.push({
+        cls: String(el.className || el.tagName).slice(0, 46),
+        over: Math.round(rect.right - bounds.right),
+        scroll: el.scrollWidth - el.clientWidth,
+      });
+    }
+  });
+  return out;
+}
+
+async function scenarioVisualAudit(browser) {
+  const pages = [
+    ['#/home', 'главная'],
+    ['#/dictionary', 'словарь'],
+    ['#/hotkeys', 'хоткеи'],
+    ['#/clipboard', 'буфер'],
+    ['#/settings?section=app&from=home', 'настройки'],
+    ['#/settings?section=diagnostics&from=home', 'диагностика'],
+  ];
+  const contrastFails = [];
+  const overflowFails = [];
+  for (const theme of ['dark', 'light']) {
+    for (const [route, label] of pages) {
+      const page = await openPage(browser, route, { settle: 450, settings: { theme } });
+      const contrast = await page.evaluate(auditContrast);
+      const overflow = await page.evaluate(auditOverflow);
+      await page.close();
+      for (const c of contrast.slice(0, 3)) contrastFails.push(`${theme}/${label}: «${c.text}» (${c.cls}) ${c.ratio}:1`);
+      for (const o of overflow.slice(0, 3)) overflowFails.push(`${theme}/${label}: ${o.cls} (+${o.over}px / scroll ${o.scroll})`);
+    }
+  }
+  record('вид', 'контраст текста не ниже 3:1 в обеих темах', contrastFails.length === 0, contrastFails.slice(0, 6).join('; '));
+  record('вид', 'ничего не вылезает за окно', overflowFails.length === 0, overflowFails.slice(0, 6).join('; '));
+}
+
 /* ── запуск ───────────────────────────────────────────────────────────── */
 
 async function main() {
@@ -1405,6 +1531,7 @@ async function main() {
       ['сроки хранения', scenarioRetention],
       ['пустые состояния', scenarioEmptyStates],
       ['сбой распознавания', scenarioSttFailure],
+      ['контраст и вёрстка', scenarioVisualAudit],
     ];
     for (const [name, fn] of scenarios) {
       try {

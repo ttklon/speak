@@ -99,6 +99,9 @@ const SHOTS = [
     scope: 'viewport',
     settings: { theme: 'light' },
   },
+  { file: '12-light-hotkeys.png', hash: '#/hotkeys', scope: 'window', settings: { theme: 'light' } },
+  { file: '13-light-clipboard.png', hash: '#/clipboard', scope: 'window', settings: { theme: 'light' } },
+  { file: '14-light-dictionary.png', hash: '#/dictionary', scope: 'window', settings: { theme: 'light' } },
 ];
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

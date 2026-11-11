@@ -32,8 +32,8 @@
   --text: #faf9fc;
   --text-2: #c2c1c4;
   --text-3: #9b9a9e;
-  --text-4: #75747a;
-  --text-5: #5a595f;
+  --text-4: #8a8992;
+  --text-5: #7d7c85;
 
   --green: #15c660;
   --green-dim: #12a552;
@@ -61,6 +61,11 @@
      rgba(var(--overlay-rgb), α). В тёмной теме это белый, в светлой — чёрный,
      поэтому одни и те же значения работают в обеих темах. */
   --overlay-rgb: 255, 255, 255;
+
+  /* Плашка «НОВОЕ»: в тёмной теме голубая на просвет, в светлой — синяя на белом */
+  --badge-new-text: #a8c4f7;
+  --badge-new-bg: rgba(48, 91, 168, 0.28);
+  --badge-new-border: rgba(90, 140, 224, 0.32);
 }
 
 * {
@@ -208,8 +213,8 @@ a {
     --text: #14141a;
     --text-2: #3b3b45;
     --text-3: #5b5b66;
-    --text-4: #7b7b87;
-    --text-5: #9a9aa5;
+    --text-4: #6d6d78;
+    --text-5: #74747f;
 
     --bg-toggle-off: #c8c8d0;
     --bg-key: #f0f0f3;
@@ -217,6 +222,10 @@ a {
     --bg-menu: #ffffff;
 
     --overlay-rgb: 0, 0, 0;
+
+    --badge-new-text: #1d4f9f;
+    --badge-new-bg: rgba(48, 91, 168, 0.12);
+    --badge-new-border: rgba(48, 91, 168, 0.26);
   }
 }
 
@@ -239,8 +248,8 @@ html[data-theme='light'] {
   --text: #14141a;
   --text-2: #3b3b45;
   --text-3: #5b5b66;
-  --text-4: #7b7b87;
-  --text-5: #9a9aa5;
+  --text-4: #6d6d78;
+  --text-5: #74747f;
 
   --bg-toggle-off: #c8c8d0;
   --bg-key: #f0f0f3;
@@ -248,4 +257,8 @@ html[data-theme='light'] {
   --bg-menu: #ffffff;
 
   --overlay-rgb: 0, 0, 0;
+
+  --badge-new-text: #1d4f9f;
+  --badge-new-bg: rgba(48, 91, 168, 0.12);
+  --badge-new-border: rgba(48, 91, 168, 0.26);
 }

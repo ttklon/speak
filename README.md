@@ -86,6 +86,8 @@
 | | |
 |---|---|
 | ![Светлая тема — главная](docs/screenshots/09-light-home.png) | ![Светлая тема — настройки](docs/screenshots/10-light-settings.png) |
+| ![Светлая тема — горячие клавиши](docs/screenshots/12-light-hotkeys.png) | ![Светлая тема — буфер обмена](docs/screenshots/13-light-clipboard.png) |
+| ![Светлая тема — словарь](docs/screenshots/14-light-dictionary.png) | |
 
 ## Стек
 
@@ -203,8 +205,9 @@ powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
 ```bash
 npm run dev        # только UI
 npm run electron:dev
-npm test                    # vitest: 63 теста
-npm run test:main           # смоук IPC/хоткеев/вставки main-процесса (15 проверок)
+npm test                    # vitest: 100 тестов
+npm run test:main           # смоук IPC, whisper --prompt, HTTP к Ollama, снимок экрана (24 проверки)
+npm run test:ui             # E2E «нажать всё» в Chromium: кнопки, поля, сценарии, контраст
 npm run test:updater        # каналы обновлений (stable/beta)
 npm run check:ipc           # нет каналов без обработчика
 npm run settings:index      # пересобрать индекс поиска по настройкам
