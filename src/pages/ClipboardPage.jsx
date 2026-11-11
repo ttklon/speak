@@ -417,12 +417,6 @@ export default function ClipboardPage() {
                     <div className="clip-card__text clip-card__text--masked">
                       {'•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length)))}
                     </div>
-                  ) : item.kind === 'password' && settings.hidePasswords ? (
-                    // «Скрывать пароли»: в сетке значение замаскировано, чтобы его
-                    // не было видно при демонстрации экрана
-                    <div className="clip-card__text clip-card__text--masked">
-                      {'•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length)))}
-                    </div>
                   ) : (
                     <div className="clip-card__text">{item.text}</div>
                   )}

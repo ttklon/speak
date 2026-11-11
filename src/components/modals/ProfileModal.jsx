@@ -7,7 +7,7 @@ import { APP } from '../../lib/config.js';
 
 /** Профиль и аккаунт — раздел «Аккаунт» из настроек в видео. */
 export default function ProfileModal({ open, onClose, onOpenSettings }) {
-  const { profile, setProfile, stats, dictations, clipboard, storageSize } = useAppData();
+  const { profile, setProfile, dictations, clipboard, storageSize } = useAppData();
   const { push } = useToast();
   const [name, setName] = useState(profile.name);
 
@@ -71,8 +71,10 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
             <div className="profile-stats__label">расшифровок</div>
           </div>
           <div>
-            <div className="profile-stats__value">{stats.wordsTotal + 9000}</div>
-            <div className="profile-stats__label">слов продиктовано</div>
+            <div className="profile-stats__value">
+              {dictations.reduce((sum, d) => sum + (d.words || 0), 0)}
+            </div>
+            <div className="profile-stats__label">слов в истории</div>
           </div>
           <div>
             <div className="profile-stats__value">{clipboard.length}</div>

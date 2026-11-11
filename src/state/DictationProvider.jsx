@@ -93,7 +93,11 @@ export function DictationProvider({ children }) {
         finishing.current = false;
       }, 700);
       const raw = text || finalRef.current || draftRef.current;
-      const cleaned = OPS.clean(postProcess(applyDictionary(raw, dictRef.current), {}));
+      // настройка «Применять словарь при диктовке»: раньше тумблер в разделе
+      // «Словарь» только сохранялся, а замены делались всегда
+      const applyDict = settingsRef.current.dictionaryEnabled !== false;
+      const corrected = applyDict ? applyDictionary(raw, dictRef.current) : raw;
+      const cleaned = OPS.clean(postProcess(corrected, {}));
       const durationMs = Math.max(400, Date.now() - startedAt.current);
       const item = {
         text: cleaned,
@@ -156,7 +160,13 @@ export function DictationProvider({ children }) {
           .then((shot) => {
             if (shot?.ok) {
               screenContextRef.current = shot.image;
-              diag.info('stt', 'Контекст экрана снят для диктовки', { width: shot.width, height: shot.height });
+              diag.info('stt', 'Контекст экрана снят для диктовки', {
+                keep: true,
+                width: shot.width,
+                height: shot.height,
+                // честно фиксируем, был ли кому передать этот кадр
+                used: Boolean(settingsRef.current.aiEndpoint),
+              });
             }
           })
           .catch(() => {});
@@ -187,6 +197,8 @@ export function DictationProvider({ children }) {
         lang: langTag(settingsRef.current.language),
         deviceId: settingsRef.current.audioDeviceId,
         model: settingsRef.current.whisperModel,
+        // словарь идёт в whisper как подсказка только если тумблер включён
+        useDictionary: settingsRef.current.dictionaryEnabled !== false,
         onStart: () => setState('listening'),
         onPartial: ({ text, interim }) => {
           const composed = [text, interim].filter(Boolean).join(' ');
@@ -269,7 +281,12 @@ export function DictationProvider({ children }) {
     setState('processing');
     setLevel(0);
     if (rec && settingsRef.current.soundFeedback !== false) playCue('stop');
-    if (!rec) return;
+    // записи нет — нечего останавливать: иначе плашка «Транскрибирую…» висела
+    // до 90-секундного сторожа
+    if (!rec) {
+      setState('idle');
+      return;
+    }
     const fallbackText = rec.text || draftRef.current;
     recRef.current = null;
     clearTimeout(stopFallback.current);

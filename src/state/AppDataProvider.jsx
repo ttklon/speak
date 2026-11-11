@@ -280,17 +280,6 @@ export function AppDataProvider({ children }) {
     setInstructions, setPresets, setVoiceHotkeys, setSettings, setStats,
   ]);
 
-  // Автоочистка старых записей по настройкам хранения
-  useEffect(() => {
-    const days = Number(settings.dictationRetentionDays || 0);
-    if (!days) return;
-    const cutoff = Date.now() - days * 86400000;
-    setDictations((prev) => {
-      const next = prev.filter((d) => d.createdAt >= cutoff);
-      return next.length === prev.length ? prev : next;
-    });
-  }, [settings.dictationRetentionDays, setDictations]);
-
   const bytes = useMemo(() => storageBytes(), [dictations, clipboard, dictionary]);
 
   const value = useMemo(

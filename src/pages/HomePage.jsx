@@ -6,13 +6,11 @@ import { writeClipboard } from '../lib/clipboard.js';
 import { typeOut } from '../lib/feedback.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
-import { keysLabel, timeHM, truncate, dayLabel, formatSeconds } from '../lib/utils.js';
+import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
 import { APP } from '../lib/config.js';
 import Icon from '../components/ui/Icon.jsx';
 import EditDictationModal from '../components/modals/EditDictationModal.jsx';
 import { Button, SearchInput } from '../components/ui/Controls.jsx';
-
-const STAT_MINUTES = 144; // «144 мин» экономии — как в кадре видео
 
 function HeroStat({ value, unit, label }) {
   return (
@@ -112,8 +110,8 @@ export default function HomePage() {
         </p>
 
         <div className="hero__stats">
-          <HeroStat value={STAT_MINUTES} unit="мин" label="сэкономлено времени" />
-          <HeroStat value="9.0" unit="к" label="количество слов" />
+          <HeroStat value={formatK(totalWords)} unit="" label="слов в истории" />
+          <HeroStat value={Math.round(totalSeconds / 60)} unit="мин" label="речи продиктовано" />
           <button
             type="button"
             className={`hero__mic ${listening ? 'is-recording' : ''}`}

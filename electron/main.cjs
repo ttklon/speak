@@ -516,10 +516,15 @@ function registerIpc() {
     } catch (err) {
       return { ok: false, text: '', reason: `не записал wav: ${err.message}` };
     }
-    const prompt = (store?.get('zs:dictionary') || [])
-      .map((d) => d.word)
-      .slice(0, 40)
-      .join(', ');
+    // Словарь — подсказка движку. Если тумблер «Применять словарь при диктовке»
+    // выключен, подсказку не передаём: настройка должна работать целиком.
+    const prompt =
+      payload?.useDictionary === false
+        ? ''
+        : (store?.get('zs:dictionary') || [])
+            .map((d) => d.word)
+            .slice(0, 40)
+            .join(', ');
     try {
       const started = Date.now();
       const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt });

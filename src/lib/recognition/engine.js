@@ -250,6 +250,9 @@ export function createRecognizer(opts = {}) {
             durationMs,
             lang: String(lang || 'ru').slice(0, 2),
             model: opts.model || 'small',
+            // тумблер «Применять словарь при диктовке» управляет и подсказкой
+            // whisper'у, и заменой слов в готовом тексте
+            useDictionary: opts.useDictionary !== false,
           });
         } catch (err) {
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });

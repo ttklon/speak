@@ -222,6 +222,7 @@ scripts/           иконки, dev-запуск, модели, CI-хелпер
 | [01-MASTER-PLAN.md](docs/01-MASTER-PLAN.md) | План из 12 стадий / 85 шагов |
 | [06-ARCHITECTURE-NET.md](docs/06-ARCHITECTURE-NET.md) | Альтернативная .NET-архитектура (WPF + Whisper.NET) |
 | [MODELS-LIGHTWEIGHT.md](docs/MODELS-LIGHTWEIGHT.md) | Лёгкие модели: размеры, RAM, скорость |
+| [09-CODE-MAP.md](docs/09-CODE-MAP.md) | Карта программы: слои, файлы, потоки диктовки и инструкций, IPC, хранение, ограничения |
 
 ## Лицензия
 

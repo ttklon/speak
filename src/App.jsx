@@ -93,23 +93,6 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
-  useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
-  }, [settings.theme]);
-
-  // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
-  // отдельно. Раньше это происходило только при ручном щелчке тумблера —
-  // после переезда профиля или переустановки автозапуск молча терялся.
-  useEffect(() => {
-    const bridge = window.zspeakly?.native;
-    if (!bridge?.setAutoLaunch) return;
-    bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
-  }, [settings.autoLaunch]);
-
   // AI-инструкции должны срабатывать в любом приложении и на любой странице,
   // а не только когда открыт раздел «Горячие клавиши». Регистрируем их здесь,
   // на уровне приложения.
