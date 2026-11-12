@@ -98,6 +98,9 @@ export const OPS = {
   clean(text) {
     if (!text) return '';
     let out = stripFillers(text);
+    // типографика: дефис, окружённый пробелами, — это тире (whisper так и пишет
+    // «я пришёл - увидел», а в тексте должно быть «—»)
+    out = out.replace(/\s+-\s+/g, ' — ');
     out = out.replace(/\s+([,.;:!?])/g, '$1');
     out = out.replace(/([,.;:!?])(?=[^\s\d])/g, '$1 ');
     out = capitalizeSentences(out);
