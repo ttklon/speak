@@ -32,12 +32,24 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
+    // Совпадение в названии важнее совпадения в описании: на «микрофон»
+    // первой должна стоять строка «Микрофон», а не «Плавающий индикатор».
+    const score = (e) => {
+      const title = e.title.toLowerCase();
+      if (title === q) return 0;
+      if (title.startsWith(q)) return 1;
+      if (title.includes(q)) return 2;
+      if (e.sectionLabel.toLowerCase().includes(q)) return 3;
+      return 4;
+    };
     return SETTING_ENTRIES.filter(
       (e) =>
         e.title.toLowerCase().includes(q) ||
         e.sectionLabel.toLowerCase().includes(q) ||
         (e.desc || '').toLowerCase().includes(q),
-    ).slice(0, 12);
+    )
+      .sort((a, b) => score(a) - score(b))
+      .slice(0, 12);
   }, [query]);
 
   const filtered = useMemo(() => {

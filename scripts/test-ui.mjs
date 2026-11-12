@@ -654,6 +654,30 @@ async function scenarioSettingsSearch(browser) {
     return { hits: hits.length, text: document.querySelector('.settings-side').innerText };
   });
   record('сценарии', 'поиск по настройкам находит «тема»', /Тема/i.test(found.text), `${found.hits} совпадений`);
+
+  // Совпадение в названии — первым, и переход открывает нужный раздел
+  const setQuery = (q) =>
+    page.evaluate((value) => {
+      const el = document.querySelector('.settings-side input');
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      set.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, q);
+  await setQuery('микрофон');
+  await sleep(350);
+  const first = await page.evaluate(() => document.querySelector('.settings-search-hit')?.innerText || '');
+  await page.evaluate(() => document.querySelector('.settings-search-hit')?.click());
+  await sleep(600);
+  const landed = await page.evaluate(() => ({
+    section: document.querySelector('.settings-nav.is-active')?.innerText.replace(/\s+/g, ' ') || '',
+    highlighted: document.querySelectorAll('.setting-row.is-highlight').length,
+  }));
+  record(
+    'сценарии',
+    'поиск по настройкам: совпадение в названии первым и переход в раздел',
+    /^\s*Микрофон/i.test(first) && /Данные/i.test(landed.section) && landed.highlighted > 0,
+    `${first.replace(/\s+/g, ' ')} | ${landed.section} | подсветок ${landed.highlighted}`,
+  );
   await page.close();
 }
 
