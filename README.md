@@ -89,6 +89,7 @@
 | ![Горячие клавиши](docs/screenshots/02-hotkeys.png) | ![Буфер обмена](docs/screenshots/03-clipboard.png) |
 | ![Буфер обмена — список](docs/screenshots/05-clipboard-list.png) | ![Словарь](docs/screenshots/04-dictionary.png) |
 | ![Настройки — приложение](docs/screenshots/06-settings-app.png) | ![Настройки — функции](docs/screenshots/07-settings-features.png) |
+| ![Модели распознавания](docs/screenshots/07b-settings-models.png) | ![Настройки — диагностика](docs/screenshots/08-settings-diagnostics.png) |
 | ![Настройки — диагностика](docs/screenshots/08-settings-diagnostics.png) | ![Правка расшифровки с обучением словаря](docs/screenshots/11-correction.png) |
 
 Светлая тема — это не фильтр поверх тёмной: палитра переключается токенами (`--text`, `--bg-elevated`,

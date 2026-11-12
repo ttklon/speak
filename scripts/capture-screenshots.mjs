@@ -86,6 +86,24 @@ const SHOTS = [
     scope: 'viewport',
   },
   {
+    // список моделей распознавания — с ценами по памяти и пометкой «рекомендуем»
+    file: '07b-settings-models.png',
+    hash: '#/settings?section=features&from=home',
+    scope: 'viewport',
+    before: async (page) => {
+      await page.evaluate(() => {
+        // показываем карточки моделей начиная с tiny — вместе с «рекомендуем»
+        const card = [...document.querySelectorAll('.model-card')].find((c) => /tiny/i.test(c.innerText));
+        const main = document.querySelector('.settings-main');
+        if (card && main) {
+          const top = card.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+          main.scrollTop = Math.max(0, top - 90);
+        }
+      });
+      await pause(300);
+    },
+  },
+  {
     file: '08-settings-diagnostics.png',
     hash: '#/settings?section=diagnostics&from=home',
     scope: 'viewport',

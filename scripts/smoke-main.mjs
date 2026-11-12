@@ -669,6 +669,22 @@ await check('паузы по краям записи обрезаются пер
   if (whisper.trimSilence(Buffer.alloc(rate * 2), rate).length !== rate * 2) throw new Error('тишина обрезана зря');
 });
 
+await check('импорт модели: чужой файл не подключается, ggml — да', async () => {
+  const modelsMod = require(path.resolve('electron/models.cjs'));
+  const tmpDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'zs-model-'));
+  const fake = path.join(tmpDir, 'not-a-model.bin');
+  fs.writeFileSync(fake, Buffer.concat([Buffer.from('NOPE'), Buffer.alloc(21 * 1024 * 1024)]));
+  const bad = await modelsMod.importModel(fake);
+  if (bad.ok) throw new Error('случайный файл подключился');
+  if (!/ggml/.test(String(bad.reason))) throw new Error(`причина: ${bad.reason}`);
+
+  const good = path.join(tmpDir, 'ggml-large-v3-turbo.bin');
+  fs.writeFileSync(good, Buffer.concat([Buffer.from('ggml'), Buffer.alloc(21 * 1024 * 1024)]));
+  const ok = await modelsMod.importModel(good);
+  if (!ok.ok || ok.id !== 'large-v3-turbo') throw new Error(JSON.stringify(ok));
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 await check('models:warm честно отказывает без whisper-server', async () => {
   const res = await handlers.get('models:warm')({}, { model: 'small', force: true });
   if (res?.ok) throw new Error('будто модель загружена');

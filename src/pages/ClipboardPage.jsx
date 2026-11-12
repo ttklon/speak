@@ -100,7 +100,7 @@ export default function ClipboardPage() {
           const text = await readClipboard();
           if (!text) return;
           addClipboardItem({
-            kind: /^(https?:\/\/|www\.)/i.test(text.trim()) ? 'text' : 'text',
+            kind: 'text',
             text,
             source: 'Копирование в ZSpeakly',
             createdAt: Date.now(),

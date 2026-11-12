@@ -278,9 +278,34 @@ async function importModel(sourcePath, onProgress) {
     return { ok: false, reason: 'это не похоже на модель whisper.cpp (меньше 20 МБ)' };
   }
 
-  // имя определяем по размеру: tiny ≈ 75, base ≈ 142, small ≈ 466, medium ≈ 1500 МБ
+  // Настоящий ggml-файл начинается с магии «ggml» (или «GGUF» у новых сборок).
+  // Раньше подходил любой .bin — и человек мог «подключить» случайный файл.
+  try {
+    const head = Buffer.alloc(4);
+    const fd = fs.openSync(file, 'r');
+    fs.readSync(fd, head, 0, 4, 0);
+    fs.closeSync(fd);
+    const magic = head.toString('latin1');
+    if (magic !== 'ggml' && magic !== 'GGUF') {
+      return {
+        ok: false,
+        reason: 'файл не в формате ggml — скачайте модель ggml-*.bin (whisper.cpp / Hugging Face)',
+      };
+    }
+  } catch (err) {
+    return { ok: false, reason: `не удалось прочитать начало файла: ${err.message}` };
+  }
+
+  // Имя берём из названия файла, если оно совпадает с известной моделью,
+  // иначе — по размеру (размеры различаются в разы, спутать сложно).
   const mb = stat.size / (1024 * 1024);
-  const guess = mb < 110 ? 'tiny' : mb < 300 ? 'base' : mb < 900 ? 'small' : 'medium';
+  const byName = /ggml-([a-z0-9._-]+)\.bin$/i.exec(path.basename(file));
+  const known = byName && MODELS[byName[1]] ? byName[1] : '';
+  const guess =
+    known ||
+    Object.entries(MODELS)
+      .map(([id, meta]) => ({ id, diff: Math.abs(meta.mb - mb) }))
+      .sort((a, b) => a.diff - b.diff)[0].id;
   const target = path.join(ensureDirs().models, `ggml-${guess}.bin`);
 
   try {

@@ -27,7 +27,9 @@ export const CLIPBOARD_TABS = [
   { id: 'text', label: 'Текст' },
   { id: 'format', label: 'Формат' },
   { id: 'image', label: 'Изображение' },
-  { id: 'file', label: 'Файл' },
+  // здесь только записи экрана: копирование файлов из проводника Windows
+  // пока не перехватываем, поэтому и подпись честная
+  { id: 'file', label: 'Видео' },
   { id: 'password', label: 'Зашифрованные' },
 ];
 
