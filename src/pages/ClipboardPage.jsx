@@ -29,7 +29,7 @@ const TABS = [{ id: 'all', label: 'Все' }, ...CLIPBOARD_TABS];
 const HOTKEYS = [
   { id: 'screenshot', title: 'Скриншот', keys: ['Shift', 'Ctrl', 'A'], icon: ScanLine },
   { id: 'record', title: 'Запись экрана', keys: ['Shift', 'Ctrl', 'R'], icon: Video },
-  { id: 'note', title: 'Скриншот с придумкой', keys: ['Shift', 'Ctrl', 'S'], icon: ClipboardIcon },
+  { id: 'note', title: 'Скриншот-заметка', keys: ['Shift', 'Ctrl', 'S'], icon: ClipboardIcon },
   { id: 'panel', title: 'Открыть панель', keys: ['Shift', 'Ctrl', 'V'], icon: List },
 ];
 
@@ -64,7 +64,7 @@ export default function ClipboardPage() {
 
   // Глобальные сочетания буфера (Shift+Ctrl+A и т.д.) регистрирует main-процесс,
   // но раньше он слал только навигацию. Теперь действие приезжает сюда, и
-  // «Скриншот с придумкой» реально превращается в заметку с подписью.
+  // «Скриншот-заметка» — снимок экрана, к которому человек дописывает подпись.
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onClipboardAction) return undefined;
@@ -290,7 +290,7 @@ export default function ClipboardPage() {
       title: 'Скриншот с заметкой',
       text: '',
       image: res.image || '',
-      source: 'Скриншот с придумкой',
+      source: 'Скриншот-заметка',
       createdAt: Date.now(),
     });
     push({

@@ -144,7 +144,7 @@ export const DEFAULT_CUSTOM_INSTRUCTIONS = [];
 export const CLIPBOARD_HOTKEYS = [
   { id: 'screenshot', title: 'Скриншот', keys: ['Shift', 'Ctrl', 'A'] },
   { id: 'record', title: 'Запись экрана', keys: ['Shift', 'Ctrl', 'R'] },
-  { id: 'shot-note', title: 'Скриншот с придумкой', keys: ['Shift', 'Ctrl', 'S'] },
+  { id: 'shot-note', title: 'Скриншот-заметка', keys: ['Shift', 'Ctrl', 'S'] },
   { id: 'panel', title: 'Открыть панель', keys: ['Shift', 'Ctrl', 'V'] },
 ];
 
