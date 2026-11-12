@@ -646,11 +646,18 @@ function registerIpc() {
       bytes: raw.length,
       seconds: payload?.durationMs ? Math.round(payload.durationMs / 100) / 10 : undefined,
     });
+    // Паузы по краям записи убираем: whisper точнее на коротком чистом фрагменте.
+    const trimmed = whisper.trimSilence?.(raw, payload?.sampleRate || 16000) || raw;
+    logger.info('stt', 'Обрезка тишины', {
+      keep: true,
+      beforeMs: Math.round((raw.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+      afterMs: Math.round((trimmed.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+    });
     const dir = path.join(app.getPath('temp'), 'zspeakly');
     fs.mkdirSync(dir, { recursive: true });
     const wav = path.join(dir, `dictation-${Date.now()}.wav`);
     try {
-      fs.writeFileSync(wav, writeWav(raw, payload?.sampleRate || 16000));
+      fs.writeFileSync(wav, writeWav(trimmed, payload?.sampleRate || 16000));
     } catch (err) {
       return { ok: false, text: '', reason: `не записал wav: ${err.message}` };
     }

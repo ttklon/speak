@@ -643,6 +643,32 @@ await check('whisper получает все ядра и -sns против га�
   if (!/\s\-np(\s|$)/.test(args)) throw new Error(`нет -np: ${args}`);
 });
 
+await check('паузы по краям записи обрезаются перед whisper', () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const rate = 16000;
+  const silence = new Int16Array(rate); // 1 с тишины
+  const speech = new Int16Array(rate); // 1 с «речи»
+  for (let i = 0; i < rate; i += 1) speech[i] = Math.round(4000 * Math.sin((2 * Math.PI * 200 * i) / rate));
+  const pcm = new Int16Array(rate * 2 + rate); // тишина, речь, тишина
+  pcm.set(silence, 0);
+  pcm.set(speech, rate);
+  pcm.set(silence, rate * 2);
+  const raw = Buffer.from(pcm.buffer);
+  const trimmed = whisper.trimSilence(raw, rate);
+  const trimmedSec = trimmed.length / 2 / rate;
+  if (!(trimmedSec < 2 && trimmedSec > 1)) throw new Error(`длина после обрезки: ${trimmedSec}`);
+  // начало речи не срезано: в обрезке есть громкие сэмплы
+  const hasLoud = (() => {
+    for (let i = 0; i < Math.floor(trimmed.length / 2); i += 7) {
+      if (Math.abs(trimmed.readInt16LE(i * 2)) > 1000) return true;
+    }
+    return false;
+  })();
+  if (!hasLoud) throw new Error('речь потерялась при обрезке');
+  // запись без речи не трогаем — её отбракует analysePcm
+  if (whisper.trimSilence(Buffer.alloc(rate * 2), rate).length !== rate * 2) throw new Error('тишина обрезана зря');
+});
+
 await check('серверный режим: multipart для /inference собран правильно', () => {
   const whisper = require(path.resolve('electron/whisper.cjs'));
   const audio = Buffer.from('RIFFxxxxWAVE');

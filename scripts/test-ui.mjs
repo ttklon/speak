@@ -481,6 +481,10 @@ async function scenarioOnboarding(browser) {
   const hasOnboarding = await page.evaluate(() =>
     Boolean([...document.querySelectorAll('button')].find((b) => /начать|погнали|готово/i.test(b.innerText))),
   );
+  // когда движок уже стоит (mock native), лишней плашки про модель быть не должно
+  const noWarning = await page.evaluate(
+    () => !/Скачать модель/i.test(document.querySelector('.modal')?.innerText || ''),
+  );
   const input = await page.$('.modal input');
   if (input) {
     await input.click({ clickCount: 3 });
@@ -507,7 +511,50 @@ async function scenarioOnboarding(browser) {
   await sleep(500);
   const body = await page.evaluate(() => document.body.innerText);
   record('сценарии', 'онбординг проходится до конца', hasOnboarding && /Главная|Недавние|Привет/i.test(body), errors[0] || '');
+  record('сценарии', 'онбординг не пугает плашкой, когда движок уже есть', noWarning);
   await page.close();
+
+  // Чистая установка без движка: онбординг обязан подсказать, где взять модель,
+  // и по кнопке вести прямо в «Настройки → Функции».
+  const bare = await browser.newPage();
+  await bare.setViewport({ width: 1280, height: 800 });
+  await bare.evaluateOnNewDocument(installMockBridge);
+  await bare.evaluateOnNewDocument(() => {
+    // моста нет — как в браузере или в Windows-сборке без whisper.cpp
+    if (window.zspeakly?.native) {
+      window.zspeakly.native.transcribePcm = undefined;
+      window.zspeakly.native.sttStatus = undefined;
+      window.zspeakly.native.transcribe = undefined;
+    }
+    localStorage.setItem('mockstore:zs.settings', JSON.stringify({ onboarded: false }));
+  });
+  await bare.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await bare.waitForSelector('.modal', { timeout: 8000 }).catch(() => {});
+  await sleep(500);
+  const cta = await bare.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => /Скачать модель/i.test(b.innerText));
+    const warn = document.querySelector('.onboarding__hint--warn')?.innerText || '';
+    return { found: Boolean(btn), warn };
+  });
+  let navigated = false;
+  if (cta.found) {
+    await bare.evaluate(() => {
+      const btn = [...document.querySelectorAll('.modal button')].find((b) => /Скачать модель/i.test(b.innerText));
+      btn?.click();
+    });
+    await sleep(700);
+    // приложение открывает настройки поверх страницы, а не меняет страницу
+    navigated = await bare.evaluate(
+      () => Boolean(document.querySelector('.settings-modal')) && /Модель распознавания/i.test(document.body.innerText),
+    );
+  }
+  record(
+    'сценарии',
+    'онбординг без движка ведёт к скачиванию модели',
+    cta.found && /движок|Web Speech|модел/i.test(cta.warn) && navigated,
+    `кнопка=${cta.found} плашка=${cta.warn.slice(0, 60)} настройки=${navigated}`,
+  );
+  await bare.close();
 }
 
 async function scenarioDictation(browser) {

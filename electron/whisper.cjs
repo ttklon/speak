@@ -406,6 +406,31 @@ function analysePcm(raw, sampleRate = 16000) {
   };
 }
 
+/**
+ * Обрезает тишину по краям записи, оставляя небольшой запас до и после речи.
+ * Whisper хуже распознаёт, когда половина файла — пауза: на длинных хвостах он
+ * «додумывает» фразы. Заодно меньше работы движку.
+ */
+function trimSilence(raw, sampleRate = 16000, { threshold = 200, leadMs = 150, tailMs = 250 } = {}) {
+  const total = Math.floor(raw.length / 2);
+  if (!total) return raw;
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < total; i += 1) {
+    if (Math.abs(raw.readInt16LE(i * 2)) > threshold) {
+      if (first < 0) first = i;
+      last = i;
+    }
+  }
+  if (first < 0) return raw; // речи нет — пусть решает analysePcm
+  const lead = Math.round((sampleRate * leadMs) / 1000);
+  const tail = Math.round((sampleRate * tailMs) / 1000);
+  const from = Math.max(0, first - lead);
+  const to = Math.min(total, last + tail);
+  if (from === 0 && to === total) return raw;
+  return raw.subarray(from * 2, to * 2);
+}
+
 // Что whisper любит «слышать» в тишине и на музыке. Убираем только целые
 // фразы-галлюцинации: если человек правда сказал «спасибо за просмотр» вместе
 // с остальным текстом — фраза не совпадёт целиком и останется.
@@ -425,6 +450,7 @@ module.exports = {
   findBinary,
   findModel,
   analysePcm,
+  trimSilence,
   isPhantom,
   serverStatus,
   stopServer,
