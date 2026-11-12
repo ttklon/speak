@@ -20,7 +20,9 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { installMockBridge } from './e2e/mock-bridge.mjs';
 // демо-наборы больше не подставляются приложением — тесты кладут их сами
@@ -136,6 +138,8 @@ async function openPage(browser, route = '#/home', opts = {}) {
   const view = opts.viewport || { width: 1280, height: 800 };
   await page.setViewport({ width: view.width, height: view.height, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(installMockBridge);
+  // точечная правка моста под конкретный сценарий (до запуска приложения)
+  if (opts.patchNative) await page.evaluateOnNewDocument(opts.patchNative);
   const settings = { ...SEED_SETTINGS, ...(opts.settings || {}) };
   // содержимое по умолчанию: демо-история, демо-буфер и демо-словарь.
   // Сценарии, которым нужны пустые экраны, передают свои storeSeed.
@@ -1184,6 +1188,36 @@ async function scenarioNote(browser) {
   await page.close();
 }
 
+// Пустая установка без модели: главная не обещает «всё готово».
+async function scenarioNoModel(browser) {
+  const page = await openPage(browser, '#/home', {
+    settle: 500,
+    patchNative: () => {
+      const native = window.zspeakly && window.zspeakly.native;
+      if (native) native.sttStatus = async () => ({ available: false, reason: 'модель не найдена' });
+    },
+  });
+  takeErrors(page);
+  const hello = await page.evaluate(() => document.querySelector('.hero__hello')?.innerText.replace(/\s+/g, ' ') || '');
+  const link = await page.evaluate(() => {
+    const btn = document.querySelector('.hero__hello button');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(600);
+  const section = await page.evaluate(() => document.querySelector('.settings-section__title')?.innerText || '');
+  record(
+    'сценарии',
+    'без модели: главная честно говорит и ведёт к выбору модели',
+    /не подключена/i.test(hello) && link && /Функции/i.test(section),
+    `${hello.slice(0, 70)} → ${section}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'без модели: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioMic(browser) {
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 400 });
   takeErrors(page);
@@ -1272,6 +1306,83 @@ async function scenarioDiagnosticsBrowser(browser) {
   );
   const errors = takeErrors(page);
   record('сценарии', 'диагностика в браузере: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Резервная копия: скачивание JSON и восстановление из файла (в браузере тоже работает).
+async function scenarioBackup(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__files = [];
+    const nativeCreate = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob) => {
+      window.__files.push({ size: blob.size, type: blob.type });
+      return nativeCreate(blob);
+    };
+    const nativeClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function click() {
+      if (this.download) window.__files.push({ name: this.download });
+      return nativeClick.call(this);
+    };
+  });
+  await clickIn(page, '', 'Скачать');
+  await sleep(600);
+  const saved = await page.evaluate(() => ({
+    files: window.__files,
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+  }));
+  const file = saved.files.find((f) => /^zspeakly-backup-\d{4}-\d{2}-\d{2}\.json$/.test(f.name || ''));
+  record(
+    'сценарии',
+    'данные: резервная копия скачивается JSON-файлом',
+    Boolean(file) && saved.files.some((f) => f.size > 200) && /Копия скачана/i.test(saved.toast),
+    JSON.stringify(saved.files),
+  );
+
+  const backupPath = join(tmpdir(), `zs-backup-${Date.now()}.json`);
+  writeFileSync(
+    backupPath,
+    JSON.stringify({
+      app: 'ZSpeakly',
+      format: 1,
+      exportedAt: '2026-11-01T10:00:00.000Z',
+      dictionary: [{ id: 'w-import', word: 'ИмпортСлово', hint: '' }],
+      dictations: [{ id: 'd-import', text: 'Восстановленная запись из копии', createdAt: Date.now(), words: 5, seconds: 4 }],
+      settings: { dictationRetentionDays: 3650 },
+      profile: { name: 'Из копии' },
+    }),
+    'utf8',
+  );
+  try {
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(backupPath);
+    await sleep(600);
+    const asked = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    // диалог подтверждения может быть вложен в модалку настроек — ищем по всему документу
+    const confirm = await clickIn(page, '', 'Восстановить');
+    await sleep(700);
+    const state = await page.evaluate(() => ({
+      // в E2E хранилище живёт в моке моста (mockstore:), а не в zs:*
+      dictionary: JSON.parse(localStorage.getItem('mockstore:zs.dictionary') || '[]'),
+      dictations: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+    }));
+    record(
+      'сценарии',
+      'данные: копия восстанавливается после подтверждения',
+      /будет заменены|заменены/i.test(asked) &&
+        confirm &&
+        state.dictionary.some((w) => w.word === 'ИмпортСлово') &&
+        state.dictations.some((d) => /Восстановленная запись/.test(d.text)) &&
+        /Копия восстановлена/i.test(state.toast),
+      `asked=${asked.slice(0, 30)} confirm=${confirm} dict=${state.dictionary.length} hist=${state.dictations.length} toast=${state.toast.slice(0, 80)}`,
+    );
+  } finally {
+    rmSync(backupPath, { force: true });
+  }
+  const errors = takeErrors(page);
+  record('сценарии', 'данные: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
@@ -2397,6 +2508,7 @@ async function main() {
       ['новая инструкция', scenarioInstruction],
       ['модели', scenarioModels],
       ['микрофон', scenarioMic],
+      ['данные: резервная копия', scenarioBackup],
       ['диагностика', scenarioDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['отмена скачивания модели', scenarioModelCancel],
@@ -2404,6 +2516,7 @@ async function main() {
       ['возврат удаления', scenarioDictationUndo],
       ['очистка истории', scenarioClearDictations],
       ['заметка со снимком', scenarioNote],
+      ['пустая установка без модели', scenarioNoModel],
       ['обновление', scenarioUpdateFlow],
       ['сбой обновления', scenarioUpdateFailure],
       ['сеть', scenarioNetwork],

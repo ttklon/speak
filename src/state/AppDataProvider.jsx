@@ -291,6 +291,76 @@ export function AppDataProvider({ children }) {
 
   const bytes = useMemo(() => storageBytes(), [dictations, clipboard, dictionary]);
 
+  // Резервная копия: словарь, инструкции, настройки, пресеты и история.
+  // Буфер обмена намеренно не выгружается — там бывают пароли и коды.
+  const exportBackup = useCallback(
+    () => ({
+      app: 'ZSpeakly',
+      format: 1,
+      exportedAt: new Date().toISOString(),
+      settings,
+      dictations,
+      dictionary,
+      voiceHotkeys,
+      presets,
+      instructions,
+      stats,
+      profile,
+    }),
+    [settings, dictations, dictionary, voiceHotkeys, presets, instructions, stats, profile],
+  );
+
+  const importBackup = useCallback(
+    (payload) => {
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error('это не файл резервной копии ZSpeakly');
+      }
+      if (payload.app && payload.app !== 'ZSpeakly') {
+        throw new Error(`копия от другого приложения: ${String(payload.app).slice(0, 40)}`);
+      }
+      const lists = ['dictations', 'dictionary', 'voiceHotkeys', 'presets', 'instructions'];
+      const hasList = lists.some((k) => Array.isArray(payload[k]));
+      const hasSettings = payload.settings && typeof payload.settings === 'object';
+      if (!hasList && !hasSettings) throw new Error('в файле нет данных ZSpeakly');
+
+      const applied = [];
+      if (hasSettings) {
+        setSettings({ ...DEFAULT_SETTINGS, ...payload.settings });
+        applied.push('настройки');
+      }
+      if (Array.isArray(payload.dictations)) {
+        setDictations(payload.dictations);
+        applied.push(`диктовки (${payload.dictations.length})`);
+      }
+      if (Array.isArray(payload.dictionary)) {
+        setDictionary(payload.dictionary);
+        applied.push(`словарь (${payload.dictionary.length})`);
+      }
+      if (Array.isArray(payload.voiceHotkeys)) {
+        setVoiceHotkeys(payload.voiceHotkeys);
+        applied.push('голосовые сочетания');
+      }
+      if (Array.isArray(payload.presets)) {
+        setPresets(payload.presets);
+        applied.push(`AI-инструкции (${payload.presets.length})`);
+      }
+      if (Array.isArray(payload.instructions)) {
+        setInstructions(payload.instructions);
+        applied.push(`свои инструкции (${payload.instructions.length})`);
+      }
+      if (payload.stats && typeof payload.stats === 'object') {
+        setStats({ ...DEFAULT_STATS, ...payload.stats });
+        applied.push('счётчики');
+      }
+      if (payload.profile && typeof payload.profile === 'object') {
+        setProfile({ name: String(payload.profile.name || '').slice(0, 40) });
+        applied.push('профиль');
+      }
+      return applied;
+    },
+    [setSettings, setDictations, setDictionary, setVoiceHotkeys, setPresets, setInstructions, setStats, setProfile],
+  );
+
   const value = useMemo(
     () => ({
       settings,
@@ -325,9 +395,12 @@ export function AppDataProvider({ children }) {
       profile,
       setProfile,
       resetAll,
+      exportBackup,
+      importBackup,
       storageSize: bytes,
     }),
     [
+      exportBackup, importBackup,
       settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, clearDictations,
       dictionary, addDictionaryWord, removeDictionaryWord, clipboard, addClipboardItem,
       removeClipboardItem, updateClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
