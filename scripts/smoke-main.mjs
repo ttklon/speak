@@ -522,6 +522,16 @@ await check('по умолчанию наружу ничего не отправ
 });
 
 // ── Экранный контекст и словарь уходят в whisper как --prompt ───────────────
+await check('резервная копия сохраняется файлом через main', async () => {
+  const save = handlers.get('data:save-backup');
+  const good = await save({}, JSON.stringify({ app: 'ZSpeakly', dictations: [] }));
+  const bad = await save({}, 'не json');
+  const empty = await save({}, '');
+  const written = good?.ok && fs.existsSync(good.path) ? fs.readFileSync(good.path, 'utf8') : '';
+  if (good?.path) fs.rmSync(good.path, { force: true });
+  return Boolean(good?.ok && /ZSpeakly/.test(written) && bad?.ok === false && empty?.ok === false);
+});
+
 await check('stt:status честно говорит, что движка нет', async () => {
   const st = await handlers.get('stt:status')({}, 'small');
   if (st.available) throw new Error('движок «нашёлся» до установки');

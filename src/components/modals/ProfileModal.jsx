@@ -7,15 +7,17 @@ import { APP } from '../../lib/config.js';
 
 /** Профиль и аккаунт — раздел «Аккаунт» из настроек в видео. */
 export default function ProfileModal({ open, onClose, onOpenSettings }) {
-  const { profile, setProfile, dictations, clipboard, storageSize } = useAppData();
+  const { profile, setProfile, settings, updateSettings, dictations, clipboard, storageSize } = useAppData();
   const { push } = useToast();
   const [name, setName] = useState(profile.name);
 
   useEffect(() => {
     if (open) {
-      setName(profile.name);
+      // имя живёт в двух местах: профиль и настройки. Раньше окно меняло только
+      // профиль, и приветствие «Привет, …» оставалось со старым именем.
+      setName(profile.name || settings.userName || '');
     }
-  }, [open, profile]);
+  }, [open, profile.name, settings.userName]);
 
   return (
     <Modal
@@ -31,8 +33,10 @@ export default function ProfileModal({ open, onClose, onOpenSettings }) {
           <Button
             variant="white"
             onClick={() => {
-              setProfile({ ...profile, name: name.trim() });
-              push({ title: 'Профиль сохранён', tone: 'success' });
+              const clean = name.trim().slice(0, 40);
+              setProfile({ ...profile, name: clean });
+              updateSettings({ userName: clean });
+              push({ title: 'Профиль сохранён', description: clean || 'Приветствие без имени.', tone: 'success' });
               onClose?.();
             }}
           >

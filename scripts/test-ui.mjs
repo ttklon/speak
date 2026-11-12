@@ -174,6 +174,18 @@ async function openPage(browser, route = '#/home', opts = {}) {
   await page.waitForSelector('.app-window', { timeout: 15_000 });
   await sleep(opts.settle ?? 250);
   page.__errors = errors;
+  // Страховка от вечных ожиданий: зависший getDisplayMedia или ушедший
+  // документ раньше подвешивали весь прогон без единой строчки в логе.
+  const rawEvaluate = page.evaluate.bind(page);
+  page.evaluate = (fn, ...args) =>
+    Promise.race([
+      rawEvaluate(fn, ...args),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('evaluate timeout (15s)')), 15_000)),
+    ]);
+  if (process.env.ZS_TRACE === '1') {
+    const rawGoto = page.goto.bind(page);
+    page.goto = (...a) => rawGoto(...a);
+  }
   return page;
 }
 
@@ -297,6 +309,7 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
       continue;
     }
     const p = await openPage(browser, route, { settle: 180 });
+    if (process.env.ZS_TRACE === '1') console.log(C.dim(`      → ${label} / ${target.label || target.tag}`));
     takeErrors(p);
     const before = await bridgeCalls(p);
     // Нажатие может увести документ (ссылка, form submit, download). Раньше
@@ -307,8 +320,12 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
     try {
       hit = await p.evaluate(clickByFingerprint, { fp: target.fp, nth: target.nth, selector: TARGET_SELECTOR });
     } catch (err) {
-      navigated = true;
-      fails.push(`${target.label || target.tag}: нажатие уводит документ (${String(err?.message || err).slice(0, 80)})`);
+      if (/evaluate timeout/i.test(String(err?.message))) {
+        fails.push(`${target.label || target.tag}: страница перестала отвечать (15 с)`);
+      } else {
+        navigated = true;
+        fails.push(`${target.label || target.tag}: нажатие уводит документ (${String(err?.message || err).slice(0, 80)})`);
+      }
     }
     if (navigated) {
       await p.close().catch(() => {});
@@ -899,7 +916,14 @@ async function scenarioProfile(browser) {
   const saved = await clickIn(page, '.modal', 'Сохранить') || (await clickIn(page, '.modal', 'Готово'));
   await sleep(450);
   const body = await page.evaluate(() => document.body.innerText);
-  record('сценарии', 'профиль: имя сохраняется и меняет приветствие', saved && /Мария/.test(body));
+  // приветствие берёт имя из настроек, подпись в сайдбаре — из профиля:
+  // после сохранения оба места должны показывать одно и то же
+  record(
+    'сценарии',
+    'профиль: имя сохраняется и меняет приветствие',
+    saved && /Привет, Мария/.test(body) && /Мария/.test(body),
+    body.slice(0, 60).replace(/\n/g, ' '),
+  );
   await page.close();
 }
 
