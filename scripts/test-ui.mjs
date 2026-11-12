@@ -1098,6 +1098,52 @@ async function scenarioDictationUndo(browser) {
   await page.close();
 }
 
+// Очистка истории диктовок — только после подтверждения, пустая история молчит делом.
+async function scenarioClearDictations(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
+  takeErrors(page);
+  const before = ((await storeOf(page, 'zs.dictations')) || []).length;
+  const clickClear = () =>
+    page.evaluate(() => {
+      const btn = [...document.querySelectorAll('.settings-main button')].find((b) => /Удалить сейчас/i.test(b.innerText));
+      if (!btn) return false;
+      btn.click();
+      return true;
+    });
+  await clickClear();
+  await sleep(400);
+  const asked = await page.evaluate(() => /Удалить всю историю диктовок\?/.test(document.body.innerText));
+  const afterCancel = await page.evaluate(() => {
+    const modal = [...document.querySelectorAll('.modal')].find((m) => /Удалить всю историю/.test(m.innerText));
+    const btn = modal && [...modal.querySelectorAll('button')].find((b) => /Отмена/i.test(b.innerText));
+    if (!btn) return null;
+    btn.click();
+    return true;
+  });
+  await sleep(350);
+  const keptCount = ((await storeOf(page, 'zs.dictations')) || []).length;
+  await clickClear();
+  await sleep(350);
+  const confirmed = await page.evaluate(() => {
+    const modal = [...document.querySelectorAll('.modal')].find((m) => /Удалить всю историю/.test(m.innerText));
+    const btn = modal && [...modal.querySelectorAll('button')].find((b) => /^Удалить$/i.test(b.innerText.trim()));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(500);
+  const afterClear = ((await storeOf(page, 'zs.dictations')) || []).length;
+  record(
+    'сценарии',
+    'настройки: очистка истории диктовок спрашивает подтверждение',
+    asked && afterCancel && keptCount === before && confirmed && afterClear === 0,
+    `${before} → отмена ${keptCount} → очистка ${afterClear}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'настройки: очистка истории без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioMic(browser) {
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 400 });
   takeErrors(page);
@@ -2316,6 +2362,7 @@ async function main() {
       ['отмена скачивания модели', scenarioModelCancel],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],
+      ['очистка истории', scenarioClearDictations],
       ['обновление', scenarioUpdateFlow],
       ['сбой обновления', scenarioUpdateFailure],
       ['сеть', scenarioNetwork],

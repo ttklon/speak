@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
@@ -6,6 +6,7 @@ import { plural } from '../../../lib/ai/style.js';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
+import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 function retentionLabel(value) {
   return (
@@ -25,6 +26,8 @@ export default function DataSection({ onOpenSection }) {
     clearClipboard,
   } = useAppData();
   const { push } = useToast();
+  // «Удалить сейчас» стирало всю историю одним щелчком — теперь с подтверждением
+  const [confirmDictations, setConfirmDictations] = useState(false);
 
   // Реальный размер именно диктовок. Раньше здесь было storageSize * 0.42 —
   // придуманное число, которое ничего не измеряло.
@@ -72,8 +75,11 @@ export default function DataSection({ onOpenSection }) {
             variant="bare"
             size="sm"
             onClick={() => {
-              clearDictations();
-              push({ title: 'История диктовок очищена', tone: 'success' });
+              if (!dictations.length) {
+                push({ title: 'История уже пуста', tone: 'success' });
+                return;
+              }
+              setConfirmDictations(true);
             }}
           >
             Удалить сейчас
@@ -226,6 +232,18 @@ export default function DataSection({ onOpenSection }) {
           Что хранится на диске
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmDictations}
+        onClose={() => setConfirmDictations(false)}
+        onConfirm={() => {
+          clearDictations();
+          push({ title: 'История диктовок очищена', description: 'Отменить это нельзя.', tone: 'success' });
+        }}
+        title="Удалить всю историю диктовок?"
+        description={`Будут удалены все расшифровки (${dictations.length} шт.). Настройки, словарь и буфер останутся.`}
+        confirmLabel="Удалить"
+      />
     </div>
   );
 }
