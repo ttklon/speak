@@ -191,13 +191,32 @@ export function createRecognizer(opts = {}) {
         if (res?.ok && res.text) {
           text = res.text;
           onFinal?.({ text: res.text, last: res.text });
-          onEnd?.({ text: res.text });
+          // ms — сколько заняло распознавание: показываем человеку, что движок
+          // действительно работал, а не «проглотил» запись
+          onEnd?.({ text: res.text, ms: res.ms });
         } else {
-          onError?.({
-            code: 'stt-empty',
-            title: 'whisper.cpp не распознал',
-            hint: res?.reason || 'Проверьте модель и микрофон в настройках',
-          });
+          const code = res?.code || 'stt-empty';
+          const byCode = {
+            silent: {
+              title: 'В записи нет речи',
+              hint: 'Микрофон не слышит голос: проверьте устройство и уровень в «Настройки → Данные и разрешения».',
+            },
+            phantom: {
+              title: 'В записи не было речи',
+              hint: 'Похоже, микрофон записал тишину или шум. Попробуйте ещё раз ближе к микрофону.',
+            },
+            'too-short': {
+              title: 'Слишком короткая запись',
+              hint: 'Говорите сразу после нажатия сочетания клавиш.',
+            },
+          };
+          onError?.(
+            byCode[code] || {
+              code: 'stt-empty',
+              title: 'whisper.cpp не распознал',
+              hint: res?.reason || 'Проверьте модель и микрофон в настройках',
+            },
+          );
           onEnd?.({ text: '' });
         }
         return { text };

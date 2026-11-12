@@ -206,6 +206,16 @@ export default function ModelManager() {
           </span>
         ) : null}
         Движок сейчас: {engineName()}.
+        {status?.active ? (
+          <>
+            {' '}
+            {status.active === status.preferred ? null : (
+              <span className="model-state model-state--warn">
+                <TriangleAlert size={11} /> выбранная «{status.preferred}» не скачана — работает «{status.active}»
+              </span>
+            )}
+          </>
+        ) : null}
         {status ? (
           <>
             {' '}
@@ -250,6 +260,7 @@ export default function ModelManager() {
               <div className="grow" style={{ textAlign: 'left' }}>
                 <div className="model-card__name">
                   {m.label}
+                  {m.recommended ? <span className="model-badge model-badge--pick">рекомендуем для диктовки</span> : null}
                   {info?.downloaded ? <span className="model-badge">скачано · {info.actualMb} МБ</span> : null}
                 </div>
                 <div className="model-card__meta">

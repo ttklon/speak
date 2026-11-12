@@ -472,6 +472,9 @@ await check('хоткей диктовки показывает скрытое �
 
 
 await check('мониторинг буфера присылает новое копирование в окно', async () => {
+  // даём доиграть отложенному возврату буфера после предыдущей вставки,
+  // иначе он перезапишет «скопированное» прямо под монитором
+  await new Promise((r) => setTimeout(r, 900));
   clipboardText.value = 'скопировано из блокнота';
   sentEvents.length = 0;
   await new Promise((r) => setTimeout(r, 1100));
@@ -550,6 +553,27 @@ const runWhisper = (answer) => {
   spawnPlan.answer = answer;
 };
 
+// Не «тишина», а сигнал с ненулевой громкостью: main справедливо не гоняет
+// whisper на нулях, поэтому проверки подсказки должны подавать настоящий звук.
+const speechPcm = (ms = 500) => {
+  const samples = Math.round((16000 * ms) / 1000);
+  const arr = new Int16Array(samples);
+  for (let i = 0; i < samples; i += 1) {
+    arr[i] = Math.round(6000 * Math.sin((2 * Math.PI * 220 * i) / 16000));
+  }
+  return new Uint8Array(arr.buffer);
+};
+
+await check('models:status честно говорит, какая модель работает на самом деле', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'large-v3-turbo' });
+  const st = await handlers.get('models:status')({});
+  if (st.preferred !== 'large-v3-turbo') throw new Error(`preferred=${st.preferred}`);
+  if (st.active !== 'small') throw new Error(`active=${st.active}`);
+  const dl = st.models['large-v3-turbo'];
+  if (!dl || dl.downloaded) throw new Error('турбо-модель будто скачана');
+  if (dl.sizeMb < 1000) throw new Error(`размер turbo подозрительный: ${dl.sizeMb}`);
+});
+
 await check('пропуск движка: whisper получает --prompt со словарём и контекстом', async () => {
   await handlers.get('store:set')({}, 'zs:dictionary', [
     { word: 'ZSpeakly', pronunciation: 'зи-спикли' },
@@ -557,7 +581,7 @@ await check('пропуск движка: whisper получает --prompt со
   ]);
   runWhisper('Проверка диктовки');
   spawnCalls.length = 0;
-  const pcm = new Uint8Array(16000); // 0.5 с тишины
+  const pcm = speechPcm(500);
   const res = await handlers.get('stt:transcribe-pcm')({}, {
     pcm,
     durationMs: 500,
@@ -580,7 +604,7 @@ await check('тумблер словаря работает целиком: бе
   runWhisper('текст');
   spawnCalls.length = 0;
   await handlers.get('stt:transcribe-pcm')({}, {
-    pcm: new Uint8Array(16000),
+    pcm: speechPcm(500),
     lang: 'ru',
     model: 'small',
     useDictionary: false,
@@ -595,7 +619,7 @@ await check('подсказка не разрастается: не больше
   runWhisper('текст');
   spawnCalls.length = 0;
   await handlers.get('stt:transcribe-pcm')({}, {
-    pcm: new Uint8Array(16000),
+    pcm: speechPcm(500),
     lang: 'ru',
     model: 'small',
     useDictionary: true,
@@ -606,6 +630,44 @@ await check('подсказка не разрастается: не больше
   if (prompt.length > 500) throw new Error(`подсказка ${prompt.length} символов`);
   // контекст экрана идёт первым — именно он важнее для точности
   if (!prompt.startsWith('О')) throw new Error('контекст экрана потерялся при обрезке');
+});
+
+await check('whisper получает все ядра и -sns против галлюцинаций', async () => {
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(500), lang: 'ru', model: 'small' });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const args = call.args.join(' ');
+  if (!/\s-t \d+/.test(args)) throw new Error(`нет -t: ${args}`);
+  if (!/\s\-sns(\s|$)/.test(args)) throw new Error(`нет -sns: ${args}`);
+  if (!/\s\-np(\s|$)/.test(args)) throw new Error(`нет -np: ${args}`);
+});
+
+await check('тишина не уходит в whisper и объясняет причину', async () => {
+  runWhisper('спасибо за просмотр');
+  spawnCalls.length = 0;
+  const silence = new Uint8Array(16000 * 2); // секунда нулей
+  const res = await handlers.get('stt:transcribe-pcm')({}, { pcm: silence, durationMs: 1000, lang: 'ru' });
+  if (spawnCalls.some((c) => String(c.file).includes('whisper'))) throw new Error('whisper всё-таки запустился');
+  if (res?.ok !== false || res.code !== 'silent') throw new Error(JSON.stringify(res));
+  if (!/микрофон/i.test(res.reason)) throw new Error(`причина непонятная: ${res.reason}`);
+});
+
+await check('фраза-галлюцинация отбрасывается, а речь остаётся', async () => {
+  runWhisper('Продолжение следует…');
+  const phantom = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(500), lang: 'ru' });
+  if (phantom?.ok !== false || phantom.code !== 'phantom') throw new Error(JSON.stringify(phantom));
+  runWhisper('Спасибо за просмотр, но давай вернёмся к смете');
+  const real = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(500), lang: 'ru' });
+  if (!real?.ok || !real.text) throw new Error(`живая фраза потерялась: ${JSON.stringify(real)}`);
+  if (!Number.isFinite(real.ms)) throw new Error('не вернулось время распознавания');
+});
+
+await check('буфер обмена восстанавливается после вставки', async () => {
+  clipboardText.value = 'моя заметка';
+  await handlers.get('text:insert')({}, 'надиктованный текст');
+  await new Promise((r) => setTimeout(r, 900));
+  if (clipboardText.value !== 'моя заметка') throw new Error(`в буфере осталось: ${clipboardText.value}`);
 });
 
 await check('пустая запись не запускает whisper', async () => {

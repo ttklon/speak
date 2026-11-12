@@ -186,10 +186,38 @@ export const DEFAULT_SETTINGS = {
  */
 export const LOG_ENDPOINT = '';
 
+/**
+ * Каталог моделей whisper.cpp (ggml). Размеры и скорость — как в официальном
+ * репозитории ggml-org/whisper.cpp и в замерах сообщества: скорость указана
+ * как «во сколько раз быстрее реального времени» на обычном ноутбучном CPU,
+ * без GPU-ускорения.
+ *
+ * Turbo — тот же large-v3, но с 4 декодерными слоями вместо 32: почти такое же
+ * качество при втрое большей скорости. Для диктовки это лучший выбор, ему и
+ * отдаём пометку «рекомендуем». Квант q5_0 — тот же turbo, но втрое меньше.
+ */
 export const MODELS = [
-  { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '300 МБ', speed: '0.4×', quality: '85% ru' },
-  { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '600 МБ', speed: '0.8×', quality: '93% ru' },
-  { id: 'medium', label: 'Whisper medium', size: '1.5 ГБ', ram: '1.5 ГБ', speed: '1.5×', quality: '96% ru' },
+  { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '≈300 МБ', speed: '≈8×', quality: 'черновая расшифровка' },
+  { id: 'base', label: 'Whisper base', size: '142 МБ', ram: '≈400 МБ', speed: '≈6×', quality: 'базовая' },
+  { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '≈700 МБ', speed: '≈3×', quality: 'хорошая' },
+  {
+    id: 'large-v3-turbo',
+    label: 'Whisper large-v3 turbo',
+    size: '1.5 ГБ',
+    ram: '≈2 ГБ',
+    speed: '≈2,5×',
+    quality: 'почти large-v3',
+    recommended: true,
+  },
+  {
+    id: 'large-v3-turbo-q5_0',
+    label: 'Whisper large-v3 turbo (q5_0)',
+    size: '547 МБ',
+    ram: '≈900 МБ',
+    speed: '≈3×',
+    quality: 'почти large-v3, меньше памяти',
+  },
+  { id: 'medium', label: 'Whisper medium', size: '1.5 ГБ', ram: '≈2 ГБ', speed: '≈1,2×', quality: 'высокая' },
 ];
 
 export const STORAGE_KEYS = {

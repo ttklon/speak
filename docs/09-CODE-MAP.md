@@ -58,7 +58,7 @@
 | `main.cjs` | Всё ядро: окно 1020×680 без рамки, трей и меню, `globalShortcut`, мониторинг буфера (900 мс), активное окно через PowerShell+C# (`GetForegroundWindow` + `GetWindowThreadProcessId`), вставка `^v` через `SendKeys`, чтение и замена выделения, скриншоты `desktopCapturer`, `setDisplayMediaRequestHandler` с loopback-звуком, регистрация всех IPC с учётом занятых сочетаний (`registerAccel` + `hotkey:conflict`), различение одиночного и двойного нажатия диктовки для «агента», инициализация журнала, тихая проверка обновлений |
 | `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native`, `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
 | `store.cjs` | `JsonStore`: `%APPDATA%\ZSpeakly\profile.json`, кэш в памяти, `scheduleFlush` 180 мс, атомарная запись `.tmp` → `rename`, `sizeSync()` |
-| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-{preferred,small,tiny,medium}.bin`; запуск с `-m -f -l --no-timestamps -nt -otxt -of`, `--prompt`, таймаут 120 с; разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк |
+| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; запуск с `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -otxt -of`, `--prompt`, таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк |
 | `models.cjs` | `modelStatus()` (что уже на диске), `downloadModel()` с Hugging Face и прогрессом, `downloadEngine()` — последний релиз `ggml-org/whisper.cpp` с `whisper-bin-x64.zip`, распаковка через `Expand-Archive`, `importModel()` — подхват файла и угадывание типа по размеру |
 | `wav.cjs` | PCM Int16 16 кГц → RIFF/WAVE без зависимостей |
 | `logger.cjs` | Журнал: буфер 400 событий, файл `logs/zspeakly.log` с обрезкой на 512 КБ, `redact()` (почта, `C:\Users\…`, `/home/…`, токены), `scrub()` (выбрасывает `text/transcript/pcm/audio/clipboard/word/prompt/selection`), отправка пачками по 40, `report()`, `ping()`, `sendNow()`, `installId` |
@@ -92,7 +92,7 @@
 | `lib/clipboard.js` | Запись/чтение буфера: нативный мост → `window.zspeakly.clipboard` → `navigator.clipboard` → `execCommand` |
 | `lib/storage.js` | Один API чтения/записи: Electron-мост или `localStorage` (`zs:` префикс) + размер данных |
 | `lib/retention.js` | Срок хранения: `pruneByAge`, «бессрочно» = 3650 |
-| `lib/seed.js` | Демо-данные из видео (тексты, «снимки», словарь) |
+| `lib/seed.js` | Фикстура для тестов и скриншотов (тексты, «снимки», словарь): в продукте не используется |
 | `lib/media/recorder.js` | Запись экрана в WebM + постер из первого кадра |
 | `lib/feedback.js` | WebAudio-бипы и эффект печати |
 | `lib/router.js` | Hash-роутер (`#/page?param=`) |
@@ -255,9 +255,16 @@ Ctrl+Alt+E (или своя инструкция)
 
 | Модель | Размер | RAM | Скорость | Качество |
 | --- | --- | --- | --- | --- |
-| tiny | 75 МБ | 300 МБ | 0.4× | 85% ru |
-| small | 466 МБ | 600 МБ | 0.8× | 93% ru |
-| medium | 1.5 ГБ | 1.5 ГБ | 1.5× | 96% ru |
+| tiny | 75 МБ | ≈300 МБ | ≈8× | черновая расшифровка |
+| base | 142 МБ | ≈400 МБ | ≈6× | базовая |
+| small | 466 МБ | ≈700 МБ | ≈3× | хорошая |
+| large-v3-turbo | 1.5 ГБ | ≈2 ГБ | ≈2,5× | почти large-v3 (рекомендуем) |
+| large-v3-turbo-q5_0 | 547 МБ | ≈900 МБ | ≈3× | почти large-v3, меньше памяти |
+| medium | 1.5 ГБ | ≈2 ГБ | ≈1,2× | высокая |
+
+Скорость — во сколько раз быстрее реального времени на обычном ноутбучном CPU без GPU.
+Каталог: `src/lib/config.js` → `MODELS`, файлы и размеры — `electron/models.cjs` → `MODELS`
+(скачиваются с `huggingface.co/ggerganov/whisper.cpp`).
 
 Ставятся из приложения («Настройки → Функции → Модель распознавания») или
 скриптом `scripts/download-models.ps1`. Хранятся в `%APPDATA%\ZSpeakly`,

@@ -2376,6 +2376,11 @@ button.plan-card--action:hover .plan-card__title {
   vertical-align: middle;
 }
 
+.model-badge--pick {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-dim);
+}
+
 .model-state {
   display: inline-flex;
   align-items: center;

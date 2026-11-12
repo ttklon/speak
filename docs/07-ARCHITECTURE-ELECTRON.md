@@ -77,12 +77,22 @@ src/                          renderer (React 18 + Vite)
 ## Распознавание речи
 
 ```
-renderer ──start──▶ main ──spawn──▶ whisper-cli -m ggml-small.bin -f rec.wav -l ru -otxt
-        ◀──line─── main ◀──stdout/файл .txt
+renderer ──PCM 16 кГц──▶ main ──writeWav──▶ whisper-cli
+   -m ggml-large-v3-turbo.bin -f rec.wav -l ru -t <ядра> -nt -np -sns -otxt -of rec.wav.out
+        ◀──.out.txt / stdout─── main ◀──текст + ms + rms
 ```
+
+Перед запуском main считает громкость записи (`analysePcm`): тишину и записи короче 0,3 с в
+whisper не отправляет, а отвечает `code: 'silent' | 'too-short'` — иначе на пустом звуке модель
+выдаёт «Спасибо за просмотр». Ответ, целиком совпавший с известной фразой-галлюцинацией
+(`isPhantom`), тоже отбрасывается с `code: 'phantom'`.
 
 Поиск бинарника: `resources/bin`, `%APPDATA%\ZSpeakly\bin`, `PATH`.
 Модели: `resources/models`, `%APPDATA%\ZSpeakly\models`, `models/` (игнорируется в Git).
+Если выбранная модель не скачана, берётся ближайшая доступная
+(turbo → q5_0 → small → base → tiny → medium), а не «ничего».
+
+`--prompt` собирается из словаря (`zs:dictionary`) и терминов с экрана (не больше 500 символов).
 
 Статус доступен через `native.sttStatus(model)` — интерфейс показывает движок в
 Настройки → Функции → «Модель распознавания».

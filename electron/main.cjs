@@ -612,6 +612,22 @@ function registerIpc() {
       logger.error('stt', 'Пустая запись пришла в распознавание', { bytes: 0 });
       return { ok: false, text: '', reason: 'пустая запись' };
     }
+    // Тишину и «дыхание» в микрофон не отправляем в whisper: на пустом звуке он
+    // выдумывает фразы вроде «Продолжение следует», и это выглядит как поломка.
+    const audio = whisper.analysePcm?.(raw, payload?.sampleRate || 16000);
+    if (audio && audio.seconds < 0.3) {
+      logger.warn('stt', 'Запись короче 0,3 с — не распознаём', { keep: true, seconds: audio.seconds });
+      return { ok: false, text: '', code: 'too-short', reason: 'запись короче 0,3 секунды' };
+    }
+    if (audio && audio.rms < 40 && audio.peak < 250) {
+      logger.warn('stt', 'В записи тишина — не распознаём', { keep: true, rms: audio.rms, peak: audio.peak });
+      return {
+        ok: false,
+        text: '',
+        code: 'silent',
+        reason: 'микрофон не слышит голос — проверьте устройство и уровень записи',
+      };
+    }
     logger.info('stt', 'Начало распознавания', {
       keep: true,
       model,
@@ -642,13 +658,19 @@ function registerIpc() {
       const started = Date.now();
       const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt });
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
+      const ms = Date.now() - started;
+      // whisper иногда «дослышит» фразу, которой не было (тишина, музыка).
+      if (res?.ok && whisper.isPhantom?.(res.text)) {
+        logger.warn('stt', 'Отброшена фраза-галлюцинация', { keep: true, chars: res.text.length });
+        return { ok: false, text: '', code: 'phantom', reason: 'в записи не было речи' };
+      }
       logger[res?.ok ? 'info' : 'error']('stt', res?.ok ? 'Распознавание завершено' : 'Распознавание не удалось', {
         keep: true,
-        ms: Date.now() - started,
+        ms,
         chars: String(res?.text || '').length,
         reason: res?.reason || '',
       });
-      return res;
+      return { ...res, ms, audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined };
     } catch (err) {
       logger.error('stt', 'Исключение в распознавании', { stack: String(err?.stack || err) });
       return { ok: false, text: '', reason: String(err?.message || err) };
@@ -665,8 +687,26 @@ function registerIpc() {
     if (!value) return false;
     lastInsertedText = value;
     lastClipboardText = value; // чтобы мониторинг не добавил это в историю
+    // Вставляем через буфер обмена, но чужой буфер не съедаем: копируем текст,
+    // вставляем его в активное окно и возвращаем прежнее содержимое. Иначе
+    // после каждой диктовки у человека пропадало то, что он скопировал.
+    const previousText = clipboard.readText();
+    const previousImage = clipboard.readImage();
+    const hadImage = previousImage && !previousImage.isEmpty();
     clipboard.writeText(value);
-    return pasteToActiveWindow();
+    const pasted = pasteToActiveWindow();
+    setTimeout(() => {
+      try {
+        if (hadImage) clipboard.writeImage(previousImage);
+        else if (previousText) clipboard.writeText(previousText);
+        // буфер вернулся к прежнему значению — мониторинг не должен считать
+        // это новой записью
+        lastClipboardText = previousText || '';
+      } catch {
+        /* ignore */
+      }
+    }, 700);
+    return pasted;
   });
   ipcMain.handle('text:paste', () => pasteToActiveWindow());
   ipcMain.handle('text:read-selection', () => readSelection());
@@ -954,7 +994,19 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('models:status', () => models.modelStatus());
+  ipcMain.handle('models:status', () => {
+    const base = models.modelStatus();
+    // Какую модель whisper возьмёт на самом деле: выбранная может быть не
+    // скачана, тогда работает ближайшая доступная — интерфейс должен это
+    // показывать, а не делать вид, что выбранная уже стоит.
+    const preferred = (store?.get('zs:settings') || {}).whisperModel || 'small';
+    const active = whisper.findModel(preferred);
+    return {
+      ...base,
+      preferred,
+      active: active ? path.basename(active).replace(/^ggml-/, '').replace(/\.bin$/, '') : '',
+    };
+  });
   ipcMain.handle('models:download', async (_e, id) => {
     const res = await models.downloadModel(id, (percent, received, total) => {
       mainWindow?.webContents.send('model:progress', { id, percent, received, total });

@@ -11,10 +11,15 @@ const path = require('node:path');
 const https = require('node:https');
 const { app } = require('electron');
 
+// Реальные файлы из ggml-org/whisper.cpp на Hugging Face (те же имена, что в
+// официальном download-ggml-model.sh). mb — ожидаемый размер для прогресса.
 const MODELS = {
   tiny: { file: 'ggml-tiny.bin', mb: 75 },
+  base: { file: 'ggml-base.bin', mb: 142 },
   small: { file: 'ggml-small.bin', mb: 466 },
-  medium: { file: 'ggml-medium.bin', mb: 1500 },
+  'large-v3-turbo': { file: 'ggml-large-v3-turbo.bin', mb: 1549 },
+  'large-v3-turbo-q5_0': { file: 'ggml-large-v3-turbo-q5_0.bin', mb: 547 },
+  medium: { file: 'ggml-medium.bin', mb: 1530 },
 };
 
 function dirs() {
