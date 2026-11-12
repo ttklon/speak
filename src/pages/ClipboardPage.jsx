@@ -454,6 +454,53 @@ export default function ClipboardPage() {
           />
         ) : view === 'grid' ? (
           <div className="scroll-area clip-scroll">
+            {selected ? (
+              // В сетке нет боковой панели, поэтому действия над выбранной
+              // карточкой раньше были недоступны вовсе: оставалось только
+              // «Очистить историю». Теперь — компактная панель.
+              <div className="clip-actions">
+                <span className="clip-actions__label">
+                  {kindLabel(selected.kind)} · {selected.source}
+                </span>
+                <button type="button" className="link-btn" onClick={() => copyItem(selected)}>
+                  Копировать
+                </button>
+                {selected.kind === 'password' && settings.hidePasswords && !revealed.has(selected.id) ? (
+                  <button
+                    type="button"
+                    className="link-btn"
+                    onClick={() => setRevealed((prev) => new Set(prev).add(selected.id))}
+                  >
+                    Показать
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => toggleClipboardPin(selected.id)}
+                >
+                  {selected.pinned ? 'Открепить' : 'Закрепить'}
+                </button>
+                <button
+                  type="button"
+                  className="link-btn link-btn--danger"
+                  onClick={() => {
+                    removeClipboardItem(selected.id);
+                    setSelectedId(null);
+                  }}
+                >
+                  Удалить
+                </button>
+                <button
+                  type="button"
+                  className="link-btn"
+                  style={{ marginLeft: 'auto' }}
+                  onClick={() => setSelectedId(null)}
+                >
+                  Снять выбор
+                </button>
+              </div>
+            ) : null}
             <div className="clip-grid">
               {filtered.map((item) => (
                 <button

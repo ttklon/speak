@@ -171,6 +171,38 @@
   cursor: default;
 }
 
+.link-btn--danger:hover:not(:disabled) {
+  color: var(--red);
+}
+
+/* Панель действий над выбранной карточкой буфера в режиме сетки:
+   приклеена к верху, чтобы не уезжать при прокрутке. */
+.clip-actions {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 7px 2px 9px;
+  margin-bottom: 8px;
+  background: var(--bg-app);
+  border-bottom: 1px solid rgba(var(--overlay-rgb), 0.07);
+}
+
+.clip-actions__label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42%;
+}
+
 .text-link {
   color: var(--text-2);
   font-size: 11px;

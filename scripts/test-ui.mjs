@@ -992,6 +992,48 @@ async function scenarioUpdateFailure(browser) {
   await page.close();
 }
 
+// В сетке буфера не было ни одной операции над карточкой — только «Очистить историю».
+async function scenarioClipboardGridActions(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 400 });
+  takeErrors(page);
+  const opened = await page.evaluate(() => {
+    const card = document.querySelector('.clip-card');
+    if (!card) return false;
+    card.click();
+    return true;
+  });
+  await sleep(350);
+  const bar = await page.evaluate(() =>
+    [...document.querySelectorAll('.clip-actions .link-btn')].map((b) => b.innerText.trim().toLowerCase()),
+  );
+  const before = ((await storeOf(page, 'zs.clipboard')) || []).length;
+  const pinned = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.clip-actions .link-btn')].find((b) => /закрепить/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(350);
+  const pins = ((await storeOf(page, 'zs.clipboard')) || []).filter((c) => c.pinned).length;
+  const removed = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.clip-actions .link-btn')].find((b) => /удалить/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(450);
+  const after = ((await storeOf(page, 'zs.clipboard')) || []).length;
+  record(
+    'сценарии',
+    'буфер в сетке: копировать, закрепить, удалить доступны',
+    opened && bar.includes('копировать') && bar.includes('закрепить') && bar.includes('удалить') && pins > 0 && after === before - 1,
+    `${bar.join('/')} | закреплено ${pins} | ${before} → ${after} | удалить ${removed}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'буфер в сетке: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioMic(browser) {
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 400 });
   takeErrors(page);
@@ -2208,6 +2250,7 @@ async function main() {
       ['диагностика', scenarioDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['отмена скачивания модели', scenarioModelCancel],
+      ['действия в сетке буфера', scenarioClipboardGridActions],
       ['обновление', scenarioUpdateFlow],
       ['сбой обновления', scenarioUpdateFailure],
       ['сеть', scenarioNetwork],
