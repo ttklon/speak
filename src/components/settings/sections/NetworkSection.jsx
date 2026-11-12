@@ -10,6 +10,8 @@ export default function NetworkSection() {
   const { settings, updateSettings } = useAppData();
   const { push } = useToast();
   const [status, setStatus] = useState('idle');
+  // какие модели реально отдаёт локальный сервер — чтобы не вписывать имя вслепую
+  const [models, setModels] = useState([]);
   const [online, setOnline] = useState(navigator.onLine);
 
   useEffect(() => {
@@ -41,12 +43,14 @@ export default function NetworkSection() {
       if (!res.ok) throw new Error('bad status');
       const data = res.data || {};
       setStatus('ok');
+      const names = Array.isArray(data.models) ? data.models.map((m) => m.name || m.model).filter(Boolean) : [];
+      setModels(names);
       // модель ответила — снимаем «паузу недоступности», инструкции снова
       // попробуют её, а не сразу пойдут по офлайн-правилам
       resetLlmBackoff();
       push({
         title: 'Локальная модель доступна',
-        description: `${data.models?.length || 0} моделей в Ollama`,
+        description: `Ollama отвечает, моделей: ${names.length || 0}`,
         tone: 'success',
       });
     } catch {
@@ -97,12 +101,27 @@ export default function NetworkSection() {
           />
         </div>
         <div className="setting-row">
-          <div className="setting-row__label">Модель</div>
-          <input
-            className="input settings-inline-input"
-            value={settings.aiModel}
-            onChange={(e) => updateSettings({ aiModel: e.target.value })}
-          />
+          <div className="setting-row__label">
+            Модель
+            <div className="setting-row__desc">
+              {models.length
+                ? 'Список взят у локального сервера — выберите из него.'
+                : 'Имя модели в Ollama. Нажмите «Проверить соединение», чтобы получить список.'}
+            </div>
+          </div>
+          {models.length ? (
+            <Select
+              value={models.includes(settings.aiModel) ? settings.aiModel : models[0]}
+              onChange={(v) => updateSettings({ aiModel: v })}
+              options={models.map((m) => ({ value: m, label: m }))}
+            />
+          ) : (
+            <input
+              className="input settings-inline-input"
+              value={settings.aiModel}
+              onChange={(e) => updateSettings({ aiModel: e.target.value })}
+            />
+          )}
         </div>
         <div className="row-8">
           <Button variant="ghost" size="sm" onClick={check} loading={status === 'checking'}>

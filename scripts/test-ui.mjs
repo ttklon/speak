@@ -1619,6 +1619,17 @@ async function scenarioNetwork(browser) {
   const calls = await bridgeCalls(page);
   const body = await page.evaluate(() => document.body.innerText);
   record('сценарии', 'сеть: проверка дергает http:get и показывает результат', check && calls.includes('http:get') && /доступна|недоступна|моделей/i.test(body));
+  // список моделей приходит от сервера — имя не нужно вписывать вручную
+  const picked = await page.evaluate(() => {
+    const select = document.querySelector('.settings-main .select');
+    return { found: Boolean(select), text: select?.innerText || '' };
+  });
+  record(
+    'сценарии',
+    'сеть: модель выбирается из списка Ollama',
+    picked.found && /qwen|llama|mistral/i.test(picked.text),
+    picked.text.replace(/\n/g, ' ').slice(0, 80),
+  );
   const errors = takeErrors(page);
   record('сценарии', 'сеть: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
