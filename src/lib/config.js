@@ -166,6 +166,8 @@ export const DEFAULT_SETTINGS = {
   clipboardRetentionDays: 30,
   dictationRetentionDays: 30,
   whisperModel: 'small',
+  // Держать модель в памяти (whisper-server): первая диктовка без холодного старта.
+  keepModelLoaded: false,
   audioDeviceId: 'default',
   autoLaunch: false,
   theme: 'dark',

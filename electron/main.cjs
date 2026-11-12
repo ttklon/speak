@@ -564,6 +564,18 @@ function stopClipboardWatch() {
 
 // ── IPC ────────────────────────────────────────────────────────────────────
 function registerIpc() {
+  // whisper-server держит модель в памяти — при выходе его нужно закрыть,
+  // иначе процесс останется висеть после закрытия приложения
+  if (!registerIpc._serverHooked) {
+    registerIpc._serverHooked = true;
+    app.on('before-quit', () => {
+      try {
+        require('./whisper.cjs').stopServer();
+      } catch {
+        /* ignore */
+      }
+    });
+  }
   // Асинхронное чтение: preload.store.get() ходит через invoke, а не sendSync.
   // Без этого обработчика вызов молча зависал.
   ipcMain.handle('store:get', (_e, key) => store.get(key) ?? null);
@@ -656,7 +668,8 @@ function registerIpc() {
     const prompt = [context, dictionaryPrompt].filter(Boolean).join(', ').slice(0, 500);
     try {
       const started = Date.now();
-      const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt });
+      const keepLoaded = (store?.get('zs:settings') || {}).keepModelLoaded === true;
+      const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
       const ms = Date.now() - started;
       // whisper иногда «дослышит» фразу, которой не было (тишина, музыка).

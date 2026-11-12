@@ -643,6 +643,35 @@ await check('whisper получает все ядра и -sns против га�
   if (!/\s\-np(\s|$)/.test(args)) throw new Error(`нет -np: ${args}`);
 });
 
+await check('серверный режим: multipart для /inference собран правильно', () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const audio = Buffer.from('RIFFxxxxWAVE');
+  const { body, contentType } = whisper.multipart(
+    { language: 'ru', prompt: 'ZSpeakly, Атлас', temperature: '0.0', response_format: 'json' },
+    { name: 'file', filename: 'rec.wav', buffer: audio },
+  );
+  const text = body.toString('latin1');
+  if (!/^multipart\/form-data; boundary=/.test(contentType)) throw new Error(contentType);
+  if (!text.includes('name="file"; filename="rec.wav"')) throw new Error('нет файла');
+  if (!text.includes('name="prompt"')) throw new Error('нет подсказки');
+  if (!text.includes('name="language"')) throw new Error('нет языка');
+  if (!text.includes('RIFFxxxxWAVE')) throw new Error('аудио не вложено');
+  if (!text.trimEnd().endsWith('--')) throw new Error('нет закрывающей границы');
+});
+
+await check('серверный режим: без whisper-server честно работает обычный запуск', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const st = whisper.status('small');
+  if (st.server.available) throw new Error('сервер будто есть');
+  if (st.server.running) throw new Error('сервер будто запущен');
+  if (!st.modelName) throw new Error('не сказано, какой файл модели используется');
+  runWhisper('обычный путь');
+  spawnCalls.length = 0;
+  const res = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(400), lang: 'ru' });
+  if (res?.text !== 'обычный путь') throw new Error(`упало: ${JSON.stringify(res)}`);
+  if (!spawnCalls.some((c) => String(c.file).includes('whisper'))) throw new Error('cli не запускался');
+});
+
 await check('тишина не уходит в whisper и объясняет причину', async () => {
   runWhisper('спасибо за просмотр');
   spawnCalls.length = 0;

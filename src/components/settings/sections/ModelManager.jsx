@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Download, Loader, TriangleAlert, X } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
+import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { MODELS } from '../../../lib/config.js';
@@ -284,6 +285,21 @@ export default function ModelManager() {
           </div>
         );
       })}
+
+      <div className="setting-row">
+        <div className="setting-row__label">
+          Держать модель в памяти
+          <div className="setting-row__desc">
+            Диктовка начинается без холодного старта: whisper-server загружает модель один раз и
+            отвечает сразу. Занимает столько же памяти, сколько модель (≈2 ГБ для turbo), и
+            работает только если в комплекте есть whisper-server.
+          </div>
+        </div>
+        <Toggle
+          checked={settings.keepModelLoaded === true}
+          onChange={(v) => updateSettings({ keepModelLoaded: v })}
+        />
+      </div>
 
       <div className="row-8" style={{ marginTop: 8, flexWrap: 'wrap' }}>
         {busy ? (
