@@ -212,6 +212,13 @@ export function AppDataProvider({ children }) {
     [setClipboard],
   );
 
+  /** Правка записи буфера: нужна для «скриншота с заметкой» — подпись пишет человек. */
+  const updateClipboardItem = useCallback(
+    (id, patch) =>
+      setClipboard((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch, editedAt: Date.now() } : c))),
+    [setClipboard],
+  );
+
   const toggleClipboardPin = useCallback(
     (id) => setClipboard((prev) => prev.map((c) => (c.id === id ? { ...c, pinned: !c.pinned } : c))),
     [setClipboard],
@@ -299,6 +306,7 @@ export function AppDataProvider({ children }) {
       clipboard,
       addClipboardItem,
       removeClipboardItem,
+      updateClipboardItem,
       toggleClipboardPin,
       clearClipboard,
       voiceHotkeys,
@@ -322,7 +330,7 @@ export function AppDataProvider({ children }) {
     [
       settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, clearDictations,
       dictionary, addDictionaryWord, removeDictionaryWord, clipboard, addClipboardItem,
-      removeClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
+      removeClipboardItem, updateClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
       updateHotkey, resetHotkeys, presets, togglePreset, updatePresetKeys, instructions, addInstruction,
       removeInstruction, updateInstruction, stats, recordWords, profile, setProfile, resetAll, bytes,
     ],

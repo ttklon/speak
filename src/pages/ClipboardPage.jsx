@@ -39,6 +39,7 @@ export default function ClipboardPage() {
     settings,
     updateSettings,
     removeClipboardItem,
+    updateClipboardItem,
     clearClipboard,
     toggleClipboardPin,
     addClipboardItem,
@@ -49,6 +50,9 @@ export default function ClipboardPage() {
   // очистка истории — только после подтверждения: один промах мыши не должен
   // стирать всё, что накопилось за день
   const [confirmClear, setConfirmClear] = useState(false);
+  // подпись к «скриншоту с заметкой»: раньше текст предлагал её дописать,
+  // но дописать было негде
+  const [noteDraft, setNoteDraft] = useState('');
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [justCopied, setJustCopied] = useState(null);
@@ -66,24 +70,7 @@ export default function ClipboardPage() {
     if (!bridge?.onClipboardAction) return undefined;
     return bridge.onClipboardAction((action) => {
       if (action === 'note') {
-        const run = async () => {
-          const res = await captureScreen();
-          if (!res) return;
-          addClipboardItem({
-            kind: 'note',
-            title: 'Скриншот с заметкой',
-            text: 'Снимок экрана. Допишите подпись — она сохранится вместе с картинкой.',
-            image: res.image || '',
-            source: 'Скриншот с придумкой',
-            createdAt: Date.now(),
-          });
-          push({
-            title: 'Заметка со скриншотом готова',
-            description: 'Откройте её в буфере и допишите подпись.',
-            tone: 'success',
-          });
-        };
-        run();
+        captureNote();
         return;
       }
       runHotkey(action === 'screenshot' ? 'screenshot' : action);
@@ -133,7 +120,8 @@ export default function ClipboardPage() {
       if (tab !== 'all') {
         if (tab === 'text' && !['text', 'password'].includes(item.kind)) return false;
         if (tab === 'format' && item.kind !== 'format') return false;
-        if (tab === 'image' && item.kind !== 'image') return false;
+        // заметка — это снимок экрана с подписью, поэтому она и в «Изображениях»
+        if (tab === 'image' && !['image', 'note'].includes(item.kind)) return false;
         if (tab === 'file' && item.kind !== 'file') return false;
         if (tab === 'password' && item.kind !== 'password') return false;
       }
@@ -289,6 +277,29 @@ export default function ClipboardPage() {
     }
   };
 
+  useEffect(() => {
+    setNoteDraft(selected?.kind === 'note' ? selected.text || '' : '');
+  }, [selected?.id, selected?.kind]);
+
+  /** Скриншот с заметкой: картинка + подпись, которую человек дописывает. */
+  const captureNote = async () => {
+    const res = await captureScreen();
+    if (!res) return;
+    addClipboardItem({
+      kind: 'note',
+      title: 'Скриншот с заметкой',
+      text: '',
+      image: res.image || '',
+      source: 'Скриншот с придумкой',
+      createdAt: Date.now(),
+    });
+    push({
+      title: 'Заметка со скриншотом готова',
+      description: 'Откройте её в списке и допишите подпись.',
+      tone: 'success',
+    });
+  };
+
   /** Действия плиток хоткеев буфера. */
   const runHotkey = async (id) => {
     if (id === 'panel') {
@@ -304,6 +315,10 @@ export default function ClipboardPage() {
     }
     if (id === 'record') {
       await toggleRecording();
+      return;
+    }
+    if (id === 'note') {
+      await captureNote();
       return;
     }
     const shot = await captureScreen();
@@ -599,7 +614,40 @@ export default function ClipboardPage() {
                   </button>
                 </div>
                 <div className="clip-preview__body">
-                  {selected.kind === 'image' && selected.image ? (
+                  {selected.kind === 'note' ? (
+                    // Заметка = картинка + подпись, которую можно дописать здесь же
+                    <div className="stack-8">
+                      {selected.image ? (
+                        <img className="clip-preview__img" src={selected.image} alt={selected.source} />
+                      ) : null}
+                      <textarea
+                        className="input clip-preview__note"
+                        rows={3}
+                        placeholder="Подпись к снимку — например, что на нём важно"
+                        value={noteDraft}
+                        onChange={(e) => setNoteDraft(e.target.value)}
+                      />
+                      <div className="row-8">
+                        <Button
+                          variant="white"
+                          size="sm"
+                          onClick={() => {
+                            updateClipboardItem(selected.id, { text: noteDraft.trim() });
+                            push({ title: 'Подпись сохранена', tone: 'success' });
+                          }}
+                        >
+                          Сохранить подпись
+                        </Button>
+                        <Button
+                          variant="bare"
+                          size="sm"
+                          onClick={() => setNoteDraft(selected.text || '')}
+                        >
+                          Сбросить
+                        </Button>
+                      </div>
+                    </div>
+                  ) : selected.kind === 'image' && selected.image ? (
                     <img className="clip-preview__img" src={selected.image} alt={selected.source} />
                   ) : selected.kind === 'password' && settings.hidePasswords && !revealed.has(selected.id) ? (
                     // настройка «Скрывать пароли»: пока не нажали «Показать», значение замаскировано

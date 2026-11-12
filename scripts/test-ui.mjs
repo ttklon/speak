@@ -1144,6 +1144,46 @@ async function scenarioClearDictations(browser) {
   await page.close();
 }
 
+// «Скриншот с придумкой» = снимок + подпись, которую человек дописывает сам.
+async function scenarioNote(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500 });
+  takeErrors(page);
+  // main сообщает о глобальном сочетании — карточка должна появиться в буфере
+  await emit(page, 'clipboard:action', 'note');
+  await sleep(900);
+  const created = ((await storeOf(page, 'zs.clipboard')) || []).filter((c) => c.kind === 'note');
+  const cards = await page.evaluate(() => document.querySelectorAll('.clip-card').length);
+  // открываем заметку в списке и дописываем подпись
+  await page.evaluate(() => document.querySelectorAll('.clip-toolbar__view button')[1]?.click());
+  await sleep(350);
+  await page.evaluate(() => {
+    const item = [...document.querySelectorAll('.clip-list__item')].find((el) => /придумк|заметк/i.test(el.innerText));
+    (item || document.querySelector('.clip-list__item'))?.click();
+  });
+  await sleep(350);
+  const hasNoteField = await page.evaluate(() => Boolean(document.querySelector('.clip-preview__note')));
+  if (hasNoteField) {
+    await page.click('.clip-preview__note');
+    await page.keyboard.type('важное на снимке');
+    await page.evaluate(() => {
+      const btn = [...document.querySelectorAll('.clip-preview button')].find((b) => /Сохранить подпись/i.test(b.innerText));
+      btn?.click();
+    });
+  }
+  await sleep(450);
+  const saved = ((await storeOf(page, 'zs.clipboard')) || []).find((c) => c.kind === 'note');
+  const label = await page.evaluate(() => document.body.innerText.includes('ЗАМЕТКА'));
+  record(
+    'сценарии',
+    'буфер: заметка со снимком создаётся и подпись сохраняется',
+    created.length === 1 && cards > 0 && hasNoteField && /важное на снимке/.test(saved?.text || '') && label,
+    `заметок ${created.length}, подпись «${(saved?.text || '').slice(0, 24)}»`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'буфер: заметка без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioMic(browser) {
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 400 });
   takeErrors(page);
@@ -2363,6 +2403,7 @@ async function main() {
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],
       ['очистка истории', scenarioClearDictations],
+      ['заметка со снимком', scenarioNote],
       ['обновление', scenarioUpdateFlow],
       ['сбой обновления', scenarioUpdateFailure],
       ['сеть', scenarioNetwork],

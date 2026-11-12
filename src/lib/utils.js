@@ -238,6 +238,7 @@ export function kindLabel(kind) {
       image: 'ИЗОБРАЖЕНИЕ',
       file: 'ФАЙЛ',
       password: 'ЗАШИФРОВАНО',
+      note: 'ЗАМЕТКА',
       link: 'ССЫЛКА',
     }[kind] || 'ТЕКСТ'
   );
