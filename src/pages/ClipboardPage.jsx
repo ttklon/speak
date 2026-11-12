@@ -201,6 +201,11 @@ export default function ClipboardPage() {
       push({ title: 'Запись экрана недоступна', description: 'Нужен установленный ZSpeakly на Windows.', tone: 'warn' });
       return;
     }
+    // Браузерный диалог выбора экрана может висеть, ничего не сообщая:
+    // сразу говорим, что от человека ждут выбора окна.
+    if (!window.zspeakly?.native?.screenshot) {
+      push({ title: 'Выберите окно или экран', description: 'В диалоге браузера отметьте, что записывать.', tone: 'success' });
+    }
     try {
       const rec = await startScreenRecording({ onTick: (ms) => setRecordMs(ms) });
       setRecordMs(0);
