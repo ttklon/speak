@@ -334,6 +334,23 @@ export default function ClipboardPage() {
     }
   };
 
+  /**
+   * Удаление одной записи с возможностью вернуть: в буфере бывают важные
+   * фрагменты, а промах мыши стирал их насовсем.
+   */
+  const removeItem = (item) => {
+    if (!item) return;
+    removeClipboardItem(item.id);
+    setSelectedId(null);
+    push({
+      title: 'Удалено из буфера',
+      description: 'Вернуть можно кнопкой в этом сообщении.',
+      tone: 'warn',
+      ttl: 8000,
+      action: { label: 'Вернуть', onClick: () => addClipboardItem(item) },
+    });
+  };
+
   const copyPaste = async (item) => {
     await copyItem(item);
     window.zspeakly?.native?.pasteToActive?.();
@@ -484,10 +501,7 @@ export default function ClipboardPage() {
                 <button
                   type="button"
                   className="link-btn link-btn--danger"
-                  onClick={() => {
-                    removeClipboardItem(selected.id);
-                    setSelectedId(null);
-                  }}
+                  onClick={() => removeItem(selected)}
                 >
                   Удалить
                 </button>
@@ -578,10 +592,7 @@ export default function ClipboardPage() {
                   <button
                     type="button"
                     className="icon-btn icon-btn--sm icon-btn--danger"
-                    onClick={() => {
-                      removeClipboardItem(selected.id);
-                      setSelectedId(null);
-                    }}
+                    onClick={() => removeItem(selected)}
                     aria-label="Удалить"
                   >
                     <Trash2 size={11} />

@@ -25,7 +25,7 @@ function HeroStat({ value, unit, label }) {
 }
 
 export default function HomePage() {
-  const { dictations, voiceHotkeys, settings, deleteDictation } = useAppData();
+  const { dictations, voiceHotkeys, settings, deleteDictation, addDictation } = useAppData();
   const { state, draft, start, stop, last, elapsed } = useDictation();
   const { push } = useToast();
   const [query, setQuery] = useState('');
@@ -285,9 +285,18 @@ export default function HomePage() {
                 size="sm"
                 icon={<Trash2 size={12} />}
                 onClick={() => {
-                  deleteDictation(snippet.id);
+                  // Промах мыши не должен стирать расшифровку навсегда:
+                  // в тосте есть «Вернуть» на несколько секунд.
+                  const removed = snippet;
+                  deleteDictation(removed.id);
                   setSnippet(null);
-                  push({ title: 'Запись удалена', tone: 'warn' });
+                  push({
+                    title: 'Запись удалена',
+                    description: 'Можно вернуть — кнопка в этом сообщении.',
+                    tone: 'warn',
+                    ttl: 8000,
+                    action: { label: 'Вернуть', onClick: () => addDictation(removed) },
+                  });
                 }}
               >
                 Удалить

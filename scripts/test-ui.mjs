@@ -1029,8 +1029,58 @@ async function scenarioClipboardGridActions(browser) {
     opened && bar.includes('копировать') && bar.includes('закрепить') && bar.includes('удалить') && pins > 0 && after === before - 1,
     `${bar.join('/')} | закреплено ${pins} | ${before} → ${after} | удалить ${removed}`,
   );
+
+  // удаление можно отменить кнопкой в тосте
+  const undone = await page.evaluate(() => {
+    const btn = document.querySelector('.toast__action');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(450);
+  const restored = ((await storeOf(page, 'zs.clipboard')) || []).length;
+  record(
+    'сценарии',
+    'буфер в сетке: удаление возвращается кнопкой «Вернуть»',
+    undone && restored === before,
+    `${after} → ${restored}`,
+  );
   const errors = takeErrors(page);
   record('сценарии', 'буфер в сетке: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Удаление расшифровки тоже обратимо: промах мыши не должен стирать текст.
+async function scenarioDictationUndo(browser) {
+  const page = await openPage(browser, '#/home', { settle: 400 });
+  takeErrors(page);
+  const before = ((await storeOf(page, 'zs.dictations')) || []).length;
+  await page.evaluate(() => document.querySelector('.recent__row, .recent-row, .recent__item')?.click());
+  await sleep(350);
+  const removed = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.snippet button')].find((b) => /Удалить/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(450);
+  const after = ((await storeOf(page, 'zs.dictations')) || []).length;
+  const undone = await page.evaluate(() => {
+    const btn = document.querySelector('.toast__action');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(500);
+  const back = ((await storeOf(page, 'zs.dictations')) || []).length;
+  record(
+    'сценарии',
+    'история: удаление расшифровки можно вернуть',
+    removed && after === before - 1 && undone && back === before,
+    `${before} → ${after} → ${back}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'история: возврат без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
@@ -2251,6 +2301,7 @@ async function main() {
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['отмена скачивания модели', scenarioModelCancel],
       ['действия в сетке буфера', scenarioClipboardGridActions],
+      ['возврат удаления', scenarioDictationUndo],
       ['обновление', scenarioUpdateFlow],
       ['сбой обновления', scenarioUpdateFailure],
       ['сеть', scenarioNetwork],
