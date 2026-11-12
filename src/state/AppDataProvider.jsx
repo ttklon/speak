@@ -326,18 +326,44 @@ export function AppDataProvider({ children }) {
       const hasSettings = payload.settings && typeof payload.settings === 'object';
       if (!hasList && !hasSettings) throw new Error('в файле нет данных ZSpeakly');
 
+      // файл мог быть собран руками или другой версией: мусорные строки
+      // не должны ронять список на первом же рендере
+      const cleanDictations = (list) =>
+        list
+          .filter((d) => d && typeof d.text === 'string' && d.text.trim())
+          .map((d, i) => ({
+            id: String(d.id || `d-import-${Date.now()}-${i}`),
+            text: String(d.text).slice(0, 8000),
+            createdAt: Number(d.createdAt) || Date.now(),
+            durationMs: Number(d.durationMs) || 0,
+            words: Number(d.words) || String(d.text).trim().split(/\s+/).length,
+            language: typeof d.language === 'string' ? d.language : undefined,
+            source: d.source === 'dictation' ? 'dictation' : 'import',
+          }));
+      const cleanDictionary = (list) =>
+        list
+          .filter((w) => w && typeof w.word === 'string' && w.word.trim())
+          .map((w, i) => ({
+            id: String(w.id || `w-import-${Date.now()}-${i}`),
+            word: String(w.word).trim().slice(0, 60),
+            pronunciation: String(w.pronunciation || '').trim().slice(0, 60),
+            createdAt: Number(w.createdAt) || Date.now(),
+          }));
+
       const applied = [];
       if (hasSettings) {
         setSettings({ ...DEFAULT_SETTINGS, ...payload.settings });
         applied.push('настройки');
       }
       if (Array.isArray(payload.dictations)) {
-        setDictations(payload.dictations);
-        applied.push(`диктовки (${payload.dictations.length})`);
+        const clean = cleanDictations(payload.dictations);
+        setDictations(clean);
+        applied.push(`диктовки (${clean.length})`);
       }
       if (Array.isArray(payload.dictionary)) {
-        setDictionary(payload.dictionary);
-        applied.push(`словарь (${payload.dictionary.length})`);
+        const clean = cleanDictionary(payload.dictionary);
+        setDictionary(clean);
+        applied.push(`словарь (${clean.length})`);
       }
       if (Array.isArray(payload.voiceHotkeys)) {
         setVoiceHotkeys(payload.voiceHotkeys);

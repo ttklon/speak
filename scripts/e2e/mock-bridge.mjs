@@ -209,6 +209,10 @@ export function installMockBridge() {
       record('diag:set-endpoint', [url]);
       return { ok: true, endpoint: url, status: { enabled: false, endpoint: url, endpointConfigured: Boolean(url) } };
     },
+    saveBackup: async (json) => {
+      record('data:save-backup', [typeof json === 'string' ? json.length : 0]);
+      return { ok: true, path: 'C:\\Users\\test\\Desktop\\zspeakly-backup.json' };
+    },
     diagSaveReport: async () => {
       record('diag:save-report');
       return { ok: true, path: 'C:\\Users\\test\\Desktop\\zspeakly-report.txt' };

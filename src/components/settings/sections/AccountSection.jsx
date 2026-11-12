@@ -8,7 +8,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
  * Почта, подписка и credits из видео-обзора намеренно убраны.
  */
 export default function AccountSection() {
-  const { profile, setProfile, stats, settings, updateSettings, dictations } = useAppData();
+  const { profile, setProfile, settings, updateSettings, dictations } = useAppData();
   const { push } = useToast();
   const [name, setName] = useState(settings.userName || profile.name);
 
@@ -58,7 +58,9 @@ export default function AccountSection() {
       <div className="setting-row">
         <div className="setting-row__label">Секунд речи</div>
         <span className="setting-row__value">
-          {Math.round(stats.secondsTotal || 0).toLocaleString('ru-RU')}
+          {Math.round(
+            dictations.reduce((sum, d) => sum + (d.durationMs || 0), 0) / 1000,
+          ).toLocaleString('ru-RU')}
         </span>
       </div>
 

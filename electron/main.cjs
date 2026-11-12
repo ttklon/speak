@@ -924,6 +924,36 @@ function registerIpc() {
     }
   });
 
+  // Резервная копия данных: в установленной версии файл кладём на Рабочий стол
+  // (как отчёт диагностики) — так пользователь точно знает, где он лежит.
+  ipcMain.handle('data:save-backup', async (_e, json) => {
+    if (typeof json !== 'string' || !json.trim()) return { ok: false, reason: 'пустые данные' };
+    let data;
+    try {
+      data = JSON.parse(json);
+    } catch {
+      return { ok: false, reason: 'данные не похожи на JSON' };
+    }
+    if (!data || typeof data !== 'object') return { ok: false, reason: 'данные не похожи на JSON' };
+    try {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const dir = app.getPath('desktop') || app.getPath('documents');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `zspeakly-backup-${stamp}.json`);
+      fs.writeFileSync(file, json, 'utf8');
+      try {
+        shell.showItemInFolder?.(file);
+      } catch {
+        /* файл всё равно на месте */
+      }
+      return { ok: true, path: file };
+    } catch (err) {
+      return { ok: false, reason: String(err?.message || err) };
+    }
+  });
+
   ipcMain.handle('models:status', () => models.modelStatus());
   ipcMain.handle('models:download', async (_e, id) => {
     const res = await models.downloadModel(id, (percent, received, total) => {

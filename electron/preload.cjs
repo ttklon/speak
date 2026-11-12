@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     modelsStatus: () => ipcRenderer.invoke('models:status'),
     modelsCancel: () => ipcRenderer.invoke('models:cancel'),
     downloadModel: (id) => ipcRenderer.invoke('models:download', id),
+    saveBackup: (json) => ipcRenderer.invoke('data:save-backup', json),
     downloadEngine: () => ipcRenderer.invoke('models:download-engine'),
     importModel: (filePath) => ipcRenderer.invoke('models:import', filePath),
     onModelProgress: (cb) => on('model:progress', cb),

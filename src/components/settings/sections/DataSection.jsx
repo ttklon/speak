@@ -33,14 +33,43 @@ export default function DataSection({ onOpenSection }) {
   const [pendingBackup, setPendingBackup] = useState(null);
   const fileRef = useRef(null);
 
-  const downloadBackup = () => {
+  const downloadBackup = async () => {
+    let data;
     try {
-      const data = exportBackup();
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      // локальная дата: toISOString отдаёт UTC и ночью показывает «завтра»
-      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      data = exportBackup();
+    } catch (err) {
+      push({ title: 'Не удалось собрать копию', description: String(err?.message || err), tone: 'warn' });
+      return;
+    }
+    const json = JSON.stringify(data, null, 2);
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    // локальная дата: toISOString отдаёт UTC и ночью показывает «завтра»
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const bridge = window.zspeakly?.native;
+    // В установленной версии файл кладёт главный процесс — рядом с отчётом
+    // диагностики, и сразу показывает его в проводнике.
+    if (bridge?.saveBackup) {
+      try {
+        const res = await bridge.saveBackup(json);
+        push(
+          res?.ok
+            ? {
+                title: 'Копия сохранена',
+                description: `${res.path || `zspeakly-backup-${stamp}.json`} — история (${dictations.length}) и настройки.`,
+                tone: 'success',
+              }
+            : { title: 'Не удалось сохранить копию', description: res?.reason, tone: 'warn' },
+        );
+        return;
+      } catch (err) {
+        push({ title: 'Не удалось сохранить копию', description: String(err?.message || err), tone: 'warn' });
+        return;
+      }
+    }
+    // Браузер: обычная загрузка файла
+    try {
+      const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -55,7 +84,7 @@ export default function DataSection({ onOpenSection }) {
         tone: 'success',
       });
     } catch (err) {
-      push({ title: 'Не удалось собрать копию', description: String(err?.message || err), tone: 'warn' });
+      push({ title: 'Не удалось скачать копию', description: String(err?.message || err), tone: 'warn' });
     }
   };
 
@@ -63,8 +92,19 @@ export default function DataSection({ onOpenSection }) {
     if (!file) return;
     try {
       const text = await file.text();
-      const payload = JSON.parse(text);
-      if (payload?.app && payload.app !== 'ZSpeakly') throw new Error('это копия другого приложения');
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        // сообщение JSON.parse на английском и со фрагментом файла — бесполезно
+        throw new Error('это не JSON-файл: выберите копию, скачанную из ZSpeakly');
+      }
+      if (payload?.app && payload.app !== 'ZSpeakly') {
+        throw new Error(`это копия другого приложения (${String(payload.app).slice(0, 40)})`);
+      }
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error('в файле нет данных ZSpeakly');
+      }
       setPendingBackup({ payload, name: file.name });
     } catch (err) {
       push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
@@ -299,7 +339,7 @@ export default function DataSection({ onOpenSection }) {
               подтверждение и покажем, что внутри.
             </div>
           </div>
-          <Button variant="bare" size="sm" onClick={() => fileRef.current?.click()}>
+          <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
             Выбрать файл
           </Button>
           <input

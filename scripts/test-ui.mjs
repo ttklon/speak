@@ -135,6 +135,15 @@ async function openPage(browser, route = '#/home', opts = {}) {
     else req.abort();
   });
 
+  // Загрузка файла (резервная копия, отчёт) в headless-режиме может увести
+// документ в blob: и подвесить evaluate — запрещаем скачивания в прогоне.
+  try {
+    const client = await page.createCDPSession();
+    await client.send('Page.setDownloadBehavior', { behavior: 'deny' });
+  } catch {
+    /* старые сборки Chromium не знают этот метод — не критично */
+  }
+
   const view = opts.viewport || { width: 1280, height: 800 };
   await page.setViewport({ width: view.width, height: view.height, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(installMockBridge);
@@ -925,7 +934,12 @@ async function scenarioRecorder(browser) {
 
   // второе действие не должно получить то же сочетание: Windows зарегистрирует
   // только одно, и второе молча не работало
-  await clickIn(page, '', 'Изменить сочетание');
+  const secondRow = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.hk-row__add')].filter((b) => /Изменить сочетание/.test(b.innerText))[1];
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
   await sleep(300);
   await page.keyboard.down('Control');
   await page.keyboard.down('Alt');
@@ -952,7 +966,7 @@ async function scenarioRecorder(browser) {
   record(
     'сценарии',
     'хоткеи: занятое сочетание не назначается дважды',
-    /Сочетание занято/i.test(clashToast) && !usedTwice,
+    secondRow && /Сочетание занято/i.test(clashToast) && !usedTwice,
     `${clashToast.slice(0, 80)} | дубли: ${usedTwice}`,
   );
   await page.close();
@@ -1394,6 +1408,25 @@ async function scenarioBackup(browser) {
       return nativeClick.call(this);
     };
   });
+  // 1) установленная версия: файл кладёт главный процесс на Рабочий стол
+  await clickIn(page, '', 'Скачать');
+  await sleep(600);
+  const nativeCalls = await bridgeCalls(page);
+  const nativeToast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+  );
+  record(
+    'сценарии',
+    'данные: в приложении копия сохраняется файлом через main',
+    nativeCalls.includes('data:save-backup') && /Копия сохранена/i.test(nativeToast),
+    nativeToast.slice(0, 90),
+  );
+
+  // 2) браузер (моста нет): обычная загрузка JSON
+  await page.evaluate(() => {
+    window.__bridgeSaved = window.zspeakly;
+    delete window.zspeakly;
+  });
   await clickIn(page, '', 'Скачать');
   await sleep(600);
   const saved = await page.evaluate(() => ({
@@ -1403,10 +1436,15 @@ async function scenarioBackup(browser) {
   const file = saved.files.find((f) => /^zspeakly-backup-\d{4}-\d{2}-\d{2}\.json$/.test(f.name || ''));
   record(
     'сценарии',
-    'данные: резервная копия скачивается JSON-файлом',
+    'данные: в браузере копия скачивается JSON-файлом',
     Boolean(file) && saved.files.some((f) => f.size > 200) && /Копия скачана/i.test(saved.toast),
     JSON.stringify(saved.files),
   );
+  // мост возвращаем: восстановление ниже пишет данные через него
+  await page.evaluate(() => {
+    window.zspeakly = window.__bridgeSaved;
+    delete window.__bridgeSaved;
+  });
 
   const backupPath = join(tmpdir(), `zs-backup-${Date.now()}.json`);
   writeFileSync(
