@@ -91,7 +91,7 @@ export function DictationProvider({ children }) {
   }, [state]);
 
   const finish = useCallback(
-    (text, { insert = true } = {}) => {
+    (text, { insert = true, sttMs = 0 } = {}) => {
       // защита от двойного завершения (web-движок + фолбэк)
       if (finishing.current) return null;
       finishing.current = true;
@@ -114,12 +114,15 @@ export function DictationProvider({ children }) {
         id: `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         language: settingsRef.current.language,
         source: 'dictation',
+        // сколько заняло распознавание (только для whisper.cpp) — видно в диагностике
+        sttMs: sttMs || undefined,
       };
       // событие в журнал: видно, что движок реально вернул текст, а не «тишину»
       diag.info('stt', cleaned ? 'Диктовка распознана' : 'Пустой результат распознавания', {
         chars: cleaned.length,
         words: item.words,
         durationMs,
+        sttMs: sttMs || 0,
         engine: engineName(),
       });
       setState(cleaned ? 'done' : 'idle');
@@ -277,15 +280,14 @@ export function DictationProvider({ children }) {
             setLevel(0);
           }
         },
-        onEnd: ({ text }) => {
+        onEnd: ({ text, ms }) => {
           recRef.current = null;
           setState('processing');
           setLevel(0);
-          // небольшая задержка — «транскрипция» как в видео
-          setTimeout(() => {
-            const item = finish(text);
-            if (opts.onResult) opts.onResult(item);
-          }, 260);
+          // Текст вставляем сразу: искусственная пауза «как в видео» только
+          // задерживала вставку (диктовка должна появляться в окне мгновенно).
+          const item = finish(text, { sttMs: ms });
+          if (opts.onResult) opts.onResult(item);
         },
       });
       recRef.current = recognizer;
