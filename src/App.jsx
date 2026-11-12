@@ -138,10 +138,6 @@ export default function App() {
       }
       if (command === 'clipboard') navigate('clipboard');
       if (command === 'home') navigate('home');
-      if (command === 'mobile') {
-        setSettingsSection('account');
-        setSettingsOpen(true);
-      }
       if (command === 'about') {
         setSettingsSection('about');
         setSettingsOpen(true);

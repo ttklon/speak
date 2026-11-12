@@ -287,7 +287,14 @@ export default function ClipboardPage() {
   /** Действия плиток хоткеев буфера. */
   const runHotkey = async (id) => {
     if (id === 'panel') {
+      // Раньше плитка просто переходила на эту же страницу: нажатие «ничего
+      // не делало». Теперь ставим курсор в поиск — панель готова к работе.
       navigate('clipboard');
+      setTimeout(() => {
+        const input = document.querySelector('.clip-toolbar .search-input input, .clip-search input');
+        if (input) input.focus();
+      }, 80);
+      push({ title: 'Панель буфера открыта', description: 'Поиск по истории — сразу в фокусе. Ctrl + K из любого экрана.', tone: 'success' });
       return;
     }
     if (id === 'record') {

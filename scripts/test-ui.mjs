@@ -558,6 +558,23 @@ async function scenarioClipboard(browser) {
   record('сценарии', 'буфер: кнопка «Копировать» пишет в буфер', calls.includes('clipboard:write') || calls.includes('clipboard:write-text'), calls.join(','));
   record('сценарии', 'буфер: без ошибок консоли', errors.length === 0, errors[0] || '');
 
+  // плитка «Открыть панель» должна не просто «ничего не делать», а дать поиск в фокус
+  await page.evaluate(() => {
+    const tile = [...document.querySelectorAll('button')].find((b) => /Открыть панель/.test(b.innerText));
+    if (tile) tile.click();
+  });
+  await sleep(400);
+  const panel = await page.evaluate(() => ({
+    focused: document.activeElement?.placeholder || '',
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+  }));
+  record(
+    'сценарии',
+    'буфер: «Открыть панель» ставит курсор в поиск',
+    /поиск по истории/i.test(panel.focused) && /Панель буфера открыта/i.test(panel.toast),
+    JSON.stringify(panel).slice(0, 140),
+  );
+
   const listRows = await page.evaluate(() => document.querySelectorAll('.clip-list__item').length);
   record('сценарии', 'буфер: переключается на список', listRows > 0, `${listRows} строк`);
   await page.close();

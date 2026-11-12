@@ -268,7 +268,7 @@ export function createRecognizer(opts = {}) {
         onFinal?.(p);
       },
       // Если Web Speech завершился без результата и пользователь не останавливал
-      // запись — ждём сторож, который переключит на демо-движок.
+      // запись — ждём сторож: он честно скажет, что распознать не удалось.
       onEnd: (payload) => {
         if (!emitted && !userStopped) return;
         emitEnd(payload);

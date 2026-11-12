@@ -3,7 +3,7 @@
  *
  * Что делает main:
  *  • окно 1000×640 без системной рамки, тёмный фон, скругления даёт CSS;
- *  • трей + меню (Главная, Настройки, Буфер, Мобильное приложение);
+ *  • трей + меню (Главная, Настройки, Буфер, Диагностика, О программе);
  *  • глобальные хоткеи: Ctrl+Alt+Space (диктовка), Ctrl+Shift+V (буфер);
  *  • мониторинг буфера обмена через WM_CLIPBOARDUPDATE (Electron clipboard polling);
  *  • хранение профиля в JSON;
@@ -174,7 +174,6 @@ function createTray() {
     { label: 'Буфер обмена', click: () => navigate('clipboard') },
     { label: 'Настройки', click: () => sendCommand('settings') },
     { type: 'separator' },
-    { label: 'Мобильное приложение', click: () => sendCommand('mobile') },
     { label: 'О программе', click: () => sendCommand('about') },
     // Витрина для «пришлите логи, если что-то не работает»
     { label: 'Диагностика', click: () => sendCommand('diagnostics') },
