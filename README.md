@@ -263,6 +263,7 @@ scripts/           иконки, dev-запуск, модели, CI-хелпер
 | [06-ARCHITECTURE-NET.md](docs/06-ARCHITECTURE-NET.md) | Альтернативная .NET-архитектура (WPF + Whisper.NET) |
 | [MODELS-LIGHTWEIGHT.md](docs/MODELS-LIGHTWEIGHT.md) | Лёгкие модели: размеры, RAM, скорость |
 | [09-CODE-MAP.md](docs/09-CODE-MAP.md) | Карта программы: слои, файлы, потоки диктовки и инструкций, IPC, хранение, ограничения |
+| [10-HOW-DICTATION-APPS-WORK.md](docs/10-HOW-DICTATION-APPS-WORK.md) | Как устроены Wispr Flow, superwhisper, Svara и Phonon: модели, VAD, чистка текста, вставка — и что из этого есть в ZSpeakly |
 
 ## Лицензия
 
