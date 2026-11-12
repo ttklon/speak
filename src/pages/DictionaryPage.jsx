@@ -96,7 +96,20 @@ export default function DictionaryPage() {
               <button
                 type="button"
                 className="icon-btn icon-btn--sm icon-btn--danger"
-                onClick={() => removeDictionaryWord(entry.id)}
+                onClick={() => {
+                  removeDictionaryWord(entry.id);
+                  // слово можно вернуть: список ведётся вручную и терять его жалко
+                  push({
+                    title: 'Слово удалено',
+                    description: entry.word,
+                    tone: 'warn',
+                    ttl: 8000,
+                    action: {
+                      label: 'Вернуть',
+                      onClick: () => addDictionaryWord(entry.word, entry.pronunciation),
+                    },
+                  });
+                }}
                 aria-label="Удалить"
               >
                 <Trash2 size={12} />

@@ -515,6 +515,20 @@ async function scenarioDictionary(browser) {
   const afterDelete = await page.evaluate(() => document.querySelectorAll('.dict-row').length);
   record('сценарии', 'словарь: слово удаляется', removed && afterDelete < after, `${after} → ${afterDelete}`);
 
+  // и возвращается кнопкой в тосте
+  const undoWord = await page.evaluate(() => {
+    const btn = document.querySelector('.toast__action');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(450);
+  const afterUndo = await page.evaluate(() => document.querySelectorAll('.dict-row').length);
+  record('сценарии', 'словарь: удалённое слово возвращается', undoWord && afterUndo === afterDelete + 1, `${afterDelete} → ${afterUndo}`);
+  // возвращаем список в прежнее состояние, чтобы не ломать следующие проверки
+  await page.evaluate(() => document.querySelector('.dict-row .icon-btn')?.click());
+  await sleep(350);
+
   // повторное добавление того же слова не плодит копии и честно говорит «обновлено»
   await clickText(page, 'Добавить');
   await sleep(300);
