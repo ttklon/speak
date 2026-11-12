@@ -1578,6 +1578,39 @@ async function scenarioBackup(browser) {
   await page.close();
 }
 
+// «Держать модель в памяти»: тумблер обязан реально просить main поднять
+// whisper-server, а не просто менять галочку.
+async function scenarioWarmModel(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', { settle: 700 });
+  takeErrors(page);
+  const clicked = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.setting-row')].find((r) => /Держать модель в памяти/i.test(r.innerText));
+    const toggle = row?.querySelector('[role="switch"]');
+    toggle?.click();
+    return Boolean(toggle);
+  });
+  await sleep(600);
+  const calls = await bridgeCalls(page);
+  const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '));
+  record(
+    'сценарии',
+    'модель в памяти: тумблер поднимает whisper-server',
+    clicked && calls.includes('models:warm') && /Модель в памяти/i.test(toast),
+    toast.slice(0, 90),
+  );
+  // выключение возвращает обычный запуск и говорит об этом
+  await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.setting-row')].find((r) => /Держать модель в памяти/i.test(r.innerText));
+    row?.querySelector('[role="switch"]')?.click();
+  });
+  await sleep(500);
+  const offToast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '));
+  record('сценарии', 'модель в памяти: выключение объясняет, что будет дальше', /выгрузится/i.test(offToast), offToast.slice(0, 90));
+  const errors = takeErrors(page);
+  record('сценарии', 'модель в памяти: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioNetwork(browser) {
   const page = await openPage(browser, '#/settings?section=network&from=home', { settle: 450 });
   takeErrors(page);
@@ -2710,6 +2743,7 @@ async function main() {
       ['хранилище заполнено', scenarioStorageFull],
       ['диагностика', scenarioDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
+      ['модель в памяти', scenarioWarmModel],
       ['отмена скачивания модели', scenarioModelCancel],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

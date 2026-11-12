@@ -210,6 +210,19 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
   return null;
 }
 
+/**
+ * Прогрев: заранее поднять whisper-server с моделью, чтобы первая диктовка
+ * после запуска приложения не платила за загрузку модели.
+ */
+async function warm(model) {
+  const modelPath = findModel(model);
+  if (!modelPath) return { ok: false, reason: 'модель не найдена' };
+  if (!serverBinary()) return { ok: false, reason: 'в комплекте нет whisper-server' };
+  const threads = Math.max(1, Math.min(8, require('node:os').cpus().length || 4));
+  const server = await ensureServer(modelPath, { threads });
+  return server ? { ok: true, port: server.port } : { ok: false, reason: 'whisper-server не поднялся' };
+}
+
 function multipart(fields, fileField) {
   const boundary = `----zspeakly${Date.now().toString(16)}`;
   const parts = [];
@@ -454,6 +467,7 @@ module.exports = {
   isPhantom,
   serverStatus,
   stopServer,
+  warm,
   multipart,
   transcribeViaServer,
 };

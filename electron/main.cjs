@@ -1014,6 +1014,22 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('models:warm', async (_e, payload) => {
+    const settings = store?.get('zs:settings') || {};
+    const id = (payload && typeof payload === 'object' ? payload.model : payload) || settings.whisperModel || 'small';
+    const force = Boolean(payload && typeof payload === 'object' && payload.force);
+    // явный клик по тумблеру приходит раньше, чем настройка доедет до диска
+    if (!force && !settings.keepModelLoaded) return { ok: false, reason: 'включите «Держать модель в памяти»' };
+    const res = await whisper.warm(id);
+    logger.info('stt', res.ok ? 'Модель загружена в память' : 'Прогрев модели не удался', {
+      keep: true,
+      model: id,
+      port: res.port || 0,
+      reason: res.reason || '',
+    });
+    return res;
+  });
+
   ipcMain.handle('models:status', () => {
     const base = models.modelStatus();
     // Какую модель whisper возьмёт на самом деле: выбранная может быть не
@@ -1246,6 +1262,19 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   createTray();
+
+  // Если включено «Держать модель в памяти», грузим её сразу после старта:
+  // первая диктовка должна быть такой же быстрой, как десятая.
+  try {
+    const booleans = store.get('zs:settings') || {};
+    if (booleans.keepModelLoaded && whisper.serverStatus().available) {
+      setTimeout(() => {
+        whisper.warm(booleans.whisperModel || 'small').catch(() => {});
+      }, 2500);
+    }
+  } catch {
+    /* ignore */
+  }
 
   updater = createUpdater({
     onStatus: (state) => mainWindow?.webContents.send('update:status', state),

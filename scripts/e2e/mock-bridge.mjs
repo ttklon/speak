@@ -277,6 +277,10 @@ export function installMockBridge() {
       if (modelCancel) return { ok: false, reason: 'скачивание отменено' };
       return { ok: true };
     },
+    modelsWarm: async (payload) => {
+      record('models:warm', [payload]);
+      return { ok: true, port: 17842 };
+    },
     modelsCancel: async () => {
       record('models:cancel');
       modelCancel = true;

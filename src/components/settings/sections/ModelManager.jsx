@@ -297,7 +297,27 @@ export default function ModelManager() {
         </div>
         <Toggle
           checked={settings.keepModelLoaded === true}
-          onChange={(v) => updateSettings({ keepModelLoaded: v })}
+          onChange={async (v) => {
+            updateSettings({ keepModelLoaded: v });
+            if (!v) {
+              push({ title: 'Модель выгрузится из памяти', description: 'Следующая диктовка снова загрузит её при старте.', tone: 'success' });
+              return;
+            }
+            if (!bridge?.modelsWarm) {
+              push({ title: 'Только в приложении', description: 'В браузере модель не загружается в память.', tone: 'warn' });
+              return;
+            }
+            const res = await bridge.modelsWarm({ model: settings.whisperModel, force: true }).catch(() => null);
+            if (res?.ok) {
+              push({ title: 'Модель в памяти', description: 'Диктовка начнётся без холодного старта.', tone: 'success' });
+            } else {
+              push({
+                title: 'Модель не загружена в память',
+                description: `${res?.reason || 'whisper-server недоступен'} — диктовка работает обычным путём.`,
+                tone: 'warn',
+              });
+            }
+          }}
         />
       </div>
 

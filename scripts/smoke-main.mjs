@@ -669,6 +669,19 @@ await check('паузы по краям записи обрезаются пер
   if (whisper.trimSilence(Buffer.alloc(rate * 2), rate).length !== rate * 2) throw new Error('тишина обрезана зря');
 });
 
+await check('models:warm честно отказывает без whisper-server', async () => {
+  const res = await handlers.get('models:warm')({}, { model: 'small', force: true });
+  if (res?.ok) throw new Error('будто модель загружена');
+  if (!/whisper-server/.test(String(res?.reason))) throw new Error(`причина непонятная: ${res?.reason}`);
+});
+
+await check('models:warm не работает при выключенной настройке', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { keepModelLoaded: false });
+  const res = await handlers.get('models:warm')({}, { model: 'small' });
+  if (res?.ok) throw new Error('прогрев без согласия');
+  if (!/Держать модель в памяти/.test(String(res?.reason))) throw new Error(`причина: ${res?.reason}`);
+});
+
 await check('серверный режим: multipart для /inference собран правильно', () => {
   const whisper = require(path.resolve('electron/whisper.cjs'));
   const audio = Buffer.from('RIFFxxxxWAVE');
