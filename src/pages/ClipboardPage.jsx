@@ -140,10 +140,14 @@ export default function ClipboardPage() {
     return Array.from(map.entries());
   }, [filtered]);
 
-  const selected = useMemo(
-    () => filtered.find((i) => i.id === selectedId) || filtered[0],
+  // В списке панель предпросмотра показывает первую запись, даже если ничего
+  // не выбрано. Для сетки наоборот: панель действий появляется только после
+  // явного выбора карточки — иначе она висела там всегда.
+  const explicit = useMemo(
+    () => (selectedId ? filtered.find((i) => i.id === selectedId) || null : null),
     [filtered, selectedId],
   );
+  const selected = useMemo(() => explicit || filtered[0], [explicit, filtered]);
 
   /** Запись экрана: старт/стоп, постер в историю и файл в «Видео». */
   const toggleRecording = async () => {
@@ -486,7 +490,7 @@ export default function ClipboardPage() {
           />
         ) : view === 'grid' ? (
           <div className="scroll-area clip-scroll">
-            {selected ? (
+            {explicit ? (
               // В сетке нет боковой панели, поэтому действия над выбранной
               // карточкой раньше были недоступны вовсе: оставалось только
               // «Очистить историю». Теперь — компактная панель.
@@ -535,7 +539,7 @@ export default function ClipboardPage() {
                 <button
                   key={item.id}
                   type="button"
-                  className={`clip-card ${selected?.id === item.id ? 'is-selected' : ''} ${
+                  className={`clip-card ${explicit?.id === item.id ? 'is-selected' : ''} ${
                     item.pinned ? 'is-pinned' : ''
                   }`}
                   onClick={() => setSelectedId(item.id)}
@@ -572,7 +576,7 @@ export default function ClipboardPage() {
                     <button
                       key={item.id}
                       type="button"
-                      className={`clip-list__item ${selected?.id === item.id ? 'is-selected' : ''}`}
+                      className={`clip-list__item ${explicit?.id === item.id ? 'is-selected' : ''}`}
                       onClick={() => setSelectedId(item.id)}
                       onDoubleClick={() => copyPaste(item)}
                     >
