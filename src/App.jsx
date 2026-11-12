@@ -100,6 +100,25 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
+  // Место в localStorage кончается — раньше запись тихо терялась. Говорим
+  // об этом один раз в 30 секунд, чтобы не заваливать тостами.
+  useEffect(() => {
+    let lastAt = 0;
+    const onStorageError = (event) => {
+      const now = Date.now();
+      if (now - lastAt < 30_000) return;
+      lastAt = now;
+      push({
+        title: 'Не удалось сохранить данные',
+        description: 'Место в браузере закончилось. Удалите крупные записи буфера или снимки.',
+        tone: 'warn',
+        ttl: 10_000,
+      });
+    };
+    window.addEventListener('zs:storage-error', onStorageError);
+    return () => window.removeEventListener('zs:storage-error', onStorageError);
+  }, [push]);
+
   // AI-инструкции должны срабатывать в любом приложении и на любой странице,
   // а не только когда открыт раздел «Горячие клавиши». Регистрируем их здесь,
   // на уровне приложения.

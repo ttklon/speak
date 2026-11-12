@@ -55,6 +55,15 @@ export function write(key, value) {
     return true;
   } catch (err) {
     console.warn('[storage] write failed', key, err);
+    // localStorage в браузере кончается на крупных картинках буфера: раньше
+    // запись просто исчезала. Сообщаем интерфейсу — он покажет тост.
+    try {
+      window.dispatchEvent(
+        new CustomEvent('zs:storage-error', { detail: { key, reason: String(err?.message || err) } }),
+      );
+    } catch {
+      /* событие не обязательно */
+    }
     return false;
   }
 }

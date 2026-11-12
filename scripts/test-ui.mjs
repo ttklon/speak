@@ -1338,6 +1338,21 @@ async function scenarioMic(browser) {
   await page.close();
 }
 
+// Браузерное хранилище кончается — человек должен узнать, а не потерять запись молча.
+async function scenarioStorageFull(browser) {
+  const page = await openPage(browser, '#/home', { settle: 400 });
+  takeErrors(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('zs:storage-error', { detail: { key: 'zs:clipboard' } })));
+  await sleep(400);
+  const toast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+  );
+  record('сценарии', 'переполнение хранилища объясняется тостом', /Не удалось сохранить данные/i.test(toast), toast.slice(0, 80));
+  const errors = takeErrors(page);
+  record('сценарии', 'переполнение хранилища без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioDiagnostics(browser) {
   const page = await openPage(browser, '#/settings?section=diagnostics&from=home', { settle: 500 });
   takeErrors(page);
@@ -2645,6 +2660,7 @@ async function main() {
       ['модели', scenarioModels],
       ['микрофон', scenarioMic],
       ['данные: резервная копия', scenarioBackup],
+      ['хранилище заполнено', scenarioStorageFull],
       ['диагностика', scenarioDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['отмена скачивания модели', scenarioModelCancel],
