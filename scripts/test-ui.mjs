@@ -887,6 +887,70 @@ async function scenarioModelCancel(browser) {
   await page.close();
 }
 
+// Обновление: проверка → скачивание → перезапуск, без «зависшей» кнопки.
+async function scenarioUpdateFlow(browser) {
+  const page = await openPage(browser, '#/settings?section=about&from=home', { settle: 600 });
+  takeErrors(page);
+  const check = await clickIn(page, '', 'Проверить обновления');
+  await sleep(400);
+  await emit(page, 'update:status', { status: 'available', version: '9.9.9', percent: 0 });
+  await sleep(500);
+  const downloadBtn = await page.evaluate(() =>
+    [...document.querySelectorAll('.settings-main button')].some((b) => /Скачать 9\.9\.9/.test(b.innerText)),
+  );
+  const download = await clickIn(page, '', 'Скачать 9.9.9');
+  await sleep(300);
+  await emit(page, 'update:status', { status: 'downloading', version: '9.9.9', percent: 42 });
+  await sleep(400);
+  const progress = await page.evaluate(() => /42%|Скачиваю/.test(document.body.innerText));
+  await emit(page, 'update:status', { status: 'downloaded', version: '9.9.9', percent: 100 });
+  await sleep(500);
+  const restart = await clickIn(page, '', 'Перезапустить и обновить');
+  await sleep(400);
+  const calls = await bridgeCalls(page);
+  record(
+    'сценарии',
+    'обновление: проверка, скачивание, перезапуск',
+    check && downloadBtn && download && progress && restart && calls.includes('update:check') && calls.includes('update:download') && calls.includes('update:install'),
+    calls.filter((c) => c.startsWith('update')).join(','),
+  );
+  // «Обновлений нет» — честный тост при актуальной версии
+  await emit(page, 'update:status', { status: 'latest', version: null, percent: 0 });
+  await sleep(400);
+  const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+  record('сценарии', 'обновление: актуальная версия сообщается', /Обновлений нет/i.test(toast), toast.slice(0, 120));
+  const errors = takeErrors(page);
+  record('сценарии', 'обновление: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Отказ обновлятора не должен оставлять кнопку в «Проверяю…»
+async function scenarioUpdateFailure(browser) {
+  const page = await openPage(browser, '#/settings?section=about&from=home', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    const native = window.zspeakly.native;
+    native.checkUpdates = async () => {
+      throw new Error('нет связи с GitHub');
+    };
+  });
+  const check = await clickIn(page, '', 'Проверить обновления');
+  await sleep(600);
+  const state = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.settings-main button')].find((b) => /Проверить обновления/.test(b.innerText));
+    return { disabled: btn ? btn.disabled : null, toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | ') };
+  });
+  record(
+    'сценарии',
+    'обновление: сбой не блокирует кнопку и объясняется',
+    check && state.disabled === false && /Не удалось проверить обновления/i.test(state.toast),
+    JSON.stringify(state).slice(0, 160),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'обновление: сбой без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioMic(browser) {
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 400 });
   takeErrors(page);
@@ -2103,6 +2167,8 @@ async function main() {
       ['диагностика', scenarioDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['отмена скачивания модели', scenarioModelCancel],
+      ['обновление', scenarioUpdateFlow],
+      ['сбой обновления', scenarioUpdateFailure],
       ['сеть', scenarioNetwork],
       ['буфер: удаление и очистка', scenarioClipboardDanger],
       ['словарь: поиск и вкладки', scenarioDictionaryExtras],

@@ -47,7 +47,7 @@ src/                          renderer (React 18 + Vite)
 ## Поток диктовки
 
 1. **Старт.** Глобальный хоткей `Ctrl+Alt+Space` ловится в main (`globalShortcut`) →
-   `webContents.send('hotkey', {type:'down'})`. В браузере — `Alt+D` или кнопка «Начать диктовку».
+   `webContents.send('hotkey', {type:'down'})`. В браузере-превью — `Alt+D` или кнопка «Начать диктовку».
 2. **Запись.** `createRecognizer()` выбирает движок:
    - native whisper.cpp (если main нашёл бинарник и модель),
    - Web Speech API,

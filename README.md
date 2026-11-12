@@ -188,7 +188,7 @@ powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
 
 | Действие | Сочетание |
 |---|---|
-| Диктовка (старт/стоп) | `Ctrl + Alt + Space` (также `Alt + D` в браузере) |
+| Диктовка (старт/стоп) | `Ctrl + Alt + Space` (в браузере-превью — `Alt + D`) |
 | Поиск по буферу | `Ctrl + K` |
 | Настройки | `Ctrl + ,` |
 | Буфер обмена | `Ctrl + Shift + V` |

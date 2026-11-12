@@ -292,7 +292,7 @@ export const SETTING_ENTRIES = [
   {
     "section": "about",
     "sectionLabel": "О программе",
-    "title": "Демо-диктовка (браузер)",
+    "title": "Диктовка в браузере (превью)",
     "desc": ""
   }
 ];

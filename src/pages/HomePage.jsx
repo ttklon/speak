@@ -221,13 +221,25 @@ export default function HomePage() {
                 navigate('settings', { section: 'about' });
                 return;
               }
-              const res = await bridge.checkUpdates();
+              // Сбой сети или самого обновлятора раньше проходил молча:
+              // человек нажимал и не получал ничего. Теперь — честный тост.
+              let res = null;
+              try {
+                res = await bridge.checkUpdates();
+              } catch (err) {
+                push({ title: 'Не удалось проверить обновления', description: String(err?.message || err), tone: 'warn' });
+                return;
+              }
               if (res?.status === 'available') {
                 push({ title: `Доступна ${res.version}`, description: 'Откройте «О программе», чтобы скачать.', tone: 'success' });
               } else if (res?.status === 'latest') {
                 push({ title: 'Обновлений нет', description: `Установлена ${APP.version}.`, tone: 'success' });
-              } else if (res?.status === 'unavailable' || res?.status === 'error') {
+              } else if (res?.status === 'error') {
+                push({ title: 'Не удалось проверить обновления', description: res.reason || 'нет связи с GitHub', tone: 'warn' });
+              } else if (res?.status === 'unavailable') {
                 push({ title: 'Автообновление недоступно', description: res.reason, tone: 'warn' });
+              } else {
+                push({ title: 'Проверка не ответила', description: 'Обновлятор молчит — попробуйте позже.', tone: 'warn' });
               }
             }}
           >
