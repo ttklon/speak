@@ -160,7 +160,14 @@ export default function AppSection() {
           />
         </div>
         <div className="setting-row">
-          <div className="setting-row__label">Свернуть в трей при закрытии</div>
+          <div className="setting-row__label">
+            Свернуть в трей при закрытии
+            <div className="setting-row__desc">
+              {isElectron()
+                ? 'Крестик прячет окно, приложение продолжает слушать сочетания клавиш.'
+                : 'В браузере трея нет: окно закрывается вместе с вкладкой.'}
+            </div>
+          </div>
           <Toggle
             checked={settings.closeToTray !== false}
             onChange={(v) => updateSettings({ closeToTray: v })}
@@ -172,7 +179,8 @@ export default function AppSection() {
       <div className="settings-group">
         <div className="settings-group__title">Сброс</div>
         <div className="settings-group__desc">
-          Удаляет историю диктовок, буфер, словарь и заметки на этом устройстве.
+          Удаляет историю диктовок, буфер, словарь, заметки, имя и настройки на этом устройстве.
+          Приложение вернётся к состоянию после первой установки.
         </div>
         <Button variant="danger" size="sm" onClick={() => setConfirmReset(true)}>
           Сбросить все данные
@@ -187,10 +195,14 @@ export default function AppSection() {
         onClose={() => setConfirmReset(false)}
         onConfirm={() => {
           resetAll();
-          push({ title: 'Данные сброшены', description: 'ZSpeakly вернулся к настройкам по умолчанию.', tone: 'warn' });
+          push({
+            title: 'Данные сброшены',
+            description: 'История, буфер, словарь и настройки удалены. Имя спросим заново.',
+            tone: 'warn',
+          });
         }}
         title="Сбросить все данные?"
-        description="История диктовок, буфер обмена, словарь и заметки будут удалены с этого компьютера. Вернуть их не получится."
+        description="История диктовок, буфер обмена, словарь, заметки, имя и настройки будут удалены с этого компьютера. Вернуть их не получится."
         confirmLabel="Сбросить"
       />
     </div>

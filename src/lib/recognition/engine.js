@@ -28,7 +28,9 @@ export const hasNativeStt = () =>
 
 export function engineName() {
   if (hasNativeStt()) return 'whisper.cpp (офлайн)';
-  if (hasWebSpeech && !isElectronShell()) return 'Web Speech (локально)';
+  // Web Speech в Chrome отправляет звук на серверы Google — это не офлайн,
+  // поэтому в названии движка честно написано про интернет.
+  if (hasWebSpeech && !isElectronShell()) return 'Web Speech (нужен интернет)';
   if (isElectronShell()) return 'движок не установлен';
   return 'распознавание недоступно';
 }

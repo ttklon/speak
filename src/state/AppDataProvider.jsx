@@ -284,9 +284,12 @@ export function AppDataProvider({ children }) {
     setVoiceHotkeys(DEFAULT_VOICE_HOTKEYS);
     setSettings(DEFAULT_SETTINGS);
     setStats(DEFAULT_STATS);
+    // имя живёт и в профиле: без этого после сброса в сайдбаре оставалось
+    // прежнее имя, хотя приложение обещало «настройки по умолчанию»
+    setProfile({ name: '' });
   }, [
     setDictations, setClipboard, setDictionary,
-    setInstructions, setPresets, setVoiceHotkeys, setSettings, setStats,
+    setInstructions, setPresets, setVoiceHotkeys, setSettings, setStats, setProfile,
   ]);
 
   const bytes = useMemo(() => storageBytes(), [dictations, clipboard, dictionary]);

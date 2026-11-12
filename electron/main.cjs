@@ -155,13 +155,12 @@ function iconPath() {
 }
 
 // ── Трей ───────────────────────────────────────────────────────────────────
-function createTray() {
-  const icon = nativeImage.createFromPath(iconPath() || '');
-  const trayIcon = icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 18, height: 18 });
+// Сочетание диктовки можно поменять в приложении — подпись в меню трея
+// должна это отражать, иначе там годами висит «Ctrl+Alt+Space».
+let trayDictKey = 'Control+Alt+Space';
 
-  tray = new Tray(trayIcon);
-  tray.setToolTip('ZSpeakly — офлайн голосовой ввод');
-  const menu = Menu.buildFromTemplate([
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
     {
       label: 'Открыть ZSpeakly',
       click: () => {
@@ -170,7 +169,7 @@ function createTray() {
       },
     },
     { type: 'separator' },
-    { label: 'Диктовка (старт/стоп)', accelerator: 'Control+Alt+Space', click: () => toggleDictation() },
+    { label: `Диктовка (старт/стоп) — ${prettyAccel(trayDictKey)}`, click: () => toggleDictation() },
     { label: 'Буфер обмена', click: () => navigate('clipboard') },
     { label: 'Настройки', click: () => sendCommand('settings') },
     { type: 'separator' },
@@ -186,7 +185,23 @@ function createTray() {
       },
     },
   ]);
-  tray.setContextMenu(menu);
+}
+
+function refreshTrayMenu() {
+  try {
+    if (tray && !tray.isDestroyed?.()) tray.setContextMenu(buildTrayMenu());
+  } catch (err) {
+    console.warn('[tray] меню не обновилось', err.message);
+  }
+}
+
+function createTray() {
+  const icon = nativeImage.createFromPath(iconPath() || '');
+  const trayIcon = icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 18, height: 18 });
+
+  tray = new Tray(trayIcon);
+  tray.setToolTip('ZSpeakly — офлайн голосовой ввод');
+  tray.setContextMenu(buildTrayMenu());
   tray.on('double-click', () => {
     mainWindow?.show();
     mainWindow?.focus();
@@ -308,6 +323,10 @@ function onDictationPress(agentOnDouble) {
 function registerVoiceHotkeys(settings = {}) {
   const list = Array.isArray(settings.voiceHotkeys) ? settings.voiceHotkeys : [];
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
+  if (dictKey !== trayDictKey) {
+    trayDictKey = dictKey;
+    refreshTrayMenu();
+  }
   for (const hk of list) {
     if (!hk?.enabled || !hk.keys?.length) continue;
     const accel = hk.id === 'dictation' ? dictKey : accelerator(hk.keys);
@@ -377,10 +396,22 @@ function showWindowForDictation() {
   windowWasHiddenForDictation = true;
 }
 
+/** Control+Alt+Space → Ctrl + Alt + Space (как в интерфейсе). */
+function prettyAccel(accel) {
+  return String(accel || '')
+    .split('+')
+    .map((part) => (part === 'Control' ? 'Ctrl' : part))
+    .join(' + ');
+}
+
 function registerShortcuts(settings = {}) {
   globalShortcut.unregisterAll();
   usedAccels.clear();
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
+  if (dictKey !== trayDictKey) {
+    trayDictKey = dictKey;
+    refreshTrayMenu();
+  }
   const voice = Array.isArray(settings.voiceHotkeys) ? settings.voiceHotkeys : [];
   // «Агент» по умолчанию висит на том же сочетании, что диктовка: различаем
   // одиночное и двойное нажатие, иначе включённый агент не работал вовсе.

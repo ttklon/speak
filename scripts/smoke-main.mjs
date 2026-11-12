@@ -24,6 +24,9 @@ const clipboardText = { value: 'выделенный текст' };
 const clipboardImage = { value: null };
 
 const windowInstances = [];
+// шаблоны меню трея: проверяем, что подпись сочетания обновляется
+const trayTemplates = [];
+const trayMenus = [];
 const makeWindow = () => ({
   webContents: {
     send: () => {},
@@ -82,10 +85,20 @@ const electronStub = {
   }, { getAllWindows: () => windowInstances }),
   Tray: class {
     setToolTip() {}
-    setContextMenu() {}
+    setContextMenu(menu) {
+      trayMenus.push(menu);
+    }
     on() {}
+    isDestroyed() {
+      return false;
+    }
   },
-  Menu: { buildFromTemplate: () => ({}) },
+  Menu: {
+    buildFromTemplate: (template) => {
+      trayTemplates.push(template);
+      return { template };
+    },
+  },
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => true }),
     createFromDataURL: () => ({ isEmpty: () => false, __fromDataUrl: true }),
@@ -334,6 +347,15 @@ await check('сочетания сохраняются в настройки г�
   if (!saved.some((h) => h.id === 'agent' && h.enabled)) {
     throw new Error('список сочетаний не сохранился — после перезапуска вернулись бы прежние');
   }
+});
+
+await check('меню трея показывает актуальное сочетание диктовки', async () => {
+  const set = handlers.get('hotkey:set');
+  set({}, { dictationKey: 'Control+Shift+D' });
+  const template = trayTemplates[trayTemplates.length - 1] || [];
+  const item = template.find((t) => /Диктовка/.test(t.label || ''));
+  const last = trayMenus[trayMenus.length - 1];
+  return Boolean(item && /Ctrl \+ Shift \+ D/.test(item.label) && /Диктовка/.test(JSON.stringify(last)));
 });
 
 await check('замена выделения пишет в буфер', async () => {

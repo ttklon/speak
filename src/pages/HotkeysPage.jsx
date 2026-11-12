@@ -72,8 +72,34 @@ export default function HotkeysPage() {
    * перерегистрирует всё при изменении — иначе один отправитель затирал
    * сочетания другого.
    */
+  // Сочетания проверяем на дубли: Windows регистрирует глобальные клавиши
+  // по одной, и второе такое же молча не работало. Раньше можно было назначить
+  // Ctrl+Shift+9 двум действиям и не понять, почему одно не срабатывает.
+  const comboOf = (keys) => (keys || []).join('+').toLowerCase();
   const applyCombo = (hk, keys) => {
     if (!keys?.length) return;
+    const wanted = comboOf(keys);
+    const twin = voiceHotkeys.find(
+      (h) => h.id !== hk.id && h.enabled !== false && h.keys?.length && comboOf(h.keys) === wanted,
+    );
+    const dictationTaken =
+      hk.id !== 'dictation' && comboOf(settings.dictationKeys) === wanted;
+    if (twin) {
+      push({
+        title: 'Сочетание занято',
+        description: `${keysLabel(keys)} уже закреплено за «${twin.title}». Выберите другое.`,
+        tone: 'warn',
+      });
+      return;
+    }
+    if (dictationTaken) {
+      push({
+        title: 'Сочетание занято',
+        description: `${keysLabel(keys)} уже запускает диктовку. Выберите другое.`,
+        tone: 'warn',
+      });
+      return;
+    }
     if (hk.id === 'dictation') {
       updateSettings({ dictationKeys: keys, dictationKey: toAccelerator(keys) });
     }

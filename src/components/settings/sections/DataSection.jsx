@@ -263,7 +263,13 @@ export default function DataSection({ onOpenSection }) {
           </Button>
         </div>
         <div className="setting-row">
-          <div className="setting-row__label">Уведомления</div>
+          <div className="setting-row__label">
+            Уведомления
+            <div className="setting-row__desc">
+              Тост Windows после расшифровки — по клику открывается окно ZSpeakly. Тихий: звука
+              нет. В браузере системных уведомлений нет, там настройка ничего не меняет.
+            </div>
+          </div>
           <Toggle
             checked={settings.notifications}
             onChange={(v) => updateSettings({ notifications: v })}

@@ -33,6 +33,9 @@ export default function HomePage() {
   const [hoverId, setHoverId] = useState(null);
   const [snippet, setSnippet] = useState(null);
   const [editing, setEditing] = useState(null);
+  // Готовность диктовки: «Всё готово» не должно быть обещанием на пустой
+  // установке без модели whisper. В браузере опираемся на Web Speech.
+  const [readiness, setReadiness] = useState(null); // null | 'ready' | 'no-model'
   // эффект печати: постепенно проявляем свежий результат
   const [typed, setTyped] = useState('');
   const [typedId, setTypedId] = useState(null);
@@ -90,12 +93,60 @@ export default function HomePage() {
     }
   };
 
+  // Esc закрывает просмотр расшифровки: остальные окна так умеют, а эта
+  // панель раньше закрывалась только щелчком мимо или крестиком.
+  useEffect(() => {
+    if (!snippet) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setSnippet(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [snippet]);
+
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.sttStatus) {
+      const hasWeb = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+      setReadiness(hasWeb ? 'ready' : 'no-model');
+      return undefined;
+    }
+    let alive = true;
+    bridge
+      .sttStatus(settings.whisperModel)
+      .then((res) => {
+        if (alive) setReadiness(res?.available ? 'ready' : 'no-model');
+      })
+      .catch(() => {
+        if (alive) setReadiness('no-model');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [settings.whisperModel]);
+
   return (
     <div className="page page--home scroll-area">
       <header className="hero">
         <p className="hero__hello">
           {settings.userName ? `Привет, ${settings.userName}. ` : ''}
-          {state === 'listening' ? 'Записываю…' : 'Всё готово к диктовке.'}
+          {state === 'listening'
+            ? 'Записываю…'
+            : readiness === 'no-model'
+              ? 'Модель распознавания ещё не подключена — диктовка не заработает, пока её нет.'
+              : 'Всё готово к диктовке.'}
+          {readiness === 'no-model' && state !== 'listening' ? (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => navigate('settings', { section: 'features' })}
+              >
+                Выбрать модель
+              </button>
+            </>
+          ) : null}
         </p>
         <h1 className="hero__title">
           Не печатай,

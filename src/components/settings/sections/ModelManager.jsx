@@ -231,7 +231,20 @@ export default function ModelManager() {
             <button
               type="button"
               className="model-card__pick"
-              onClick={() => updateSettings({ whisperModel: m.id })}
+              onClick={() => {
+                // выбор модели раньше менял только галочку: без скачанного
+                // файла диктовка молча не работала, и было непонятно почему
+                updateSettings({ whisperModel: m.id });
+                push(
+                  info?.downloaded
+                    ? { title: 'Модель выбрана', description: `${m.label} · ${m.size}`, tone: 'success' }
+                    : {
+                        title: 'Модель выбрана, но не скачана',
+                        description: `${m.label} — нажмите «Скачать», иначе диктовка не заработает.`,
+                        tone: 'warn',
+                      },
+                );
+              }}
               title="Использовать эту модель"
             >
               <div className="grow" style={{ textAlign: 'left' }}>

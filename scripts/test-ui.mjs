@@ -290,16 +290,39 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
     const p = await openPage(browser, route, { settle: 180 });
     takeErrors(p);
     const before = await bridgeCalls(p);
-    const hit = await p.evaluate(clickByFingerprint, { fp: target.fp, nth: target.nth, selector: TARGET_SELECTOR });
+    // Нажатие может увести документ (ссылка, form submit, download). Раньше
+    // такой клик ронял весь прогон «Execution context was destroyed» и
+    // остальные экраны вообще не проверялись. Теперь это отдельная находка.
+    let hit = false;
+    let navigated = false;
+    try {
+      hit = await p.evaluate(clickByFingerprint, { fp: target.fp, nth: target.nth, selector: TARGET_SELECTOR });
+    } catch (err) {
+      navigated = true;
+      fails.push(`${target.label || target.tag}: нажатие уводит документ (${String(err?.message || err).slice(0, 80)})`);
+    }
+    if (navigated) {
+      await p.close().catch(() => {});
+      continue;
+    }
     if (!hit) {
       await p.close();
       continue;
     }
     clicked += 1;
     await sleep(220);
-    const state = await health(p);
-    const errors = takeErrors(p);
-    const after = await bridgeCalls(p);
+    let state;
+    let errors;
+    let after;
+    try {
+      state = await health(p);
+      errors = takeErrors(p);
+      after = await bridgeCalls(p);
+    } catch (err) {
+      fails.push(`${target.label || target.tag}: страница ушла после нажатия (${String(err?.message || err).slice(0, 60)})`);
+      await p.close().catch(() => {});
+      continue;
+    }
     const fired = after.length - before.length;
 
     if (!state.hasWindow || state.rootEmpty || state.crashed) {
@@ -310,7 +333,12 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
     }
 
     // второй уровень: то, что открылось модалкой или выпадающим списком
-    const dialog = await p.$('.modal, [role="dialog"], .select__menu');
+    let dialog = null;
+    try {
+      dialog = await p.$('.modal, [role="dialog"], .select__menu');
+    } catch {
+      dialog = null;
+    }
     if (dialog) {
       const scope = (await p.$('.modal, [role="dialog"]')) ? '.modal, [role="dialog"]' : '.select__menu';
       const inner = await p.evaluate(collectTargets, { selector: TARGET_SELECTOR, scope });
@@ -318,39 +346,46 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
       let used = 0;
       for (const sub of inner) {
         if (used >= maxDepth2) break;
+        // контекст второго уровня тоже может умереть от навигации — не роняем прогон
         if (`${sub.fp}#${sub.nth}` === `${target.fp}#${target.nth}`) continue;
         const p2 = await openPage(browser, route, { settle: 160 });
         takeErrors(p2);
-        const firstHit = await p2.evaluate(clickByFingerprint, {
-          fp: target.fp,
-          nth: target.nth,
-          selector: TARGET_SELECTOR,
-        });
-        if (!firstHit) {
-          await p2.close();
-          continue;
+        try {
+          const firstHit = await p2.evaluate(clickByFingerprint, {
+            fp: target.fp,
+            nth: target.nth,
+            selector: TARGET_SELECTOR,
+          });
+          if (!firstHit) {
+            await p2.close();
+            continue;
+          }
+          await sleep(150);
+          const secondHit = await p2.evaluate(clickByFingerprint, {
+            fp: sub.fp,
+            nth: sub.nth,
+            selector: TARGET_SELECTOR,
+            scope,
+          });
+          if (!secondHit) {
+            await p2.close();
+            continue;
+          }
+          used += 1;
+          clicked += 1;
+          await sleep(200);
+          const st2 = await health(p2);
+          const err2 = takeErrors(p2);
+          if (!st2.hasWindow || st2.rootEmpty || st2.crashed) {
+            fails.push(
+              `${target.label} → ${sub.label}: экран сломался (win=${st2.hasWindow} empty=${st2.rootEmpty} crashed=${st2.crashed})`,
+            );
+          }
+          for (const e of err2) fails.push(`${target.label} → ${sub.label}: ${e}`);
+        } catch (err) {
+          fails.push(`${target.label} → ${sub.label}: страница ушла (${String(err?.message || err).slice(0, 60)})`);
         }
-        await sleep(150);
-        const secondHit = await p2.evaluate(clickByFingerprint, {
-          fp: sub.fp,
-          nth: sub.nth,
-          selector: TARGET_SELECTOR,
-          scope,
-        });
-        if (!secondHit) {
-          await p2.close();
-          continue;
-        }
-        used += 1;
-        clicked += 1;
-        await sleep(200);
-        const st2 = await health(p2);
-        const err2 = takeErrors(p2);
-        if (!st2.hasWindow || st2.rootEmpty || st2.crashed) {
-          fails.push(`${target.label} → ${sub.label}: экран сломался`);
-        }
-        for (const e of err2) fails.push(`${target.label} → ${sub.label}: ${e}`);
-        await p2.close();
+        await p2.close().catch(() => {});
       }
       if (used === 0) dead.push(`${target.label || target.tag}: внутри открывшегося списка нечего нажать`);
       continue;
@@ -886,6 +921,39 @@ async function scenarioRecorder(browser) {
     'хоткеи: сочетание записывается и модалка закрывается',
     opened && hasModal && saved && modalGone && /Ctrl/.test(shown) && /Control\+Alt\+J|"Ctrl","Alt","J"/.test(stored),
     shown.slice(0, 60),
+  );
+
+  // второе действие не должно получить то же сочетание: Windows зарегистрирует
+  // только одно, и второе молча не работало
+  await clickIn(page, '', 'Изменить сочетание');
+  await sleep(300);
+  await page.keyboard.down('Control');
+  await page.keyboard.down('Alt');
+  await page.keyboard.down('KeyJ');
+  await page.keyboard.up('KeyJ');
+  await page.keyboard.up('Alt');
+  await page.keyboard.up('Control');
+  await sleep(300);
+  await clickIn(page, '.modal', 'Сохранить');
+  await sleep(450);
+  const clashToast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+  );
+  const keysAfter = await storeOf(page, 'zs.hotkeys');
+  const usedTwice = Array.isArray(keysAfter)
+    ? Object.values(
+        keysAfter.reduce((acc, h) => {
+          const key = (h.keys || []).join('+');
+          acc[key] = (acc[key] || 0) + 1;
+          return acc;
+        }, {}),
+      ).some((n) => n > 1)
+    : false;
+  record(
+    'сценарии',
+    'хоткеи: занятое сочетание не назначается дважды',
+    /Сочетание занято/i.test(clashToast) && !usedTwice,
+    `${clashToast.slice(0, 80)} | дубли: ${usedTwice}`,
   );
   await page.close();
 }
@@ -1541,6 +1609,12 @@ async function scenarioHomeExtras(browser) {
   await sleep(300);
   const calls = await bridgeCalls(page);
   record('сценарии', 'главная: копирование из сниппета работает', copied && (calls.includes('clipboard:write') || calls.includes('clipboard:write-text')));
+
+  // Esc должен закрывать просмотр расшифровки, как и остальные окна
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  const closedByEsc = await page.evaluate(() => !document.querySelector('.snippet'));
+  record('сценарии', 'главная: Esc закрывает просмотр расшифровки', copied && closedByEsc);
 
   await page.evaluate(() => document.querySelector('.recent__row').click());
   await sleep(250);
