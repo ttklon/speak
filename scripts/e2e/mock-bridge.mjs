@@ -26,6 +26,9 @@ export function installMockBridge() {
     if (calls.length > 500) calls.splice(0, calls.length - 500);
   };
 
+  // флажок отмены скачивания модели (см. downloadModel/modelsCancel)
+  let modelCancel = false;
+
   const readStore = (key) => {
     const raw = localStorage.getItem(PREFIX + key);
     if (!raw) return null;
@@ -264,6 +267,15 @@ export function installMockBridge() {
     },
     downloadModel: async (id) => {
       record('models:download', [id]);
+      // держим скачивание «в полёте», чтобы успеть нажать «Отменить»
+      modelCancel = false;
+      await new Promise((r) => setTimeout(r, 1200));
+      if (modelCancel) return { ok: false, reason: 'скачивание отменено' };
+      return { ok: true };
+    },
+    modelsCancel: async () => {
+      record('models:cancel');
+      modelCancel = true;
       return { ok: true };
     },
     downloadEngine: async () => {

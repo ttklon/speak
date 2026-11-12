@@ -860,6 +860,33 @@ async function scenarioModels(browser) {
   await page.close();
 }
 
+// Скачивание модели можно отменить: раньше кнопки не было вовсе.
+async function scenarioModelCancel(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', { settle: 600 });
+  takeErrors(page);
+  const started = await clickIn(page, '', 'Скачать');
+  await sleep(350);
+  const cancel = await clickIn(page, '', 'Отменить скачивание');
+  await sleep(1500);
+  const calls = await bridgeCalls(page);
+  const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+  record(
+    'сценарии',
+    'модели: скачивание отменяется кнопкой',
+    started && cancel && calls.includes('models:cancel') && /Скачивание отменено/i.test(toast),
+    `${calls.filter((c) => c.startsWith('models')).join(',')} | ${toast}`,
+  );
+  // после отмены кнопка «Скачать» снова доступна
+  const again = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.settings-main button')].find((b) => /^Скачать$/.test((b.innerText || '').trim()));
+    return btn ? !btn.disabled : false;
+  });
+  record('сценарии', 'модели: после отмены можно скачать снова', again);
+  const errors = takeErrors(page);
+  record('сценарии', 'модели: отмена без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioMic(browser) {
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 400 });
   takeErrors(page);
@@ -2075,6 +2102,7 @@ async function main() {
       ['микрофон', scenarioMic],
       ['диагностика', scenarioDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
+      ['отмена скачивания модели', scenarioModelCancel],
       ['сеть', scenarioNetwork],
       ['буфер: удаление и очистка', scenarioClipboardDanger],
       ['словарь: поиск и вкладки', scenarioDictionaryExtras],

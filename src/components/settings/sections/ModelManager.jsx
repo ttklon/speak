@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Check, Download, Loader, TriangleAlert } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, Download, Loader, TriangleAlert, X } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
@@ -19,6 +19,17 @@ export default function ModelManager() {
   const [status, setStatus] = useState(null); // { models: {...}, bin: bool }
   const [progress, setProgress] = useState({}); // id → percent
   const [busy, setBusy] = useState(null);
+  // Одинаковые сообщения приходят и с события прогресса, и с ответа на
+  // downloadModel — показываем одно, чтобы не было двух тостов подряд.
+  const lastToast = useRef({ key: '', at: 0 });
+  const pushOnce = (title, description, tone) => {
+    const key = `${title}|${description || ''}`;
+    const now = Date.now();
+    if (lastToast.current.key === key && now - lastToast.current.at < 2500) return;
+    lastToast.current = { key, at: now };
+    push({ title, description, tone });
+  };
+  const cancelAsked = useRef(false);
 
   const refresh = async ({ silent = true } = {}) => {
     if (!bridge?.modelsStatus) {
@@ -65,6 +76,11 @@ export default function ModelManager() {
       refresh();
       if (p.done) {
         setBusy(null);
+        if (cancelAsked.current && !p.ok) {
+          cancelAsked.current = false;
+          pushOnce('Скачивание отменено', 'Недокачанный файл удалён — можно попробовать снова.', 'success');
+          return;
+        }
         if (p.ok) {
           push({
             title: p.id === 'engine' ? 'Движок установлен' : 'Модель скачана',
@@ -72,7 +88,7 @@ export default function ModelManager() {
             tone: 'success',
           });
         } else {
-          push({ title: 'Не удалось скачать', description: p.reason, tone: 'warn' });
+          pushOnce('Не удалось скачать', p.reason, 'warn');
         }
       }
     });
@@ -100,8 +116,35 @@ export default function ModelManager() {
     await refresh();
     if (!res?.ok) {
       setBusy(null);
-      push({ title: 'Не удалось скачать модель', description: res?.reason, tone: 'warn' });
+      if (cancelAsked.current) {
+        cancelAsked.current = false;
+        pushOnce('Скачивание отменено', 'Недокачанный файл удалён — можно попробовать снова.', 'success');
+      } else {
+        pushOnce('Не удалось скачать модель', res?.reason, 'warn');
+      }
     }
+  };
+
+  // Отмена посреди загрузки: модель весит сотни мегабайт, и без этой кнопки
+  // остановить её можно было только закрыв приложение.
+  const cancelDownload = async () => {
+    if (!bridge?.modelsCancel) {
+      push({ title: 'Отмена — в установленном приложении', tone: 'warn' });
+      return;
+    }
+    cancelAsked.current = true;
+    try {
+      const res = await bridge.modelsCancel();
+      if (!res?.ok) {
+        cancelAsked.current = false;
+        pushOnce('Отменять пока нечего', res?.reason || '', 'warn');
+        setBusy(null);
+      }
+    } catch (err) {
+      cancelAsked.current = false;
+      pushOnce('Не удалось отменить', String(err?.message || err), 'warn');
+    }
+    await refresh();
   };
 
   // Модель могли скачать вручную в «Загрузки» — даём подхватить её файлом
@@ -219,6 +262,11 @@ export default function ModelManager() {
       })}
 
       <div className="row-8" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+        {busy ? (
+          <Button variant="white" size="sm" icon={<X size={12} />} onClick={cancelDownload}>
+            Отменить скачивание
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           size="sm"

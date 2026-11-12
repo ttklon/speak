@@ -52,6 +52,29 @@ function modelStatus() {
   return { models: out, bin };
 }
 
+/**
+ * Отмена текущей загрузки: модель весит сотни мегабайт, и раньше
+ * единственным способом остановить её было закрыть приложение.
+ * Держим ссылку на активный запрос и файл, чтобы убрать .part.
+ */
+let active = null;
+
+function cancelDownload() {
+  if (!active) return { ok: false, reason: 'нечего отменять' };
+  const { req, file, tmp } = active;
+  active = null;
+  try {
+    req?.destroy();
+  } catch {}
+  try {
+    file?.destroy();
+  } catch {}
+  try {
+    if (tmp) fs.rmSync(tmp, { force: true });
+  } catch {}
+  return { ok: true };
+}
+
 /** Скачивание с редиректами и прогрессом. */
 function download(url, dest, onProgress, redirects = 0) {
   return new Promise((resolve, reject) => {
@@ -77,13 +100,28 @@ function download(url, dest, onProgress, redirects = 0) {
         let received = 0;
         const tmp = `${dest}.part`;
         const file = fs.createWriteStream(tmp);
+        active = { req, file, tmp };
         res.on('data', (chunk) => {
+          if (!active) {
+            // отменили посреди загрузки — прекращаем читать поток
+            res.destroy();
+            return;
+          }
           received += chunk.length;
           if (total) onProgress?.(Math.round((received / total) * 100), received, total);
+        });
+        res.on('close', () => {
+          if (!active) reject(new Error('скачивание отменено'));
         });
         res.pipe(file);
         file.on('finish', () => {
           file.close(() => {
+            if (!active) {
+              fs.rmSync(tmp, { force: true });
+              reject(new Error('скачивание отменено'));
+              return;
+            }
+            active = null;
             fs.renameSync(tmp, dest);
             resolve({ bytes: received });
           });
@@ -249,4 +287,4 @@ async function importModel(sourcePath, onProgress) {
   return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
 }
 
-module.exports = { modelStatus, downloadModel, downloadEngine, importModel, MODELS };
+module.exports = { modelStatus, downloadModel, downloadEngine, importModel, cancelDownload, MODELS };

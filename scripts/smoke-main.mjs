@@ -193,11 +193,17 @@ await check('IPC-каналы зарегистрированы', () => {
   const need = [
     'stt:transcribe', 'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
-    'models:status', 'models:download', 'models:download-engine',
+    'models:status', 'models:download', 'models:download-engine', 'models:cancel',
     'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',
   ];
   const missing = need.filter((ch) => !handlers.has(ch));
   if (missing.length) throw new Error(`нет каналов: ${missing.join(', ')}`);
+});
+await check('отмена скачивания модели отвечает без зависаний', async () => {
+  const res = await handlers.get('models:cancel')({});
+  if (!res || typeof res.ok !== 'boolean') throw new Error(`странный ответ: ${JSON.stringify(res)}`);
+  if (res.ok) throw new Error('нечего отменять, а вернулось ok');
+  if (!/нечего/.test(res.reason || '')) throw new Error(`нет причины: ${res.reason}`);
 });
 await check('store:get работает синхронно', () => {
   if (!onHandlers.has('store:get')) throw new Error('нет store:get');

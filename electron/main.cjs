@@ -902,6 +902,7 @@ function registerIpc() {
     mainWindow?.webContents.send('model:progress', { id, percent: res.ok ? 100 : 0, done: true, ...res });
     return res;
   });
+  ipcMain.handle('models:cancel', () => models.cancelDownload());
   ipcMain.handle('models:import', async (_e, sourcePath) => models.importModel(sourcePath));
   ipcMain.handle('models:download-engine', async () => {
     const res = await models.downloadEngine((percent) => {

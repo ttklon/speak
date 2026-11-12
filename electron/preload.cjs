@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     notify: (payload) => ipcRenderer.invoke('app:notify', payload),
     saveFile: (payload) => ipcRenderer.invoke('app:save-file', payload),
     modelsStatus: () => ipcRenderer.invoke('models:status'),
+    modelsCancel: () => ipcRenderer.invoke('models:cancel'),
     downloadModel: (id) => ipcRenderer.invoke('models:download', id),
     downloadEngine: () => ipcRenderer.invoke('models:download-engine'),
     importModel: (filePath) => ipcRenderer.invoke('models:import', filePath),
