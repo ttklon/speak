@@ -485,17 +485,24 @@ function onDictationPress(agentOnDouble) {
   }
   const now = Date.now();
   if (now - lastDictPress < 420) {
+    // Второе нажатие: только что начатую диктовку отменяем БЕЗ распознавания
+    // (иначе короткий обрывок превращался в «слишком короткую запись»)
+    // и открываем «агента».
     clearTimeout(dictPressTimer);
     lastDictPress = 0;
+    if (dictationActive) {
+      dictationActive = false;
+      mainWindow?.webContents.send('hotkey', { type: 'cancel' });
+    }
     showWindowForDictation();
     mainWindow?.webContents.send('hotkey', { type: 'agent' });
     return;
   }
   lastDictPress = now;
   clearTimeout(dictPressTimer);
-  dictPressTimer = setTimeout(() => {
-    if (lastDictPress === now) toggleDictation();
-  }, 430);
+  // Диктовка стартует сразу: раньше она ждала 430 мс, чтобы отличить двойное
+  // нажатие, и человек слышал «щелчок» с задержкой.
+  toggleDictation();
 }
 
 /**
@@ -594,6 +601,11 @@ function prettyAccel(accel) {
 function registerShortcuts(settings = {}) {
   globalShortcut.unregisterAll();
   usedAccels.clear();
+  // Сменили сочетания — история нажатий «для двойного клика» больше не нужна.
+  // Иначе одно нажатие сразу после переназначения считалось вторым и вместо
+  // диктовки открывало «агента».
+  lastDictPress = 0;
+  clearTimeout(dictPressTimer);
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
   if (dictKey !== trayDictKey) {
     trayDictKey = dictKey;
@@ -907,7 +919,7 @@ function registerIpc() {
     const previousImage = clipboard.readImage();
     const hadImage = previousImage && !previousImage.isEmpty();
     clipboard.writeText(value);
-    const pasted = pasteToActiveWindow();
+    const pasted = await pasteToActiveWindow();
     setTimeout(() => {
       try {
         if (hadImage) clipboard.writeImage(previousImage);
@@ -1299,8 +1311,11 @@ function registerIpc() {
 }
 
 // Отправка клавиш в активное окно через PowerShell SendKeys (Windows-only)
-function sendKeys(keys) {
-  if (process.platform !== 'win32') return false;
+function sendKeys(keys, onDone) {
+  if (process.platform !== 'win32') {
+    onDone?.(false);
+    return false;
+  }
   const script = `Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 90; [System.Windows.Forms.SendKeys]::SendWait('${keys}')`;
   execFile(
     'powershell.exe',
@@ -1308,6 +1323,10 @@ function sendKeys(keys) {
     { windowsHide: true },
     (err) => {
       if (err) console.warn('[sendKeys] failed', err.message);
+      // SendKeys не работает в окнах с повышенными правами и в некоторых играх:
+      // вызывающий код должен узнать, что вставка не удалась, и сказать человеку
+      // «текст в буфере, нажмите Ctrl+V» вместо тишины.
+      onDone?.(!err);
     },
   );
   return true;
@@ -1358,7 +1377,7 @@ function replaceSelection(text) {
  * (SendInput, вставка за ~30 мс), используется он.
  */
 function pasteToActiveWindow() {
-  if (process.platform !== 'win32') return false;
+  if (process.platform !== 'win32') return Promise.resolve(false);
 
   // Прячем окно, только если фокус был в нём: тогда он вернётся туда, где
   // человек печатал. Если окно и так не в фокусе — ничего не трогаем, иначе
@@ -1372,23 +1391,33 @@ function pasteToActiveWindow() {
     windowHiddenForInsert = false;
   }
 
-  const helper = process.env.ZSPEAKLY_INPUT;
-  if (helper && fs.existsSync(helper)) {
-    execFile(helper, ['ctrl+v'], { windowsHide: true }, (err) => {
-      if (err) {
+  return new Promise((resolve) => {
+    const helper = process.env.ZSPEAKLY_INPUT;
+    if (helper && fs.existsSync(helper)) {
+      execFile(helper, ['ctrl+v'], { windowsHide: true }, (err) => {
+        if (!err) {
+          restoreWindowAfterInsert();
+          resolve(true);
+          return;
+        }
         console.warn('[paste] helper failed, fallback', err.message);
-        setTimeout(() => sendKeys('^v'), 120);
-        restoreWindowAfterInsert();
-      }
-    });
-    return true;
-  }
+        setTimeout(() => {
+          sendKeys('^v', (ok) => {
+            restoreWindowAfterInsert();
+            resolve(ok);
+          });
+        }, 120);
+      });
+      return;
+    }
 
-  setTimeout(() => {
-    sendKeys('^v');
-    restoreWindowAfterInsert();
-  }, 60);
-  return true;
+    setTimeout(() => {
+      sendKeys('^v', (ok) => {
+        restoreWindowAfterInsert();
+        resolve(ok);
+      });
+    }, 60);
+  });
 }
 
 /**

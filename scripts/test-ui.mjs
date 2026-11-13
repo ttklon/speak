@@ -746,6 +746,35 @@ async function scenarioFloatingHud(browser) {
   await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
   await sleep(600);
 
+  // Двойное нажатие с включённым «агентом» присылает cancel: обрывок не должен
+  // попасть ни в историю, ни в тост «слишком короткая запись».
+  await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(900);
+  const beforeCancel = await page.evaluate(() => (window.__e2e.read('zs.dictations') || []).length);
+  await page.evaluate(() => window.__e2e.resetCalls());
+  await page.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(500);
+  await page.evaluate(() => window.__e2e.emit('hotkey', { type: 'cancel' }));
+  await sleep(700);
+  const afterCancel = await page.evaluate(() => ({
+    count: (window.__e2e.read('zs.dictations') || []).length,
+    mic: document.querySelector('.hero__mic')?.innerText.replace(/\n/g, ' ') || '',
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+  }));
+  const cancelCalls = await bridgeCalls(page);
+  record(
+    'сценарии',
+    'диктовка: отмена не пишет обрывок в историю',
+    afterCancel.count === beforeCancel && /Начать диктовку/.test(afterCancel.mic) && !cancelCalls.includes('stt:transcribe-pcm'),
+    `${beforeCancel} → ${afterCancel.count} · ${cancelCalls.slice(-2).join(',')}`,
+  );
+  record(
+    'сценарии',
+    'диктовка: отмена без тоста «слишком коротко»',
+    !/слишком коротк|пустая/i.test(afterCancel.toast),
+    afterCancel.toast.slice(0, 60),
+  );
+
   const errors = takeErrors(page);
   record('сценарии', 'индикатор: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
@@ -829,6 +858,39 @@ async function scenarioMissingMic(browser) {
   await sleep(900);
   const errors = takeErrors(page);
   record('сценарии', 'микрофон: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Лимит истории буфера не должен выбрасывать закреплённое.
+async function scenarioPinnedLimit(browser) {
+  const pinned = { id: 'pin-1', kind: 'text', text: 'закреплённая запись', source: 'тест', createdAt: Date.now(), pinned: true };
+  const page = await openPage(browser, '#/clipboard', {
+    settings: { clipboardMaxItems: 3 },
+    storeSeed: { 'zs.clipboard': [pinned] },
+  });
+  takeErrors(page);
+  await page.evaluate(() => {
+    for (let i = 1; i <= 6; i += 1) {
+      window.__e2e.emit('clipboard:item', {
+        kind: 'text',
+        text: `новая запись ${i}`,
+        source: 'тест',
+        createdAt: Date.now() + i,
+      });
+    }
+  });
+  await sleep(700);
+  const state = await page.evaluate(() => (window.__e2e.read('zs.clipboard') || []).map((c) => ({ text: c.text, pinned: Boolean(c.pinned) })));
+  const hasPinned = state.some((c) => c.pinned && c.text === 'закреплённая запись');
+  const visible = await page.evaluate(() => document.body.innerText);
+  record(
+    'сценарии',
+    'буфер: лимит истории не выбрасывает закреплённое',
+    hasPinned && /закреплённая запись/.test(visible),
+    `записей ${state.length}: ${state.map((c) => (c.pinned ? '★' : '·')).join('')}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'буфер: лимит без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
@@ -3014,6 +3076,7 @@ async function main() {
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],
       ['пропавший микрофон', scenarioMissingMic],
+      ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['разделы настроек', scenarioSettingsSections],

@@ -198,10 +198,15 @@ export function AppDataProvider({ children }) {
       setClipboard((prev) => {
         if (item.hidePasswords && item.kind === 'password') return prev;
         const dedup = prev.filter((p) => !(p.kind === item.kind && p.text && p.text === item.text));
-        return [{ ...item, id: item.id || uid('clip'), createdAt: item.createdAt || Date.now() }, ...dedup].slice(
-          0,
-          settings.clipboardMaxItems || 10000,
-        );
+        const next = [{ ...item, id: item.id || uid('clip'), createdAt: item.createdAt || Date.now() }, ...dedup];
+        // Лимит истории не должен выбрасывать закреплённое: человек закрепил
+        // запись именно для того, чтобы она осталась.
+        const limit = settings.clipboardMaxItems || 10000;
+        const kept = [];
+        for (const entry of next) {
+          if (kept.length < limit || entry.pinned) kept.push(entry);
+        }
+        return kept;
       });
     },
     [setClipboard, settings.clipboardMaxItems],

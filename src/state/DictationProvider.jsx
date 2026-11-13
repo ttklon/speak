@@ -145,7 +145,21 @@ export function DictationProvider({ children }) {
         // оставался в истории — в приложении он не появлялся.
         const native = window.zspeakly?.native;
         if (insert && sessionOpts.current.insert !== false && native?.insertText) {
-          native.insertText(cleaned);
+          // main отвечает false, если SendKeys не сработал (окно с правами
+          // администратора, игра, защищённое поле). Текст уже в буфере —
+          // говорим об этом, иначе диктовка выглядит «сломанной».
+          Promise.resolve(native.insertText(cleaned))
+            .then((ok) => {
+              if (ok === false) {
+                pushToast({
+                  title: 'Текст скопирован в буфер',
+                  description: 'Вставить автоматически не удалось — нажмите Ctrl+V в нужном окне.',
+                  tone: 'warn',
+                  ttl: 9000,
+                });
+              }
+            })
+            .catch(() => {});
         }
         if (settingsRef.current.readAloud) {
           speak(cleaned, settingsRef.current.language, settingsRef.current.readAloudVoice || '');
@@ -439,6 +453,22 @@ export function DictationProvider({ children }) {
     return () => clearInterval(t);
   }, [state]);
 
+  /** Отменить начатую запись без распознавания и без истории. */
+  const cancel = useCallback(() => {
+    try {
+      recRef.current?.abort?.();
+    } catch {
+      /* движок мог уже закрыться */
+    }
+    recRef.current = null;
+    finalRef.current = '';
+    draftRef.current = '';
+    setDraft('');
+    setLevel(0);
+    setElapsed(0);
+    setState('idle');
+  }, []);
+
   // Глобальный хоткей из Electron (удержание клавиши)
   useEffect(() => {
     const bridge = window.zspeakly?.native;
@@ -454,10 +484,13 @@ export function DictationProvider({ children }) {
         if (payload.screenAware && !recRef.current) start({ mode: 'toggle', screenAware: true });
         else toggle();
       }
+      // «Агент» по двойному нажатию: начатая диктовка отменяется, а не
+      // распознаётся — из неё всё равно вышел бы обрывок в полслова
+      if (payload?.type === 'cancel') cancel();
       if (payload?.type === 'agent') askAgent();
     });
     return off;
-  }, [start, stop, toggle]);
+  }, [start, stop, toggle, cancel, askAgent]);
 
   // Локальный хоткей браузера: Alt+D — старт/стоп (для dev-preview)
   useEffect(() => {
@@ -467,13 +500,7 @@ export function DictationProvider({ children }) {
         if (recRef.current) stop();
         else start({ mode: 'hold' });
       }
-      if (e.key === 'Escape' && recRef.current) {
-        recRef.current?.abort?.();
-        recRef.current = null;
-        setState('idle');
-        setDraft('');
-        setLevel(0);
-      }
+      if (e.key === 'Escape' && recRef.current) cancel();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

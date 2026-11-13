@@ -311,12 +311,20 @@ await check('двойное нажатие диктовки открывает �
   }
   dict.fn();
   await new Promise((r) => setTimeout(r, 60));
+  // первое нажатие начинает диктовку сразу, без ожидания «а вдруг двойное»
+  const firstDown = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'down');
+  if (!firstDown) throw new Error('диктовка не началась мгновенно');
   dict.fn();
-  await new Promise((r) => setTimeout(r, 80));
+  await new Promise((r) => setTimeout(r, 120));
   const agent = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'agent');
   if (!agent) throw new Error(`агент не сработал: ${JSON.stringify(sentEvents.slice(-3))}`);
+  const cancel = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'cancel');
+  if (!cancel) throw new Error('обрывок диктовки не отменён перед агентом');
   const downs = sentEvents.filter((e) => e.ch === 'hotkey' && e.payload?.type === 'down').length;
-  if (downs) throw new Error('двойное нажатие запустило ещё и диктовку');
+  if (downs !== 1) throw new Error(`лишние запуски диктовки: ${downs}`);
+  if (sentEvents.filter((e) => e.ch === 'hotkey' && e.payload?.type === 'up').length) {
+    throw new Error('отмена ушла как «стоп» — обрывок попал бы в историю');
+  }
 });
 
 await check('одиночное нажатие диктовки запускает запись', async () => {
@@ -330,13 +338,12 @@ await check('одиночное нажатие диктовки запускае
   });
   const handler = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space').fn;
   handler();
-  await new Promise((r) => setTimeout(r, 600));
+  await new Promise((r) => setTimeout(r, 120));
   const down = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'down');
-  if (!down) throw new Error('запись не началась');
+  if (!down) throw new Error('запись не началась мгновенно');
   // возвращаем состояние «не записываем», иначе следующая проверка нажмёт «стоп»
-  // (с включённым агентом одиночное нажатие срабатывает через 430 мс)
   handler();
-  await new Promise((r) => setTimeout(r, 600));
+  await new Promise((r) => setTimeout(r, 120));
 });
 
 await check('своё сочетание диктовки и screen-aware работают переключателем', () => {
@@ -513,7 +520,8 @@ await check('хоткей диктовки показывает скрытое �
   if (!entry) throw new Error('хоткей диктовки не зарегистрирован');
   sentEvents.length = 0;
   entry.fn();
-  await new Promise((r) => setTimeout(r, 50));
+  // диктовка стартует сразу, ждать «вдруг двойное» больше не нужно
+  await new Promise((r) => setTimeout(r, 120));
   const shown = visible.value;
   entry.fn();
   for (const o of originals) {
