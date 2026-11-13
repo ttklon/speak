@@ -106,7 +106,11 @@ export function DictationProvider({ children }) {
       // «Словарь» только сохранялся, а замены делались всегда
       const applyDict = settingsRef.current.dictionaryEnabled !== false;
       const corrected = applyDict ? applyDictionary(raw, dictRef.current) : raw;
-      const cleaned = OPS.clean(postProcess(corrected, {}));
+      // Тумблер «Постобработка текста» в настройках раньше только сохранялся:
+      // чистка шла всегда. Теперь выключенный тумблер оставляет текст как есть,
+      // а включённый убирает паразитов и расставляет пунктуацию.
+      const polishing = settingsRef.current.aiProcessing !== false;
+      const cleaned = polishing ? OPS.clean(postProcess(corrected, {})) : corrected.trim();
       const durationMs = Math.max(400, Date.now() - startedAt.current);
       const item = {
         text: cleaned,

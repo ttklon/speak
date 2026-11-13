@@ -751,6 +751,47 @@ async function scenarioFloatingHud(browser) {
   await page.close();
 }
 
+// Тумблер «Постобработка текста»: включён — паразиты и пунктуация чистятся,
+// выключен — в историю попадает ровно то, что вернул движок.
+async function scenarioCleanupToggle(browser) {
+  const messy = 'э-э  ну , привет   как дела';
+  const run = async (aiProcessing) => {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiProcessing },
+      patchNative: () => {
+        const native = window.zspeakly && window.zspeakly.native;
+        if (native) native.transcribePcm = async () => ({ ok: true, text: 'э-э  ну , привет   как дела', engine: 'whisper' });
+      },
+    });
+    takeErrors(page);
+    await page.evaluate(() => window.__e2e.resetCalls());
+    await page.evaluate(() => document.querySelector('.hero__mic').click());
+    await sleep(800);
+    await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+    await sleep(1500);
+    const stored = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
+    const errors = takeErrors(page);
+    await page.close();
+    return { stored, errors };
+  };
+
+  const on = await run(true);
+  const off = await run(false);
+  record(
+    'сценарии',
+    'постобработка: включённая чистка убирает паразитов и ставит точку',
+    on.stored !== messy && /Привет как дела/.test(on.stored) && !/э-э|ну/i.test(on.stored),
+    on.stored,
+  );
+  record(
+    'сценарии',
+    'постобработка: выключенная оставляет текст движка как есть',
+    off.stored === messy.trim(),
+    off.stored,
+  );
+  record('сценарии', 'постобработка: без ошибок консоли', [...on.errors, ...off.errors].length === 0, [...on.errors, ...off.errors][0] || '');
+}
+
 async function scenarioDictionary(browser) {
   const page = await openPage(browser, '#/dictionary');
   takeErrors(page);
@@ -2931,6 +2972,7 @@ async function main() {
       ['онбординг', scenarioOnboarding],
       ['диктовка', scenarioDictation],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
+      ['постобработка текста', scenarioCleanupToggle],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['разделы настроек', scenarioSettingsSections],
