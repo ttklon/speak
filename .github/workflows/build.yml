@@ -65,11 +65,18 @@ jobs:
         with:
           name: zspeakly-dist
           path: dist/
-          retention-days: 7
+          # 2 дня: рендерер пересоберётся за минуту, хранить его месяц незачем
+          retention-days: 2
 
   # 2. Сборка установщика для Windows
   package:
     needs: check
+    # На каждый коммит в рабочую ветку установщик не собираем: 170 МБ артефактов
+    # на коммит — так и переполняется хранилище. Полная упаковка — на main, теги
+    # и ручной запуск (workflow_dispatch), плюс pull_request для проверки.
+    if: >-
+      github.event_name != 'push'
+      || !startsWith(github.ref, 'refs/heads/arena/')
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -244,7 +251,9 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest.yml
-          retention-days: 30
+          # 2 дня: установщик весит ~170 МБ, а прежние 30 дней забивали
+          # хранилище Actions на многие гигабайты
+          retention-days: 2
 
       - name: Summary
         if: always()
