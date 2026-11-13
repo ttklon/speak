@@ -49,12 +49,18 @@ const makeWindow = (options = {}) => {
     },
     show: () => {
       win._visible = true;
+      win._showCalls = (win._showCalls || 0) + 1;
     },
     showInactive: () => {
       win._visible = true;
+      win._inactiveCalls = (win._inactiveCalls || 0) + 1;
     },
-    focus: () => {},
-    blur: () => {},
+    focus: () => {
+      win._focusCalls = (win._focusCalls || 0) + 1;
+    },
+    blur: () => {
+      win._blurCalls = (win._blurCalls || 0) + 1;
+    },
     hide: () => {
       win._visible = false;
     },
@@ -1021,6 +1027,41 @@ await check('screen:capture отдаёт dataURL, когда экран дост
     if (!(res.width > 0 && res.height > 0)) throw new Error('нет размеров экрана');
   } finally {
     stub.getSources = original;
+  }
+});
+
+// Этот кейс подменяет process.platform и оставляет таймеры вставки (буфер
+// возвращается через 700 мс), поэтому держим его последним в файле.
+await check('вставка не забирает фокус у чужого окна', async () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  const restoreFocused = mainWin.isFocused;
+  try {
+    // окно ZSpeakly не в фокусе: человек печатает в браузере
+    mainWin.isFocused = () => false;
+    mainWin._focusCalls = 0;
+    mainWin._inactiveCalls = 0;
+    mainWin._showCalls = 0;
+    mainWin._visible = false;
+    await handlers.get('text:insert')({}, 'текст в чужое окно');
+    await new Promise((r) => setTimeout(r, 400));
+    if (mainWin._focusCalls > 0) throw new Error('окно забрало фокус после вставки');
+    if (mainWin._showCalls > 0) throw new Error('окно показалось поверх чужого приложения');
+    if (mainWin._visible) throw new Error('скрытое окно всплыло после вставки');
+
+    // окно было в фокусе: его прячем, а после вставки возвращаем без фокуса
+    mainWin.isFocused = () => true;
+    mainWin._visible = true;
+    mainWin._focusCalls = 0;
+    mainWin._inactiveCalls = 0;
+    await handlers.get('text:insert')({}, 'текст из окна приложения');
+    await new Promise((r) => setTimeout(r, 500));
+    if (mainWin._focusCalls > 0) throw new Error('после возврата окно снова забрало фокус');
+    if (mainWin._inactiveCalls === 0) throw new Error('окно не вернулось на экран');
+  } finally {
+    mainWin.isFocused = restoreFocused;
+    Object.defineProperty(process, 'platform', realPlatform);
   }
 });
 

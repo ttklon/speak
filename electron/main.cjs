@@ -1360,12 +1360,17 @@ function replaceSelection(text) {
 function pasteToActiveWindow() {
   if (process.platform !== 'win32') return false;
 
-  // прячем окно, чтобы фокус вернулся туда, где человек печатал
+  // Прячем окно, только если фокус был в нём: тогда он вернётся туда, где
+  // человек печатал. Если окно и так не в фокусе — ничего не трогаем, иначе
+  // после вставки оно всплывало поверх чужого приложения.
   try {
-    if (mainWindow?.isFocused?.() && mainWindow.isVisible?.()) mainWindow.hide();
-    else mainWindow?.blur();
-    windowHiddenForInsert = true;
-  } catch {}
+    const focused = Boolean(mainWindow?.isFocused?.() && mainWindow?.isVisible?.());
+    if (focused) mainWindow.hide();
+    else mainWindow?.blur?.();
+    windowHiddenForInsert = focused;
+  } catch {
+    windowHiddenForInsert = false;
+  }
 
   const helper = process.env.ZSPEAKLY_INPUT;
   if (helper && fs.existsSync(helper)) {
@@ -1386,14 +1391,19 @@ function pasteToActiveWindow() {
   return true;
 }
 
-/** Вернуть окно ZSpeakly, когда вставка уже случилась. */
+/**
+ * Вернуть окно ZSpeakly, когда вставка уже случилась.
+ *
+ * Возвращаем без фокуса: раньше окно забирало фокус на себя сразу после
+ * вставки, и текст оказывался в чужом приложении, а курсор — снова в ZSpeakly.
+ * Теперь активным остаётся то приложение, куда диктовали.
+ */
 function restoreWindowAfterInsert() {
   if (!windowHiddenForInsert) return;
   windowHiddenForInsert = false;
   setTimeout(() => {
     try {
-      if (mainWindow && !mainWindow.isVisible?.()) mainWindow.show();
-      mainWindow?.focus?.();
+      if (mainWindow && !mainWindow.isVisible?.()) mainWindow.showInactive();
     } catch {}
   }, 220);
 }
