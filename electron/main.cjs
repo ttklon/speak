@@ -366,9 +366,12 @@ function registerHudIpc() {
   });
   ipcMain.handle('hud:close', () => {
     hideHudWindow();
-    // окно диктовки должно узнать, что плашку убрали: оно нарисует индикатор
-    // внутри себя, чтобы запись можно было остановить
-    mainWindow?.webContents.send('hud:closed');
+    // Если окно приложения на экране — оно нарисует индикатор внутри себя,
+    // и запись можно остановить оттуда. Если окно свёрнуто в трей, показать
+    // индикатор негде: закрытие плашки завершает запись, иначе она осталась бы
+    // без единой кнопки.
+    if (mainWindow?.isVisible?.()) mainWindow.webContents.send('hud:closed');
+    else mainWindow?.webContents.send('dictation:stop', { from: 'hud' });
     return true;
   });
   ipcMain.handle('hud:status', () => ({

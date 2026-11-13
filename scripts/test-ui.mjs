@@ -661,6 +661,46 @@ async function scenarioFloatingHud(browser) {
     `${stopped.slice(-3).join(',')} state=${stoppedState}`,
   );
 
+  // Выключение настройки прямо во время записи прячет плашку
+  await page.evaluate(() => window.__e2e.resetCalls());
+  await page.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(600);
+  const startedForToggle = await bridgeCalls(page);
+  await page.evaluate(() => window.__e2e.emit('command', 'settings'));
+  await page.waitForSelector('.settings-modal', { timeout: 8000 });
+  await sleep(600);
+  // переходим на раздел «Приложение» и жмём переключатель плавающего индикатора
+  await page.evaluate(() => {
+    const modal = document.querySelector('.settings-modal');
+    [...(modal?.querySelectorAll('button') || [])]
+      .find((b) => /^Приложение/.test(b.innerText.trim()))
+      ?.click();
+  });
+  await sleep(500);
+  const toggledOff = await page.evaluate(() => {
+    const input = document.querySelector('.settings-modal [role="switch"][aria-label*="Плавающий"]');
+    if (!input) return { found: false };
+    input.click();
+    return { found: true, checked: input.getAttribute('aria-checked') };
+  });
+  await sleep(800);
+  const afterToggle = await bridgeCalls(page);
+  record(
+    'сценарии',
+    'индикатор: выключение настройки во время записи убирает плашку',
+    startedForToggle.includes('hud:show') && toggledOff.found && afterToggle.includes('hud:hide'),
+    `${startedForToggle.slice(0, 2).join(',')} → ${afterToggle.slice(-2).join(',')} · ${JSON.stringify(toggledOff)}`,
+  );
+  // возвращаем настройку и закрываем настройки, чтобы не мешать дальше
+  await page.evaluate(() => {
+    document.querySelector('.settings-modal [role="switch"][aria-label*="Плавающий"]')?.click();
+  });
+  await sleep(400);
+  await page.evaluate(() => document.querySelector('.settings-modal .modal__close, .settings-modal [aria-label="Закрыть"]')?.click());
+  await sleep(400);
+  await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(700);
+
   // «Крестик» на плавающем окне: запись продолжается, индикатор переезжает
   // внутрь окна приложения — иначе остановить было бы нечем
   await page.evaluate(() => window.__e2e.resetCalls());
@@ -1895,8 +1935,8 @@ async function scenarioHomeExtras(browser) {
   record('сценарии', 'главная: копирование из сниппета работает', copied && (calls.includes('clipboard:write') || calls.includes('clipboard:write-text')));
 
   // Esc должен закрывать просмотр расшифровки, как и остальные окна
-  await page.keyboard.press('Escape');
-  await sleep(300);
+  await page.evaluate(() => document.querySelector('.settings-modal .modal__close, .settings-modal [aria-label="Закрыть"]')?.click());
+  await sleep(400);
   const closedByEsc = await page.evaluate(() => !document.querySelector('.snippet'));
   record('сценарии', 'главная: Esc закрывает просмотр расшифровки', copied && closedByEsc);
 
@@ -1988,8 +2028,8 @@ async function scenarioTrayCommands(browser) {
   await emit(page, 'command', 'settings');
   await sleep(400);
   const settingsOpen = await page.evaluate(() => Boolean(document.querySelector('.settings-modal')));
-  await page.keyboard.press('Escape');
-  await sleep(300);
+  await page.evaluate(() => document.querySelector('.settings-modal .modal__close, .settings-modal [aria-label="Закрыть"]')?.click());
+  await sleep(400);
   await emit(page, 'command', 'diagnostics');
   await sleep(400);
   const section = await page.evaluate(() => document.querySelector('.settings-main h2')?.innerText || '');
@@ -2109,8 +2149,8 @@ async function scenarioKeyboard(browser) {
   await page.keyboard.up('Control');
   await sleep(400);
   const opened = await page.evaluate(() => Boolean(document.querySelector('.settings-modal')));
-  await page.keyboard.press('Escape');
-  await sleep(300);
+  await page.evaluate(() => document.querySelector('.settings-modal .modal__close, .settings-modal [aria-label="Закрыть"]')?.click());
+  await sleep(400);
   const closed = await page.evaluate(() => !document.querySelector('.settings-modal'));
 
   await page.keyboard.down('Control');

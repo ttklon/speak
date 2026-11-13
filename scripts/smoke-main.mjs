@@ -483,7 +483,16 @@ await check('clipboard:write кладёт картинку, а не только
 
 await check('хоткей диктовки показывает скрытое окно из трея', async () => {
   const visible = { value: false };
-  // подменяем видимость у всех окон: mainWindow мог быть создан не последним
+  // подменяем видимость у всех окон: mainWindow мог быть создан не последним.
+  // Подмену обязательно снимаем в конце — иначе она врёт следующим проверкам
+  // (и индикатор «виден» даже после hide).
+  const originals = windowInstances.map((win) => ({
+    win,
+    isVisible: win.isVisible,
+    show: win.show,
+    showInactive: win.showInactive,
+    hide: win.hide,
+  }));
   for (const win of windowInstances) {
     win.isVisible = () => visible.value;
     win.show = () => { visible.value = true; };
@@ -499,10 +508,17 @@ await check('хоткей диктовки показывает скрытое �
   sentEvents.length = 0;
   entry.fn();
   await new Promise((r) => setTimeout(r, 50));
-  if (!visible.value) {
+  const shown = visible.value;
+  entry.fn();
+  for (const o of originals) {
+    o.win.isVisible = o.isVisible;
+    o.win.show = o.show;
+    o.win.showInactive = o.showInactive;
+    o.win.hide = o.hide;
+  }
+  if (!shown) {
     throw new Error(`окно осталось скрытым: события ${JSON.stringify(sentEvents.map((e) => e.payload))}, окон ${windowInstances.length}`);
   }
-  entry.fn();
 });
 
 
@@ -802,10 +818,28 @@ await check('индикатор: состояние доходит до окна
   const bottom = (b) => (b.y ?? 0) + (b.height ?? 0);
   if (bottom(hudWin._bounds) !== 1372) throw new Error(`нижний край уехал: ${JSON.stringify(hudWin._bounds)}`);
   const hud = windowInstances[windowInstances.length - 1];
+  // главное окно ищем по его параметрам, а не по порядку создания
+  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  if (!mainWin) throw new Error('главное окно не найдено');
+  mainWin._visible = true;
   await handlers.get('hud:close')({});
   if (hud.isVisible()) throw new Error('индикатор не спрятался');
   if (!sentEvents.some((e) => e.ch === 'hud:closed')) {
     throw new Error('окно диктовки не узнало о закрытии — индикатор не переедет внутрь');
+  }
+
+  // окно приложения спрятано в трей: показывать индикатор негде — запись
+  // должна остановиться, иначе ею нечем управлять
+  await handlers.get('hud:show')({});
+  mainWin._visible = false;
+  sentEvents.length = 0;
+  await handlers.get('hud:close')({});
+  mainWin._visible = true;
+  if (!sentEvents.some((e) => e.ch === 'dictation:stop')) {
+    throw new Error('при скрытом окне закрытие плашки не остановило запись');
+  }
+  if (sentEvents.some((e) => e.ch === 'hud:closed')) {
+    throw new Error('при скрытом окне индикатор зря переехал в невидимое окно');
   }
 });
 

@@ -488,6 +488,9 @@ export function DictationProvider({ children }) {
 
   useEffect(() => {
     if (!hudAllowed) {
+      // настройку выключили прямо во время записи — плашку надо убрать,
+      // иначе она останется на экране до конца диктовки
+      window.zspeakly?.native?.hudHide?.();
       setHudNativeOn(false);
       return undefined;
     }
