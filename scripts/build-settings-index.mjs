@@ -43,11 +43,15 @@ function extractRows(source) {
   for (const chunk of source.matchAll(rowRe)) {
     const body = chunk[1];
     const label = body.match(/className="setting-row__label"[^>]*>\s*([^<>\n{][^<>\n]*)/);
-    const desc = body.match(/className="setting-row__desc"[^>]*>\s*([^<>\n{][^<>\n]*)/);
+    // описание берём целиком, включая переносы строк: раньше регулярка
+    // обрывалась на первом переводе строки, и в поиске висели обрезки
+    // вроде «Отдельное окно поверх всех приложений: «Слушаю…», уровень»
+    const descBlock = body.match(/className="setting-row__desc"[^>]*>([\s\S]*?)(?:<\/div>|$)/);
     if (!label) continue;
     // описание с JSX-выражением — это код, а не текст: в поиске он бесполезен
-    const rawDesc = (desc?.[1] || '').trim().replace(/\s+/g, ' ');
-    const descDone = /[{}<>]/.test(rawDesc) ? '' : rawDesc;
+    const descHtml = descBlock?.[1] || '';
+    const rawDesc = descHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    const descDone = /[{}]/.test(descHtml) ? '' : rawDesc;
     rows.push({
       title: label[1].trim().replace(/\s+/g, ' '),
       desc: descDone,

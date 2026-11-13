@@ -259,6 +259,54 @@ function markLlm(ok) {
 }
 
 /** Попытка локальной LLM (Ollama). Возвращает null, если недоступна. */
+/**
+ * Правдоподобен ли ответ модели для диктовки: она должна править, а не
+ * пересказывать. Отсекаем «модель выкинула половину», «модель дописала от
+ * себя» и «модель потеряла числа» — вместо такого ответа остаются офлайн-правила.
+ */
+export function saneRewrite(source, out) {
+  const a = String(source || '').trim();
+  let b = String(out || '').trim();
+  if (!a || !b) return null;
+  // модель любит обернуть ответ в кавычки или приписать «Вот исправленный текст:»
+  b = b.replace(/^(вот\s+)?(исправленный|готовый|итоговый)\s+текст\s*:\s*/i, '');
+  b = b.replace(/^["'«„]+|["'»“]+$/g, '').trim();
+  if (!b) return null;
+  if (b.length < a.length * 0.5) return null;
+  if (b.length > a.length * 2.2) return null;
+  const numbers = a.match(/\d+/g) || [];
+  if (numbers.some((n) => !b.includes(n))) return null;
+  return b;
+}
+
+/** Промпт для чистки расшифровки: правит знаки и паразитов, не пересказывает. */
+export const DICTATION_PROMPT =
+  'Ты редактор расшифровки речи. Расставь знаки препинания и заглавные буквы, ' +
+  'убери слова-паразиты и повторы, исправь очевидные оговорки. Не добавляй новых ' +
+  'мыслей, не пересказывай, не переводи, не меняй числа и имена. Ответь только ' +
+  'исправленным текстом, без пояснений.';
+
+/**
+ * Вторая стадия чистки диктовки — локальная модель.
+ *
+ * Включается только осознанно («Переписывать диктовку моделью» в настройках) и
+ * только если задан адрес Ollama. При любом сбое возвращает null, и остаётся
+ * результат офлайн-правил: диктовка не должна ломаться из-за модели.
+ */
+export async function polishDictation(text, settings = {}, { timeout = 6000 } = {}) {
+  if (!text || !settings.aiEndpoint) return null;
+  if (settings.aiDictationRewrite !== true) return null;
+  if (settings.aiProcessing === false) return null;
+  const out = await llmRewrite({
+    endpoint: settings.aiEndpoint,
+    model: settings.aiModel,
+    system: DICTATION_PROMPT,
+    text,
+    timeout,
+  });
+  return saneRewrite(text, out);
+}
+
 export async function llmRewrite({ endpoint, model, system, text, timeout = 6000 }) {
   if (!endpoint || !text) return null;
   // недавно уже не ответила — не тратим время человека

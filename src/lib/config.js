@@ -162,6 +162,9 @@ export const DEFAULT_SETTINGS = {
   translateTarget: 'en',
   aiProcessing: true,
   aiEndpoint: 'http://localhost:11434', // Ollama, опционально
+  // вторая стадия чистки диктовки моделью: по умолчанию выключена, потому что
+  // добавляет 1–3 секунды к каждой вставке
+  aiDictationRewrite: false,
   aiModel: 'qwen2.5:0.5b',
   clipboardMonitor: true,
   clipboardMaxItems: 10000,

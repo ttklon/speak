@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { OPS, llmIsDown, llmRewrite, resetLlmBackoff, runOp } from './ai/textops.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  OPS,
+  llmIsDown,
+  llmRewrite,
+  polishDictation,
+  resetLlmBackoff,
+  runOp,
+  saneRewrite,
+} from './ai/textops.js';
 import { offlineTranslate, translate } from './translate.js';
 
 describe('постобработка диктовки', () => {
@@ -126,5 +134,56 @@ describe('translate', () => {
       expect(out.replace(/\s+/g, ' ').trim()).not.toMatch(/^[,.;]/);
       expect(out.length).toBeGreaterThan(3);
     });
+  });
+});
+
+describe('вторая стадия чистки диктовки моделью', () => {
+  it('saneRewrite принимает правку и снимает обёртку модели', () => {
+    expect(saneRewrite('привет как дела', 'Вот исправленный текст: «Привет, как дела?»')).toBe(
+      'Привет, как дела?',
+    );
+  });
+
+  it('saneRewrite отбрасывает пересказ, дописки и потерю чисел', () => {
+    expect(saneRewrite('встречаемся в 15 30 обсудим отчёт и планы на квартал', 'Встречаемся.')).toBeNull();
+    expect(saneRewrite('короткая фраза', 'Короткая фраза, а ещё я добавил от себя целый абзац текста')).toBeNull();
+    expect(saneRewrite('перезвони в 12 45', 'Перезвони.')).toBeNull();
+  });
+
+  it('polishDictation молчит, пока настройка не включена', async () => {
+    const out = await polishDictation('ну привет как дела', {
+      aiEndpoint: 'http://localhost:11434',
+      aiDictationRewrite: false,
+    });
+    expect(out).toBeNull();
+  });
+
+  it('polishDictation возвращает правку модели, когда она включена', async () => {
+    resetLlmBackoff();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ response: 'Привет, как дела?' }),
+    });
+    const out = await polishDictation('ну привет как дела', {
+      aiEndpoint: 'http://localhost:11434',
+      aiModel: 'qwen2.5:0.5b',
+      aiDictationRewrite: true,
+    });
+    expect(out).toBe('Привет, как дела?');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.prompt).toContain('знаки препинания');
+    fetchSpy.mockRestore();
+  });
+
+  it('падение Ollama не ломает диктовку — остаются офлайн-правила', async () => {
+    resetLlmBackoff();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('нет сервера'));
+    const out = await polishDictation('ну привет как дела', {
+      aiEndpoint: 'http://localhost:11434',
+      aiDictationRewrite: true,
+    });
+    expect(out).toBeNull();
+    fetchSpy.mockRestore();
   });
 });

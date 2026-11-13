@@ -7,7 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
-import { OPS, llmRewrite } from '../lib/ai/textops.js';
+import { OPS, llmRewrite, polishDictation } from '../lib/ai/textops.js';
 import { describeScreen } from '../lib/ai/vision.js';
 import { playCue } from '../lib/feedback.js';
 import { diag } from '../lib/diagnostics.js';
@@ -94,13 +94,20 @@ export function DictationProvider({ children }) {
   }, [state]);
 
   const finish = useCallback(
-    (text, { insert = true, sttMs = 0 } = {}) => {
-      // защита от двойного завершения (web-движок + фолбэк)
+    async (text, { insert = true, sttMs = 0 } = {}) => {
+      // защита от двойного завершения (web-движок + фолбэк); держим до конца
+      // второй стадии, иначе модель успевала запуститься дважды
       if (finishing.current) return null;
       finishing.current = true;
-      setTimeout(() => {
+      // страховка: если вторая стадия почему-то не вернётся, диктовка не должна
+      // навсегда остаться «занятой»
+      const hardReset = setTimeout(() => {
         finishing.current = false;
-      }, 700);
+      }, 9000);
+      const release = () => {
+        clearTimeout(hardReset);
+        finishing.current = false;
+      };
       const raw = text || finalRef.current || draftRef.current;
       // настройка «Применять словарь при диктовке»: раньше тумблер в разделе
       // «Словарь» только сохранялся, а замены делались всегда
@@ -110,7 +117,27 @@ export function DictationProvider({ children }) {
       // чистка шла всегда. Теперь выключенный тумблер оставляет текст как есть,
       // а включённый убирает паразитов и расставляет пунктуацию.
       const polishing = settingsRef.current.aiProcessing !== false;
-      const cleaned = polishing ? OPS.clean(postProcess(corrected, {})) : corrected.trim();
+      let cleaned = polishing ? OPS.clean(postProcess(corrected, {})) : corrected.trim();
+      // Вторая стадия («Переписывать диктовку моделью»): офлайн-правила уже
+      // дали текст, локальная модель доводит формулировки. Модель может
+      // не ответить — тогда остаётся результат правил, диктовка не ломается.
+      if (polishing && cleaned && settingsRef.current.aiDictationRewrite === true) {
+        setState('processing');
+        const before = cleaned.length;
+        const better = await polishDictation(cleaned, settingsRef.current, { timeout: 6000 });
+        if (better) {
+          cleaned = OPS.clean(better);
+          diag.info('stt', 'Диктовку довела локальная модель', {
+            before,
+            after: cleaned.length,
+            model: settingsRef.current.aiModel || '',
+          });
+        } else if (settingsRef.current.aiEndpoint) {
+          diag.warn('stt', 'Модель не улучшила диктовку — оставлены правила', {
+            reason: 'empty-or-unsane',
+          });
+        }
+      }
       const durationMs = Math.max(400, Date.now() - startedAt.current);
       const item = {
         text: cleaned,
@@ -136,6 +163,10 @@ export function DictationProvider({ children }) {
       setDraft('');
       draftRef.current = '';
       finalRef.current = '';
+      if (!cleaned) {
+        release();
+        return item;
+      }
       if (cleaned) {
         setLast(item);
         addDictation(item);
@@ -172,6 +203,7 @@ export function DictationProvider({ children }) {
         }
       }
       setTimeout(() => setState((s) => (s === 'done' ? 'idle' : s)), 2200);
+      release();
       return item;
     },
     [addDictation, recordWords],
@@ -305,13 +337,14 @@ export function DictationProvider({ children }) {
             setLevel(0);
           }
         },
-        onEnd: ({ text, ms }) => {
+        onEnd: async ({ text, ms }) => {
           recRef.current = null;
           setState('processing');
           setLevel(0);
           // Текст вставляем сразу: искусственная пауза «как в видео» только
           // задерживала вставку (диктовка должна появляться в окне мгновенно).
-          const item = finish(text, { sttMs: ms });
+          // Исключение — включённая вторая стадия чистки моделью: тогда ждём её.
+          const item = await finish(text, { sttMs: ms });
           if (opts.onResult) opts.onResult(item);
         },
       });
@@ -366,7 +399,7 @@ export function DictationProvider({ children }) {
     }
 
     const text = (result && result.text) || fallbackText || '';
-    const item = finish(text);
+    const item = await finish(text);
     if (!item && text.trim()) return;
     if (!text.trim()) setState('idle');
   }, [finish]);
@@ -414,7 +447,7 @@ export function DictationProvider({ children }) {
         setState('idle');
         return;
       }
-      const item = finish(answer, { insert: false });
+      const item = await finish(answer, { insert: false });
       if (item) pushToast({ title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' });
     } catch (err) {
       diag.error('agent', 'Ошибка агента', { reason: String(err?.message || err) });

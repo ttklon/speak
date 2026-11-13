@@ -821,6 +821,55 @@ async function scenarioCleanupToggle(browser) {
   record('сценарии', 'постобработка: без ошибок консоли', [...on.errors, ...off.errors].length === 0, [...on.errors, ...off.errors][0] || '');
 }
 
+// Вторая стадия чистки: включённая галочка «Переписывать диктовку моделью»
+// отправляет текст в локальную модель, выключенная — не ходит в сеть вовсе.
+async function scenarioModelRewrite(browser) {
+  const run = async (on) => {
+    const page = await openPage(browser, '#/home', {
+      settings: {
+        aiProcessing: true,
+        aiEndpoint: 'http://localhost:11434',
+        aiModel: 'qwen2.5:0.5b',
+        aiDictationRewrite: on,
+      },
+      patchNative: () => {
+        const native = window.zspeakly && window.zspeakly.native;
+        if (!native) return;
+        native.transcribePcm = async () => ({ ok: true, text: 'ну привет как дела у меня', engine: 'whisper' });
+        native.httpPost = async () => ({ ok: true, data: { response: 'Привет, как дела у меня?' } });
+      },
+    });
+    takeErrors(page);
+    await page.evaluate(() => window.__e2e.resetCalls());
+    await page.evaluate(() => document.querySelector('.hero__mic').click());
+    await sleep(700);
+    await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+    await sleep(1800);
+    const calls = await bridgeCalls(page);
+    const stored = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
+    const errors = takeErrors(page);
+    await page.close();
+    return { stored, calls, errors };
+  };
+
+  const on = await run(true);
+  const off = await run(false);
+  record(
+    'сценарии',
+    'модель: включённая галочка доводит диктовку после правил',
+    on.stored === 'Привет, как дела у меня?',
+    on.stored,
+  );
+  record(
+    'сценарии',
+    'модель: выключенная галочка не ходит в сеть',
+    off.stored === 'Привет как дела у меня.' && !off.calls.includes('http:post'),
+    `${off.stored} · ${off.calls.slice(-2).join(',')}`,
+  );
+  const errors = [...on.errors, ...off.errors];
+  record('сценарии', 'модель: без ошибок консоли', errors.length === 0, errors[0] || '');
+}
+
 // Микрофон из настроек пропал (выдернули USB): диктовка не должна молча
 // ломаться — пишем с системного и честно говорим об этом.
 async function scenarioMissingMic(browser) {
@@ -1102,6 +1151,27 @@ async function scenarioSettingsSearch(browser) {
     'поиск по настройкам: совпадение в названии первым и переход в раздел',
     /^\s*Микрофон/i.test(first) && /Данные/i.test(landed.section) && landed.highlighted > 0,
     `${first.replace(/\s+/g, ' ')} | ${landed.section} | подсветок ${landed.highlighted}`,
+  );
+  // Индекс описаний раньше обрывался на первом переносе строки, поэтому слова
+  // из конца описания («кнопки», «телеметрии») ничего не находили.
+  const byDesc = async (q, titleRe) => {
+    await setQuery(q);
+    await sleep(350);
+    return page.evaluate(
+      (re) =>
+        [...document.querySelectorAll('.settings-search-hit')].some((h) =>
+          new RegExp(re).test(h.innerText),
+        ),
+      titleRe,
+    );
+  };
+  const tailWord = await byDesc('кнопки', 'Плавающий индикатор');
+  const telemetry = await byDesc('телеметрии', 'Проверять обновления');
+  record(
+    'сценарии',
+    'поиск по настройкам: слова из конца описания тоже находятся',
+    tailWord && telemetry,
+    `кнопки ${tailWord ? 'да' : 'нет'} · телеметрии ${telemetry ? 'да' : 'нет'}`,
   );
   await page.close();
 }
@@ -3075,6 +3145,7 @@ async function main() {
       ['диктовка', scenarioDictation],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],
+      ['переписывание моделью', scenarioModelRewrite],
       ['пропавший микрофон', scenarioMissingMic],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['словарь', scenarioDictionary],
