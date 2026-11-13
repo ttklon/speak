@@ -703,6 +703,44 @@ await check('пропуск движка: whisper получает --prompt со
   if (res?.text !== 'Проверка диктовки') throw new Error(`текст не вернулся: ${JSON.stringify(res)}`);
 });
 
+// ── VAD: длинная диктовка режется по паузам ─────────────────────────────────
+const silencePcm = (ms = 500) => new Uint8Array(Math.round((16000 * ms) / 1000) * 2);
+
+await check('splitBySilence режет по длинной паузе и не режет короткую', () => {
+  const whisperLib = require(path.resolve('electron/whisper.cjs'));
+  if (typeof whisperLib.splitBySilence !== 'function') throw new Error('нет splitBySilence');
+  const join = (...parts) => Buffer.concat(parts.map((p) => Buffer.from(p)));
+  const longPause = join(speechPcm(900), silencePcm(1500), speechPcm(900));
+  const parts = whisperLib.splitBySilence(longPause, 16000);
+  if (parts.length !== 2) throw new Error(`ожидалось 2 фрагмента, вышло ${parts.length}`);
+  const shortPause = join(speechPcm(900), silencePcm(300), speechPcm(900));
+  if (whisperLib.splitBySilence(shortPause, 16000).length !== 1) {
+    throw new Error('короткая пауза разрезала фразу');
+  }
+  const continuous = whisperLib.splitBySilence(Buffer.from(speechPcm(30000)), 16000);
+  if (continuous.length !== 2) throw new Error(`30 секунд речи не разрезаны на 25-секундные куски: ${continuous.length}`);
+});
+
+await check('диктовка с паузой распознаётся по фрагментам', async () => {
+  runWhisper('первая фраза');
+  spawnCalls.length = 0;
+  const pcm = Buffer.concat([
+    Buffer.from(speechPcm(900)),
+    Buffer.from(silencePcm(1500)),
+    Buffer.from(speechPcm(900)),
+  ]);
+  const res = await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: new Uint8Array(pcm),
+    durationMs: 3300,
+    lang: 'ru',
+    model: 'small',
+  });
+  const whisperRuns = spawnCalls.filter((c) => String(c.file).includes('whisper')).length;
+  if (whisperRuns !== 2) throw new Error(`whisper запускался ${whisperRuns} раз вместо 2`);
+  if (res?.chunks !== 2) throw new Error(`фрагментов в ответе: ${res?.chunks}`);
+  if (res?.text !== 'первая фраза. первая фраза.') throw new Error(`текст: ${JSON.stringify(res?.text)}`);
+});
+
 await check('тумблер словаря работает целиком: без словаря и без подсказки', async () => {
   runWhisper('текст');
   spawnCalls.length = 0;

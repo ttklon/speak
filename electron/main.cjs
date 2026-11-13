@@ -889,7 +889,51 @@ function registerIpc() {
     try {
       const started = Date.now();
       const keepLoaded = (store?.get('zs:settings') || {}).keepModelLoaded === true;
-      const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
+      const sr = payload?.sampleRate || 16000;
+      // Длинную диктовку режем по паузам: whisper на цельном файле хуже держит
+      // конец и путает фразы через паузу в несколько секунд. Короткая запись
+      // (одна речевая фраза) идёт одним куском, как раньше.
+      const parts = whisper.splitBySilence?.(trimmed, sr) || [trimmed];
+      let res;
+      if (parts.length > 1 && parts.length <= 40) {
+        const texts = [];
+        let failed = null;
+        for (let i = 0; i < parts.length; i += 1) {
+          const partWav = `${wav}.${i}.wav`;
+          try {
+            fs.writeFileSync(partWav, writeWav(parts[i], sr));
+            // eslint-disable-next-line no-await-in-loop
+            const one = await whisper.transcribe(partWav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
+            if (!one?.ok) {
+              failed = one;
+              break;
+            }
+            if (one.text) texts.push(String(one.text).trim());
+          } finally {
+            fs.rmSync(partWav, { force: true });
+          }
+        }
+        if (failed) {
+          // кусок не распознался — честнее отдать ошибку, чем половину текста
+          logger.warn('stt', 'Фрагмент диктовки не распознан', { keep: true, reason: failed.reason || '' });
+          res = failed;
+        } else {
+          const joined = texts
+            .filter(Boolean)
+            .map((t) => (/[.!?…:;]$/.test(t) ? t : `${t}.`))
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          res = { ok: true, text: joined, parts: texts.length };
+          logger.info('stt', 'Диктовка распознана по фрагментам', {
+            keep: true,
+            parts: texts.length,
+            chars: joined.length,
+          });
+        }
+      } else {
+        res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
+      }
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
       const ms = Date.now() - started;
       // whisper иногда «дослышит» фразу, которой не было (тишина, музыка).
@@ -903,7 +947,12 @@ function registerIpc() {
         chars: String(res?.text || '').length,
         reason: res?.reason || '',
       });
-      return { ...res, ms, audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined };
+      return {
+        ...res,
+        ms,
+        audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined,
+        chunks: parts.length > 1 ? parts.length : undefined,
+      };
     } catch (err) {
       logger.error('stt', 'Исключение в распознавании', { stack: String(err?.stack || err) });
       return { ok: false, text: '', reason: String(err?.message || err) };

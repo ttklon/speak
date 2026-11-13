@@ -444,6 +444,74 @@ function trimSilence(raw, sampleRate = 16000, { threshold = 200, leadMs = 150, t
   return raw.subarray(from * 2, to * 2);
 }
 
+/**
+ * Режет запись на фрагменты по длинным паузам (простой VAD по громкости).
+ *
+ * Зачем: whisper обрабатывает файл целиком и на длинной диктовке хуже держит
+ * конец и путает фразы через паузу в несколько секунд. Режем по паузам длиннее
+ * `minPauseMs`, каждый фрагмент распознаём отдельно и склеиваем текстом.
+ * Тишина внутри фразы (обычная пауза между словами) границей не считается.
+ */
+function splitBySilence(raw, sampleRate = 16000, { minPauseMs = 700, maxSeconds = 25, threshold = 200 } = {}) {
+  const total = Math.floor(raw.length / 2);
+  if (!total) return [raw];
+  const frameMs = 20;
+  const frame = Math.round((sampleRate * frameMs) / 1000);
+  if (!frame) return [raw];
+  const frames = Math.floor(total / frame);
+  if (frames < 2) return [raw];
+
+  const voiced = new Array(frames);
+  for (let f = 0; f < frames; f += 1) {
+    let peak = 0;
+    const start = f * frame;
+    for (let i = start; i < start + frame; i += 1) {
+      const abs = Math.abs(raw.readInt16LE(i * 2));
+      if (abs > peak) peak = abs;
+    }
+    voiced[f] = peak > threshold;
+  }
+
+  const pauseFrames = Math.max(2, Math.round(minPauseMs / frameMs));
+  const speech = [];
+  let from = -1;
+  let lastVoiced = -1;
+  for (let f = 0; f < frames; f += 1) {
+    if (voiced[f]) {
+      if (from < 0) from = f;
+      lastVoiced = f;
+    } else if (from >= 0 && f - lastVoiced >= pauseFrames) {
+      speech.push([from, lastVoiced]);
+      from = -1;
+      lastVoiced = -1;
+    }
+  }
+  if (from >= 0) speech.push([from, lastVoiced]);
+  if (!speech.length) return [raw];
+
+  // запас по краям, чтобы не срезать начало и конец слова
+  const leadFrames = Math.round(300 / frameMs);
+  const tailFrames = Math.round(400 / frameMs);
+  const maxFrames = Math.max(1, Math.round((maxSeconds * 1000) / frameMs));
+  const parts = [];
+  for (const [a, b] of speech) {
+    let start = Math.max(0, a - leadFrames);
+    const end = Math.min(frames, b + tailFrames);
+    while (end - start > maxFrames) {
+      parts.push([start, start + maxFrames]);
+      start += maxFrames;
+    }
+    parts.push([start, end]);
+  }
+  if (parts.length < 2) return [raw];
+  const out = [];
+  for (const [a, b] of parts) {
+    const slice = raw.subarray(a * frame * 2, Math.min(total, b * frame) * 2);
+    if (slice.length >= frame * 2) out.push(slice);
+  }
+  return out.length ? out : [raw];
+}
+
 // Что whisper любит «слышать» в тишине и на музыке. Убираем только целые
 // фразы-галлюцинации: если человек правда сказал «спасибо за просмотр» вместе
 // с остальным текстом — фраза не совпадёт целиком и останется.
@@ -464,6 +532,7 @@ module.exports = {
   findModel,
   analysePcm,
   trimSilence,
+  splitBySilence,
   isPhantom,
   serverStatus,
   stopServer,

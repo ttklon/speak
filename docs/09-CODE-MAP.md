@@ -60,7 +60,7 @@
 | `hud-preload.cjs` | Мост окна индикатора: `window.hudBridge = { stop, close, onState }` — ничего больше |
 | `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native` (включая `hudShow/hudHide/hudUpdate/hudStatus`, `onDictationStop`, `onHudClosed`), `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
 | `store.cjs` | `JsonStore`: `%APPDATA%\ZSpeakly\profile.json`, кэш в памяти, `scheduleFlush` 180 мс, атомарная запись `.tmp` → `rename`, `sizeSync()` |
-| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; запуск с `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -otxt -of`, `--prompt`, таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк. Серверный режим: `ensureServer`/`transcribeViaServer` (whisper-server на 127.0.0.1, `POST /inference` multipart), `stopServer` на `before-quit`, откат на CLI при любой ошибке |
+| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; запуск с `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -otxt -of`, `--prompt`, таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `trimSilence()` (тишина по краям), `splitBySilence()` (VAD по громкости: паузы длиннее 700 мс режут запись на фрагменты, длиннее 25 с — дробятся), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк. Серверный режим: `ensureServer`/`transcribeViaServer` (whisper-server на 127.0.0.1, `POST /inference` multipart), `stopServer` на `before-quit`, откат на CLI при любой ошибке |
 | `models.cjs` | `modelStatus()` (что уже на диске), `downloadModel()` с Hugging Face и прогрессом, `downloadEngine()` — последний релиз `ggml-org/whisper.cpp` с `whisper-bin-x64.zip`, распаковка через `Expand-Archive`, `importModel()` — подхват файла и угадывание типа по размеру |
 | `wav.cjs` | PCM Int16 16 кГц → RIFF/WAVE без зависимостей |
 | `logger.cjs` | Журнал: буфер 400 событий, файл `logs/zspeakly.log` с обрезкой на 512 КБ, `redact()` (почта, `C:\Users\…`, `/home/…`, токены), `scrub()` (выбрасывает `text/transcript/pcm/audio/clipboard/word/prompt/selection`), отправка пачками по 40, `report()`, `ping()`, `sendNow()`, `installId` |
@@ -137,7 +137,8 @@ Ctrl+Alt+Space (глобальный хоткей)
   → engine.stop(): recorder.stop() → { pcm, durationMs }
       проверки: пустая запись / короче 350 мс
   → invoke('stt:transcribe-pcm', { pcm, durationMs, lang, model, useDictionary })
-  → main: WAV во temp → whisper.transcribe(wav, { prompt из словаря })
+  → main: WAV во temp → trimSilence → splitBySilence: одна фраза идёт одним файлом,
+      длинная диктовка — по фрагментам через паузы (каждый в whisper, тексты склеиваются)
   → пришёл текст: applyDictionary (если тумблер включён)
       → postProcess → OPS.clean → история + статистика
       → invoke('text:insert') → clipboard.writeText + SendKeys ^v
