@@ -964,6 +964,56 @@ async function scenarioHudPromise(browser) {
   await page.close();
 }
 
+// «Горячий микрофон»: поток открыт заранее, поэтому в распознавание уходит и
+// звук до нажатия хоткея. Без настройки первое слово теряется — это видно по
+// длительности записи.
+async function scenarioMicPreroll(browser) {
+  const run = async (micPreroll) => {
+    const page = await openPage(browser, '#/home', {
+      settings: { micPreroll },
+      patchNative: () => {
+        const native = window.zspeakly && window.zspeakly.native;
+        if (!native) return;
+        window.__prerollPayload = null;
+        native.transcribePcm = async (payload) => {
+          window.__prerollPayload = { durationMs: payload?.durationMs || 0, bytes: payload?.pcm?.byteLength || 0 };
+          return { ok: true, text: 'проверка предролла', engine: 'whisper' };
+        };
+      },
+    });
+    takeErrors(page);
+    // даём «горячему микрофону» накопить буфер
+    await sleep(micPreroll ? 1200 : 200);
+    await page.evaluate(() => document.querySelector('.hero__mic').click());
+    await sleep(600);
+    await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+    await sleep(1800);
+    const payload = await page.evaluate(() => window.__prerollPayload);
+    const errors = takeErrors(page);
+    await page.close();
+    return { payload, errors };
+  };
+
+  const on = await run(true);
+  const off = await run(false);
+  const onMs = on.payload?.durationMs || 0;
+  const offMs = off.payload?.durationMs || 0;
+  record(
+    'сценарии',
+    'предролл: горячий микрофон добавляет звук до хоткея',
+    onMs > 0 && offMs > 0 && onMs >= offMs + 300,
+    `${onMs} мс против ${offMs} мс без настройки`,
+  );
+  record(
+    'сценарии',
+    'предролл: без настройки запись начинается с нажатия',
+    offMs > 0 && offMs < 1200,
+    `${offMs} мс записи`,
+  );
+  const errors = [...on.errors, ...off.errors];
+  record('сценарии', 'предролл: без ошибок консоли', errors.length === 0, errors[0] || '');
+}
+
 // Микрофон из настроек пропал (выдернули USB): диктовка не должна молча
 // ломаться — пишем с системного и честно говорим об этом.
 async function scenarioMissingMic(browser) {
@@ -3322,6 +3372,7 @@ async function main() {
       ['пропавший микрофон', scenarioMissingMic],
       ['вставка не удалась', scenarioInsertFailed],
       ['обещания плашки', scenarioHudPromise],
+      ['предролл микрофона', scenarioMicPreroll],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['пароли', scenarioPasswordVault],
       ['словарь', scenarioDictionary],

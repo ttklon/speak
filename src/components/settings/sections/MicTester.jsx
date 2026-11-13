@@ -95,6 +95,17 @@ export default function MicTester() {
 
       <div className="setting-row">
         <div className="setting-row__label">
+          Горячий микрофон (предролл)
+          <div className="setting-row__desc">
+            Микрофон открыт, пока приложение запущено: первые ~0,6 секунды фразы не теряются. Пока
+            настройка включена, система показывает, что микрофон работает.
+          </div>
+        </div>
+        <Toggle checked={settings.micPreroll === true} onChange={(v) => updateSettings({ micPreroll: v })} />
+      </div>
+
+      <div className="setting-row">
+        <div className="setting-row__label">
           Тест микрофона
           <div className="setting-row__desc">
             {testing ? 'Говорите что-нибудь 5 секунд.' : 'Проверим, что ZSpeakly слышит вас.'}

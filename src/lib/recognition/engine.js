@@ -134,6 +134,8 @@ export function createRecognizer(opts = {}) {
           recorder = await startPcmRecording({
             deviceId: opts.deviceId || 'default',
             onLevel: (v) => onLevel?.(v),
+            // предролл «горячего микрофона»: звук до нажатия хоткея
+            preroll: opts.preroll || null,
           });
           // выбранный микрофон пропал — пишем с системного, но не молчим
           if (recorder?.fellBack) {

@@ -5,6 +5,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
+import { createMicWarm } from '../lib/audio/micWarm.js';
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS, llmRewrite, polishDictation } from '../lib/ai/textops.js';
@@ -79,6 +80,8 @@ export function DictationProvider({ children }) {
   const { push: pushToast } = useToast();
   // когда последний раз предупреждали, что модель не улучшила диктовку
   const rewriteWarnedAt = useRef(0);
+  // «горячий микрофон»: поток открыт заранее, последние 600 мс лежат в буфере
+  const micWarm = useRef(null);
 
   // ошибка не должна висеть на экране навсегда: 12 секунд — и убираем
   useEffect(() => {
@@ -237,6 +240,29 @@ export function DictationProvider({ children }) {
     [addDictation, recordWords],
   );
 
+  useEffect(() => {
+    const wanted = settingsRef.current?.micPreroll === true && hasNativeStt();
+    const current = micWarm.current;
+    if (!wanted) {
+      current?.close?.();
+      micWarm.current = null;
+      return undefined;
+    }
+    const warm = createMicWarm({
+      prerollMs: 600,
+      deviceId: settingsRef.current?.audioDeviceId || 'default',
+    });
+    micWarm.current = warm;
+    warm.open().catch((err) => {
+      diag.warn('mic', 'Горячий микрофон не открылся', { reason: String(err?.message || err) });
+      if (micWarm.current === warm) micWarm.current = null;
+    });
+    return () => {
+      warm.close();
+      if (micWarm.current === warm) micWarm.current = null;
+    };
+  }, [settings.micPreroll, settings.audioDeviceId]);
+
   const start = useCallback(
     (opts = {}) => {
       if (recRef.current) return;
@@ -310,9 +336,12 @@ export function DictationProvider({ children }) {
           .catch(() => {});
       }
 
+      // предролл забираем один раз: иначе звук прошлой диктовки попадёт в новую
+      const preroll = micWarm.current?.take?.() || null;
       const recognizer = createRecognizer({
         lang: langTag(settingsRef.current.language),
         deviceId: settingsRef.current.audioDeviceId,
+        preroll,
         model: settingsRef.current.whisperModel,
         // словарь идёт в whisper как подсказка только если тумблер включён
         useDictionary: settingsRef.current.dictionaryEnabled !== false,

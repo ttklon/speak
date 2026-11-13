@@ -174,6 +174,9 @@ export const DEFAULT_SETTINGS = {
   // Держать модель в памяти (whisper-server): первая диктовка без холодного старта.
   keepModelLoaded: false,
   audioDeviceId: 'default',
+  // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
+  // По умолчанию выключено — микрофон работал бы всё время.
+  micPreroll: false,
   autoLaunch: false,
   theme: 'dark',
   soundFeedback: true,

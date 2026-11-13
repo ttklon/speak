@@ -79,6 +79,8 @@
 | `state/AppDataProvider.jsx` | Единое состояние: настройки, диктовки, словарь, буфер, хоткеи, пресеты, инструкции, статистика, профиль; персист в `profile.json` / `localStorage`; синхронизация `zs:settings` и `zs:dictionary` в main; очистка по сроку хранения; `exportBackup`/`importBackup` для резервной копии (буфер обмена не выгружается) |
 | `state/DictationProvider.jsx` | Движок диктовки: старт/стоп, живой текст, уровень, таймеры, ошибки, «режим агента», глобальные хоткеи, `Alt+D` в браузере. Плавающий индикатор: в Electron состояние уходит в отдельное окно (`hudShow/hudUpdate/hudHide`, стоп приходит событием `dictation:stop`, крестик — `hud:closed` и индикатор переезжает внутрь окна), в браузере рисуется `DictationHUD` |
 | `state/ToastProvider.jsx` | Тосты с тоном, TTL, действием |
+| `lib/audio/ringBuffer.js` | Кольцевой буфер отсчётов для предролла: `push`, `tail`, `clear` |
+| `lib/audio/micWarm.js` | «Горячий микрофон»: поток и `ScriptProcessor` открыты заранее, последние `prerollMs` лежат в кольце; `take()` отдаёт их записи один раз, `close()` закрывает устройство |
 | `lib/recognition/engine.js` | Выбор движка: `whisper.cpp` → Web Speech → честная ошибка «распознавание недоступно» (выдуманного текста нет) |
 | `lib/recognition/errors.js` | Человеческие тексты ошибок распознавания |
 | `lib/audio/pcmRecorder.js` | `getUserMedia` → `ScriptProcessor` → ресемплинг в 16 кГц → `Int16Array` + RMS-уровень |
@@ -310,9 +312,9 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ## 12. Проверки перед коммитом
 
 ```bash
-npm test                  # 119 тестов (vitest + jsdom)
+npm test                  # 124 теста (vitest + jsdom)
 npm run test:main         # 65 смоук-проверок main-процесса
-npm run test:ui           # E2E: обход кнопок, 66 сценариев (193 проверки), контраст/вёрстка
+npm run test:ui           # E2E: обход кнопок, 67 сценариев (196 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений
