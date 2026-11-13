@@ -918,6 +918,52 @@ async function scenarioInsertFailed(browser) {
   await page.close();
 }
 
+// Плавающая плашка не должна обещать живой текст там, где его нет: у whisper.cpp
+// расшифровка появляется только после остановки.
+async function scenarioHudPromise(browser) {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 400, height: 140, deviceScaleFactor: 1 });
+  await page.evaluateOnNewDocument(() => {
+    window.__hudState = null;
+    window.hudBridge = {
+      onState: (cb) => {
+        window.__hudPush = cb;
+      },
+      stop: () => {},
+      close: () => {},
+    };
+  });
+  await page.goto(`${BASE}/electron/hud.html`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#text', { timeout: 10_000 });
+  const textFor = async (engine) => {
+    await page.evaluate(
+      (eng) => window.__hudPush({ state: 'listening', level: 0.3, elapsed: 900, draft: '', engine: eng }),
+      engine,
+    );
+    await sleep(150);
+    return page.evaluate(() => document.getElementById('text').textContent);
+  };
+  const whisper = await textFor('whisper.cpp (офлайн)');
+  const web = await textFor('');
+  const draft = await page.evaluate(() => {
+    window.__hudPush({ state: 'listening', level: 0.3, elapsed: 900, draft: 'привет как дела', engine: 'whisper.cpp (офлайн)' });
+    return document.getElementById('text').textContent;
+  });
+  record(
+    'сценарии',
+    'плашка: с whisper не обещает живой текст',
+    /после остановки/i.test(whisper) && !/текст появится здесь/i.test(whisper),
+    whisper,
+  );
+  record(
+    'сценарии',
+    'плашка: живой текст браузерного движка подписан честно',
+    /текст появится здесь/i.test(web) && draft === 'привет как дела',
+    `${web} · черновик: ${draft}`,
+  );
+  await page.close();
+}
+
 // Микрофон из настроек пропал (выдернули USB): диктовка не должна молча
 // ломаться — пишем с системного и честно говорим об этом.
 async function scenarioMissingMic(browser) {
@@ -3275,6 +3321,7 @@ async function main() {
       ['переписывание моделью', scenarioModelRewrite],
       ['пропавший микрофон', scenarioMissingMic],
       ['вставка не удалась', scenarioInsertFailed],
+      ['обещания плашки', scenarioHudPromise],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['пароли', scenarioPasswordVault],
       ['словарь', scenarioDictionary],

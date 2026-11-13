@@ -203,10 +203,16 @@
         const seconds = Math.max(0, (p.elapsed || 0) / 1000);
         timeEl.textContent = state === 'idle' || state === 'error' ? '' : `${seconds.toFixed(1)} с`;
         const draft = (p.draft || '').trim();
+        // У whisper.cpp промежуточного текста нет — обещать «текст появится здесь»
+        // нельзя: честнее сказать, что расшифровка будет после остановки.
+        const noLiveText = /whisper/i.test(String(p.engine || ''));
+        const idleHint = noLiveText
+          ? 'Говорите — расшифровка появится после остановки'
+          : 'Говорите — текст появится здесь';
         textEl.textContent =
           state === 'error'
             ? p.hint || 'Проверьте микрофон и движок в настройках'
-            : draft || (state === 'processing' ? 'Распознаю запись…' : 'Говорите — текст появится здесь');
+            : draft || (state === 'processing' ? 'Распознаю запись…' : idleHint);
         // кнопка «стоп» нужна только пока идёт запись
         stopBtn.hidden = state !== 'listening';
       }

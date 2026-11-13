@@ -621,11 +621,13 @@ export function DictationProvider({ children }) {
       level,
       elapsed,
       draft,
+      // движок нужен плашке, чтобы не обещать живой текст там, где его нет
+      engine,
       error: error?.title || '',
       hint: hintFull,
       hintFull,
     });
-  }, [state, level, elapsed, draft, error, hudAllowed]);
+  }, [state, level, elapsed, draft, error, hudAllowed, engine]);
 
   // Сообщаем main, что реально происходит: от этого зависят пункт
   // «Остановить диктовку» в трее и поведение глобального сочетания.
