@@ -47,6 +47,10 @@ let updater = null;
 let lastClipboardText = '';
 let windowHiddenForInsert = false;
 let lastInsertedText = '';
+let lastInsertedAt = 0;
+// Свою же вставку считаем «своей» только пару секунд: иначе человек,
+// скопировавший ту же фразу позже, не увидел бы её в истории буфера.
+const OWN_TEXT_TTL = 2000;
 let lastClipboardImageHash = '';
 
 // ── Одиночный экземпляр ────────────────────────────────────────────────────
@@ -722,7 +726,8 @@ function startClipboardWatch() {
 
     const text = clipboard.readText();
     // свой вставленный диктант не пишем в историю буфера
-    const ownText = Boolean(text) && text === lastInsertedText;
+    const ownText =
+      Boolean(text) && text === lastInsertedText && Date.now() - lastInsertedAt < OWN_TEXT_TTL;
     if (ownText) lastClipboardText = text;
     else if (text && text !== lastClipboardText) {
       lastClipboardText = text;
@@ -914,6 +919,7 @@ function registerIpc() {
     const value = String(text || '');
     if (!value) return false;
     lastInsertedText = value;
+    lastInsertedAt = Date.now();
     lastClipboardText = value; // чтобы мониторинг не добавил это в историю
     // Вставляем через буфер обмена, но чужой буфер не съедаем: копируем текст,
     // вставляем его в активное окно и возвращаем прежнее содержимое. Иначе
@@ -1362,6 +1368,7 @@ function readSelection() {
 function replaceSelection(text) {
   return new Promise((resolve) => {
     lastInsertedText = String(text || '');
+    lastInsertedAt = Date.now();
     lastClipboardText = lastInsertedText;
     clipboard.writeText(String(text || ''));
     setTimeout(() => {

@@ -582,6 +582,21 @@ await check('своя вставка не попадает в историю б�
   }
 });
 
+await check('та же фраза, скопированная позже, снова попадает в историю', async () => {
+  await handlers.get('text:insert')({}, 'та же фраза');
+  sentEvents.length = 0;
+  // ждём, пока истечёт окно «это моя же вставка», и буфер вернётся к прежнему
+  await new Promise((r) => setTimeout(r, 2400));
+  clipboardText.value = 'другой текст';
+  await new Promise((r) => setTimeout(r, 1100));
+  clipboardText.value = 'та же фраза';
+  await new Promise((r) => setTimeout(r, 1100));
+  const texts = sentEvents.filter((e) => e.ch === 'clipboard:item').map((e) => e.payload.text);
+  if (!texts.includes('та же фраза')) {
+    throw new Error(`фраза не попала в историю буфера: ${JSON.stringify(texts)}`);
+  }
+});
+
 await check('выключенный мониторинг молчит', async () => {
   await handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: false });
   clipboardText.value = 'это не должно попасть в историю';
