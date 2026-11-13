@@ -689,6 +689,38 @@ await check('паузы по краям записи обрезаются пер
   if (whisper.trimSilence(Buffer.alloc(rate * 2), rate).length !== rate * 2) throw new Error('тишина обрезана зря');
 });
 
+await check('оценка записи: тишина, шёпот и речь различаются', () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const rate = 16000;
+  const make = (amp) => {
+    const pcm = new Int16Array(rate);
+    for (let i = 0; i < rate; i += 1) pcm[i] = Math.round(amp * Math.sin((2 * Math.PI * 180 * i) / rate));
+    return Buffer.from(pcm.buffer);
+  };
+  const silence = whisper.analysePcm(Buffer.alloc(rate * 2), rate);
+  if (silence.samples !== rate) throw new Error(`сэмплов: ${silence.samples}`);
+  if (Math.abs(silence.seconds - 1) > 0.001) throw new Error(`секунд: ${silence.seconds}`);
+  if (silence.rms !== 0 || silence.peak !== 0) throw new Error('тишина не нулевая');
+
+  const quiet = whisper.analysePcm(make(300), rate);
+  const loud = whisper.analysePcm(make(6000), rate);
+  if (!(loud.rms > quiet.rms && quiet.rms > 0)) throw new Error(`rms ${quiet.rms}/${loud.rms}`);
+  if (!(loud.peak > 5000)) throw new Error(`пик: ${loud.peak}`);
+  // пустой буфер не должен делить на ноль
+  const empty = whisper.analysePcm(Buffer.alloc(0), rate);
+  if (empty.samples !== 0 || empty.seconds !== 0) throw new Error('пустой буфер посчитан неверно');
+});
+
+await check('фразы-галлюцинации отбрасываются, живой текст остаётся', () => {
+  const { isPhantom } = require(path.resolve('electron/whisper.cjs'));
+  for (const bad of ['Спасибо за просмотр!', '  Продолжение следует  ', 'Thank you for watching.', 'Подписывайтесь на канал']) {
+    if (!isPhantom(bad)) throw new Error(`пропущена галлюцинация: ${bad}`);
+  }
+  for (const good of ['Спасибо за просмотр, теперь про отчёты', 'Конец квартала нужно закрыть', '', 'Привет']) {
+    if (isPhantom(good)) throw new Error(`удалён живой текст: ${good}`);
+  }
+});
+
 await check('импорт модели: чужой файл не подключается, ggml — да', async () => {
   const modelsMod = require(path.resolve('electron/models.cjs'));
   const tmpDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'zs-model-'));
@@ -754,6 +786,37 @@ await check('индикатор: «стоп» и «скрыть» работаю
   await handlers.get('hud:hide')({});
   const after = await handlers.get('hud:status')({});
   if (after.open) throw new Error('после hide индикатор всё ещё открыт');
+});
+
+await check('трей и сочетание знают реальное состояние записи', async () => {
+  const stateHandler = onHandlers.get('dictation:state');
+  if (!stateHandler) throw new Error('нет обработчика dictation:state');
+  stateHandler({}, 'listening');
+  const menu = trayTemplates[trayTemplates.length - 1] || [];
+  if (!menu.some((i) => i.label === 'Остановить диктовку')) throw new Error('нет пункта стопа при записи');
+  stateHandler({}, 'idle');
+  const idleMenu = trayTemplates[trayTemplates.length - 1] || [];
+  if (idleMenu.some((i) => i.label === 'Остановить диктовку')) throw new Error('стоп остался после записи');
+  // мусор в событии не должен ломать состояние
+  stateHandler({}, 'что-то странное');
+  const stillNoStop = (trayTemplates[trayTemplates.length - 1] || []).some(
+    (i) => i.label === 'Остановить диктовку',
+  );
+  if (stillNoStop) throw new Error('неизвестное состояние включило запись');
+});
+
+await check('трей: во время записи появляется «Остановить диктовку»', async () => {
+  await handlers.get('hud:show')({});
+  const withStop = trayTemplates[trayTemplates.length - 1] || [];
+  const item = withStop.find((i) => i.label === 'Остановить диктовку');
+  if (!item) throw new Error(`в меню нет стопа: ${withStop.map((i) => i.label || i.type).join(' · ')}`);
+  sentEvents.length = 0;
+  item.click();
+  const ev = sentEvents.find((e) => e.ch === 'dictation:stop');
+  if (!ev || ev.payload?.from !== 'tray') throw new Error('пункт меню не останавливает запись');
+  await handlers.get('hud:hide')({});
+  const withoutStop = trayTemplates[trayTemplates.length - 1] || [];
+  if (withoutStop.some((i) => i.label === 'Остановить диктовку')) throw new Error('стоп остался в меню после записи');
 });
 
 await check('models:warm честно отказывает без whisper-server', async () => {

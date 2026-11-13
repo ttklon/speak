@@ -164,7 +164,7 @@ Ctrl+Alt+E (или своя инструкция)
 
 ## 5. IPC: полный контракт
 
-Проверяется `npm run check:ipc` (сейчас 52 invoke-канала, 55 обработчиков).
+Проверяется `npm run check:ipc` (сейчас 52 invoke-канала, 56 обработчиков, 1 send).
 
 | Группа | Каналы |
 | --- | --- |
@@ -179,7 +179,7 @@ Ctrl+Alt+E (или своя инструкция)
 | Файлы и система | `app:open-data-folder`, `app:open-external` (белый список GitHub), `app:auto-launch`, `app:open-logs`, `app:save-file`, `app:notify`, `app:noop` |
 | Модели | `models:status`, `models:download`, `models:download-engine`, `models:import` |
 | Обновления | `update:check`, `update:channel`, `update:download`, `update:install` |
-| Индикатор диктовки | `hud:show`, `hud:hide`, `hud:update`, `hud:stop`, `hud:close`, `hud:status` — отдельное окно поверх всех приложений |
+| Индикатор диктовки | `hud:show`, `hud:hide`, `hud:update`, `hud:stop`, `hud:close`, `hud:status` — отдельное окно поверх всех приложений; `dictation:state` (send) — рендерер сообщает реальное состояние записи для трея и глобального сочетания |
 
 События main → renderer: `hotkey`, `text-action`, `command`, `navigate`,
 `clipboard:item`, `clipboard:action`, `model:progress`, `update:status`,

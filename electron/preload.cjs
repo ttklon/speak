@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     hudStatus: () => ipcRenderer.invoke('hud:status'),
     onDictationStop: (cb) => on('dictation:stop', cb),
     onHudClosed: (cb) => on('hud:closed', cb),
+    dictationState: (state) => ipcRenderer.send('dictation:state', state),
     checkUpdates: () => ipcRenderer.invoke('update:check'),
     setUpdateChannel: (channel) => ipcRenderer.invoke('update:channel', channel),
     downloadUpdate: () => ipcRenderer.invoke('update:download'),

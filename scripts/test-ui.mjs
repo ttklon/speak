@@ -206,6 +206,11 @@ async function health(page) {
       rootEmpty: !root || root.children.length === 0,
       crashed: /Что-то пошло не так|Application error|Cannot read properties/i.test(text),
       title: text.split('\n').filter(Boolean).slice(0, 2).join(' · ').slice(0, 80),
+      // чем ещё может ответить кнопка, кроме вызова моста: переход по hash,
+      // открытие модалки/оверлея или изменение текста на экране
+      hash: location.hash,
+      modal: Boolean(document.querySelector('.modal, .settings-modal, .palette, .dropdown, [role="dialog"]')),
+      textLen: text.length,
     };
   });
 }
@@ -312,6 +317,7 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
     if (process.env.ZS_TRACE === '1') console.log(C.dim(`      → ${label} / ${target.label || target.tag}`));
     takeErrors(p);
     const before = await bridgeCalls(p);
+    const beforeState = await health(p).catch(() => null);
     // Нажатие может увести документ (ссылка, form submit, download). Раньше
     // такой клик ронял весь прогон «Execution context was destroyed» и
     // остальные экраны вообще не проверялись. Теперь это отдельная находка.
@@ -417,7 +423,16 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
       continue;
     }
 
-    if (fired === 0 && target.tag === 'BUTTON' && !/tab|view|is-active/i.test(target.cls)) {
+    // «Ничего не произошло» — это когда нет ни вызова моста, ни смены экрана,
+    // ни открывшейся модалки, ни изменившегося текста. Раньше кнопки навигации
+    // попадали в этот список зря: они меняют hash, а не дергают main.
+    const reacted =
+      fired > 0 ||
+      (beforeState &&
+        (state.hash !== beforeState.hash ||
+          (state.modal && !beforeState.modal) ||
+          state.textLen !== beforeState.textLen));
+    if (!reacted && target.tag === 'BUTTON' && !/tab|view|is-active/i.test(target.cls)) {
       dead.push(`${target.label || target.cls || target.tag}`);
     }
     await p.close();
@@ -616,17 +631,29 @@ async function scenarioFloatingHud(browser) {
     JSON.stringify(stateCall?.args?.[0] || null),
   );
   record('сценарии', 'индикатор: внутри окна второй плашки нет', inWindowHud === 0, String(inWindowHud));
+  // main должен знать, что запись идёт — иначе пункт трея и сочетание врут
+  const stateReports = await page.evaluate(() => ({
+    listening: window.__e2e.countOf('dictation:state'),
+    last: window.__e2e.last('dictation:state')?.args?.[0],
+  }));
+  record(
+    'сценарии',
+    'индикатор: main получает реальное состояние записи',
+    stateReports.listening > 0 && stateReports.last === 'listening',
+    JSON.stringify(stateReports),
+  );
 
   // кнопка «стоп» на плавающем окне приходит событием из main
   await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
   await sleep(900);
   const stopped = await bridgeCalls(page);
   const body = await textOf(page, '.app-window');
+  const stoppedState = await page.evaluate(() => window.__e2e.last('dictation:state')?.args?.[0]);
   record(
     'сценарии',
     'индикатор: кнопка «стоп» останавливает запись',
-    stopped.includes('hud:hide') && !/Слушаю…/i.test(body),
-    stopped.join(','),
+    stopped.includes('hud:hide') && !/Слушаю…/i.test(body) && stoppedState !== 'listening',
+    `${stopped.slice(-3).join(',')} state=${stoppedState}`,
   );
 
   // «Крестик» на плавающем окне: запись продолжается, индикатор переезжает

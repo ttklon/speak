@@ -111,6 +111,7 @@ export function installMockBridge() {
     },
     onDictationStop: subscribe('dictation:stop'),
     onHudClosed: subscribe('hud:closed'),
+    dictationState: (state) => record('dictation:state', [state]),
     available: true,
     platform: 'win32',
 

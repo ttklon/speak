@@ -36,6 +36,8 @@ let store = null;
 // Отдельное «плавающее» окно индикатора диктовки: видно поверх любых
 // приложений и не забирает фокус, поэтому вставка идёт туда, где человек печатал.
 let hudWindow = null;
+// идёт ли сейчас диктовка (для пункта «Остановить диктовку» в трее)
+let hudActive = false;
 let clipboardTimer = null;
 let updater = null;
 let lastClipboardText = '';
@@ -173,6 +175,15 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     { label: `Диктовка (старт/стоп) — ${prettyAccel(trayDictKey)}`, click: () => toggleDictation() },
+    // Пока идёт запись, из трея можно остановить её, не ища индикатор
+    ...(recordingState === 'listening' || hudActive
+      ? [
+          {
+            label: 'Остановить диктовку',
+            click: () => mainWindow?.webContents.send('dictation:stop', { from: 'tray' }),
+          },
+        ]
+      : []),
     { label: 'Буфер обмена', click: () => navigate('clipboard') },
     { label: 'Настройки', click: () => sendCommand('settings') },
     { type: 'separator' },
@@ -250,6 +261,12 @@ function createHudWindow() {
   return hudWindow;
 }
 
+function setHudActive(active) {
+  if (hudActive === active) return;
+  hudActive = active;
+  refreshTrayMenu();
+}
+
 function showHudWindow() {
   const win = createHudWindow();
   try {
@@ -257,6 +274,7 @@ function showHudWindow() {
   } catch {
     /* ignore */
   }
+  setHudActive(true);
   return true;
 }
 
@@ -266,6 +284,7 @@ function hideHudWindow() {
   } catch {
     /* ignore */
   }
+  setHudActive(false);
   return true;
 }
 
@@ -278,7 +297,19 @@ function sendHudState(state) {
   }
 }
 
+// Рендерер сообщает, что реально происходит с записью: по этому состоянию
+// трей показывает «Остановить диктовку», а глобальное сочетание понимает,
+// слушаем мы сейчас или нет.
+let recordingState = 'idle';
+
 function registerHudIpc() {
+  ipcMain.on('dictation:state', (_e, next) => {
+    const state = ['listening', 'processing', 'done', 'idle'].includes(next) ? next : 'idle';
+    if (state === recordingState) return;
+    recordingState = state;
+    dictationActive = state === 'listening';
+    refreshTrayMenu();
+  });
   ipcMain.handle('hud:show', () => showHudWindow());
   ipcMain.handle('hud:hide', () => hideHudWindow());
   ipcMain.handle('hud:update', (_e, state) => {
@@ -321,6 +352,9 @@ let dictationActive = false;
 let windowWasHiddenForDictation = false;
 
 function toggleDictation() {
+  // Обычно переключаем своё состояние, но если запись остановили кнопкой на
+  // плашке, рендерер уже сообщил «idle» — тогда следующее нажатие начинает
+  // заново, а не пытается «остановить» пустоту.
   dictationActive = !dictationActive;
   mainWindow?.webContents.send('hotkey', { type: dictationActive ? 'down' : 'up' });
   // если окно скрыто в трее — на время диктовки оно должно быть на экране,

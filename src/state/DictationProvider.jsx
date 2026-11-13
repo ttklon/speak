@@ -526,6 +526,12 @@ export function DictationProvider({ children }) {
     });
   }, [state, level, elapsed, draft, error, hudAllowed]);
 
+  // Сообщаем main, что реально происходит: от этого зависят пункт
+  // «Остановить диктовку» в трее и поведение глобального сочетания.
+  useEffect(() => {
+    window.zspeakly?.native?.dictationState?.(state);
+  }, [state]);
+
   // «Крестик» на плавающем окне: запись продолжается, но индикатор переезжает
   // внутрь окна приложения — иначе остановить запись было бы нечем.
   useEffect(() => {
