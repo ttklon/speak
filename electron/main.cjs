@@ -1035,8 +1035,21 @@ function registerIpc() {
     const hadImage = previousImage && !previousImage.isEmpty();
     clipboard.writeText(value);
     const pasted = await pasteToActiveWindow();
+    if (!pasted) {
+      // Вставка не удалась — и тогда текст ОСТАЁТСЯ в буфере: именно это
+      // обещает тост «Текст скопирован в буфер, нажмите Ctrl+V». Раньше буфер
+      // всё равно восстанавливался через 700 мс, и обещанного текста там не было.
+      lastClipboardText = value;
+      return false;
+    }
     setTimeout(() => {
       try {
+        // Если за эти полсекунды человек успел что-то скопировать сам — его
+        // содержимое важнее нашего восстановления, буфер не перетираем.
+        if (clipboard.readText() !== value) {
+          lastClipboardText = clipboard.readText();
+          return;
+        }
         if (hadImage) clipboard.writeImage(previousImage);
         else if (previousText) clipboard.writeText(previousText);
         // буфер вернулся к прежнему значению — мониторинг не должен считать
@@ -1045,7 +1058,7 @@ function registerIpc() {
       } catch {
         /* ignore */
       }
-    }, 700);
+    }, 500);
     return pasted;
   });
   ipcMain.handle('text:paste', () => pasteToActiveWindow());

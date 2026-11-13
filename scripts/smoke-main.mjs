@@ -199,12 +199,15 @@ const electronStub = {
 // перехватываем spawn/execFile — никаких реальных процессов в тесте
 const spawnCalls = [];
 // что «ответит» фейковый whisper (см. cpStub.spawn); null — процесс просто молчит
-const spawnPlan = { answer: null };
+const spawnPlan = { answer: null, execError: false };
 const globalShortcutRegs = [];
 const cpStub = {
   execFile: (file, args, opts, cb) => {
     spawnCalls.push({ file, args });
-    if (typeof cb === 'function') setTimeout(() => cb(null, '', ''), 0);
+    // execError: притворяемся, что SendKeys недоступен (окно с правами админа)
+    if (typeof cb === 'function') {
+      setTimeout(() => (spawnPlan.execError ? cb(new Error('SendKeys недоступен')) : cb(null, '', '')), 0);
+    }
     return { on: () => {} };
   },
   exec: (cmd, opts, cb) => {
@@ -455,6 +458,58 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
     const pasted = calls.some((c) => /SendKeys\]::SendWait\('\^v'\)/.test(c));
     if (!pasted) throw new Error(`не нашёл Ctrl+V: ${calls.join(' | ') || 'пусто'}`);
     if (clipboardText.value !== 'привет из диктовки') throw new Error('текст не в буфере');
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('неудачная вставка оставляет текст в буфере — как обещает тост', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    clipboardText.value = 'чужой текст';
+    spawnPlan.execError = true;
+    const ok = await handlers.get('text:insert')({}, 'диктовка в буфере');
+    await new Promise((r) => setTimeout(r, 900));
+    if (ok !== false) throw new Error('вставка выдана за успешную');
+    if (clipboardText.value !== 'диктовка в буфере') {
+      throw new Error(`в буфере: ${clipboardText.value} — обещанного текста нет`);
+    }
+  } finally {
+    spawnPlan.execError = false;
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('восстановление буфера не перетирает то, что человек скопировал сам', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    clipboardText.value = 'было в буфере';
+    const ok = await handlers.get('text:insert')({}, 'вставка прошла');
+    if (ok !== true) throw new Error('вставка не удалась');
+    await new Promise((r) => setTimeout(r, 120));
+    clipboardText.value = 'человек скопировал своё';
+    await new Promise((r) => setTimeout(r, 900));
+    if (clipboardText.value !== 'человек скопировал своё') {
+      throw new Error(`буфер перетёрт: ${clipboardText.value}`);
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('после успешной вставки возвращается прежний буфер', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    clipboardText.value = 'прежнее содержимое';
+    const ok = await handlers.get('text:insert')({}, 'диктованный текст');
+    if (ok !== true) throw new Error('вставка не удалась');
+    await new Promise((r) => setTimeout(r, 900));
+    if (clipboardText.value !== 'прежнее содержимое') {
+      throw new Error(`в буфере осталось: ${clipboardText.value}`);
+    }
   } finally {
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   }
@@ -1100,11 +1155,16 @@ await check('фраза-галлюцинация отбрасывается, а 
   if (!Number.isFinite(real.ms)) throw new Error('не вернулось время распознавания');
 });
 
-await check('буфер обмена восстанавливается после вставки', async () => {
+await check('вне Windows текст остаётся в буфере: вставлять некуда', async () => {
+  // на не-Windows sendKeys не работает, значит вставки не было и буфер должен
+  // сохранить текст — ровно то, что обещает тост «нажмите Ctrl+V»
   clipboardText.value = 'моя заметка';
-  await handlers.get('text:insert')({}, 'надиктованный текст');
+  const ok = await handlers.get('text:insert')({}, 'надиктованный текст');
   await new Promise((r) => setTimeout(r, 900));
-  if (clipboardText.value !== 'моя заметка') throw new Error(`в буфере осталось: ${clipboardText.value}`);
+  if (ok !== false) throw new Error('вставка выдана за успешную');
+  if (clipboardText.value !== 'надиктованный текст') {
+    throw new Error(`в буфере осталось: ${clipboardText.value}`);
+  }
 });
 
 await check('пустая запись не запускает whisper', async () => {

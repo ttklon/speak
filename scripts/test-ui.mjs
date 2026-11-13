@@ -886,6 +886,38 @@ async function scenarioModelRewrite(browser) {
   record('сценарии', 'модель: без ошибок консоли', errors.length === 0, errors[0] || '');
 }
 
+// Вставка в чужое окно не удалась (окно с правами администратора): текст
+// остаётся в буфере, и об этом сказано — иначе диктовка выглядит сломанной.
+async function scenarioInsertFailed(browser) {
+  const page = await openPage(browser, '#/home', {
+    patchNative: () => {
+      const native = window.zspeakly && window.zspeakly.native;
+      if (!native) return;
+      native.transcribePcm = async () => ({ ok: true, text: 'ну привет как дела', engine: 'whisper' });
+      // main отвечает false, когда SendKeys не сработал
+      native.insertText = async () => false;
+    },
+  });
+  takeErrors(page);
+  await page.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const state = await page.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+    stored: (window.__e2e.read('zs.dictations') || [])[0]?.text || '',
+  }));
+  record(
+    'сценарии',
+    'вставка не удалась: текст в истории и тост «скопирован в буфер»',
+    /скопирован в буфер/i.test(state.toast) && state.stored === 'Привет как дела.',
+    `${state.stored} · ${state.toast.slice(0, 60)}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'вставка не удалась: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Микрофон из настроек пропал (выдернули USB): диктовка не должна молча
 // ломаться — пишем с системного и честно говорим об этом.
 async function scenarioMissingMic(browser) {
@@ -3242,6 +3274,7 @@ async function main() {
       ['постобработка текста', scenarioCleanupToggle],
       ['переписывание моделью', scenarioModelRewrite],
       ['пропавший микрофон', scenarioMissingMic],
+      ['вставка не удалась', scenarioInsertFailed],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['пароли', scenarioPasswordVault],
       ['словарь', scenarioDictionary],
