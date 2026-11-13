@@ -92,6 +92,25 @@ export function installMockBridge() {
   const noopSubscription = subscribe;
 
   const native = {
+    // плавающий индикатор диктовки (в Electron — отдельное окно поверх всех)
+    hudShow: async () => {
+      record('hud:show');
+      return true;
+    },
+    hudHide: async () => {
+      record('hud:hide');
+      return true;
+    },
+    hudUpdate: async (state) => {
+      record('hud:update', [state]);
+      return true;
+    },
+    hudStatus: async () => {
+      record('hud:status');
+      return { open: true };
+    },
+    onDictationStop: subscribe('dictation:stop'),
+    onHudClosed: subscribe('hud:closed'),
     available: true,
     platform: 'win32',
 

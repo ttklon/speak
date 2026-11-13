@@ -72,6 +72,13 @@ contextBridge.exposeInMainWorld('zspeakly', {
     downloadEngine: () => ipcRenderer.invoke('models:download-engine'),
     importModel: (filePath) => ipcRenderer.invoke('models:import', filePath),
     onModelProgress: (cb) => on('model:progress', cb),
+    // плавающий индикатор диктовки (отдельное окно поверх всех приложений)
+    hudShow: () => ipcRenderer.invoke('hud:show'),
+    hudHide: () => ipcRenderer.invoke('hud:hide'),
+    hudUpdate: (state) => ipcRenderer.invoke('hud:update', state),
+    hudStatus: () => ipcRenderer.invoke('hud:status'),
+    onDictationStop: (cb) => on('dictation:stop', cb),
+    onHudClosed: (cb) => on('hud:closed', cb),
     checkUpdates: () => ipcRenderer.invoke('update:check'),
     setUpdateChannel: (channel) => ipcRenderer.invoke('update:channel', channel),
     downloadUpdate: () => ipcRenderer.invoke('update:download'),

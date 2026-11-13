@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>ZSpeakly — диктовка</title>
+    <style>
+      /*
+       * Отдельное всегда-сверху окно индикатора. Оно не забирает фокус,
+       * поэтому Enter/Ctrl+V в чужом приложении продолжает работать.
+       */
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        color: #f2f2f3;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .hud {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 100%;
+        padding: 10px 12px;
+        border-radius: 16px;
+        background: rgba(24, 24, 26, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      }
+      .pulse {
+        position: relative;
+        flex: 0 0 auto;
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+      }
+      .ring,
+      .ring2 {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 1px solid rgba(21, 198, 96, 0.55);
+        transform: scale(calc(0.7 + var(--level, 0) * 0.5));
+        opacity: calc(0.35 + var(--level, 0) * 0.65);
+      }
+      .ring2 {
+        inset: -6px;
+        opacity: calc(0.12 + var(--level, 0) * 0.35);
+      }
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #15c660;
+        box-shadow: 0 0 12px rgba(21, 198, 96, 0.7);
+      }
+      .hud[data-state='processing'] .dot,
+      .hud[data-state='idle'] .dot {
+        background: #a0a0a8;
+        box-shadow: none;
+      }
+      .hud[data-state='error'] .dot {
+        background: #ff6b6b;
+        box-shadow: 0 0 12px rgba(255, 107, 107, 0.6);
+      }
+      .body {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .title {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .time {
+        font-size: 10.5px;
+        font-weight: 500;
+        color: #8b8b93;
+        font-variant-numeric: tabular-nums;
+      }
+      .text {
+        margin-top: 2px;
+        font-size: 10.5px;
+        line-height: 1.35;
+        color: #9c9ca4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .hud[data-state='error'] .text {
+        color: #ff9a9a;
+      }
+      .actions {
+        display: flex;
+        gap: 6px;
+        flex: 0 0 auto;
+      }
+      button {
+        width: 28px;
+        height: 28px;
+        border-radius: 9px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        background: rgba(255, 255, 255, 0.06);
+        color: #e9e9ec;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        padding: 0;
+        transition: background 0.15s ease, border-color 0.15s ease;
+      }
+      button:hover {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+      button:focus-visible {
+        outline: 2px solid #15c660;
+        outline-offset: 1px;
+      }
+      button.stop {
+        background: rgba(255, 107, 107, 0.16);
+        border-color: rgba(255, 107, 107, 0.35);
+        color: #ffb3b3;
+      }
+      button.stop:hover {
+        background: rgba(255, 107, 107, 0.26);
+      }
+      button[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="hud" id="hud" data-state="listening">
+      <div class="pulse" id="pulse">
+        <span class="ring"></span>
+        <span class="ring2"></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="title">
+          <span id="title">Слушаю…</span>
+          <span class="time" id="time">0.0 с</span>
+        </div>
+        <div class="text" id="text">Говорите — текст появится здесь</div>
+      </div>
+      <div class="actions">
+        <button id="stop" class="stop" type="button" title="Остановить запись" aria-label="Остановить запись">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <rect x="1" y="1" width="8" height="8" rx="1.5" fill="currentColor" />
+          </svg>
+        </button>
+        <button id="close" type="button" title="Скрыть индикатор (запись продолжится)" aria-label="Скрыть индикатор">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <script>
+      const hud = document.getElementById('hud');
+      const pulse = document.getElementById('pulse');
+      const titleEl = document.getElementById('title');
+      const timeEl = document.getElementById('time');
+      const textEl = document.getElementById('text');
+      const stopBtn = document.getElementById('stop');
+      const closeBtn = document.getElementById('close');
+
+      const STATE_TITLE = {
+        listening: 'Слушаю…',
+        processing: 'Транскрибирую…',
+        idle: 'Запись остановлена',
+        error: 'Не получилось',
+      };
+
+      function render(payload) {
+        const p = payload || {};
+        const state = p.error ? 'error' : p.state || 'listening';
+        hud.dataset.state = state;
+        pulse.style.setProperty('--level', String(Math.max(0, Math.min(1, p.level || 0))));
+        titleEl.textContent = p.error || STATE_TITLE[state] || STATE_TITLE.listening;
+        const seconds = Math.max(0, (p.elapsed || 0) / 1000);
+        timeEl.textContent = state === 'idle' || state === 'error' ? '' : `${seconds.toFixed(1)} с`;
+        const draft = (p.draft || '').trim();
+        textEl.textContent =
+          state === 'error'
+            ? p.hint || 'Проверьте микрофон и движок в настройках'
+            : draft || (state === 'processing' ? 'Распознаю запись…' : 'Говорите — текст появится здесь');
+        // кнопка «стоп» нужна только пока идёт запись
+        stopBtn.hidden = state !== 'listening';
+      }
+
+      stopBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.hudBridge?.stop();
+      });
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.hudBridge?.close();
+      });
+      // Esc останавливает запись, даже если фокус остался в чужом окне
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') window.hudBridge?.stop();
+      });
+
+      window.hudBridge?.onState(render);
+      render({ state: 'listening', level: 0, elapsed: 0, draft: '' });
+    </script>
+  </body>
+</html>

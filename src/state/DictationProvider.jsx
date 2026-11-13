@@ -50,6 +50,9 @@ export function DictationProvider({ children }) {
   const [mode, setMode] = useState('hold');
   const [elapsed, setElapsed] = useState(0);
   const [hudOpen, setHudOpen] = useState(false);
+  // отдельное окно индикатора реально показано (а не просто «должно быть»)
+  const [hudNativeOn, setHudNativeOn] = useState(false);
+  const hudHiddenByUser = useRef(false);
 
   const recRef = useRef(null);
   const startedAt = useRef(0);
@@ -160,6 +163,8 @@ export function DictationProvider({ children }) {
     (opts = {}) => {
       if (recRef.current) return;
       sessionOpts.current = opts;
+      // новая диктовка — снова показываем плавающее окно, даже если прошлое скрыли
+      hudHiddenByUser.current = false;
       setError(null);
       setDraft('');
       draftRef.current = '';
@@ -473,6 +478,75 @@ export function DictationProvider({ children }) {
     if (state === 'listening') setHudOpen(true);
   }, [state]);
 
+  // ── Плавающий индикатор в отдельном окне (только Electron) ────────────────
+  // Внутри главного окна индикатор виден лишь когда окно на экране: свернул
+  // приложение — и запись «потерялась». Отдельное окно поверх всех приложений
+  // показывает уровень, время и кнопки «стоп»/«скрыть».
+  const nativeHud = typeof window !== 'undefined' ? Boolean(window.zspeakly?.native?.hudShow) : false;
+  const hudAllowed = nativeHud && settings.showFloatingIndicator !== false;
+  const lastHudSent = useRef(0);
+
+  useEffect(() => {
+    if (!hudAllowed) {
+      setHudNativeOn(false);
+      return undefined;
+    }
+    const native = window.zspeakly?.native;
+    if ((state === 'listening' || state === 'processing') && !hudHiddenByUser.current) {
+      Promise.resolve(native?.hudShow?.())
+        .then((ok) => setHudNativeOn(Boolean(ok)))
+        .catch(() => setHudNativeOn(false));
+      return undefined;
+    }
+    // Ошибку показываем ещё несколько секунд: иначе плавающее окно исчезнет
+    // ровно в тот момент, когда человеку нужно прочитать причину.
+    const delay = error ? 6000 : 0;
+    const timer = setTimeout(() => {
+      native?.hudHide?.();
+      setHudNativeOn(false);
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [state, hudAllowed, error]);
+
+  useEffect(() => {
+    if (!hudAllowed) return;
+    const native = window.zspeakly?.native;
+    if (!native?.hudUpdate) return;
+    const now = Date.now();
+    // уровень приходит по 30 кадров в секунду — в окно отправляем реже
+    if (state === 'listening' && now - lastHudSent.current < 100) return;
+    lastHudSent.current = now;
+    native.hudUpdate({
+      state,
+      level,
+      elapsed,
+      draft,
+      error: error?.title || '',
+      hint: error?.hint || '',
+    });
+  }, [state, level, elapsed, draft, error, hudAllowed]);
+
+  // «Крестик» на плавающем окне: запись продолжается, но индикатор переезжает
+  // внутрь окна приложения — иначе остановить запись было бы нечем.
+  useEffect(() => {
+    const native = window.zspeakly?.native;
+    if (!native?.onHudClosed) return undefined;
+    return native.onHudClosed(() => {
+      hudHiddenByUser.current = true;
+      setHudNativeOn(false);
+    });
+  }, []);
+
+  // Кнопка «стоп» на плавающем индикаторе живёт в другом окне и просит
+  // остановить запись через main — обрабатываем так же, как горячую клавишу.
+  useEffect(() => {
+    const native = window.zspeakly?.native;
+    if (!native?.onDictationStop) return undefined;
+    return native.onDictationStop(() => {
+      if (recRef.current) stop();
+    });
+  }, [stop]);
+
   const value = useMemo(
     () => ({
       state,
@@ -483,6 +557,7 @@ export function DictationProvider({ children }) {
       mode,
       elapsed,
       hudOpen,
+      nativeHud: hudAllowed && hudNativeOn,
       engine,
       hasWebSpeech,
       start,
@@ -494,7 +569,7 @@ export function DictationProvider({ children }) {
       formatK,
       askAgent,
     }),
-    [state, draft, level, error, last, mode, elapsed, hudOpen, engine, start, stop, toggle, finish, askAgent],
+    [state, draft, level, error, last, mode, elapsed, hudOpen, hudAllowed, hudNativeOn, engine, start, stop, toggle, finish, askAgent],
   );
 
   return <DictationContext.Provider value={value}>{children}</DictationContext.Provider>;

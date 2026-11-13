@@ -55,8 +55,10 @@
 
 | Файл | Что делает |
 | --- | --- |
-| `main.cjs` | Всё ядро: окно 1020×680 без рамки, трей и меню, `globalShortcut`, мониторинг буфера (900 мс), активное окно через PowerShell+C# (`GetForegroundWindow` + `GetWindowThreadProcessId`), вставка `^v` через `SendKeys`, чтение и замена выделения, скриншоты `desktopCapturer`, `setDisplayMediaRequestHandler` с loopback-звуком, регистрация всех IPC с учётом занятых сочетаний (`registerAccel` + `hotkey:conflict`), различение одиночного и двойного нажатия диктовки для «агента», инициализация журнала, тихая проверка обновлений |
-| `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native`, `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
+| `main.cjs` | Всё ядро: окно 1020×680 без рамки, отдельное окно индикатора диктовки (`createHudWindow` — 268×92, `frame:false`, `transparent`, `alwaysOnTop: 'screen-saver'`, `focusable:false`, `showInactive`, низ экрана по центру) и каналы `hud:show/hide/update/stop/close/status`, трей и меню, `globalShortcut`, мониторинг буфера (900 мс), активное окно через PowerShell+C# (`GetForegroundWindow` + `GetWindowThreadProcessId`), вставка `^v` через `SendKeys`, чтение и замена выделения, скриншоты `desktopCapturer`, `setDisplayMediaRequestHandler` с loopback-звуком, регистрация всех IPC с учётом занятых сочетаний (`registerAccel` + `hotkey:conflict`), различение одиночного и двойного нажатия диктовки для «агента», инициализация журнала, тихая проверка обновлений |
+| `hud.html` | Само окно индикатора: пульс уровня (`--level`), «Слушаю… / Транскрибирую… / Запись остановлена», таймер, живой текст, кнопки «Остановить запись» и «Скрыть индикатор» (крестик). Своих скриптов вне файла нет, стили внутри |
+| `hud-preload.cjs` | Мост окна индикатора: `window.hudBridge = { stop, close, onState }` — ничего больше |
+| `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native` (включая `hudShow/hudHide/hudUpdate/hudStatus`, `onDictationStop`, `onHudClosed`), `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
 | `store.cjs` | `JsonStore`: `%APPDATA%\ZSpeakly\profile.json`, кэш в памяти, `scheduleFlush` 180 мс, атомарная запись `.tmp` → `rename`, `sizeSync()` |
 | `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; запуск с `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -otxt -of`, `--prompt`, таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк. Серверный режим: `ensureServer`/`transcribeViaServer` (whisper-server на 127.0.0.1, `POST /inference` multipart), `stopServer` на `before-quit`, откат на CLI при любой ошибке |
 | `models.cjs` | `modelStatus()` (что уже на диске), `downloadModel()` с Hugging Face и прогрессом, `downloadEngine()` — последний релиз `ggml-org/whisper.cpp` с `whisper-bin-x64.zip`, распаковка через `Expand-Archive`, `importModel()` — подхват файла и угадывание типа по размеру |
@@ -75,7 +77,7 @@
 | `pages/HotkeysPage.jsx` | Голосовые сочетания, рекомендуемые AI-пресеты, свои инструкции, запись сочетания, стиль письма |
 | `pages/ClipboardPage.jsx` | Сетка/список, вкладки, поиск, закрепление, маскировка паролей с «Показать», скриншот, запись экрана |
 | `state/AppDataProvider.jsx` | Единое состояние: настройки, диктовки, словарь, буфер, хоткеи, пресеты, инструкции, статистика, профиль; персист в `profile.json` / `localStorage`; синхронизация `zs:settings` и `zs:dictionary` в main; очистка по сроку хранения; `exportBackup`/`importBackup` для резервной копии (буфер обмена не выгружается) |
-| `state/DictationProvider.jsx` | Движок диктовки: старт/стоп, живой текст, уровень, таймеры, ошибки, HUD, «режим агента», глобальные хоткеи, `Alt+D` в браузере |
+| `state/DictationProvider.jsx` | Движок диктовки: старт/стоп, живой текст, уровень, таймеры, ошибки, «режим агента», глобальные хоткеи, `Alt+D` в браузере. Плавающий индикатор: в Electron состояние уходит в отдельное окно (`hudShow/hudUpdate/hudHide`, стоп приходит событием `dictation:stop`, крестик — `hud:closed` и индикатор переезжает внутрь окна), в браузере рисуется `DictationHUD` |
 | `state/ToastProvider.jsx` | Тосты с тоном, TTL, действием |
 | `lib/recognition/engine.js` | Выбор движка: `whisper.cpp` → Web Speech → честная ошибка «распознавание недоступно» (выдуманного текста нет) |
 | `lib/recognition/errors.js` | Человеческие тексты ошибок распознавания |
@@ -162,7 +164,7 @@ Ctrl+Alt+E (или своя инструкция)
 
 ## 5. IPC: полный контракт
 
-Проверяется `npm run check:ipc` (сейчас 45 invoke-каналов, 46 обработчиков).
+Проверяется `npm run check:ipc` (сейчас 52 invoke-канала, 55 обработчиков).
 
 | Группа | Каналы |
 | --- | --- |
@@ -177,10 +179,12 @@ Ctrl+Alt+E (или своя инструкция)
 | Файлы и система | `app:open-data-folder`, `app:open-external` (белый список GitHub), `app:auto-launch`, `app:open-logs`, `app:save-file`, `app:notify`, `app:noop` |
 | Модели | `models:status`, `models:download`, `models:download-engine`, `models:import` |
 | Обновления | `update:check`, `update:channel`, `update:download`, `update:install` |
+| Индикатор диктовки | `hud:show`, `hud:hide`, `hud:update`, `hud:stop`, `hud:close`, `hud:status` — отдельное окно поверх всех приложений |
 
 События main → renderer: `hotkey`, `text-action`, `command`, `navigate`,
 `clipboard:item`, `clipboard:action`, `model:progress`, `update:status`,
-`hotkey:conflict`.
+`hotkey:conflict`, `dictation:stop` (кнопка на плавающем индикаторе),
+`hud:closed` (крестик на индикаторе). Окно индикатора получает `hud:state`.
 
 ## 6. Хранение данных
 

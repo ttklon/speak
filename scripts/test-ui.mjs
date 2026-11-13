@@ -595,6 +595,90 @@ async function scenarioDictation(browser) {
   await page.close();
 }
 
+// Плавающий индикатор диктовки: в Electron это отдельное окно поверх всех
+// приложений, поэтому рендерер обязан просить main показать его, обновлять
+// состояние и слушать кнопку «стоп» оттуда.
+async function scenarioFloatingHud(browser) {
+  const page = await openPage(browser, '#/home', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => window.__e2e.resetCalls());
+
+  await clickText(page, 'Начать диктовку');
+  await sleep(900);
+  const started = await bridgeCalls(page);
+  const inWindowHud = await page.evaluate(() => document.querySelectorAll('.hud').length);
+  const stateCall = await page.evaluate(() => window.__e2e.last('hud:update'));
+  record('сценарии', 'индикатор: старт диктовки показывает плавающее окно', started.includes('hud:show'), started.join(','));
+  record(
+    'сценарии',
+    'индикатор: состояние (уровень, время, текст) уходит в окно',
+    Boolean(stateCall) && typeof stateCall.args[0]?.level === 'number' && stateCall.args[0]?.state === 'listening',
+    JSON.stringify(stateCall?.args?.[0] || null),
+  );
+  record('сценарии', 'индикатор: внутри окна второй плашки нет', inWindowHud === 0, String(inWindowHud));
+
+  // кнопка «стоп» на плавающем окне приходит событием из main
+  await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(900);
+  const stopped = await bridgeCalls(page);
+  const body = await textOf(page, '.app-window');
+  record(
+    'сценарии',
+    'индикатор: кнопка «стоп» останавливает запись',
+    stopped.includes('hud:hide') && !/Слушаю…/i.test(body),
+    stopped.join(','),
+  );
+
+  // «Крестик» на плавающем окне: запись продолжается, индикатор переезжает
+  // внутрь окна приложения — иначе остановить было бы нечем
+  await page.evaluate(() => window.__e2e.resetCalls());
+  await clickText(page, 'Начать диктовку');
+  await sleep(700);
+  await page.evaluate(() => window.__e2e.emit('hud:closed'));
+  await sleep(500);
+  const afterClose = await page.evaluate(() => ({
+    inWindow: document.querySelectorAll('.hud').length,
+    text: document.querySelector('.hud')?.innerText || '',
+  }));
+  record(
+    'сценарии',
+    'индикатор: «крестик» возвращает индикатор в окно приложения',
+    afterClose.inWindow === 1 && /Слушаю|Остановить/i.test(afterClose.text),
+    JSON.stringify(afterClose),
+  );
+  await page.evaluate(() => document.querySelector('.hud button')?.click());
+  await sleep(800);
+  const afterInWindowStop = await page.evaluate(() => ({
+    hud: document.querySelectorAll('.hud').length,
+    body: document.body.innerText,
+  }));
+  record(
+    'сценарии',
+    'индикатор: стоп из окна приложения завершает запись',
+    afterInWindowStop.hud === 0 && !/Слушаю…/.test(afterInWindowStop.body),
+  );
+  await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(900);
+  const hero = await page.evaluate(() => ({
+    mic: document.querySelector('.hero__mic')?.innerText.replace(/\n/g, ' ') || '',
+    buttons: [...document.querySelectorAll('.hero__stats button')].map((b) => b.innerText.replace(/\n/g, ' ')),
+    hash: location.hash,
+  }));
+  record('сценарии', 'индикатор: после остановки кнопка записи на месте', /Начать диктовку/.test(hero.mic), JSON.stringify(hero));
+  // повторный старт (после того как окно скрыли) снова его показывает
+  await page.evaluate(() => window.__e2e.resetCalls());
+  await page.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  const again = await bridgeCalls(page);
+  record('сценарии', 'индикатор: после скрытия окно показывается снова', again.includes('hud:show'), again.join(','));
+  await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(600);
+
+  const errors = takeErrors(page);
+  record('сценарии', 'индикатор: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioDictionary(browser) {
   const page = await openPage(browser, '#/dictionary');
   takeErrors(page);
@@ -2708,8 +2792,10 @@ async function main() {
       ],
     });
 
+    // ZS_ONLY — прогон одного сценария: обход экранов и ввод текста не нужны
+    const only = process.env.ZS_ONLY || '';
     console.log(C.head('\nОбход экранов'));
-    const screens = process.env.ZS_SKIP_CRAWL === '1' ? [] : [
+    const screens = process.env.ZS_SKIP_CRAWL === '1' || only ? [] : [
       { route: '#/home', label: 'Главная' },
       { route: '#/dictionary', label: 'Словарь' },
       { route: '#/hotkeys', label: 'Горячие клавиши' },
@@ -2721,7 +2807,7 @@ async function main() {
       await explore(browser, screen);
     }
 
-    if (process.env.ZS_SKIP_INPUTS !== '1') {
+    if (process.env.ZS_SKIP_INPUTS !== '1' && !only) {
       console.log(C.head('\nВвод текста в поля'));
       for (const screen of [
         { route: '#/home', label: 'Главная' },
@@ -2737,6 +2823,7 @@ async function main() {
     const scenarios = [
       ['онбординг', scenarioOnboarding],
       ['диктовка', scenarioDictation],
+      ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['разделы настроек', scenarioSettingsSections],
@@ -2795,7 +2882,9 @@ async function main() {
       ['связь с main', scenarioMainSync],
       ['сброс сочетаний', scenarioResetHotkeys],
     ];
+    // ZS_ONLY=подстрока — прогнать один сценарий, пока чинишь именно его
     for (const [name, fn] of scenarios) {
+      if (only && !name.includes(only)) continue;
       try {
         await fn(browser);
       } catch (err) {

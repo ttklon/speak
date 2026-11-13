@@ -6,7 +6,7 @@ import { useDictation } from '../../state/DictationProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 
 export default function DictationHUD() {
-  const { state, draft, level, elapsed, stop, setHudOpen, error } = useDictation();
+  const { state, draft, level, elapsed, stop, setHudOpen, error, nativeHud } = useDictation();
   const { settings } = useAppData();
   // настройка «Плавающий индикатор записи»: выключили — плашки нет,
   // но ошибки показываем всегда, иначе человек не поймёт, почему тишина
@@ -24,6 +24,9 @@ export default function DictationHUD() {
   }, [level]);
 
   if (!open) return null;
+  // В Electron индикатор живёт отдельным окном поверх всех приложений —
+  // вторую плашку внутри окна не рисуем, чтобы не было двух «Слушаю…».
+  if (nativeHud) return null;
   const seconds = (elapsed / 1000).toFixed(1);
   const idle = state !== 'listening' && state !== 'processing';
 

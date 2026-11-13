@@ -27,39 +27,58 @@ const windowInstances = [];
 // шаблоны меню трея: проверяем, что подпись сочетания обновляется
 const trayTemplates = [];
 const trayMenus = [];
-const makeWindow = () => ({
-  webContents: {
-    send: () => {},
-    executeJavaScript: async () => {},
-    setWindowOpenHandler: () => {},
+// Окно-заглушка: запоминаем options и состояние, чтобы проверять плавающий
+// индикатор (alwaysOnTop, focusable, showInactive, hide, loadFile).
+const makeWindow = (options = {}) => {
+  const win = {
+    _options: options,
+    _file: '',
+    _visible: options.show !== false,
+    webContents: {
+      send: (ch, payload) => sentEvents.push({ ch, payload }),
+      sendInputEvent: (ev) => sentInputEvents.push(ev),
+      executeJavaScript: async () => {},
+      setWindowOpenHandler: () => {},
+      on: () => {},
+    },
     on: () => {},
-  },
-  on: () => {},
-  once: () => {},
-  loadURL: async () => {},
-  loadFile: async () => {},
-  show: () => {},
-  showInactive: () => {},
-  focus: () => {},
-  blur: () => {},
-  hide: () => {},
-  isMinimized: () => false,
-  isVisible: () => true,
-  restore: () => {},
-  isMaximized: () => false,
-  isFocused: () => true,
-  maximize: () => {},
-  unmaximize: () => {},
-  minimize: () => {},
-  close: () => {},
-  webContents: {
-    send: (ch, payload) => sentEvents.push({ ch, payload }),
-    sendInputEvent: (ev) => sentInputEvents.push(ev),
-    executeJavaScript: async () => {},
-    setWindowOpenHandler: () => {},
-    on: () => {},
-  },
-});
+    once: () => {},
+    loadURL: async () => {},
+    loadFile: async (file) => {
+      win._file = String(file);
+    },
+    show: () => {
+      win._visible = true;
+    },
+    showInactive: () => {
+      win._visible = true;
+    },
+    focus: () => {},
+    blur: () => {},
+    hide: () => {
+      win._visible = false;
+    },
+    isMinimized: () => false,
+    isVisible: () => win._visible,
+    isDestroyed: () => false,
+    destroy: () => {
+      win._visible = false;
+    },
+    setAlwaysOnTop: (flag) => {
+      win._alwaysOnTop = flag;
+    },
+    setVisibleOnAllWorkspaces: () => {},
+    setIgnoreMouseEvents: () => {},
+    restore: () => {},
+    isMaximized: () => false,
+    isFocused: () => true,
+    maximize: () => {},
+    unmaximize: () => {},
+    minimize: () => {},
+    close: () => {},
+  };
+  return win;
+};
 const fakeWindow = () => windowInstances[windowInstances.length - 1] || makeWindow();
 
 const electronStub = {
@@ -78,8 +97,8 @@ const electronStub = {
     setLoginItemSettings: () => {},
     getLoginItemSettings: () => ({ openAtLogin: false }),
   },
-  BrowserWindow: Object.assign(function BrowserWindow() {
-    const win = makeWindow();
+  BrowserWindow: Object.assign(function BrowserWindow(options) {
+    const win = makeWindow(options);
     windowInstances.push(win);
     return win;
   }, { getAllWindows: () => windowInstances }),
@@ -133,6 +152,7 @@ const electronStub = {
     getPrimaryDisplay: () => ({
       size: { width: 1920, height: 1080 },
       workAreaSize: { width: 1920, height: 1040 },
+      workArea: { x: 0, y: 0, width: 1920, height: 1040 },
     }),
   },
   session: { defaultSession: { setDisplayMediaRequestHandler: () => {} } },
@@ -683,6 +703,57 @@ await check('импорт модели: чужой файл не подключ�
   const ok = await modelsMod.importModel(good);
   if (!ok.ok || ok.id !== 'large-v3-turbo') throw new Error(JSON.stringify(ok));
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// ── Плавающий индикатор диктовки ────────────────────────────────────────────
+await check('индикатор диктовки: отдельное окно поверх всех, без фокуса', async () => {
+  const before = windowInstances.length;
+  const ok = await handlers.get('hud:show')({});
+  if (!ok) throw new Error('hud:show не ответил ok');
+  const hud = windowInstances[windowInstances.length - 1];
+  if (windowInstances.length !== before + 1) throw new Error('окно не создано');
+  const o = hud._options || {};
+  if (o.alwaysOnTop !== true) throw new Error('не alwaysOnTop');
+  if (o.focusable !== false) throw new Error('забирает фокус — вставка уйдёт в индикатор');
+  if (o.frame !== false) throw new Error('с рамкой');
+  if (o.transparent !== true) throw new Error('без прозрачности');
+  if (o.skipTaskbar !== true) throw new Error('висит в панели задач');
+  if (hud._alwaysOnTop !== true) throw new Error('setAlwaysOnTop не вызван');
+  if (!/hud\.html$/.test(hud._file)) throw new Error(`загружен не тот файл: ${hud._file}`);
+  if (!hud.isVisible()) throw new Error('показано невидимым');
+  // повторный вызов не плодит окна
+  await handlers.get('hud:show')({});
+  if (windowInstances.length !== before + 1) throw new Error('создалось второе окно индикатора');
+});
+
+await check('индикатор: состояние доходит до окна, закрытие его прячет', async () => {
+  sentEvents.length = 0;
+  await handlers.get('hud:update')({}, { state: 'listening', level: 0.42, elapsed: 1200, draft: 'привет' });
+  const stateEvent = sentEvents.find((e) => e.ch === 'hud:state');
+  if (!stateEvent) throw new Error('окно не получило состояние');
+  if (stateEvent.payload.level !== 0.42 || stateEvent.payload.draft !== 'привет') {
+    throw new Error(`состояние исказилось: ${JSON.stringify(stateEvent.payload)}`);
+  }
+  const hud = windowInstances[windowInstances.length - 1];
+  await handlers.get('hud:close')({});
+  if (hud.isVisible()) throw new Error('индикатор не спрятался');
+  if (!sentEvents.some((e) => e.ch === 'hud:closed')) {
+    throw new Error('окно диктовки не узнало о закрытии — индикатор не переедет внутрь');
+  }
+});
+
+await check('индикатор: «стоп» и «скрыть» работают как кнопки', async () => {
+  await handlers.get('hud:show')({});
+  sentEvents.length = 0;
+  await handlers.get('hud:stop')({});
+  const stopEvent = sentEvents.find((e) => e.ch === 'dictation:stop');
+  if (!stopEvent) throw new Error('окно диктовки не получило просьбу остановиться');
+  if (stopEvent.payload?.from !== 'hud') throw new Error('не отмечено, что стоп пришёл с индикатора');
+  const status = await handlers.get('hud:status')({});
+  if (!status.open) throw new Error('статус говорит, что индикатора нет');
+  await handlers.get('hud:hide')({});
+  const after = await handlers.get('hud:status')({});
+  if (after.open) throw new Error('после hide индикатор всё ещё открыт');
 });
 
 await check('models:warm честно отказывает без whisper-server', async () => {

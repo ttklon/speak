@@ -33,6 +33,9 @@ const START_HIDDEN = process.argv.includes('--hidden');
 let mainWindow = null;
 let tray = null;
 let store = null;
+// Отдельное «плавающее» окно индикатора диктовки: видно поверх любых
+// приложений и не забирает фокус, поэтому вставка идёт туда, где человек печатал.
+let hudWindow = null;
 let clipboardTimer = null;
 let updater = null;
 let lastClipboardText = '';
@@ -193,6 +196,111 @@ function refreshTrayMenu() {
   } catch (err) {
     console.warn('[tray] меню не обновилось', err.message);
   }
+}
+
+/**
+ * Плавающий индикатор записи.
+ *
+ * Раньше HUD жил внутри главного окна: стоило свернуть приложение — и человек
+ * не видел ни «Слушаю…», ни кнопки «стоп». Теперь это отдельное окно без рамки,
+ * всегда сверху, без фокуса (иначе Ctrl+V уходил бы в него, а не в чужое окно).
+ */
+function createHudWindow() {
+  if (hudWindow && !hudWindow.isDestroyed?.()) return hudWindow;
+  const { workArea } = screen.getPrimaryDisplay();
+  const width = 268;
+  const height = 92;
+  hudWindow = new BrowserWindow({
+    width,
+    height,
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + workArea.height - height - 28),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    focusable: false,
+    hasShadow: false,
+    show: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'hud-preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  try {
+    hudWindow.setAlwaysOnTop(true, 'screen-saver');
+    hudWindow.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true });
+    hudWindow.setIgnoreMouseEvents?.(false);
+  } catch {
+    /* не на всех платформах есть эти методы */
+  }
+  hudWindow.loadFile(path.join(__dirname, 'hud.html'));
+  hudWindow.on('closed', () => {
+    hudWindow = null;
+  });
+  return hudWindow;
+}
+
+function showHudWindow() {
+  const win = createHudWindow();
+  try {
+    if (!win.isVisible?.()) win.showInactive();
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
+
+function hideHudWindow() {
+  try {
+    hudWindow?.hide();
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
+
+function sendHudState(state) {
+  if (!hudWindow || hudWindow.isDestroyed?.()) return;
+  try {
+    hudWindow.webContents.send('hud:state', state);
+  } catch {
+    /* окно могло закрыться между кадрами */
+  }
+}
+
+function registerHudIpc() {
+  ipcMain.handle('hud:show', () => showHudWindow());
+  ipcMain.handle('hud:hide', () => hideHudWindow());
+  ipcMain.handle('hud:update', (_e, state) => {
+    sendHudState(state || {});
+    return true;
+  });
+  // Кнопки на плавающем индикаторе: стоп просим у окна диктовки,
+  // закрытие прячет только индикатор — запись продолжается.
+  ipcMain.handle('hud:stop', () => {
+    mainWindow?.webContents.send('dictation:stop', { from: 'hud' });
+    return true;
+  });
+  ipcMain.handle('hud:close', () => {
+    hideHudWindow();
+    // окно диктовки должно узнать, что плашку убрали: оно нарисует индикатор
+    // внутри себя, чтобы запись можно было остановить
+    mainWindow?.webContents.send('hud:closed');
+    return true;
+  });
+  ipcMain.handle('hud:status', () => ({
+    open: Boolean(hudWindow && !hudWindow.isDestroyed?.() && hudWindow.isVisible?.()),
+  }));
 }
 
 function createTray() {
@@ -569,6 +677,12 @@ function registerIpc() {
   if (!registerIpc._serverHooked) {
     registerIpc._serverHooked = true;
     app.on('before-quit', () => {
+      try {
+        hudWindow?.destroy?.();
+        hudWindow = null;
+      } catch {
+        /* ignore */
+      }
       try {
         require('./whisper.cjs').stopServer();
       } catch {
@@ -1013,6 +1127,8 @@ function registerIpc() {
       return { ok: false, reason: String(err?.message || err) };
     }
   });
+
+  registerHudIpc();
 
   ipcMain.handle('models:warm', async (_e, payload) => {
     const settings = store?.get('zs:settings') || {};
