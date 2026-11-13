@@ -155,6 +155,16 @@ export function installMockBridge() {
       record('clipboard:read');
       return { text: clipboardText, kind: 'text' };
     },
+    // пароли: как настоящий main, отдаём открытый текст только по запросу
+    secretAvailable: async () => {
+      record('secret:available');
+      return true;
+    },
+    revealSecret: async (cipher) => {
+      record('secret:reveal', [cipher]);
+      if (!cipher) return null;
+      return atob(cipher);
+    },
     writeClipboard: async (payload) => {
       record('clipboard:write', [payload]);
       if (payload && typeof payload.text === 'string') clipboardText = payload.text;

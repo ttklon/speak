@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
-  clipboard, shell, dialog, screen, session,
+  clipboard, shell, dialog, screen, session, safeStorage,
 } = require('electron');
 
 const { JsonStore } = require('./store.cjs');
@@ -717,6 +717,56 @@ function processName(pid) {
   }
 }
 
+// ── Пароли в буфере обмена ─────────────────────────────────────────────────
+/**
+ * Похоже ли скопированное на пароль или токен.
+ *
+ * Задача не «угадать всё», а не хранить открытым текстом то, что человек
+ * копирует из менеджера паролей: одна строка, без пробелов, 8–80 символов,
+ * минимум три класса символов (строчные, заглавные, цифры, знаки).
+ */
+function looksLikeSecret(text) {
+  const value = String(text || '');
+  if (value.length < 8 || value.length > 80) return false;
+  if (/\s/.test(value)) return false;
+  if (/^https?:\/\//i.test(value)) return false;
+  const classes =
+    Number(/[a-zа-яё]/.test(value)) +
+    Number(/[A-ZА-ЯЁ]/.test(value)) +
+    Number(/[0-9]/.test(value)) +
+    Number(/[^\w\s]/.test(value));
+  return classes >= 3;
+}
+
+/** Системное хранилище (DPAPI на Windows) доступно? */
+function canEncrypt() {
+  try {
+    return Boolean(safeStorage?.isEncryptionAvailable?.());
+  } catch {
+    return false;
+  }
+}
+
+/** Зашифровать строку → base64 или null, если шифрование недоступно. */
+function encryptText(text) {
+  try {
+    if (!canEncrypt()) return null;
+    return safeStorage.encryptString(String(text)).toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+/** Расшифровать base64 → строка или null. */
+function decryptText(cipher) {
+  try {
+    if (!cipher || !canEncrypt()) return null;
+    return safeStorage.decryptString(Buffer.from(String(cipher), 'base64'));
+  } catch {
+    return null;
+  }
+}
+
 // ── Буфер обмена ───────────────────────────────────────────────────────────
 function startClipboardWatch() {
   stopClipboardWatch();
@@ -731,13 +781,21 @@ function startClipboardWatch() {
     if (ownText) lastClipboardText = text;
     else if (text && text !== lastClipboardText) {
       lastClipboardText = text;
+      // Пароль из менеджера паролей не храним открытым текстом: если системное
+      // хранилище доступно (DPAPI на Windows), в профиль уходит только шифр,
+      // а в окно — маска. Иначе честно помечаем запись как «незашифрованную».
+      const secret = looksLikeSecret(text);
+      const cipher = secret ? encryptText(text) : null;
       foregroundWindow().then((win) => {
         const source = win.app
           ? `${win.app}${win.title ? ` — ${win.title}` : ''}`
           : 'Системный буфер';
         mainWindow?.webContents.send('clipboard:item', {
-          kind: 'text',
-          text,
+          kind: secret && cipher ? 'password' : 'text',
+          // открытый пароль не отправляем в рендерер вовсе
+          text: secret && cipher ? '' : text,
+          cipher: cipher || undefined,
+          encrypted: Boolean(cipher),
           source,
           app: win.app || '',
           windowTitle: win.title || '',
@@ -1331,6 +1389,10 @@ function registerIpc() {
   });
   ipcMain.handle('update:download', () => updater?.download() || { status: 'error', reason: 'updater не готов' });
   ipcMain.handle('update:install', () => Boolean(updater?.install()));
+  // Пароли: расшифровка только по запросу из интерфейса («Показать»/«Копировать»).
+  ipcMain.handle('secret:available', () => canEncrypt());
+  ipcMain.handle('secret:reveal', (_e, cipher) => decryptText(cipher));
+
   ipcMain.handle('app:notify', (_e, payload) => showNotification(payload));
 
   // Открыть ссылку в браузере. Белый список: приложение не должно уметь

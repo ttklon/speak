@@ -177,13 +177,14 @@ Ctrl+Alt+E (или своя инструкция)
 
 ## 5. IPC: полный контракт
 
-Проверяется `npm run check:ipc` (сейчас 50 invoke-каналов, 54 обработчика, 1 send).
+Проверяется `npm run check:ipc` (сейчас 52 invoke-канала, 56 обработчиков, 1 send).
 
 | Группа | Каналы |
 | --- | --- |
 | Хранилище | `store:get` (handle + sendSync), `store:set`, `store:remove`, `store:size` (sendSync) |
 | Окно | `win:minimize`, `win:toggle-maximize`, `win:close`, `win:badge` |
 | Распознавание | `stt:status`, `stt:transcribe-pcm` (канал `stt:transcribe(wav)` удалён: рендерер его не вызывал) |
+| Пароли | `secret:available`, `secret:reveal` (DPAPI через `safeStorage`; открытый текст пароля в профиль не пишется) |
 | Текст | `text:insert`, `text:paste`, `text:read-selection`, `text:replace-selection` |
 | Буфер | `clipboard:read`, `clipboard:write`, `clipboard:screenshot`, `screen:capture` |
 | Хоткеи | `hotkey:set` (строка-акселератор или `{dictationKey, textActions, voiceHotkeys}`) |
@@ -310,8 +311,8 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 
 ```bash
 npm test                  # 119 тестов (vitest + jsdom)
-npm run test:main         # 57 смоук-проверок main-процесса
-npm run test:ui           # E2E: обход кнопок, 63 сценария (185 проверок), контраст/вёрстка
+npm run test:main         # 62 смоук-проверки main-процесса
+npm run test:ui           # E2E: обход кнопок, 64 сценария (189 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений

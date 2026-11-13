@@ -112,6 +112,22 @@ const electronStub = {
     setLoginItemSettings: () => {},
     getLoginItemSettings: () => ({ openAtLogin: false }),
   },
+  // системное хранилище (DPAPI) — в тесте «шифруем» префиксом, чтобы проверить
+  // и путь с шифрованием, и путь без него (available=false)
+  safeStorage: {
+    _available: true,
+    isEncryptionAvailable() {
+      return this._available;
+    },
+    encryptString(text) {
+      return Buffer.from(`enc:${text}`, 'utf8');
+    },
+    decryptString(buf) {
+      const value = Buffer.from(buf).toString('utf8');
+      if (!value.startsWith('enc:')) throw new Error('не наш шифр');
+      return value.slice(4);
+    },
+  },
   BrowserWindow: Object.assign(function BrowserWindow(options) {
     const win = makeWindow(options);
     windowInstances.push(win);
@@ -594,6 +610,50 @@ await check('та же фраза, скопированная позже, сно
   const texts = sentEvents.filter((e) => e.ch === 'clipboard:item').map((e) => e.payload.text);
   if (!texts.includes('та же фраза')) {
     throw new Error(`фраза не попала в историю буфера: ${JSON.stringify(texts)}`);
+  }
+});
+
+await check('пароль из буфера уходит в окно только шифром', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true });
+  clipboardText.value = 'Qw7!pLz9#Vb2';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+  if (!item) throw new Error('событие clipboard:item не пришло');
+  if (item.payload.kind !== 'password') throw new Error(`вид записи: ${item.payload.kind}`);
+  if (item.payload.text) throw new Error('открытый пароль ушёл в рендерер');
+  if (!item.payload.cipher || !item.payload.encrypted) throw new Error('нет шифра');
+  const plain = await handlers.get('secret:reveal')({}, item.payload.cipher);
+  if (plain !== 'Qw7!pLz9#Vb2') throw new Error(`расшифровка вернула: ${plain}`);
+  const available = await handlers.get('secret:available')({});
+  if (!available) throw new Error('secret:available соврал');
+});
+
+await check('обычный текст не считается паролем и не шифруется', async () => {
+  clipboardText.value = 'строка из заметки с пробелами';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+  if (!item) throw new Error('событие clipboard:item не пришло');
+  if (item.payload.kind !== 'text') throw new Error(`вид записи: ${item.payload.kind}`);
+  if (item.payload.cipher) throw new Error('обычный текст зашифрован');
+  if (item.payload.text !== 'строка из заметки с пробелами') throw new Error('текст потерялся');
+});
+
+await check('без системного хранилища пароль остаётся текстом, а не «зашифрован»', async () => {
+  electronStub.safeStorage._available = false;
+  try {
+    clipboardText.value = 'Zx9$kM4!qW1';
+    sentEvents.length = 0;
+    await new Promise((r) => setTimeout(r, 1100));
+    const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+    if (!item) throw new Error('событие clipboard:item не пришло');
+    if (item.payload.kind === 'password' || item.payload.encrypted) {
+      throw new Error('запись выдана за зашифрованную, хотя хранилища нет');
+    }
+    if (await handlers.get('secret:available')({})) throw new Error('secret:available врёт');
+  } finally {
+    electronStub.safeStorage._available = true;
   }
 });
 

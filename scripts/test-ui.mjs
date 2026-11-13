@@ -959,6 +959,85 @@ async function scenarioPinnedLimit(browser) {
   await page.close();
 }
 
+// Пароли в буфере: в профиле только шифр, открытый текст появляется лишь после
+// «Показать»/«Копировать» — и только если main смог расшифровать.
+async function scenarioPasswordVault(browser) {
+  const secret = 'Qw7!pLz9#Vb2';
+  const cipher = Buffer.from(secret, 'utf8').toString('base64');
+  const page = await openPage(browser, '#/clipboard?tab=password', {
+    storeSeed: {
+      'zs.clipboard': [
+        {
+          id: 'pw-1',
+          kind: 'password',
+          text: '',
+          cipher,
+          encrypted: true,
+          source: 'Bitwarden',
+          createdAt: Date.now(),
+        },
+      ],
+    },
+  });
+  takeErrors(page);
+  await page.evaluate(() => {
+    const tab = [...document.querySelectorAll('.btn--tab')].find((b) => /Пароли/.test(b.innerText));
+    if (tab) tab.click();
+  });
+  await sleep(400);
+  const masked = await page.evaluate(() => ({
+    body: document.body.innerText,
+    leaked: document.body.innerText.includes('Qw7!pLz9#Vb2'),
+    card: document.querySelector('.clip-card__text--masked')?.innerText || '',
+  }));
+  record(
+    'сценарии',
+    'пароли: значение не попадает на экран до «Показать»',
+    !masked.leaked && masked.card.length > 0,
+    `маска ${masked.card.length} символов`,
+  );
+
+  await page.evaluate(() => document.querySelector('.clip-card')?.click());
+  await sleep(300);
+  await page.evaluate(() => {
+    // подписи кнопок приходят в верхнем регистре (CSS text-transform)
+    const btn = [...document.querySelectorAll('.clip-preview__reveal, .clip-actions .link-btn, .clip-actions button')].find(
+      (b) => /показать/i.test(b.innerText),
+    );
+    if (btn) btn.click();
+  });
+  await sleep(600);
+  const revealed = await page.evaluate(() => ({
+    body: document.body.innerText,
+    calls: (window.__bridgeCalls || []).map((c) => c.channel || c.ch),
+  }));
+  const calls = await bridgeCalls(page);
+  record(
+    'сценарии',
+    'пароли: «Показать» расшифровывает через системное хранилище',
+    revealed.body.includes(secret) && calls.includes('secret:reveal'),
+    `${calls.filter((c) => c === 'secret:reveal').length} расшифровок`,
+  );
+
+  await page.evaluate(() => window.__e2e.resetCalls());
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => /^копировать$/i.test(b.innerText.trim()));
+    if (btn) btn.click();
+  });
+  await sleep(600);
+  const copied = await page.evaluate(() => (window.__bridgeCalls || []).filter((c) => (c.channel || c.ch) === 'clipboard:write'));
+  const copiedText = copied.at(-1)?.payload?.[0]?.text ?? copied.at(-1)?.args?.[0]?.text;
+  record(
+    'сценарии',
+    'пароли: копирование кладёт в буфер сам пароль, а не шифр',
+    copiedText === secret,
+    String(copiedText || '').slice(0, 20),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'пароли: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioDictionary(browser) {
   const page = await openPage(browser, '#/dictionary');
   takeErrors(page);
@@ -3164,6 +3243,7 @@ async function main() {
       ['переписывание моделью', scenarioModelRewrite],
       ['пропавший микрофон', scenarioMissingMic],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
+      ['пароли', scenarioPasswordVault],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['разделы настроек', scenarioSettingsSections],

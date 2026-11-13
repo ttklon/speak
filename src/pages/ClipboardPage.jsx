@@ -58,6 +58,8 @@ export default function ClipboardPage() {
   const [justCopied, setJustCopied] = useState(null);
   // какие пароли пользователь явно раскрыл в этой сессии
   const [revealed, setRevealed] = useState(() => new Set());
+  // расшифрованный текст пароля: держим в памяти только до перезагрузки окна
+  const [decrypted, setDecrypted] = useState({});
   const [recording, setRecording] = useState(null);
   const [recordMs, setRecordMs] = useState(0);
   const lastExternal = useRef(0);
@@ -337,13 +339,52 @@ export default function ClipboardPage() {
     push({ title: 'Скриншот сохранён', description: `${shot.width}×${shot.height} · в истории буфера`, tone: 'success' });
   };
 
+  /**
+   * Открытый текст записи: у пароля в профиле лежит только шифр, поэтому
+   * значение спрашиваем у main (DPAPI). Возвращает null, если расшифровать
+   * не удалось — тогда показывать нечего и врать про «зашифровано» нельзя.
+   */
+  const revealText = async (item) => {
+    if (!item?.cipher) return item?.text || '';
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.revealSecret) return null;
+    const plain = await bridge.revealSecret(item.cipher).catch(() => null);
+    return typeof plain === 'string' ? plain : null;
+  };
+
+  const reveal = async (item) => {
+    const plain = await revealText(item);
+    if (plain == null) {
+      push({
+        title: 'Расшифровать не удалось',
+        description: 'Системное хранилище Windows недоступно — значение не восстановить.',
+        tone: 'warn',
+        ttl: 7000,
+      });
+      return;
+    }
+    setDecrypted((prev) => ({ ...prev, [item.id]: plain }));
+    setRevealed((prev) => new Set(prev).add(item.id));
+  };
+
   const copyItem = async (item) => {
     try {
+      // пароль лежит в профиле зашифрованным: сначала расшифровываем
+      const value = item.cipher ? await revealText(item) : item.text || '';
+      if (item.cipher && value == null) {
+        push({
+          title: 'Пароль не расшифрован',
+          description: 'Системное хранилище Windows недоступно.',
+          tone: 'warn',
+          ttl: 7000,
+        });
+        return;
+      }
       // нативный мост первым: в file:// браузерное API часто запрещено
-      await writeClipboard(item.text || '', item.image);
+      await writeClipboard(value, item.image);
       setJustCopied(item.id);
       setTimeout(() => setJustCopied(null), 1400);
-      push({ title: 'Скопировано', description: truncate(item.text, 60), tone: 'success', ttl: 1800 });
+      push({ title: 'Скопировано', description: truncate(value, 60), tone: 'success', ttl: 1800 });
     } catch {
       push({
         title: 'Не удалось скопировать',
@@ -380,7 +421,12 @@ export default function ClipboardPage() {
       <div className="clip-head">
         <div>
           <h1 className="page__title">Буфер обмена</h1>
-          <p className="page__sub">Всё, что вы захватываете и копируете, — в одном месте.</p>
+          <p className="page__sub">
+            Всё, что вы захватываете и копируете, — в одном месте.
+            {tab === 'password'
+              ? ' Пароли хранятся в профиле зашифрованными (системное хранилище Windows), в окно приходит только шифр.'
+              : ''}
+          </p>
         </div>
         <div className="clip-head__toggle-wrap">
           <span className="clip-head__state">{settings.clipboardMonitor ? 'Включено' : 'Выключено'}</span>
@@ -502,11 +548,7 @@ export default function ClipboardPage() {
                   Копировать
                 </button>
                 {selected.kind === 'password' && settings.hidePasswords && !revealed.has(selected.id) ? (
-                  <button
-                    type="button"
-                    className="link-btn"
-                    onClick={() => setRevealed((prev) => new Set(prev).add(selected.id))}
-                  >
+                  <button type="button" className="link-btn" onClick={() => reveal(selected)}>
                     Показать
                   </button>
                 ) : null}
@@ -544,15 +586,15 @@ export default function ClipboardPage() {
                   }`}
                   onClick={() => setSelectedId(item.id)}
                   onDoubleClick={() => copyPaste(item)}
-                  title={item.text || item.source}
+                  title={item.kind === 'password' ? 'Пароль (зашифрован)' : item.text || item.source}
                 >
                   {item.kind === 'image' && item.image ? (
                     <img className="clip-card__image" src={item.image} alt={item.source || 'Изображение'} />
-                  ) : item.kind === 'password' && settings.hidePasswords ? (
-                    // «Скрывать пароли»: в сетке значение замаскировано, чтобы его
-                    // не было видно при демонстрации экрана
-                    <div className="clip-card__text clip-card__text--masked">
-                      {'•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length)))}
+                  ) : item.kind === 'password' ? (
+                    // в профиле только шифр: до «Показать» — маска, после — само значение
+                    <div className={`clip-card__text ${decrypted[item.id] ? '' : 'clip-card__text--masked'}`}>
+                      {decrypted[item.id] ||
+                        '•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length || 10)))}
                     </div>
                   ) : (
                     <div className="clip-card__text">{item.text}</div>
@@ -660,11 +702,20 @@ export default function ClipboardPage() {
                       <button
                         type="button"
                         className="clip-preview__reveal"
-                        onClick={() => setRevealed((prev) => new Set(prev).add(selected.id))}
+                        onClick={() => reveal(selected)}
                       >
                         Показать
                       </button>
                     </span>
+                  ) : selected.cipher && !decrypted[selected.id] ? (
+                    <span className="clip-preview__masked">
+                      {'•'.repeat(12)}
+                      <button type="button" className="clip-preview__reveal" onClick={() => reveal(selected)}>
+                        Показать
+                      </button>
+                    </span>
+                  ) : selected.cipher ? (
+                    decrypted[selected.id]
                   ) : (
                     selected.text
                   )}

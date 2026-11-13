@@ -30,7 +30,7 @@ export const CLIPBOARD_TABS = [
   // здесь только записи экрана: копирование файлов из проводника Windows
   // пока не перехватываем, поэтому и подпись честная
   { id: 'file', label: 'Видео' },
-  { id: 'password', label: 'Зашифрованные' },
+  { id: 'password', label: 'Пароли' },
 ];
 
 export const LANGUAGES = [

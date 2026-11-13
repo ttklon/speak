@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('zspeakly', {
     readSelection: () => ipcRenderer.invoke('text:read-selection'),
     replaceSelection: (text) => ipcRenderer.invoke('text:replace-selection', text),
     readClipboard: () => ipcRenderer.invoke('clipboard:read'),
+    // пароли в буфере: в профиле только шифр, открытый текст — по запросу
+    secretAvailable: () => ipcRenderer.invoke('secret:available'),
+    revealSecret: (cipher) => ipcRenderer.invoke('secret:reveal', cipher),
     screenshot: () => ipcRenderer.invoke('clipboard:screenshot'),
     writeClipboard: (payload) => ipcRenderer.invoke('clipboard:write', payload),
     openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
