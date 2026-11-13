@@ -84,7 +84,6 @@ contextBridge.exposeInMainWorld('zspeakly', {
     downloadUpdate: () => ipcRenderer.invoke('update:download'),
     installUpdate: () => ipcRenderer.invoke('update:install'),
     onUpdateStatus: (cb) => on('update:status', cb),
-    getSystemAudio: () => ipcRenderer.invoke('app:noop'),
     onHotkeyConflict: (cb) => {
       const handler = (_e, payload) => cb(payload);
       ipcRenderer.on('hotkey:conflict', handler);

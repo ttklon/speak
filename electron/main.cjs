@@ -1348,7 +1348,6 @@ function registerIpc() {
     require('electron').shell.openExternal(url);
     return true;
   });
-  ipcMain.handle('app:noop', () => null);
 
   // Выбор источника для getDisplayMedia (запись экрана / системный звук)
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {

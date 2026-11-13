@@ -192,10 +192,6 @@ export function installMockBridge() {
       record('app:save-file', [payload && payload.name]);
       return { ok: true, path: `C:\\Users\\test\\Desktop\\${(payload && payload.name) || 'файл'}` };
     },
-    getSystemAudio: async () => {
-      record('app:noop');
-      return true;
-    },
 
     log: async (entry) => {
       record('diag:log', [entry]);
