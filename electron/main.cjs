@@ -394,7 +394,6 @@ function createTray() {
 
 // ── Хоткеи ─────────────────────────────────────────────────────────────────
 let dictationActive = false;
-let windowWasHiddenForDictation = false;
 
 function toggleDictation() {
   // Обычно переключаем своё состояние, но если запись остановили кнопкой на
@@ -402,20 +401,9 @@ function toggleDictation() {
   // заново, а не пытается «остановить» пустоту.
   dictationActive = !dictationActive;
   mainWindow?.webContents.send('hotkey', { type: dictationActive ? 'down' : 'up' });
-  // если окно скрыто в трее — на время диктовки оно должно быть на экране,
-  // иначе человек не видит индикатор и не понимает, слушают его или нет
-  if (dictationActive) {
-    if (!mainWindow?.isVisible()) mainWindow?.show();
-    mainWindow?.showInactive();
-    windowWasHiddenForDictation = true;
-  } else if (windowWasHiddenForDictation) {
-    windowWasHiddenForDictation = false;
-    setTimeout(() => {
-      if (dictationActive) return;
-      const toTray = store?.get('zs:settings')?.closeToTray !== false;
-      if (toTray && !mainWindow?.isFocused?.()) mainWindow?.hide();
-    }, 900);
-  }
+  // Окно ZSpeakly не показываем: индикатор записи — отдельная плашка поверх
+  // всех приложений. Раньше окно выпрыгивало при каждом нажатии хоткея и
+  // закрывало собой то приложение, куда человек диктует.
 }
 
 function navigate(page) {
@@ -583,11 +571,15 @@ function registerVoiceHotkeys(settings = {}) {
   }
 }
 
-/** Диктовка из трея или с клавиши: окно должно быть видно. */
+/**
+ * Диктовка с клавиши или из трея.
+ *
+ * Окно больше не показываем: состояние видно на плавающем индикаторе, а
+ * всплывающее окно перекрывало чужое приложение. Если человек хочет видеть
+ * окно — он его откроет сам.
+ */
 function showWindowForDictation() {
-  if (!mainWindow?.isVisible()) mainWindow?.show();
-  mainWindow?.showInactive();
-  windowWasHiddenForDictation = true;
+  /* намеренно пусто: раньше здесь было mainWindow.show() */
 }
 
 /** Control+Alt+Space → Ctrl + Alt + Space (как в интерфейсе). */

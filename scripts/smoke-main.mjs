@@ -494,7 +494,7 @@ await check('clipboard:write кладёт картинку, а не только
   if (!clipboardImage.value) throw new Error('картинка не попала в буфер');
 });
 
-await check('хоткей диктовки показывает скрытое окно из трея', async () => {
+await check('хоткей диктовки не выдёргивает окно поверх чужого приложения', async () => {
   const visible = { value: false };
   // подменяем видимость у всех окон: mainWindow мог быть создан не последним.
   // Подмену обязательно снимаем в конце — иначе она врёт следующим проверкам
@@ -530,9 +530,11 @@ await check('хоткей диктовки показывает скрытое �
     o.win.showInactive = o.showInactive;
     o.win.hide = o.hide;
   }
-  if (!shown) {
-    throw new Error(`окно осталось скрытым: события ${JSON.stringify(sentEvents.map((e) => e.payload))}, окон ${windowInstances.length}`);
+  const down = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'down');
+  if (!down) {
+    throw new Error(`диктовка не началась: ${JSON.stringify(sentEvents.map((e) => e.payload))}`);
   }
+  if (shown) throw new Error('окно ZSpeakly всплыло поверх чужого приложения');
 });
 
 
