@@ -104,9 +104,14 @@ export function DictationProvider({ children }) {
       const hardReset = setTimeout(() => {
         finishing.current = false;
       }, 9000);
+      // после завершения держим флаг ещё 700 мс: движок и кнопка «стоп»
+      // присылают результат почти одновременно, и без паузы диктовка
+      // записывалась дважды
       const release = () => {
         clearTimeout(hardReset);
-        finishing.current = false;
+        setTimeout(() => {
+          finishing.current = false;
+        }, 700);
       };
       const raw = text || finalRef.current || draftRef.current;
       // настройка «Применять словарь при диктовке»: раньше тумблер в разделе
