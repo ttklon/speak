@@ -37,6 +37,12 @@ describe('индекс настроек', () => {
     expect(broken).toEqual([]);
   });
 
+  it('находит строки, которые рисует отдельный компонент (микрофон)', () => {
+    const find = (q) => SETTING_ENTRIES.filter((e) => e.title.toLowerCase().includes(q)).map((e) => e.title);
+    expect(find('устройство микрофона')).toContain('Устройство микрофона');
+    expect(find('горячий микрофон')).toContain('Горячий микрофон (предролл)');
+  });
+
   it('находит строки по словам из конца описания', () => {
     const byDesc = (q) => SETTING_ENTRIES.filter((e) => (e.desc || '').toLowerCase().includes(q));
     expect(byDesc('кнопки').map((e) => e.title)).toContain('Плавающий индикатор записи');

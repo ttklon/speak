@@ -1388,6 +1388,13 @@ async function scenarioSettingsSearch(browser) {
       titleRe,
     );
   };
+  const extra = await byDesc('предролл', 'Горячий микрофон');
+  record(
+    'сценарии',
+    'поиск по настройкам: строки отдельного компонента тоже находятся',
+    extra,
+    extra ? 'нашёл «Горячий микрофон»' : 'не нашёл',
+  );
   const tailWord = await byDesc('кнопки', 'Плавающий индикатор');
   const telemetry = await byDesc('телеметрии', 'Проверять обновления');
   record(

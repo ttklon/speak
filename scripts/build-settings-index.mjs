@@ -26,6 +26,12 @@ const SECTION_LABELS = {
   about: 'О программе',
 };
 
+// Компоненты, которые рисуют строки настроек внутри раздела: без них поиск не
+// находил ни «Устройство микрофона», ни «Горячий микрофон».
+const EXTRA_FILES = {
+  data: ['MicTester.jsx'],
+};
+
 const SECTION_FILES = {
   account: 'AccountSection.jsx',
   app: 'AppSection.jsx',
@@ -73,13 +79,16 @@ function extractInfoRows(source) {
 function build() {
   const entries = [];
   for (const [id, file] of Object.entries(SECTION_FILES)) {
-    const full = path.join(SECTIONS_DIR, file);
-    if (!fs.existsSync(full)) continue;
-    const source = fs.readFileSync(full, 'utf8');
-    for (const row of extractRows(source)) {
-      // мусорные обрезки типа «Как» пропускаем: настоящий заголовок длиннее 3 букв
-      if (row.title.length < 4) continue;
-      entries.push({ section: id, sectionLabel: SECTION_LABELS[id], title: row.title, desc: row.desc });
+    // секция плюс компоненты, которые рисуют её строки (например, MicTester)
+    const names = [file, ...(EXTRA_FILES[id] || [])];
+    for (const name of names) {
+      const full = path.join(SECTIONS_DIR, name);
+      if (!fs.existsSync(full)) continue;
+      for (const row of extractRows(fs.readFileSync(full, 'utf8'))) {
+        // мусорные обрезки типа «Как» пропускаем: настоящий заголовок длиннее 3 букв
+        if (row.title.length < 4) continue;
+        entries.push({ section: id, sectionLabel: SECTION_LABELS[id], title: row.title, desc: row.desc });
+      }
     }
   }
   // «О программе» — отдельная разметка
