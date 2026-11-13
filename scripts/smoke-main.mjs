@@ -538,6 +538,27 @@ await check('хоткей диктовки не выдёргивает окно 
 });
 
 
+await check('с выключенным индикатором окно показывается без фокуса', async () => {
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, showFloatingIndicator: false });
+  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  mainWin._visible = false;
+  mainWin._showCalls = 0;
+  mainWin._inactiveCalls = 0;
+  mainWin._focusCalls = 0;
+  const entry = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space');
+  if (!entry) throw new Error('хоткей диктовки не зарегистрирован');
+  sentEvents.length = 0;
+  entry.fn();
+  await new Promise((r) => setTimeout(r, 150));
+  if (mainWin._showCalls) throw new Error('окно показалось с фокусом');
+  if (!mainWin._inactiveCalls) throw new Error('окно не показалось — индикатор негде увидеть');
+  // возвращаем настройку как было
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, showFloatingIndicator: true });
+  entry.fn();
+  await new Promise((r) => setTimeout(r, 60));
+});
+
 await check('мониторинг буфера присылает новое копирование в окно', async () => {
   // даём доиграть отложенному возврату буфера после предыдущей вставки,
   // иначе он перезапишет «скопированное» прямо под монитором

@@ -404,6 +404,17 @@ function toggleDictation() {
   // Окно ZSpeakly не показываем: индикатор записи — отдельная плашка поверх
   // всех приложений. Раньше окно выпрыгивало при каждом нажатии хоткея и
   // закрывало собой то приложение, куда человек диктует.
+  if (dictationActive) showWindowIfIndicatorOff();
+}
+
+/**
+ * Если плавающий индикатор выключен в настройках, единственное место, где
+ * видно запись, — окно приложения. Тогда его надо показать (без фокуса).
+ */
+function showWindowIfIndicatorOff() {
+  const settings = store?.get('zs:settings') || {};
+  if (settings.showFloatingIndicator !== false) return;
+  if (!mainWindow?.isVisible?.()) mainWindow?.showInactive?.();
 }
 
 function navigate(page) {
@@ -579,7 +590,7 @@ function registerVoiceHotkeys(settings = {}) {
  * окно — он его откроет сам.
  */
 function showWindowForDictation() {
-  /* намеренно пусто: раньше здесь было mainWindow.show() */
+  showWindowIfIndicatorOff();
 }
 
 /** Control+Alt+Space → Ctrl + Alt + Space (как в интерфейсе). */
