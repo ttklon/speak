@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, Square } from 'lucide-react';
 import { Button, Select } from '../../ui/Controls.jsx';
+import Toggle from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { createLevelMeter, listDevices } from '../../../lib/audio/devices.js';
 
