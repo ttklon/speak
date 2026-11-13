@@ -55,7 +55,24 @@ export async function startPcmRecording({ deviceId = 'default', onLevel } = {}) 
         : { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   };
 
-  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  // Микрофон из настроек мог исчезнуть (наушники отключили, USB выдернули).
+  // Тогда getUserMedia падает с OverconstrainedError, и диктовка «не работает»
+  // без объяснений. Пишем с системного и говорим об этом человеку.
+  let stream;
+  let fellBack = false;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (err) {
+    const missingDevice =
+      deviceId &&
+      deviceId !== 'default' &&
+      ['OverconstrainedError', 'NotFoundError', 'DevicesNotFoundError'].includes(err?.name);
+    if (!missingDevice) throw err;
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+    fellBack = true;
+  }
   const ctx = new Ctx();
   // некоторые системы не дают 16 кГц — тогда пишем в родной частоте и ресемплим
   const source = ctx.createMediaStreamSource(stream);
@@ -101,6 +118,8 @@ export async function startPcmRecording({ deviceId = 'default', onLevel } = {}) 
   };
 
   return {
+    /** true, если запись идёт не с выбранного микрофона, а с системного */
+    fellBack,
     get sampleRate() {
       return ctx.sampleRate;
     },

@@ -792,6 +792,46 @@ async function scenarioCleanupToggle(browser) {
   record('сценарии', 'постобработка: без ошибок консоли', [...on.errors, ...off.errors].length === 0, [...on.errors, ...off.errors][0] || '');
 }
 
+// Микрофон из настроек пропал (выдернули USB): диктовка не должна молча
+// ломаться — пишем с системного и честно говорим об этом.
+async function scenarioMissingMic(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { audioDeviceId: 'mic-404' },
+    patchNative: () => {
+      const devices = navigator.mediaDevices;
+      if (!devices?.getUserMedia) return;
+      const original = devices.getUserMedia.bind(devices);
+      devices.getUserMedia = async (constraints) => {
+        if (constraints?.audio?.deviceId?.exact) {
+          const err = new Error('Requested device not found');
+          err.name = 'OverconstrainedError';
+          throw err;
+        }
+        return original(constraints);
+      };
+    },
+  });
+  takeErrors(page);
+  await page.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(1200);
+  const state = await page.evaluate(() => ({
+    listening: /Слушаю…/.test(document.querySelector('.hero__mic')?.innerText || ''),
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+    hud: document.querySelectorAll('.hud').length,
+  }));
+  record(
+    'сценарии',
+    'микрофон: пропавшее устройство заменяется системным с объяснением',
+    state.listening && /Микрофон из настроек не найден/.test(state.toast) && /системн/i.test(state.toast),
+    `${state.listening} · ${state.toast.slice(0, 70)}`,
+  );
+  await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(900);
+  const errors = takeErrors(page);
+  record('сценарии', 'микрофон: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioDictionary(browser) {
   const page = await openPage(browser, '#/dictionary');
   takeErrors(page);
@@ -2973,6 +3013,7 @@ async function main() {
       ['диктовка', scenarioDictation],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],
+      ['пропавший микрофон', scenarioMissingMic],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['разделы настроек', scenarioSettingsSections],

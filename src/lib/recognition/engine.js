@@ -116,6 +116,7 @@ export function createRecognizer(opts = {}) {
     onEnd,
     onStart,
     onLevel,
+    onNotice,
   } = opts;
 
   // 1) Нативный whisper.cpp: пишем PCM в рендерере → main → whisper-cli.exe
@@ -133,6 +134,15 @@ export function createRecognizer(opts = {}) {
             deviceId: opts.deviceId || 'default',
             onLevel: (v) => onLevel?.(v),
           });
+          // выбранный микрофон пропал — пишем с системного, но не молчим
+          if (recorder?.fellBack) {
+            onNotice?.({
+              title: 'Микрофон из настроек не найден',
+              description: 'Записываю с системного. Выберите микрофон в «Настройки → Данные и разрешения».',
+              tone: 'warn',
+              ttl: 9000,
+            });
+          }
           onStart?.();
         } catch (err) {
           // нет микрофона или отказали в доступе — сообщаем честно

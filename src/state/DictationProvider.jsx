@@ -257,6 +257,8 @@ export function DictationProvider({ children }) {
           setDraft(text);
         },
         onLevel: (v) => setLevel(v),
+        // не ошибка, но человек должен знать: микрофон из настроек пропал
+        onNotice: (t) => pushToast(t),
         onError: (err) => {
           // каждая ошибка движка должна быть видна в диагностике, иначе
           // «не работает» невозможно разобрать постфактум
