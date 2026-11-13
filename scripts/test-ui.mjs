@@ -2208,8 +2208,20 @@ async function scenarioEmptyStates(browser) {
   await page.close();
 }
 
+// Браузерное превью: моста плавающего индикатора нет, поэтому индикатор
+// рисуется внутри окна. Именно этот путь и проверяют сценарии ниже.
+const NO_NATIVE_HUD = () => {
+  const native = window.zspeakly && window.zspeakly.native;
+  if (!native) return;
+  delete native.hudShow;
+  delete native.hudHide;
+  delete native.hudUpdate;
+  delete native.hudStatus;
+  delete native.onHudClosed;
+};
+
 async function scenarioSttFailure(browser) {
-  const page = await openPage(browser, '#/home');
+  const page = await openPage(browser, '#/home', { patchNative: NO_NATIVE_HUD });
   takeErrors(page);
   await page.evaluate(() => {
     window.zspeakly.native.transcribePcm = async () => ({ ok: false, text: '', reason: 'движок не установлен' });
@@ -2402,7 +2414,10 @@ async function scenarioHidePasswords(browser) {
 }
 
 async function scenarioIndicator(browser) {
-  const page = await openPage(browser, '#/home', { settings: { showFloatingIndicator: false } });
+  const page = await openPage(browser, '#/home', {
+    settings: { showFloatingIndicator: false },
+    patchNative: NO_NATIVE_HUD,
+  });
   await clickText(page, 'Начать диктовку');
   await sleep(1200);
   const hud = await page.evaluate(() => Boolean(document.querySelector('.hud')));
@@ -2410,7 +2425,10 @@ async function scenarioIndicator(browser) {
   await sleep(1200);
   record('настройки', 'выключенный индикатор не показывается при записи', !hud);
 
-  const page2 = await openPage(browser, '#/home', { settings: { showFloatingIndicator: true } });
+  const page2 = await openPage(browser, '#/home', {
+    settings: { showFloatingIndicator: true },
+    patchNative: NO_NATIVE_HUD,
+  });
   await clickText(page2, 'Начать диктовку');
   await sleep(1200);
   const hud2 = await page2.evaluate(() => Boolean(document.querySelector('.hud')));
@@ -2422,7 +2440,10 @@ async function scenarioIndicator(browser) {
 }
 
 async function scenarioReadAloud(browser) {
-  const page = await openPage(browser, '#/home', { settings: { readAloud: true, soundFeedback: false } });
+  const page = await openPage(browser, '#/home', {
+    settings: { readAloud: true, soundFeedback: false },
+    patchNative: NO_NATIVE_HUD,
+  });
   await page.evaluate(() => {
     window.__spoken = [];
     window.speechSynthesis = window.speechSynthesis || {};
