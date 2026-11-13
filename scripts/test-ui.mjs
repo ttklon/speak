@@ -148,7 +148,9 @@ async function openPage(browser, route = '#/home', opts = {}) {
   await page.setViewport({ width: view.width, height: view.height, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(installMockBridge);
   // точечная правка моста под конкретный сценарий (до запуска приложения)
-  if (opts.patchNative) await page.evaluateOnNewDocument(opts.patchNative);
+  // patchArg уходит в страницу вместе с функцией: evaluateOnNewDocument не
+  // переносит замыкания, поэтому параметры передаём явно
+  if (opts.patchNative) await page.evaluateOnNewDocument(opts.patchNative, opts.patchArg);
   const settings = { ...SEED_SETTINGS, ...(opts.settings || {}) };
   // содержимое по умолчанию: демо-история, демо-буфер и демо-словарь.
   // Сценарии, которым нужны пустые экраны, передают свои storeSeed.
@@ -824,19 +826,23 @@ async function scenarioCleanupToggle(browser) {
 // Вторая стадия чистки: включённая галочка «Переписывать диктовку моделью»
 // отправляет текст в локальную модель, выключенная — не ходит в сеть вовсе.
 async function scenarioModelRewrite(browser) {
-  const run = async (on) => {
+  const run = async (on, { endpoint = 'http://localhost:11434', broken = false } = {}) => {
     const page = await openPage(browser, '#/home', {
       settings: {
         aiProcessing: true,
-        aiEndpoint: 'http://localhost:11434',
+        aiEndpoint: endpoint,
         aiModel: 'qwen2.5:0.5b',
         aiDictationRewrite: on,
       },
-      patchNative: () => {
+      patchArg: { broken },
+      patchNative: (arg) => {
         const native = window.zspeakly && window.zspeakly.native;
         if (!native) return;
         native.transcribePcm = async () => ({ ok: true, text: 'ну привет как дела у меня', engine: 'whisper' });
-        native.httpPost = async () => ({ ok: true, data: { response: 'Привет, как дела у меня?' } });
+        native.httpPost = async () => {
+          if (arg && arg.broken) return { ok: false, status: 0 };
+          return { ok: true, data: { response: 'Привет, как дела у меня?' } };
+        };
       },
     });
     takeErrors(page);
@@ -847,13 +853,17 @@ async function scenarioModelRewrite(browser) {
     await sleep(1800);
     const calls = await bridgeCalls(page);
     const stored = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
+    const toast = await page.evaluate(() =>
+      [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+    );
     const errors = takeErrors(page);
     await page.close();
-    return { stored, calls, errors };
+    return { stored, calls, toast, errors };
   };
 
   const on = await run(true);
   const off = await run(false);
+  const broken = await run(true, { broken: true });
   record(
     'сценарии',
     'модель: включённая галочка доводит диктовку после правил',
@@ -862,11 +872,17 @@ async function scenarioModelRewrite(browser) {
   );
   record(
     'сценарии',
+    'модель: молчание Ollama не ломает диктовку, но о нём сказано',
+    broken.stored === 'Привет как дела у меня.' && /Модель не ответила/.test(broken.toast || ''),
+    `${broken.stored} · ${(broken.toast || '').slice(0, 40)}`,
+  );
+  record(
+    'сценарии',
     'модель: выключенная галочка не ходит в сеть',
     off.stored === 'Привет как дела у меня.' && !off.calls.includes('http:post'),
     `${off.stored} · ${off.calls.slice(-2).join(',')}`,
   );
-  const errors = [...on.errors, ...off.errors];
+  const errors = [...on.errors, ...off.errors, ...broken.errors];
   record('сценарии', 'модель: без ошибок консоли', errors.length === 0, errors[0] || '');
 }
 

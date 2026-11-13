@@ -77,6 +77,8 @@ export function DictationProvider({ children }) {
 
   const engine = useMemo(() => engineName(), []);
   const { push: pushToast } = useToast();
+  // когда последний раз предупреждали, что модель не улучшила диктовку
+  const rewriteWarnedAt = useRef(0);
 
   // ошибка не должна висеть на экране навсегда: 12 секунд — и убираем
   useEffect(() => {
@@ -137,10 +139,31 @@ export function DictationProvider({ children }) {
             after: cleaned.length,
             model: settingsRef.current.aiModel || '',
           });
-        } else if (settingsRef.current.aiEndpoint) {
+        } else {
+          // Галочка включена, а модель ничего не дала. Молчать нельзя: человек
+          // думает, что текст «улучшается», хотя работает офлайн-правила.
           diag.warn('stt', 'Модель не улучшила диктовку — оставлены правила', {
-            reason: 'empty-or-unsane',
+            reason: settingsRef.current.aiEndpoint ? 'empty-or-unsane' : 'no-endpoint',
           });
+          // не чаще раза в 5 минут, чтобы не засыпать тостами на каждой фразе
+          if (Date.now() - rewriteWarnedAt.current > 5 * 60 * 1000) {
+            rewriteWarnedAt.current = Date.now();
+            if (!settingsRef.current.aiEndpoint) {
+              pushToast({
+                title: 'Модель не настроена',
+                description: 'Галочка «Переписывать диктовку моделью» включена, но адрес Ollama пуст — текст чистят офлайн-правила.',
+                tone: 'warn',
+                ttl: 9000,
+              });
+            } else {
+              pushToast({
+                title: 'Модель не ответила',
+                description: 'Диктовка очищена офлайн-правилами. Проверьте, запущена ли Ollama: «Настройки → Сеть → Проверить соединение».',
+                tone: 'warn',
+                ttl: 9000,
+              });
+            }
+          }
         }
       }
       const durationMs = Math.max(400, Date.now() - startedAt.current);
