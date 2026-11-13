@@ -1935,7 +1935,7 @@ async function scenarioHomeExtras(browser) {
   record('сценарии', 'главная: копирование из сниппета работает', copied && (calls.includes('clipboard:write') || calls.includes('clipboard:write-text')));
 
   // Esc должен закрывать просмотр расшифровки, как и остальные окна
-  await page.evaluate(() => document.querySelector('.settings-modal .modal__close, .settings-modal [aria-label="Закрыть"]')?.click());
+  await page.keyboard.press('Escape');
   await sleep(400);
   const closedByEsc = await page.evaluate(() => !document.querySelector('.snippet'));
   record('сценарии', 'главная: Esc закрывает просмотр расшифровки', copied && closedByEsc);
@@ -2151,7 +2151,16 @@ async function scenarioKeyboard(browser) {
   const opened = await page.evaluate(() => Boolean(document.querySelector('.settings-modal')));
   await page.evaluate(() => document.querySelector('.settings-modal .modal__close, .settings-modal [aria-label="Закрыть"]')?.click());
   await sleep(400);
-  const closed = await page.evaluate(() => !document.querySelector('.settings-modal'));
+  const closedByX = await page.evaluate(() => !document.querySelector('.settings-modal'));
+  // и второй способ закрыть: Esc (раньше здесь проверялся только крестик)
+  await page.keyboard.down('Control');
+  await page.keyboard.press(',');
+  await page.keyboard.up('Control');
+  await sleep(400);
+  const reopened = await page.evaluate(() => Boolean(document.querySelector('.settings-modal')));
+  await page.keyboard.press('Escape');
+  await sleep(400);
+  const closedByEsc = await page.evaluate(() => !document.querySelector('.settings-modal'));
 
   await page.keyboard.down('Control');
   await page.keyboard.press('KeyK');
@@ -2161,7 +2170,12 @@ async function scenarioKeyboard(browser) {
     onClipboard: location.hash.includes('clipboard'),
     focused: document.activeElement?.closest('.clip-toolbar') !== null,
   }));
-  record('клавиатура', 'Ctrl+, открывает настройки, Esc закрывает', opened && closed);
+  record(
+    'клавиатура',
+    'Ctrl+, открывает настройки, крестик и Esc закрывают',
+    opened && closedByX && reopened && closedByEsc,
+    `открылись=${opened} крестик=${closedByX} снова=${reopened} Esc=${closedByEsc}`,
+  );
   record('клавиатура', 'Ctrl+K ведёт в буфер и ставит курсор в поиск', search.onClipboard && search.focused, JSON.stringify(search));
   await page.close();
 }
