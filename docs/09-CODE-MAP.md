@@ -177,13 +177,13 @@ Ctrl+Alt+E (или своя инструкция)
 
 ## 5. IPC: полный контракт
 
-Проверяется `npm run check:ipc` (сейчас 52 invoke-канала, 56 обработчиков, 1 send).
+Проверяется `npm run check:ipc` (сейчас 51 invoke-канал, 55 обработчиков, 1 send).
 
 | Группа | Каналы |
 | --- | --- |
 | Хранилище | `store:get` (handle + sendSync), `store:set`, `store:remove`, `store:size` (sendSync) |
 | Окно | `win:minimize`, `win:toggle-maximize`, `win:close`, `win:badge` |
-| Распознавание | `stt:status`, `stt:transcribe`, `stt:transcribe-pcm` |
+| Распознавание | `stt:status`, `stt:transcribe-pcm` (канал `stt:transcribe(wav)` удалён: рендерер его не вызывал) |
 | Текст | `text:insert`, `text:paste`, `text:read-selection`, `text:replace-selection` |
 | Буфер | `clipboard:read`, `clipboard:write`, `clipboard:screenshot`, `screen:capture` |
 | Хоткеи | `hotkey:set` (строка-акселератор или `{dictationKey, textActions, voiceHotkeys}`) |

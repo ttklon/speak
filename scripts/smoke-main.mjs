@@ -245,7 +245,7 @@ await check('main загружается без реального Electron', ()
 });
 await check('IPC-каналы зарегистрированы', () => {
   const need = [
-    'stt:transcribe', 'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
+    'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
     'models:status', 'models:download', 'models:download-engine', 'models:cancel',
     'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',

@@ -22,7 +22,8 @@ export const hasWebSpeech = Boolean(SpeechRecognitionImpl);
 // В Electron моста достаточно, чтобы отличить настоящую сборку от превью.
 const isElectronShell = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.isElectron);
-// нужен именно PCM-канал: старый transcribe(wav) без записи звука бесполезен
+// нужен именно PCM-канал: канал transcribe(wav) удалён из main, у рендерера
+// нет записи звука в файл, и вызов был мёртвым
 export const hasNativeStt = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribePcm);
 

@@ -962,7 +962,6 @@ function registerIpc() {
   });
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));
-  ipcMain.handle('stt:transcribe', async (_e, payload) => whisper.transcribe(payload?.wav, payload || {}));
 
   ipcMain.handle('text:insert', async (_e, text) => {
     const value = String(text || '');
