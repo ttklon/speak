@@ -117,7 +117,7 @@
 - **lucide-react** — иконки (MIT), без внешних CDN;
 - **Vitest** — 95 тестов: текстовые движки, стиль письма, склонения, буфер, экранный контекст,
   бэкофф локальной модели, рендер всех страниц;
-- **Смоук main-процесса** — `npm run test:main` (54 проверки) запускает настоящий `main.cjs` с
+- **Смоук main-процесса** — `npm run test:main` (55 проверок) запускает настоящий `main.cjs` с
   заглушкой Electron: IPC, хоткеи, вставка Ctrl+V в чужое окно, WAV для whisper, картинки в буфере;
 - **Проверка IPC-контракта** — `npm run check:ipc`: каждый канал, который зовёт рендерер, обязан
   иметь обработчик (иначе вызов молча зависал);
@@ -237,7 +237,7 @@ powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
 npm run dev        # только UI
 npm run electron:dev
 npm test                    # vitest: 111 тестов
-npm run test:main           # смоук IPC, whisper --prompt, HTTP к Ollama, снимок экрана, мониторинг буфера (54 проверки)
+npm run test:main           # смоук IPC, whisper --prompt, HTTP к Ollama, снимок экрана, мониторинг буфера (55 проверок)
 npm run test:ui             # E2E «нажать всё» в Chromium: кнопки, поля, сценарии, контраст, доступные имена
 npm run test:updater        # каналы обновлений (stable/beta)
 npm run check:ipc           # нет каналов без обработчика
