@@ -80,6 +80,12 @@
         gap: 6px;
         font-size: 12.5px;
         font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .title span:first-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .time {
         font-size: 10.5px;
@@ -89,7 +95,7 @@
       }
       .text {
         margin-top: 2px;
-        font-size: 10.5px;
+        font-size: 11px;
         line-height: 1.35;
         color: #9c9ca4;
         white-space: nowrap;
@@ -98,6 +104,11 @@
       }
       .hud[data-state='error'] .text {
         color: #ff9a9a;
+        /* две строки: окно в этот момент выше (main меняет высоту по флагу error) */
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
       }
       .actions {
         display: flex;
@@ -187,6 +198,8 @@
         hud.dataset.state = state;
         pulse.style.setProperty('--level', String(Math.max(0, Math.min(1, p.level || 0))));
         titleEl.textContent = p.error || STATE_TITLE[state] || STATE_TITLE.listening;
+        // полный текст — в подсказке: плашка узкая, а обрезать причину нельзя
+        hud.title = [p.error, p.hintFull || p.hint].filter(Boolean).join(' — ') || 'ZSpeakly';
         const seconds = Math.max(0, (p.elapsed || 0) / 1000);
         timeEl.textContent = state === 'idle' || state === 'error' ? '' : `${seconds.toFixed(1)} с`;
         const draft = (p.draft || '').trim();

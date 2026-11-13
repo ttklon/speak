@@ -68,6 +68,15 @@ const makeWindow = (options = {}) => {
       win._alwaysOnTop = flag;
     },
     setVisibleOnAllWorkspaces: () => {},
+    getBounds: () => ({
+      x: win._bounds?.x ?? 0,
+      y: win._bounds?.y ?? 0,
+      width: win._bounds?.width ?? win._options.width,
+      height: win._bounds?.height ?? win._options.height,
+    }),
+    setBounds: (b) => {
+      win._bounds = b;
+    },
     setIgnoreMouseEvents: () => {},
     restore: () => {},
     isMaximized: () => false,
@@ -153,6 +162,12 @@ const electronStub = {
       size: { width: 1920, height: 1080 },
       workAreaSize: { width: 1920, height: 1040 },
       workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+    }),
+    // второй монитор справа: индикатор должен переезжать туда, где курсор
+    getCursorScreenPoint: () => ({ x: 2500, y: 300 }),
+    getDisplayNearestPoint: () => ({
+      size: { width: 2560, height: 1440 },
+      workArea: { x: 1920, y: 0, width: 2560, height: 1400 },
     }),
   },
   session: { defaultSession: { setDisplayMediaRequestHandler: () => {} } },
@@ -758,6 +773,17 @@ await check('индикатор диктовки: отдельное окно п
   if (windowInstances.length !== before + 1) throw new Error('создалось второе окно индикатора');
 });
 
+await check('индикатор появляется на том мониторе, где курсор', async () => {
+  await handlers.get('hud:show')({});
+  const hud = windowInstances[windowInstances.length - 1];
+  const b = hud._bounds || {};
+  // второй экран начинается с x=1920 и шириной 2560: центр = 1920 + (2560-268)/2
+  const expectedX = Math.round(1920 + (2560 - 360) / 2);
+  if (b.x !== expectedX) throw new Error(`x=${b.x}, ждали ${expectedX}`);
+  if (b.y !== 1400 - 92 - 28) throw new Error(`y=${b.y}`);
+  if (b.width !== 360 || b.height !== 92) throw new Error('размер плашки изменился');
+});
+
 await check('индикатор: состояние доходит до окна, закрытие его прячет', async () => {
   sentEvents.length = 0;
   await handlers.get('hud:update')({}, { state: 'listening', level: 0.42, elapsed: 1200, draft: 'привет' });
@@ -766,6 +792,15 @@ await check('индикатор: состояние доходит до окна
   if (stateEvent.payload.level !== 0.42 || stateEvent.payload.draft !== 'привет') {
     throw new Error(`состояние исказилось: ${JSON.stringify(stateEvent.payload)}`);
   }
+  // ошибка — две строки: окно становится выше, обычное состояние — обратно
+  const hudWin = windowInstances[windowInstances.length - 1];
+  await handlers.get('hud:update')({}, { state: 'error', error: 'Модель не загружена', hint: 'Скачайте модель' });
+  if (hudWin._bounds?.height !== 112) throw new Error(`высота при ошибке: ${hudWin._bounds?.height}`);
+  await handlers.get('hud:update')({}, { state: 'listening', level: 0.1, elapsed: 100 });
+  if (hudWin._bounds?.height !== 92) throw new Error(`высота после ошибки: ${JSON.stringify(hudWin._bounds)}`);
+  // окно растёт вверх, нижний край остаётся на месте (1400 - 28)
+  const bottom = (b) => (b.y ?? 0) + (b.height ?? 0);
+  if (bottom(hudWin._bounds) !== 1372) throw new Error(`нижний край уехал: ${JSON.stringify(hudWin._bounds)}`);
   const hud = windowInstances[windowInstances.length - 1];
   await handlers.get('hud:close')({});
   if (hud.isVisible()) throw new Error('индикатор не спрятался');

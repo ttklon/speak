@@ -209,7 +209,12 @@ async function health(page) {
       // чем ещё может ответить кнопка, кроме вызова моста: переход по hash,
       // открытие модалки/оверлея или изменение текста на экране
       hash: location.hash,
-      modal: Boolean(document.querySelector('.modal, .settings-modal, .palette, .dropdown, [role="dialog"]')),
+      // реакция — это и открывшееся окно/оверлей, и тост: оба видны человеку
+      modal: Boolean(
+        document.querySelector(
+          '.modal, .settings-modal, .palette, .dropdown, .clip-preview, .toast, [role="dialog"]',
+        ),
+      ),
       textLen: text.length,
     };
   });

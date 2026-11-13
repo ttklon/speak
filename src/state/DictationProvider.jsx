@@ -516,13 +516,17 @@ export function DictationProvider({ children }) {
     // уровень приходит по 30 кадров в секунду — в окно отправляем реже
     if (state === 'listening' && now - lastHudSent.current < 100) return;
     lastHudSent.current = now;
+    // Ошибку плашка показывает двумя строками и сама становится выше
+    // (main увеличивает окно по флагу error), поэтому текст не обрезаем.
+    const hintFull = error?.hint || '';
     native.hudUpdate({
       state,
       level,
       elapsed,
       draft,
       error: error?.title || '',
-      hint: error?.hint || '',
+      hint: hintFull,
+      hintFull,
     });
   }, [state, level, elapsed, draft, error, hudAllowed]);
 

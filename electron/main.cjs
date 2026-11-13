@@ -36,6 +36,10 @@ let store = null;
 // Отдельное «плавающее» окно индикатора диктовки: видно поверх любых
 // приложений и не забирает фокус, поэтому вставка идёт туда, где человек печатал.
 let hudWindow = null;
+// Размеры плашки: в обычном режиме — одна строка текста, при ошибке — две.
+const HUD_WIDTH = 360;
+const HUD_HEIGHT = 92;
+const HUD_HEIGHT_ERROR = 112;
 // идёт ли сейчас диктовка (для пункта «Остановить диктовку» в трее)
 let hudActive = false;
 let clipboardTimer = null;
@@ -219,8 +223,8 @@ function refreshTrayMenu() {
 function createHudWindow() {
   if (hudWindow && !hudWindow.isDestroyed?.()) return hudWindow;
   const { workArea } = screen.getPrimaryDisplay();
-  const width = 268;
-  const height = 92;
+  const width = HUD_WIDTH;
+  const height = HUD_HEIGHT;
   hudWindow = new BrowserWindow({
     width,
     height,
@@ -267,8 +271,44 @@ function setHudActive(active) {
   refreshTrayMenu();
 }
 
+/**
+ * Ставим плашку на тот монитор, где сейчас курсор: на двух экранах прежняя
+ * привязка к основному оставляла индикатор на соседнем дисплее, и человек его
+ * просто не видел.
+ */
+function placeHudWindow(win) {
+  try {
+    const point = screen.getCursorScreenPoint?.();
+    const display = point ? screen.getDisplayNearestPoint(point) : screen.getPrimaryDisplay();
+    const area = display?.workArea || screen.getPrimaryDisplay().workArea;
+    const { width, height } = win.getBounds?.() || { width: HUD_WIDTH, height: HUD_HEIGHT };
+    win.setBounds?.({
+      x: Math.round(area.x + (area.width - width) / 2),
+      y: Math.round(area.y + area.height - height - 28),
+      width,
+      height,
+    });
+  } catch {
+    /* размеры экрана недоступны — остаёмся там, где открылись */
+  }
+}
+
+/** Высота плашки: при ошибке вторая строка подсказки должна быть видна. */
+function resizeHudWindow(height) {
+  const win = hudWindow;
+  if (!win || win.isDestroyed?.()) return;
+  try {
+    const b = win.getBounds?.();
+    if (!b || b.height === height) return;
+    win.setBounds({ x: b.x, y: b.y + (b.height - height), width: b.width, height });
+  } catch {
+    /* окно могло закрыться между проверкой и вызовом */
+  }
+}
+
 function showHudWindow() {
   const win = createHudWindow();
+  placeHudWindow(win);
   try {
     if (!win.isVisible?.()) win.showInactive();
   } catch {
@@ -313,6 +353,8 @@ function registerHudIpc() {
   ipcMain.handle('hud:show', () => showHudWindow());
   ipcMain.handle('hud:hide', () => hideHudWindow());
   ipcMain.handle('hud:update', (_e, state) => {
+    // Ошибку показываем двумя строками — для этого плашка становится выше.
+    resizeHudWindow(state?.error ? HUD_HEIGHT_ERROR : HUD_HEIGHT);
     sendHudState(state || {});
     return true;
   });
