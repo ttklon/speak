@@ -126,10 +126,14 @@
 ```
 Ctrl+Alt+Space (глобальный хоткей)
   → main: globalShortcut → webContents.send('hotkey', {type:'down'})
-  → DictationProvider.start(): состояние listening, HUD, бип
+  → DictationProvider.start(): состояние listening, бип
+      → invoke('hud:show') → main: отдельное окно поверх всех приложений
+      → invoke('hud:update') до 10 раз в секунду: уровень, таймер, живой текст
+      → invoke('dictation:state', 'listening') → трей и хоткей знают, что идёт запись
   → engine.createRecognizer(): native (whisper.cpp) → pcmRecorder
       getUserMedia → ScriptProcessor(4096) → Float32 → 16 кГц → Int16
-  → отпустили клавишу: hotkey {type:'up'} → stop()
+  → стоп: кнопка «Остановить» на плашке (main шлёт 'dictation:stop'),
+      «Остановить диктовку» в трее, горячая клавиша или кнопка в окне — stop()
   → engine.stop(): recorder.stop() → { pcm, durationMs }
       проверки: пустая запись / короче 350 мс
   → invoke('stt:transcribe-pcm', { pcm, durationMs, lang, model, useDictionary })
@@ -137,7 +141,7 @@ Ctrl+Alt+Space (глобальный хоткей)
   → пришёл текст: applyDictionary (если тумблер включён)
       → postProcess → OPS.clean → история + статистика
       → invoke('text:insert') → clipboard.writeText + SendKeys ^v
-      → окно возвращается, HUD закрывается через 2.2 с
+      → invoke('hud:hide') — плашка уходит; ошибка держится на экране 6 с
 ```
 
 Особенности:
