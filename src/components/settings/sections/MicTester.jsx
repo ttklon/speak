@@ -5,6 +5,7 @@ import Toggle from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useDictation } from '../../../state/DictationProvider.jsx';
 import { createLevelMeter, listDevices } from '../../../lib/audio/devices.js';
+import { hasNativeStt } from '../../../lib/recognition/engine.js';
 
 /**
  * Тест микрофона как в видео: «Начать тест» → полоска уровня 5 секунд →
@@ -106,11 +107,13 @@ export default function MicTester() {
             {settings.micPreroll === true ? (
               <span className="setting-row__state">
                 {' '}
-                {micWarmState === 'open'
-                  ? 'Сейчас: микрофон открыт.'
-                  : micWarmState === 'failed'
-                    ? 'Сейчас: открыть микрофон не удалось — запись начнётся с нажатия.'
-                    : 'Сейчас: открываю микрофон…'}
+                {!hasNativeStt()
+                  ? 'Сейчас: предролл работает только с whisper.cpp в приложении, в браузере — запись с нажатия.'
+                  : micWarmState === 'open'
+                    ? 'Сейчас: микрофон открыт.'
+                    : micWarmState === 'failed'
+                      ? 'Сейчас: открыть микрофон не удалось — запись начнётся с нажатия.'
+                      : 'Сейчас: открываю микрофон…'}
               </span>
             ) : (
               <span className="setting-row__state"> Сейчас: микрофон закрыт, откроется при диктовке.</span>
