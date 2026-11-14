@@ -27,4 +27,25 @@ describe('индекс настроек', () => {
   it('не содержит обрезков короче четырёх символов', () => {
     expect(SETTING_ENTRIES.every((e) => e.title.length >= 4)).toBe(true);
   });
+
+  it('описания не обрезаны на первом переносе строки', () => {
+    // раньше регулярка сборщика останавливалась на переводе строки, и в индекс
+    // попадали обрезки вроде «…, уровень микрофона, живой текст и»
+    const descs = SETTING_ENTRIES.map((e) => e.desc).filter(Boolean);
+    expect(descs.length).toBeGreaterThan(10);
+    const broken = descs.filter((d) => !/[.!?»)]$/.test(d.trim()));
+    expect(broken).toEqual([]);
+  });
+
+  it('находит строки, которые рисует отдельный компонент (микрофон)', () => {
+    const find = (q) => SETTING_ENTRIES.filter((e) => e.title.toLowerCase().includes(q)).map((e) => e.title);
+    expect(find('устройство микрофона')).toContain('Устройство микрофона');
+    expect(find('горячий микрофон')).toContain('Горячий микрофон (предролл)');
+  });
+
+  it('находит строки по словам из конца описания', () => {
+    const byDesc = (q) => SETTING_ENTRIES.filter((e) => (e.desc || '').toLowerCase().includes(q));
+    expect(byDesc('кнопки').map((e) => e.title)).toContain('Плавающий индикатор записи');
+    expect(byDesc('на 1–3 секунды').map((e) => e.title)).toContain('Переписывать диктовку моделью');
+  });
 });

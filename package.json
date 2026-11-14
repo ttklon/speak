@@ -1,7 +1,7 @@
 {
   "name": "zspeakly",
   "productName": "ZSpeakly",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "private": true,
   "description": "ZSpeakly — офлайн голосовой ввод для Windows 11: диктовка в любое поле, словарь, AI-инструкции и буфер обмена.",
   "author": {
@@ -21,6 +21,8 @@
     "dist:dir": "npm run build && electron-builder --dir",
     "test": "vitest run",
     "icons": "node scripts/make-icons.mjs",
+    "screenshots": "node scripts/capture-screenshots.mjs",
+    "test:ui": "node scripts/test-ui.mjs",
     "test:main": "node scripts/smoke-main.mjs",
     "settings:index": "node scripts/build-settings-index.mjs",
     "settings:index:check": "node scripts/build-settings-index.mjs --check",
@@ -38,6 +40,7 @@
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
     "lucide-react": "^0.469.0",
+    "puppeteer-core": "^23.11.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^5.4.11",

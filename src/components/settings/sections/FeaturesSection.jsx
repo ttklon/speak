@@ -39,7 +39,8 @@ export default function FeaturesSection() {
           <div className="setting-row__label">
             Локальная модель (Ollama)
             <div className="setting-row__desc">
-              Адрес локального сервера. Если недоступен — ZSpeakly тихо вернётся к офлайн-правилам.
+              Адрес Ollama: нужен для AI-инструкций, подсказок с экрана и переписывания
+              диктовки. Если недоступен — ZSpeakly тихо вернётся к офлайн-правилам.
             </div>
           </div>
           <input
@@ -47,6 +48,19 @@ export default function FeaturesSection() {
             value={settings.aiEndpoint}
             onChange={(e) => updateSettings({ aiEndpoint: e.target.value })}
             placeholder="http://localhost:11434"
+          />
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Переписывать диктовку моделью
+            <div className="setting-row__desc">
+              Модель доводит формулировки после офлайн-правил: вставка позже на 1–3 секунды,
+              без запущенной Ollama остаются правила.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.aiDictationRewrite === true}
+            onChange={(v) => updateSettings({ aiDictationRewrite: v })}
           />
         </div>
         <div className="setting-row">
@@ -72,6 +86,21 @@ export default function FeaturesSection() {
             onChange={(v) => updateSettings({ language: v })}
             options={LANGUAGES.map((l) => ({ value: l.id, label: l.native }))}
             width={190}
+          />
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Живая расшифровка
+            <div className="setting-row__desc">
+              Пока вы говорите, приложение раз в 2,5 секунды просит whisper.cpp распознать уже
+              сказанное — текст в плашке появляется по ходу речи. Работает только с whisper.cpp:
+              в браузере текст и так приходит частями. На слабом компьютере это заметная нагрузка,
+              выключите — расшифровка будет одна, после остановки.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.liveWhisper !== false}
+            onChange={(v) => updateSettings({ liveWhisper: v })}
           />
         </div>
         <div className="setting-row">
@@ -159,6 +188,30 @@ export default function FeaturesSection() {
           <Toggle
             checked={settings.hidePasswords}
             onChange={(v) => updateSettings({ hidePasswords: v })}
+          />
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Вставка текста</div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Способ вставки
+            <div className="setting-row__desc">
+              «Буфер обмена» кладёт текст в буфер и жмёт Ctrl+V, прежнее содержимое возвращается через
+              полсекунды — это работает почти везде. «Без буфера (SendInput)» отправляет клавиатурные
+              события прямо в активное окно: чужой буфер не трогается вовсе, работает и там, где Ctrl+V
+              перехвачен. Только Windows; на длинном тексте ввод идёт по символу и заметно медленнее.
+            </div>
+          </div>
+          <Select
+            value={settings.insertMethod === 'sendinput' ? 'sendinput' : 'clipboard'}
+            onChange={(v) => updateSettings({ insertMethod: v })}
+            options={[
+              { value: 'clipboard', label: 'Буфер обмена' },
+              { value: 'sendinput', label: 'Без буфера' },
+            ]}
+            width={170}
           />
         </div>
       </div>

@@ -12,6 +12,22 @@ function pickAudioContext() {
   return Ctx || null;
 }
 
+/** Простой ресемплер: линейная интерполяция из одной частоты в другую. */
+function resampleLinear(float32, inputRate, outputRate) {
+  if (inputRate === outputRate || !float32?.length) return float32;
+  const ratio = inputRate / outputRate;
+  const length = Math.floor(float32.length / ratio);
+  const out = new Float32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    const pos = i * ratio;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(float32.length - 1, i0 + 1);
+    const frac = pos - i0;
+    out[i] = float32[i0] * (1 - frac) + float32[i1] * frac;
+  }
+  return out;
+}
+
 /** Простой ресемплер: линейная интерполяция к 16 кГц. */
 function resampleTo16k(float32, inputRate) {
   if (inputRate === TARGET_RATE) return float32;
@@ -41,8 +57,10 @@ function toInt16(float32) {
  * @param {object} opts
  * @param {string} opts.deviceId  id микрофона ('default' — системный)
  * @param {(level:number)=>void} opts.onLevel
+ * @param {{samples: Float32Array, sampleRate: number}} [opts.preroll]
+ *   звук, записанный «горячим микрофоном» до нажатия хоткея
  */
-export async function startPcmRecording({ deviceId = 'default', onLevel } = {}) {
+export async function startPcmRecording({ deviceId = 'default', onLevel, preroll = null } = {}) {
   const Ctx = pickAudioContext();
   if (!Ctx || !navigator.mediaDevices?.getUserMedia) {
     throw new Error('Микрофон недоступен в этом окружении');
@@ -55,7 +73,24 @@ export async function startPcmRecording({ deviceId = 'default', onLevel } = {}) 
         : { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   };
 
-  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  // Микрофон из настроек мог исчезнуть (наушники отключили, USB выдернули).
+  // Тогда getUserMedia падает с OverconstrainedError, и диктовка «не работает»
+  // без объяснений. Пишем с системного и говорим об этом человеку.
+  let stream;
+  let fellBack = false;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (err) {
+    const missingDevice =
+      deviceId &&
+      deviceId !== 'default' &&
+      ['OverconstrainedError', 'NotFoundError', 'DevicesNotFoundError'].includes(err?.name);
+    if (!missingDevice) throw err;
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+    fellBack = true;
+  }
   const ctx = new Ctx();
   // некоторые системы не дают 16 кГц — тогда пишем в родной частоте и ресемплим
   const source = ctx.createMediaStreamSource(stream);
@@ -65,6 +100,16 @@ export async function startPcmRecording({ deviceId = 'default', onLevel } = {}) 
   let frames = 0;
   let aborted = false;
   let smoothLevel = 0;
+
+  // Предролл: первые сотни миллисекунд уже записаны до старта — кладём их
+  // первыми, иначе начало фразы пропадает на открытии устройства.
+  if (preroll?.samples?.length) {
+    const prepared = resampleLinear(preroll.samples, preroll.sampleRate || ctx.sampleRate, ctx.sampleRate);
+    if (prepared.length) {
+      chunks.push(prepared);
+      frames += prepared.length;
+    }
+  }
 
   processor.onaudioprocess = (event) => {
     if (aborted) return;
@@ -100,7 +145,44 @@ export async function startPcmRecording({ deviceId = 'default', onLevel } = {}) 
     ctx.close().catch(() => {});
   };
 
+  // Склеивает уже записанное в PCM 16 кГц — для промежуточной расшифровки,
+  // не останавливая микрофон. Хвост длиннее maxSeconds отбрасываем: whisper
+  // на минуте речи работает заметно дольше, чем длится сама диктовка.
+  const snapshot = ({ maxSeconds = 30 } = {}) => {
+    let from = 0;
+    let count = frames;
+    const limit = Math.floor(maxSeconds * ctx.sampleRate);
+    if (limit > 0 && frames > limit) {
+      count = limit;
+      from = frames - limit;
+    }
+    const part = new Float32Array(count);
+    let offset = 0;
+    let start = 0;
+    for (const c of chunks) {
+      const end = start + c.length;
+      // окно [from, from+count) может начинаться внутри чанка
+      const a = Math.max(start, from);
+      const b = Math.min(end, from + count);
+      if (b > a) {
+        part.set(c.subarray(a - start, b - start), offset);
+        offset += b - a;
+      }
+      start = end;
+      if (start >= from + count) break;
+    }
+    return {
+      pcm: toInt16(resampleTo16k(part, ctx.sampleRate)),
+      durationMs: Math.round((count / ctx.sampleRate) * 1000),
+      truncated: from > 0,
+    };
+  };
+
   return {
+    /** true, если запись идёт не с выбранного микрофона, а с системного */
+    fellBack,
+    /** накопленный звук без остановки записи (для живой расшифровки) */
+    snapshot,
     get sampleRate() {
       return ctx.sampleRate;
     },

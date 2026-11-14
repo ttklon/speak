@@ -24,37 +24,77 @@ const clipboardText = { value: 'выделенный текст' };
 const clipboardImage = { value: null };
 
 const windowInstances = [];
-const makeWindow = () => ({
-  webContents: {
-    send: () => {},
-    executeJavaScript: async () => {},
-    setWindowOpenHandler: () => {},
+// шаблоны меню трея: проверяем, что подпись сочетания обновляется
+const trayTemplates = [];
+const trayMenus = [];
+const trayTooltips = [];
+// Окно-заглушка: запоминаем options и состояние, чтобы проверять плавающий
+// индикатор (alwaysOnTop, focusable, showInactive, hide, loadFile).
+const makeWindow = (options = {}) => {
+  const win = {
+    _options: options,
+    _file: '',
+    _visible: options.show !== false,
+    webContents: {
+      send: (ch, payload) => sentEvents.push({ ch, payload }),
+      sendInputEvent: (ev) => sentInputEvents.push(ev),
+      executeJavaScript: async () => {},
+      setWindowOpenHandler: () => {},
+      on: () => {},
+    },
     on: () => {},
-  },
-  on: () => {},
-  once: () => {},
-  loadURL: async () => {},
-  loadFile: async () => {},
-  show: () => {},
-  focus: () => {},
-  blur: () => {},
-  hide: () => {},
-  isMinimized: () => false,
-  restore: () => {},
-  isMaximized: () => false,
-  isFocused: () => true,
-  maximize: () => {},
-  unmaximize: () => {},
-  minimize: () => {},
-  close: () => {},
-  webContents: {
-    send: (ch, payload) => sentEvents.push({ ch, payload }),
-    sendInputEvent: (ev) => sentInputEvents.push(ev),
-    executeJavaScript: async () => {},
-    setWindowOpenHandler: () => {},
-    on: () => {},
-  },
-});
+    once: () => {},
+    loadURL: async () => {},
+    loadFile: async (file) => {
+      win._file = String(file);
+    },
+    show: () => {
+      win._visible = true;
+      win._showCalls = (win._showCalls || 0) + 1;
+    },
+    showInactive: () => {
+      win._visible = true;
+      win._inactiveCalls = (win._inactiveCalls || 0) + 1;
+    },
+    focus: () => {
+      win._focusCalls = (win._focusCalls || 0) + 1;
+    },
+    blur: () => {
+      win._blurCalls = (win._blurCalls || 0) + 1;
+    },
+    hide: () => {
+      win._visible = false;
+    },
+    isMinimized: () => false,
+    isVisible: () => win._visible,
+    isDestroyed: () => false,
+    destroy: () => {
+      win._visible = false;
+    },
+    setAlwaysOnTop: (flag) => {
+      win._alwaysOnTop = flag;
+    },
+    setVisibleOnAllWorkspaces: () => {},
+    getBounds: () => ({
+      x: win._bounds?.x ?? 0,
+      y: win._bounds?.y ?? 0,
+      width: win._bounds?.width ?? win._options.width,
+      height: win._bounds?.height ?? win._options.height,
+    }),
+    setBounds: (b) => {
+      win._bounds = b;
+    },
+    setIgnoreMouseEvents: () => {},
+    restore: () => {},
+    isMaximized: () => false,
+    isFocused: () => true,
+    maximize: () => {},
+    unmaximize: () => {},
+    minimize: () => {},
+    close: () => {},
+  };
+  return win;
+};
 const fakeWindow = () => windowInstances[windowInstances.length - 1] || makeWindow();
 
 const electronStub = {
@@ -64,7 +104,7 @@ const electronStub = {
     on: () => {},
     whenReady: () => Promise.resolve(),
     quit: () => {},
-    getVersion: () => '1.4.4',
+    getVersion: () => '1.4.5',
     getName: () => 'ZSpeakly',
     getPath: () => userData,
     getAppPath: () => process.cwd(),
@@ -73,17 +113,45 @@ const electronStub = {
     setLoginItemSettings: () => {},
     getLoginItemSettings: () => ({ openAtLogin: false }),
   },
-  BrowserWindow: Object.assign(function BrowserWindow() {
-    const win = makeWindow();
+  // системное хранилище (DPAPI) — в тесте «шифруем» префиксом, чтобы проверить
+  // и путь с шифрованием, и путь без него (available=false)
+  safeStorage: {
+    _available: true,
+    isEncryptionAvailable() {
+      return this._available;
+    },
+    encryptString(text) {
+      return Buffer.from(`enc:${text}`, 'utf8');
+    },
+    decryptString(buf) {
+      const value = Buffer.from(buf).toString('utf8');
+      if (!value.startsWith('enc:')) throw new Error('не наш шифр');
+      return value.slice(4);
+    },
+  },
+  BrowserWindow: Object.assign(function BrowserWindow(options) {
+    const win = makeWindow(options);
     windowInstances.push(win);
     return win;
   }, { getAllWindows: () => windowInstances }),
   Tray: class {
-    setToolTip() {}
-    setContextMenu() {}
+    setToolTip(text) {
+      trayTooltips.push(text);
+    }
+    setContextMenu(menu) {
+      trayMenus.push(menu);
+    }
     on() {}
+    isDestroyed() {
+      return false;
+    }
   },
-  Menu: { buildFromTemplate: () => ({}) },
+  Menu: {
+    buildFromTemplate: (template) => {
+      trayTemplates.push(template);
+      return { template };
+    },
+  },
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => true }),
     createFromDataURL: () => ({ isEmpty: () => false, __fromDataUrl: true }),
@@ -96,8 +164,11 @@ const electronStub = {
   globalShortcut: {
     unregisterAll: () => (registered.length = 0),
     register: (acc, fn) => {
+      // как в Electron: занятое сочетание не регистрируется повторно
+      if (registered.includes(acc)) return false;
       registered.push(acc);
       globalShortcutRegs.push({ accel: acc, fn });
+      return true;
     },
   },
   clipboard: {
@@ -111,19 +182,59 @@ const electronStub = {
   },
   shell: { openExternal: () => {}, openPath: () => {} },
   dialog: { showErrorBox: () => {} },
-  screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1920, height: 1080 } }) },
+  screen: {
+    getPrimaryDisplay: () => ({
+      size: { width: 1920, height: 1080 },
+      workAreaSize: { width: 1920, height: 1040 },
+      workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+    }),
+    // второй монитор справа: индикатор должен переезжать туда, где курсор
+    getCursorScreenPoint: () => ({ x: 2500, y: 300 }),
+    getDisplayNearestPoint: () => ({
+      size: { width: 2560, height: 1440 },
+      workArea: { x: 1920, y: 0, width: 2560, height: 1400 },
+    }),
+  },
   session: { defaultSession: { setDisplayMediaRequestHandler: () => {} } },
   desktopCapturer: { getSources: async () => [] },
 };
 
 // перехватываем spawn/execFile — никаких реальных процессов в тесте
 const spawnCalls = [];
+// что «ответит» фейковый whisper (см. cpStub.spawn); null — процесс просто молчит
+const spawnPlan = { answer: null, execError: false };
 const globalShortcutRegs = [];
 const cpStub = {
   execFile: (file, args, opts, cb) => {
     spawnCalls.push({ file, args });
-    if (typeof cb === 'function') setTimeout(() => cb(null, '', ''), 0);
-    return { on: () => {} };
+    // execError: притворяемся, что SendKeys недоступен (окно с правами админа)
+    if (typeof cb === 'function') {
+      setTimeout(() => (spawnPlan.execError ? cb(new Error('SendKeys недоступен')) : cb(null, '', '')), 0);
+    }
+    // SendInput-помощник общается через stdin/stdout: отдаём то, что велел тест
+    const listeners = {};
+    const plan = spawnPlan.sendInput;
+    const child = {
+      on: (event, fn) => {
+        if (fn) listeners[event] = fn;
+      },
+      stdout: {
+        on: (event, fn) => {
+          if (event !== 'data' || !fn) return;
+          if (plan) setTimeout(() => fn(Buffer.from(plan.out || '')), 0);
+        },
+      },
+      stderr: { on: () => {} },
+      stdin: {
+        write: (data) => {
+          spawnPlan.stdin = String(data);
+        },
+        end: () => {},
+      },
+      kill: () => {},
+    };
+    if (plan) setTimeout(() => listeners.close?.(plan.code ?? 0), 5);
+    return child;
   },
   exec: (cmd, opts, cb) => {
     spawnCalls.push({ file: cmd, args: [] });
@@ -132,7 +243,22 @@ const cpStub = {
   },
   spawn: (file, args) => {
     spawnCalls.push({ file, args });
-    return { on: () => {}, stdout: { on: () => {} }, stderr: { on: () => {} }, kill: () => {} };
+    const listeners = {};
+    const child = {
+      on: (event, fn) => {
+        if (fn) listeners[event] = fn;
+      },
+      stdout: { on: () => {} },
+      stderr: { on: () => {} },
+      kill: () => {},
+    };
+    // «распознавание»: пишем тот же файл, что ждёт whisper.cjs (-otxt), и закрываемся
+    if (spawnPlan.answer !== null) {
+      const at = (args || []).indexOf('-of');
+      if (at >= 0) fs.writeFileSync(`${args[at + 1]}.txt`, spawnPlan.answer);
+      setTimeout(() => listeners.close?.(0), 0);
+    }
+    return child;
   },
 };
 
@@ -164,13 +290,19 @@ await check('main загружается без реального Electron', ()
 });
 await check('IPC-каналы зарегистрированы', () => {
   const need = [
-    'stt:transcribe', 'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
+    'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
-    'models:status', 'models:download', 'models:download-engine',
+    'models:status', 'models:download', 'models:download-engine', 'models:cancel',
     'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',
   ];
   const missing = need.filter((ch) => !handlers.has(ch));
   if (missing.length) throw new Error(`нет каналов: ${missing.join(', ')}`);
+});
+await check('отмена скачивания модели отвечает без зависаний', async () => {
+  const res = await handlers.get('models:cancel')({});
+  if (!res || typeof res.ok !== 'boolean') throw new Error(`странный ответ: ${JSON.stringify(res)}`);
+  if (res.ok) throw new Error('нечего отменять, а вернулось ok');
+  if (!/нечего/.test(res.reason || '')) throw new Error(`нет причины: ${res.reason}`);
 });
 await check('store:get работает синхронно', () => {
   if (!onHandlers.has('store:get')) throw new Error('нет store:get');
@@ -205,11 +337,118 @@ await check('голосовые сочетания регистрируются 
   if (registered.includes('Control+Alt+Z')) throw new Error('выключенное сочетание зарегистрировано');
 });
 
+await check('двойное нажатие диктовки открывает агента, если он на том же сочетании', async () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    dictationKey: 'Control+Alt+Space',
+    textActions: [],
+    voiceHotkeys: [
+      { id: 'dictation', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+      { id: 'agent', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+    ],
+  });
+  const dict = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space');
+  if (!dict) throw new Error('диктовка не зарегистрирована');
+  if (registered.filter((a) => a === 'Control+Alt+Space').length !== 1) {
+    throw new Error('сочетание зарегистрировано дважды');
+  }
+  dict.fn();
+  await new Promise((r) => setTimeout(r, 60));
+  // первое нажатие начинает диктовку сразу, без ожидания «а вдруг двойное»
+  const firstDown = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'down');
+  if (!firstDown) throw new Error('диктовка не началась мгновенно');
+  dict.fn();
+  await new Promise((r) => setTimeout(r, 120));
+  const agent = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'agent');
+  if (!agent) throw new Error(`агент не сработал: ${JSON.stringify(sentEvents.slice(-3))}`);
+  const cancel = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'cancel');
+  if (!cancel) throw new Error('обрывок диктовки не отменён перед агентом');
+  const downs = sentEvents.filter((e) => e.ch === 'hotkey' && e.payload?.type === 'down').length;
+  if (downs !== 1) throw new Error(`лишние запуски диктовки: ${downs}`);
+  if (sentEvents.filter((e) => e.ch === 'hotkey' && e.payload?.type === 'up').length) {
+    throw new Error('отмена ушла как «стоп» — обрывок попал бы в историю');
+  }
+});
+
+await check('одиночное нажатие диктовки запускает запись', async () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    dictationKey: 'Control+Alt+Space',
+    textActions: [],
+    voiceHotkeys: [{ id: 'agent', keys: ['Ctrl', 'Alt', 'Space'], enabled: true }],
+  });
+  const handler = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space').fn;
+  handler();
+  await new Promise((r) => setTimeout(r, 120));
+  const down = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'down');
+  if (!down) throw new Error('запись не началась мгновенно');
+  // возвращаем состояние «не записываем», иначе следующая проверка нажмёт «стоп»
+  handler();
+  await new Promise((r) => setTimeout(r, 120));
+});
+
+await check('своё сочетание диктовки и screen-aware работают переключателем', () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    // своё сочетание диктовки живёт в dictationKey — так его пишет раздел
+    dictationKey: 'Control+Alt+D',
+    textActions: [],
+    voiceHotkeys: [{ id: 'screen-aware', keys: ['Ctrl', 'Alt', 'S'], enabled: true }],
+  });
+  const dict = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+D');
+  const aware = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+S');
+  if (!dict || !aware) throw new Error('сочетания не зарегистрированы');
+  // диктовка: первое нажатие — старт, второе — стоп (глобальное сочетание
+  // не присылает отпускание клавиши, поэтому «удержание» невозможно)
+  dict.fn();
+  dict.fn();
+  aware.fn();
+  const payloads = sentEvents.filter((e) => e.ch === 'hotkey').map((e) => e.payload);
+  const types = payloads.map((p) => p?.type);
+  if (types[0] !== 'down' || types[1] !== 'up') throw new Error(`диктовка не переключается: ${JSON.stringify(types)}`);
+  if (types[2] !== 'toggle') throw new Error(`screen-aware не переключатель: ${JSON.stringify(types)}`);
+  if (!payloads[2]?.screenAware) throw new Error('screen-aware потерял флаг экрана');
+  if (!registered.includes('Control+Alt+D')) throw new Error('своё сочетание диктовки не зарегистрировано');
+});
+
+await check('занятое сочетание не пропадает молча — приходит hotkey:conflict', () => {
+  registered.length = 0;
+  globalShortcutRegs.length = 0;
+  sentEvents.length = 0;
+  handlers.get('hotkey:set')({}, {
+    dictationKey: 'Control+Alt+Space',
+    textActions: [{ id: 'shorten', keys: ['Ctrl', 'Alt', 'S'], enabled: true }],
+    voiceHotkeys: [
+      { id: 'screen-aware', keys: ['Ctrl', 'Alt', 'S'], enabled: true },
+      { id: 'agent', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+    ],
+  });
+  const conflicts = sentEvents.filter((e) => e.ch === 'hotkey:conflict');
+  if (!conflicts.length) throw new Error('конфликта не сообщили');
+  const textActionWorks = globalShortcutRegs.some((r) => r.accel === 'Control+Alt+S');
+  if (!textActionWorks) throw new Error('ни одно из сочетаний не зарегистрировалось');
+});
+
 await check('сочетания сохраняются в настройки главного процесса', () => {
   const saved = (handlers.get('store:get')({}, 'zs:settings') || {}).voiceHotkeys || [];
   if (!saved.some((h) => h.id === 'agent' && h.enabled)) {
     throw new Error('список сочетаний не сохранился — после перезапуска вернулись бы прежние');
   }
+});
+
+await check('меню трея показывает актуальное сочетание диктовки', async () => {
+  const set = handlers.get('hotkey:set');
+  set({}, { dictationKey: 'Control+Shift+D' });
+  const template = trayTemplates[trayTemplates.length - 1] || [];
+  const item = template.find((t) => /Диктовка/.test(t.label || ''));
+  const last = trayMenus[trayMenus.length - 1];
+  return Boolean(item && /Ctrl \+ Shift \+ D/.test(item.label) && /Диктовка/.test(JSON.stringify(last)));
 });
 
 await check('замена выделения пишет в буфер', async () => {
@@ -250,6 +489,134 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
   }
 });
 
+await check('неудачная вставка оставляет текст в буфере — как обещает тост', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    clipboardText.value = 'чужой текст';
+    spawnPlan.execError = true;
+    const ok = await handlers.get('text:insert')({}, 'диктовка в буфере');
+    await new Promise((r) => setTimeout(r, 900));
+    if (ok !== false) throw new Error('вставка выдана за успешную');
+    if (clipboardText.value !== 'диктовка в буфере') {
+      throw new Error(`в буфере: ${clipboardText.value} — обещанного текста нет`);
+    }
+  } finally {
+    spawnPlan.execError = false;
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('SendInput: скрипт действительно вызывает SendInput с UNICODE', async () => {
+  const { buildScript, parseOutput } = require(path.resolve('electron/sendInput.cjs'));
+  const script = buildScript();
+  if (!/SendInput\(/.test(script)) throw new Error('скрипт не зовёт SendInput');
+  if (!/KEYEVENTF_UNICODE/.test(script)) throw new Error('нет флага UNICODE — кириллица не введётся');
+  if (/\$args/.test(script)) throw new Error('текст не должен идти аргументами командной строки');
+  const done = parseOutput('p:25\nok:40\n', 40);
+  if (!done.ok || done.sent !== 40) throw new Error(`разбор успеха: ${JSON.stringify(done)}`);
+  const cut = parseOutput('p:25\nerr:sendinput 5\np:25\n', 40);
+  if (cut.ok || cut.sent !== 25) throw new Error(`разбор обрыва: ${JSON.stringify(cut)}`);
+});
+
+await check('вставка без буфера: текст уходит в окно, буфер не тронут', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  try {
+    const text = 'диктовка без буфера';
+    clipboardText.value = 'чужой буфер';
+    spawnPlan.stdin = '';
+    spawnPlan.sendInput = { out: `p:25\nok:${text.length}\n`, code: 0 };
+    spawnCalls.length = 0;
+    const ok = await handlers.get('text:insert')({}, text);
+    if (ok !== true) throw new Error(`вставка не удалась: ${JSON.stringify(ok)}`);
+    if (clipboardText.value !== 'чужой буфер') throw new Error(`буфер перетёрт: ${clipboardText.value}`);
+    const decoded = Buffer.from(spawnPlan.stdin, 'base64').toString('utf8');
+    if (decoded !== text) throw new Error(`в помощник ушло не то: ${decoded}`);
+    const usedPaste = spawnCalls.some((c) => (c.args || []).some((a) => /SendWait|\^v/.test(String(a))));
+    if (usedPaste) throw new Error('вставка всё-таки пошла через буфер');
+  } finally {
+    spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('вставка без буфера: обрыв на середине не дублирует текст', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  try {
+    clipboardText.value = 'чужой буфер';
+    spawnPlan.sendInput = { out: 'p:7\nerr:sendinput 5\n', code: 2 };
+    spawnCalls.length = 0;
+    const res = await handlers.get('text:insert')({}, 'длинная диктовка на сорок символов и ещё');
+    if (!res || res.partial !== 7) throw new Error(`не сообщили про частичный ввод: ${JSON.stringify(res)}`);
+    if (clipboardText.value !== 'чужой буфер') throw new Error(`буфер тронут: ${clipboardText.value}`);
+    const usedPaste = spawnCalls.some((c) => (c.args || []).some((a) => /SendWait|\^v/.test(String(a))));
+    if (usedPaste) throw new Error('после обрыва текст вставили буфером — будет дубль');
+  } finally {
+    spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('вставка без буфера: полный отказ уходит на буфер', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  try {
+    spawnPlan.sendInput = { out: 'err:empty\n', code: 3 };
+    const text = 'запасной путь через буфер';
+    const ok = await handlers.get('text:insert')({}, text);
+    if (ok !== true) throw new Error('SendInput не ввёл ничего, а буферный путь не сработал');
+    if (clipboardText.value !== text) throw new Error(`в буфере: ${clipboardText.value}`);
+  } finally {
+    spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('восстановление буфера не перетирает то, что человек скопировал сам', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    clipboardText.value = 'было в буфере';
+    const ok = await handlers.get('text:insert')({}, 'вставка прошла');
+    if (ok !== true) throw new Error('вставка не удалась');
+    await new Promise((r) => setTimeout(r, 120));
+    clipboardText.value = 'человек скопировал своё';
+    await new Promise((r) => setTimeout(r, 900));
+    if (clipboardText.value !== 'человек скопировал своё') {
+      throw new Error(`буфер перетёрт: ${clipboardText.value}`);
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('после успешной вставки возвращается прежний буфер', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    clipboardText.value = 'прежнее содержимое';
+    const ok = await handlers.get('text:insert')({}, 'диктованный текст');
+    if (ok !== true) throw new Error('вставка не удалась');
+    await new Promise((r) => setTimeout(r, 900));
+    if (clipboardText.value !== 'прежнее содержимое') {
+      throw new Error(`в буфере осталось: ${clipboardText.value}`);
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
 await check('app:open-external пускает только наши ссылки', async () => {
   const opened = [];
   const okOwn = await handlers.get('app:open-external')({}, 'https://github.com/ttklon/speak/releases');
@@ -266,6 +633,31 @@ await check('app:open-external пускает только наши ссылки
   }
 });
 
+await check('скриншот не попадает в историю дважды', async () => {
+  const stub = electronStub.desktopCapturer;
+  const original = stub.getSources;
+  stub.getSources = async () => [
+    {
+      name: 'Экран 1',
+      thumbnail: {
+        toDataURL: () => 'data:image/png;base64,QQ==',
+        resize: () => ({ toDataURL: () => 'data:image/png;base64,QQ==' }),
+        getSize: () => ({ width: 1920, height: 1080 }),
+      },
+    },
+  ];
+  sentEvents.length = 0;
+  try {
+    const res = await handlers.get('clipboard:screenshot')({});
+    if (!res?.ok) throw new Error(res?.reason || 'снимок не сделался');
+    if (!res.image || !res.width) throw new Error('нет превью или размеров');
+    const duplicates = sentEvents.filter((e) => e.ch === 'clipboard:item');
+    if (duplicates.length) throw new Error('main сам прислал clipboard:item — в истории будет два снимка');
+  } finally {
+    stub.getSources = original;
+  }
+});
+
 await check('clipboard:write кладёт картинку, а не только текст', async () => {
   const ok = await handlers.get('clipboard:write')({}, {
     image: 'data:image/png;base64,iVBORw0KGgo=',
@@ -275,24 +667,163 @@ await check('clipboard:write кладёт картинку, а не только
   if (!clipboardImage.value) throw new Error('картинка не попала в буфер');
 });
 
-await check('хоткей диктовки показывает скрытое окно из трея', async () => {
-  const win = windowInstances.at(-1);
+await check('хоткей диктовки не выдёргивает окно поверх чужого приложения', async () => {
   const visible = { value: false };
-  win.isVisible = () => visible.value;
-  win.show = () => { visible.value = true; };
-  win.showInactive = () => { visible.value = true; };
-  win.hide = () => { visible.value = false; };
+  // подменяем видимость у всех окон: mainWindow мог быть создан не последним.
+  // Подмену обязательно снимаем в конце — иначе она врёт следующим проверкам
+  // (и индикатор «виден» даже после hide).
+  const originals = windowInstances.map((win) => ({
+    win,
+    isVisible: win.isVisible,
+    show: win.show,
+    showInactive: win.showInactive,
+    hide: win.hide,
+  }));
+  for (const win of windowInstances) {
+    win.isVisible = () => visible.value;
+    win.show = () => { visible.value = true; };
+    win.showInactive = () => { visible.value = true; };
+    win.hide = () => { visible.value = false; };
+  }
 
   const regs = [];
   globalShortcutRegs.length = 0;
   await handlers.get('hotkey:set')({}, { dictationKey: 'Control+Alt+Space' });
   const entry = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space');
   if (!entry) throw new Error('хоткей диктовки не зарегистрирован');
+  sentEvents.length = 0;
   entry.fn();
-  if (!visible.value) throw new Error('окно осталось скрытым во время диктовки');
+  // диктовка стартует сразу, ждать «вдруг двойное» больше не нужно
+  await new Promise((r) => setTimeout(r, 120));
+  const shown = visible.value;
   entry.fn();
+  for (const o of originals) {
+    o.win.isVisible = o.isVisible;
+    o.win.show = o.show;
+    o.win.showInactive = o.showInactive;
+    o.win.hide = o.hide;
+  }
+  const down = sentEvents.find((e) => e.ch === 'hotkey' && e.payload?.type === 'down');
+  if (!down) {
+    throw new Error(`диктовка не началась: ${JSON.stringify(sentEvents.map((e) => e.payload))}`);
+  }
+  if (shown) throw new Error('окно ZSpeakly всплыло поверх чужого приложения');
 });
 
+
+await check('с выключенным индикатором окно показывается без фокуса', async () => {
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, showFloatingIndicator: false });
+  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  mainWin._visible = false;
+  mainWin._showCalls = 0;
+  mainWin._inactiveCalls = 0;
+  mainWin._focusCalls = 0;
+  const entry = globalShortcutRegs.find((r) => r.accel === 'Control+Alt+Space');
+  if (!entry) throw new Error('хоткей диктовки не зарегистрирован');
+  sentEvents.length = 0;
+  entry.fn();
+  await new Promise((r) => setTimeout(r, 150));
+  if (mainWin._showCalls) throw new Error('окно показалось с фокусом');
+  if (!mainWin._inactiveCalls) throw new Error('окно не показалось — индикатор негде увидеть');
+  // возвращаем настройку как было
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, showFloatingIndicator: true });
+  entry.fn();
+  await new Promise((r) => setTimeout(r, 60));
+});
+
+await check('мониторинг буфера присылает новое копирование в окно', async () => {
+  // даём доиграть отложенному возврату буфера после предыдущей вставки,
+  // иначе он перезапишет «скопированное» прямо под монитором
+  await new Promise((r) => setTimeout(r, 900));
+  clipboardText.value = 'скопировано из блокнота';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+  if (!item) throw new Error('событие clipboard:item не пришло');
+  if (item.payload.text !== 'скопировано из блокнота') throw new Error(`текст не тот: ${item.payload.text}`);
+  if (!item.payload.source) throw new Error('источник не заполнен');
+});
+
+await check('своя вставка не попадает в историю буфера', async () => {
+  await handlers.get('text:insert')({}, 'вставленный диктант');
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const texts = sentEvents.filter((e) => e.ch === 'clipboard:item').map((e) => e.payload.text);
+  if (texts.some((t) => t === 'вставленный диктант')) {
+    throw new Error('диктовка попала в буфер как чужое копирование');
+  }
+});
+
+await check('та же фраза, скопированная позже, снова попадает в историю', async () => {
+  await handlers.get('text:insert')({}, 'та же фраза');
+  sentEvents.length = 0;
+  // ждём, пока истечёт окно «это моя же вставка», и буфер вернётся к прежнему
+  await new Promise((r) => setTimeout(r, 2400));
+  clipboardText.value = 'другой текст';
+  await new Promise((r) => setTimeout(r, 1100));
+  clipboardText.value = 'та же фраза';
+  await new Promise((r) => setTimeout(r, 1100));
+  const texts = sentEvents.filter((e) => e.ch === 'clipboard:item').map((e) => e.payload.text);
+  if (!texts.includes('та же фраза')) {
+    throw new Error(`фраза не попала в историю буфера: ${JSON.stringify(texts)}`);
+  }
+});
+
+await check('пароль из буфера уходит в окно только шифром', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true });
+  clipboardText.value = 'Qw7!pLz9#Vb2';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+  if (!item) throw new Error('событие clipboard:item не пришло');
+  if (item.payload.kind !== 'password') throw new Error(`вид записи: ${item.payload.kind}`);
+  if (item.payload.text) throw new Error('открытый пароль ушёл в рендерер');
+  if (!item.payload.cipher || !item.payload.encrypted) throw new Error('нет шифра');
+  const plain = await handlers.get('secret:reveal')({}, item.payload.cipher);
+  if (plain !== 'Qw7!pLz9#Vb2') throw new Error(`расшифровка вернула: ${plain}`);
+  const available = await handlers.get('secret:available')({});
+  if (!available) throw new Error('secret:available соврал');
+});
+
+await check('обычный текст не считается паролем и не шифруется', async () => {
+  clipboardText.value = 'строка из заметки с пробелами';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+  if (!item) throw new Error('событие clipboard:item не пришло');
+  if (item.payload.kind !== 'text') throw new Error(`вид записи: ${item.payload.kind}`);
+  if (item.payload.cipher) throw new Error('обычный текст зашифрован');
+  if (item.payload.text !== 'строка из заметки с пробелами') throw new Error('текст потерялся');
+});
+
+await check('без системного хранилища пароль остаётся текстом, а не «зашифрован»', async () => {
+  electronStub.safeStorage._available = false;
+  try {
+    clipboardText.value = 'Zx9$kM4!qW1';
+    sentEvents.length = 0;
+    await new Promise((r) => setTimeout(r, 1100));
+    const item = sentEvents.find((e) => e.ch === 'clipboard:item');
+    if (!item) throw new Error('событие clipboard:item не пришло');
+    if (item.payload.kind === 'password' || item.payload.encrypted) {
+      throw new Error('запись выдана за зашифрованную, хотя хранилища нет');
+    }
+    if (await handlers.get('secret:available')({})) throw new Error('secret:available врёт');
+  } finally {
+    electronStub.safeStorage._available = true;
+  }
+});
+
+await check('выключенный мониторинг молчит', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: false });
+  clipboardText.value = 'это не должно попасть в историю';
+  sentEvents.length = 0;
+  await new Promise((r) => setTimeout(r, 1100));
+  const texts = sentEvents.filter((e) => e.ch === 'clipboard:item').map((e) => e.payload.text);
+  if (texts.length) throw new Error(`пришло ${texts.length} событий при выключенном мониторинге`);
+  // возвращаем как было, чтобы не влиять на остальные проверки
+  await handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true });
+});
 
 await check('отчёт диагностики сохраняется файлом на Рабочем столе', async () => {
   const save = handlers.get('diag:save-report');
@@ -311,6 +842,566 @@ await check('по умолчанию наружу ничего не отправ
   if (status.endpointConfigured) throw new Error('адрес приёмника задан по умолчанию');
   const res = await handlers.get('diag:send-now')({});
   if (res?.ok) throw new Error('отправка прошла без настроенного приёмника');
+});
+
+// ── Экранный контекст и словарь уходят в whisper как --prompt ───────────────
+await check('резервная копия сохраняется файлом через main', async () => {
+  const save = handlers.get('data:save-backup');
+  const good = await save({}, JSON.stringify({ app: 'ZSpeakly', dictations: [] }));
+  const bad = await save({}, 'не json');
+  const empty = await save({}, '');
+  const written = good?.ok && fs.existsSync(good.path) ? fs.readFileSync(good.path, 'utf8') : '';
+  if (good?.path) fs.rmSync(good.path, { force: true });
+  return Boolean(good?.ok && /ZSpeakly/.test(written) && bad?.ok === false && empty?.ok === false);
+});
+
+await check('stt:status честно говорит, что движка нет', async () => {
+  const st = await handlers.get('stt:status')({}, 'small');
+  if (st.available) throw new Error('движок «нашёлся» до установки');
+  if (st.bin || st.model) throw new Error('статус показывает несуществующие файлы');
+});
+
+const whisperBin = path.join(userData, 'bin', 'whisper-cli.exe');
+const whisperModel = path.join(userData, 'models', 'ggml-small.bin');
+fs.mkdirSync(path.dirname(whisperBin), { recursive: true });
+fs.mkdirSync(path.dirname(whisperModel), { recursive: true });
+fs.writeFileSync(whisperBin, 'fake');
+fs.writeFileSync(whisperModel, 'fake');
+
+// «запуск» whisper: планируем ответ фейкового процесса
+const runWhisper = (answer) => {
+  spawnPlan.answer = answer;
+};
+
+// Не «тишина», а сигнал с ненулевой громкостью: main справедливо не гоняет
+// whisper на нулях, поэтому проверки подсказки должны подавать настоящий звук.
+const speechPcm = (ms = 500) => {
+  const samples = Math.round((16000 * ms) / 1000);
+  const arr = new Int16Array(samples);
+  for (let i = 0; i < samples; i += 1) {
+    arr[i] = Math.round(6000 * Math.sin((2 * Math.PI * 220 * i) / 16000));
+  }
+  return new Uint8Array(arr.buffer);
+};
+
+await check('models:status честно говорит, какая модель работает на самом деле', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'large-v3-turbo' });
+  const st = await handlers.get('models:status')({});
+  if (st.preferred !== 'large-v3-turbo') throw new Error(`preferred=${st.preferred}`);
+  if (st.active !== 'small') throw new Error(`active=${st.active}`);
+  const dl = st.models['large-v3-turbo'];
+  if (!dl || dl.downloaded) throw new Error('турбо-модель будто скачана');
+  if (dl.sizeMb < 1000) throw new Error(`размер turbo подозрительный: ${dl.sizeMb}`);
+});
+
+await check('пропуск движка: whisper получает --prompt со словарём и контекстом', async () => {
+  await handlers.get('store:set')({}, 'zs:dictionary', [
+    { word: 'ZSpeakly', pronunciation: 'зи-спикли' },
+    { word: 'Алтайтара', pronunciation: 'алтай-тара' },
+  ]);
+  runWhisper('Проверка диктовки');
+  spawnCalls.length = 0;
+  const pcm = speechPcm(500);
+  const res = await handlers.get('stt:transcribe-pcm')({}, {
+    pcm,
+    durationMs: 500,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+    contextPrompt: 'Список задач, дедлайн, проект «Атлас», ZSpeakly',
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  if (!call) throw new Error(`whisper не запускался: ${JSON.stringify(spawnCalls)}`);
+  const i = call.args.indexOf('--prompt');
+  if (i < 0) throw new Error('--prompt не передан');
+  const prompt = call.args[i + 1];
+  if (!prompt.includes('ZSpeakly') || !prompt.includes('Алтайтара')) throw new Error(`словаря нет: ${prompt}`);
+  if (!prompt.includes('Атлас')) throw new Error(`контекста экрана нет: ${prompt}`);
+  // «ZSpeakly» встречается и в словаре, и в контексте — подсказка не должна
+  // повторять одно слово дважды, иначе полезные термины вытесняются за лимит
+  const repeated = prompt
+    .split(',')
+    .map((w) => w.trim().toLowerCase())
+    .filter((w, idx, all) => w && all.indexOf(w) !== idx);
+  if (repeated.length) throw new Error(`повторы в подсказке: ${repeated.join(', ')}`);
+  if (res?.text !== 'Проверка диктовки') throw new Error(`текст не вернулся: ${JSON.stringify(res)}`);
+});
+
+// ── VAD: длинная диктовка режется по паузам ─────────────────────────────────
+const silencePcm = (ms = 500) => new Uint8Array(Math.round((16000 * ms) / 1000) * 2);
+
+await check('splitBySilence режет по длинной паузе и не режет короткую', () => {
+  const whisperLib = require(path.resolve('electron/whisper.cjs'));
+  if (typeof whisperLib.splitBySilence !== 'function') throw new Error('нет splitBySilence');
+  const join = (...parts) => Buffer.concat(parts.map((p) => Buffer.from(p)));
+  const longPause = join(speechPcm(900), silencePcm(1500), speechPcm(900));
+  const parts = whisperLib.splitBySilence(longPause, 16000);
+  if (parts.length !== 2) throw new Error(`ожидалось 2 фрагмента, вышло ${parts.length}`);
+  const shortPause = join(speechPcm(900), silencePcm(300), speechPcm(900));
+  if (whisperLib.splitBySilence(shortPause, 16000).length !== 1) {
+    throw new Error('короткая пауза разрезала фразу');
+  }
+  const continuous = whisperLib.splitBySilence(Buffer.from(speechPcm(30000)), 16000);
+  if (continuous.length !== 2) throw new Error(`30 секунд речи не разрезаны на 25-секундные куски: ${continuous.length}`);
+});
+
+await check('диктовка с паузой распознаётся по фрагментам', async () => {
+  runWhisper('первая фраза');
+  spawnCalls.length = 0;
+  const pcm = Buffer.concat([
+    Buffer.from(speechPcm(900)),
+    Buffer.from(silencePcm(1500)),
+    Buffer.from(speechPcm(900)),
+  ]);
+  const res = await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: new Uint8Array(pcm),
+    durationMs: 3300,
+    lang: 'ru',
+    model: 'small',
+  });
+  const whisperRuns = spawnCalls.filter((c) => String(c.file).includes('whisper')).length;
+  if (whisperRuns !== 2) throw new Error(`whisper запускался ${whisperRuns} раз вместо 2`);
+  if (res?.chunks !== 2) throw new Error(`фрагментов в ответе: ${res?.chunks}`);
+  if (res?.text !== 'первая фраза. первая фраза.') throw new Error(`текст: ${JSON.stringify(res?.text)}`);
+});
+
+await check('тумблер словаря работает целиком: без словаря и без подсказки', async () => {
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(500),
+    lang: 'ru',
+    model: 'small',
+    useDictionary: false,
+    contextPrompt: '',
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  if (call.args.includes('--prompt')) throw new Error(`подсказка осталась: ${call.args.join(' ')}`);
+});
+
+await check('подсказка не разрастается: не больше 500 символов', async () => {
+  await handlers.get('store:set')({}, 'zs:dictionary', Array.from({ length: 60 }, (_, i) => ({ word: `Термин${i}` })));
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(500),
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+    contextPrompt: 'О'.repeat(900),
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const prompt = call.args[call.args.indexOf('--prompt') + 1];
+  if (prompt.length > 500) throw new Error(`подсказка ${prompt.length} символов`);
+  // контекст экрана идёт первым — именно он важнее для точности
+  if (!prompt.startsWith('О')) throw new Error('контекст экрана потерялся при обрезке');
+});
+
+await check('whisper получает все ядра и -sns против галлюцинаций', async () => {
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(500), lang: 'ru', model: 'small' });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const args = call.args.join(' ');
+  if (!/\s-t \d+/.test(args)) throw new Error(`нет -t: ${args}`);
+  if (!/\s\-sns(\s|$)/.test(args)) throw new Error(`нет -sns: ${args}`);
+  if (!/\s\-np(\s|$)/.test(args)) throw new Error(`нет -np: ${args}`);
+});
+
+await check('паузы по краям записи обрезаются перед whisper', () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const rate = 16000;
+  const silence = new Int16Array(rate); // 1 с тишины
+  const speech = new Int16Array(rate); // 1 с «речи»
+  for (let i = 0; i < rate; i += 1) speech[i] = Math.round(4000 * Math.sin((2 * Math.PI * 200 * i) / rate));
+  const pcm = new Int16Array(rate * 2 + rate); // тишина, речь, тишина
+  pcm.set(silence, 0);
+  pcm.set(speech, rate);
+  pcm.set(silence, rate * 2);
+  const raw = Buffer.from(pcm.buffer);
+  const trimmed = whisper.trimSilence(raw, rate);
+  const trimmedSec = trimmed.length / 2 / rate;
+  if (!(trimmedSec < 2 && trimmedSec > 1)) throw new Error(`длина после обрезки: ${trimmedSec}`);
+  // начало речи не срезано: в обрезке есть громкие сэмплы
+  const hasLoud = (() => {
+    for (let i = 0; i < Math.floor(trimmed.length / 2); i += 7) {
+      if (Math.abs(trimmed.readInt16LE(i * 2)) > 1000) return true;
+    }
+    return false;
+  })();
+  if (!hasLoud) throw new Error('речь потерялась при обрезке');
+  // запись без речи не трогаем — её отбракует analysePcm
+  if (whisper.trimSilence(Buffer.alloc(rate * 2), rate).length !== rate * 2) throw new Error('тишина обрезана зря');
+});
+
+await check('оценка записи: тишина, шёпот и речь различаются', () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const rate = 16000;
+  const make = (amp) => {
+    const pcm = new Int16Array(rate);
+    for (let i = 0; i < rate; i += 1) pcm[i] = Math.round(amp * Math.sin((2 * Math.PI * 180 * i) / rate));
+    return Buffer.from(pcm.buffer);
+  };
+  const silence = whisper.analysePcm(Buffer.alloc(rate * 2), rate);
+  if (silence.samples !== rate) throw new Error(`сэмплов: ${silence.samples}`);
+  if (Math.abs(silence.seconds - 1) > 0.001) throw new Error(`секунд: ${silence.seconds}`);
+  if (silence.rms !== 0 || silence.peak !== 0) throw new Error('тишина не нулевая');
+
+  const quiet = whisper.analysePcm(make(300), rate);
+  const loud = whisper.analysePcm(make(6000), rate);
+  if (!(loud.rms > quiet.rms && quiet.rms > 0)) throw new Error(`rms ${quiet.rms}/${loud.rms}`);
+  if (!(loud.peak > 5000)) throw new Error(`пик: ${loud.peak}`);
+  // пустой буфер не должен делить на ноль
+  const empty = whisper.analysePcm(Buffer.alloc(0), rate);
+  if (empty.samples !== 0 || empty.seconds !== 0) throw new Error('пустой буфер посчитан неверно');
+});
+
+await check('фразы-галлюцинации отбрасываются, живой текст остаётся', () => {
+  const { isPhantom } = require(path.resolve('electron/whisper.cjs'));
+  for (const bad of ['Спасибо за просмотр!', '  Продолжение следует  ', 'Thank you for watching.', 'Подписывайтесь на канал']) {
+    if (!isPhantom(bad)) throw new Error(`пропущена галлюцинация: ${bad}`);
+  }
+  for (const good of ['Спасибо за просмотр, теперь про отчёты', 'Конец квартала нужно закрыть', '', 'Привет']) {
+    if (isPhantom(good)) throw new Error(`удалён живой текст: ${good}`);
+  }
+});
+
+await check('импорт модели: чужой файл не подключается, ggml — да', async () => {
+  const modelsMod = require(path.resolve('electron/models.cjs'));
+  const tmpDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'zs-model-'));
+  const fake = path.join(tmpDir, 'not-a-model.bin');
+  fs.writeFileSync(fake, Buffer.concat([Buffer.from('NOPE'), Buffer.alloc(21 * 1024 * 1024)]));
+  const bad = await modelsMod.importModel(fake);
+  if (bad.ok) throw new Error('случайный файл подключился');
+  if (!/ggml/.test(String(bad.reason))) throw new Error(`причина: ${bad.reason}`);
+
+  const good = path.join(tmpDir, 'ggml-large-v3-turbo.bin');
+  fs.writeFileSync(good, Buffer.concat([Buffer.from('ggml'), Buffer.alloc(21 * 1024 * 1024)]));
+  const ok = await modelsMod.importModel(good);
+  if (!ok.ok || ok.id !== 'large-v3-turbo') throw new Error(JSON.stringify(ok));
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// ── Плавающий индикатор диктовки ────────────────────────────────────────────
+await check('индикатор диктовки: отдельное окно поверх всех, без фокуса', async () => {
+  const before = windowInstances.length;
+  const ok = await handlers.get('hud:show')({});
+  if (!ok) throw new Error('hud:show не ответил ok');
+  const hud = windowInstances[windowInstances.length - 1];
+  if (windowInstances.length !== before + 1) throw new Error('окно не создано');
+  const o = hud._options || {};
+  if (o.alwaysOnTop !== true) throw new Error('не alwaysOnTop');
+  if (o.focusable !== false) throw new Error('забирает фокус — вставка уйдёт в индикатор');
+  if (o.frame !== false) throw new Error('с рамкой');
+  if (o.transparent !== true) throw new Error('без прозрачности');
+  if (o.skipTaskbar !== true) throw new Error('висит в панели задач');
+  if (hud._alwaysOnTop !== true) throw new Error('setAlwaysOnTop не вызван');
+  if (!/hud\.html$/.test(hud._file)) throw new Error(`загружен не тот файл: ${hud._file}`);
+  if (!hud.isVisible()) throw new Error('показано невидимым');
+  // повторный вызов не плодит окна
+  await handlers.get('hud:show')({});
+  if (windowInstances.length !== before + 1) throw new Error('создалось второе окно индикатора');
+});
+
+await check('индикатор появляется на том мониторе, где курсор', async () => {
+  await handlers.get('hud:show')({});
+  const hud = windowInstances[windowInstances.length - 1];
+  const b = hud._bounds || {};
+  // второй экран начинается с x=1920 и шириной 2560: центр = 1920 + (2560-268)/2
+  const expectedX = Math.round(1920 + (2560 - 360) / 2);
+  if (b.x !== expectedX) throw new Error(`x=${b.x}, ждали ${expectedX}`);
+  if (b.y !== 1400 - 92 - 28) throw new Error(`y=${b.y}`);
+  if (b.width !== 360 || b.height !== 92) throw new Error('размер плашки изменился');
+});
+
+await check('индикатор: состояние доходит до окна, закрытие его прячет', async () => {
+  sentEvents.length = 0;
+  await handlers.get('hud:update')({}, { state: 'listening', level: 0.42, elapsed: 1200, draft: 'привет' });
+  const stateEvent = sentEvents.find((e) => e.ch === 'hud:state');
+  if (!stateEvent) throw new Error('окно не получило состояние');
+  if (stateEvent.payload.level !== 0.42 || stateEvent.payload.draft !== 'привет') {
+    throw new Error(`состояние исказилось: ${JSON.stringify(stateEvent.payload)}`);
+  }
+  // ошибка — две строки: окно становится выше, обычное состояние — обратно
+  const hudWin = windowInstances[windowInstances.length - 1];
+  await handlers.get('hud:update')({}, { state: 'error', error: 'Модель не загружена', hint: 'Скачайте модель' });
+  if (hudWin._bounds?.height !== 112) throw new Error(`высота при ошибке: ${hudWin._bounds?.height}`);
+  await handlers.get('hud:update')({}, { state: 'listening', level: 0.1, elapsed: 100 });
+  if (hudWin._bounds?.height !== 92) throw new Error(`высота после ошибки: ${JSON.stringify(hudWin._bounds)}`);
+  // окно растёт вверх, нижний край остаётся на месте (1400 - 28)
+  const bottom = (b) => (b.y ?? 0) + (b.height ?? 0);
+  if (bottom(hudWin._bounds) !== 1372) throw new Error(`нижний край уехал: ${JSON.stringify(hudWin._bounds)}`);
+  const hud = windowInstances[windowInstances.length - 1];
+  // главное окно ищем по его параметрам, а не по порядку создания
+  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  if (!mainWin) throw new Error('главное окно не найдено');
+  mainWin._visible = true;
+  await handlers.get('hud:close')({});
+  if (hud.isVisible()) throw new Error('индикатор не спрятался');
+  if (!sentEvents.some((e) => e.ch === 'hud:closed')) {
+    throw new Error('окно диктовки не узнало о закрытии — индикатор не переедет внутрь');
+  }
+
+  // окно приложения спрятано в трей: показывать индикатор негде — запись
+  // должна остановиться, иначе ею нечем управлять
+  await handlers.get('hud:show')({});
+  mainWin._visible = false;
+  sentEvents.length = 0;
+  await handlers.get('hud:close')({});
+  mainWin._visible = true;
+  if (!sentEvents.some((e) => e.ch === 'dictation:stop')) {
+    throw new Error('при скрытом окне закрытие плашки не остановило запись');
+  }
+  if (sentEvents.some((e) => e.ch === 'hud:closed')) {
+    throw new Error('при скрытом окне индикатор зря переехал в невидимое окно');
+  }
+});
+
+await check('индикатор: «стоп» и «скрыть» работают как кнопки', async () => {
+  await handlers.get('hud:show')({});
+  sentEvents.length = 0;
+  await handlers.get('hud:stop')({});
+  const stopEvent = sentEvents.find((e) => e.ch === 'dictation:stop');
+  if (!stopEvent) throw new Error('окно диктовки не получило просьбу остановиться');
+  if (stopEvent.payload?.from !== 'hud') throw new Error('не отмечено, что стоп пришёл с индикатора');
+  const status = await handlers.get('hud:status')({});
+  if (!status.open) throw new Error('статус говорит, что индикатора нет');
+  await handlers.get('hud:hide')({});
+  const after = await handlers.get('hud:status')({});
+  if (after.open) throw new Error('после hide индикатор всё ещё открыт');
+});
+
+await check('трей и сочетание знают реальное состояние записи', async () => {
+  const stateHandler = onHandlers.get('dictation:state');
+  if (!stateHandler) throw new Error('нет обработчика dictation:state');
+  stateHandler({}, 'listening');
+  const menu = trayTemplates[trayTemplates.length - 1] || [];
+  if (!menu.some((i) => i.label === 'Остановить диктовку')) throw new Error('нет пункта стопа при записи');
+  stateHandler({}, 'idle');
+  const idleMenu = trayTemplates[trayTemplates.length - 1] || [];
+  if (idleMenu.some((i) => i.label === 'Остановить диктовку')) throw new Error('стоп остался после записи');
+  // мусор в событии не должен ломать состояние
+  stateHandler({}, 'что-то странное');
+  const stillNoStop = (trayTemplates[trayTemplates.length - 1] || []).some(
+    (i) => i.label === 'Остановить диктовку',
+  );
+  if (stillNoStop) throw new Error('неизвестное состояние включило запись');
+});
+
+await check('трей говорит, что микрофон открыт заранее', async () => {
+  const handler = onHandlers.get('mic:warm');
+  if (!handler) throw new Error('нет обработчика mic:warm');
+  handler({}, true);
+  const menu = trayTemplates[trayTemplates.length - 1] || [];
+  if (!menu.some((i) => /Микрофон открыт заранее/.test(i.label || ''))) {
+    throw new Error(`в меню нет строки про открытый микрофон: ${menu.map((i) => i.label || i.type).join(' · ')}`);
+  }
+  if (!trayTooltips.some((t) => /микрофон открыт заранее/.test(String(t)))) {
+    throw new Error(`подсказка трея молчит: ${trayTooltips.join(' | ')}`);
+  }
+  // подсказка про непрочитанное не должна теряться
+  await handlers.get('win:badge')({}, 3);
+  const withBadge = trayTooltips[trayTooltips.length - 1];
+  if (!/3 новых/.test(withBadge) || !/микрофон открыт заранее/.test(withBadge)) {
+    throw new Error(`счётчик и микрофон не уживаются: ${withBadge}`);
+  }
+  await handlers.get('win:badge')({}, 0);
+  handler({}, false);
+  const after = trayTemplates[trayTemplates.length - 1] || [];
+  if (after.some((i) => /Микрофон открыт заранее/.test(i.label || ''))) throw new Error('строка осталась после закрытия');
+  if (!/офлайн голосовой ввод/.test(String(trayTooltips[trayTooltips.length - 1]))) {
+    throw new Error(`подсказка не вернулась к обычной: ${trayTooltips[trayTooltips.length - 1]}`);
+  }
+});
+
+await check('трей: во время записи появляется «Остановить диктовку»', async () => {
+  await handlers.get('hud:show')({});
+  const withStop = trayTemplates[trayTemplates.length - 1] || [];
+  const item = withStop.find((i) => i.label === 'Остановить диктовку');
+  if (!item) throw new Error(`в меню нет стопа: ${withStop.map((i) => i.label || i.type).join(' · ')}`);
+  sentEvents.length = 0;
+  item.click();
+  const ev = sentEvents.find((e) => e.ch === 'dictation:stop');
+  if (!ev || ev.payload?.from !== 'tray') throw new Error('пункт меню не останавливает запись');
+  await handlers.get('hud:hide')({});
+  const withoutStop = trayTemplates[trayTemplates.length - 1] || [];
+  if (withoutStop.some((i) => i.label === 'Остановить диктовку')) throw new Error('стоп остался в меню после записи');
+});
+
+await check('models:warm честно отказывает без whisper-server', async () => {
+  const res = await handlers.get('models:warm')({}, { model: 'small', force: true });
+  if (res?.ok) throw new Error('будто модель загружена');
+  if (!/whisper-server/.test(String(res?.reason))) throw new Error(`причина непонятная: ${res?.reason}`);
+});
+
+await check('models:warm не работает при выключенной настройке', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { keepModelLoaded: false });
+  const res = await handlers.get('models:warm')({}, { model: 'small' });
+  if (res?.ok) throw new Error('прогрев без согласия');
+  if (!/Держать модель в памяти/.test(String(res?.reason))) throw new Error(`причина: ${res?.reason}`);
+});
+
+await check('серверный режим: multipart для /inference собран правильно', () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const audio = Buffer.from('RIFFxxxxWAVE');
+  const { body, contentType } = whisper.multipart(
+    { language: 'ru', prompt: 'ZSpeakly, Атлас', temperature: '0.0', response_format: 'json' },
+    { name: 'file', filename: 'rec.wav', buffer: audio },
+  );
+  const text = body.toString('latin1');
+  if (!/^multipart\/form-data; boundary=/.test(contentType)) throw new Error(contentType);
+  if (!text.includes('name="file"; filename="rec.wav"')) throw new Error('нет файла');
+  if (!text.includes('name="prompt"')) throw new Error('нет подсказки');
+  if (!text.includes('name="language"')) throw new Error('нет языка');
+  if (!text.includes('RIFFxxxxWAVE')) throw new Error('аудио не вложено');
+  if (!text.trimEnd().endsWith('--')) throw new Error('нет закрывающей границы');
+});
+
+await check('серверный режим: без whisper-server честно работает обычный запуск', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const st = whisper.status('small');
+  if (st.server.available) throw new Error('сервер будто есть');
+  if (st.server.running) throw new Error('сервер будто запущен');
+  if (!st.modelName) throw new Error('не сказано, какой файл модели используется');
+  runWhisper('обычный путь');
+  spawnCalls.length = 0;
+  const res = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(400), lang: 'ru' });
+  if (res?.text !== 'обычный путь') throw new Error(`упало: ${JSON.stringify(res)}`);
+  if (!spawnCalls.some((c) => String(c.file).includes('whisper'))) throw new Error('cli не запускался');
+});
+
+await check('тишина не уходит в whisper и объясняет причину', async () => {
+  runWhisper('спасибо за просмотр');
+  spawnCalls.length = 0;
+  const silence = new Uint8Array(16000 * 2); // секунда нулей
+  const res = await handlers.get('stt:transcribe-pcm')({}, { pcm: silence, durationMs: 1000, lang: 'ru' });
+  if (spawnCalls.some((c) => String(c.file).includes('whisper'))) throw new Error('whisper всё-таки запустился');
+  if (res?.ok !== false || res.code !== 'silent') throw new Error(JSON.stringify(res));
+  if (!/микрофон/i.test(res.reason)) throw new Error(`причина непонятная: ${res.reason}`);
+});
+
+await check('фраза-галлюцинация отбрасывается, а речь остаётся', async () => {
+  runWhisper('Продолжение следует…');
+  const phantom = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(500), lang: 'ru' });
+  if (phantom?.ok !== false || phantom.code !== 'phantom') throw new Error(JSON.stringify(phantom));
+  runWhisper('Спасибо за просмотр, но давай вернёмся к смете');
+  const real = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(500), lang: 'ru' });
+  if (!real?.ok || !real.text) throw new Error(`живая фраза потерялась: ${JSON.stringify(real)}`);
+  if (!Number.isFinite(real.ms)) throw new Error('не вернулось время распознавания');
+});
+
+await check('вне Windows текст остаётся в буфере: вставлять некуда', async () => {
+  // на не-Windows sendKeys не работает, значит вставки не было и буфер должен
+  // сохранить текст — ровно то, что обещает тост «нажмите Ctrl+V»
+  clipboardText.value = 'моя заметка';
+  const ok = await handlers.get('text:insert')({}, 'надиктованный текст');
+  await new Promise((r) => setTimeout(r, 900));
+  if (ok !== false) throw new Error('вставка выдана за успешную');
+  if (clipboardText.value !== 'надиктованный текст') {
+    throw new Error(`в буфере осталось: ${clipboardText.value}`);
+  }
+});
+
+await check('пустая запись не запускает whisper', async () => {
+  runWhisper('не должно быть');
+  spawnCalls.length = 0;
+  const res = await handlers.get('stt:transcribe-pcm')({}, { pcm: new Uint8Array(0), lang: 'ru' });
+  if (res?.ok) throw new Error('пустая запись распозналась');
+  if (spawnCalls.some((c) => String(c.file).includes('whisper'))) throw new Error('whisper запущен на пустом файле');
+});
+
+spawnPlan.answer = null;
+
+// ── HTTP к локальной модели: экранный контекст и текст ──────────────────────
+await check('http:post доносит картинку до локальной модели', async () => {
+  const http = await import('node:http');
+  const got = { body: null };
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      got.body = JSON.parse(body || '{}');
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ response: 'Проект «Атлас», дедлайн пятница' }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const res = await handlers.get('http:post')({}, {
+      url: `http://127.0.0.1:${port}/api/generate`,
+      body: { model: 'qwen2.5:0.5b', prompt: 'что на экране?', images: ['data:image/png;base64,AAA'], stream: false },
+      timeout: 4000,
+    });
+    if (!res?.ok) throw new Error(res?.reason || 'запрос не прошёл');
+    if (got.body?.images?.[0] !== 'data:image/png;base64,AAA') throw new Error('картинка не дошла');
+    if (res.data?.response !== 'Проект «Атлас», дедлайн пятница') throw new Error('ответ не разобран');
+  } finally {
+    server.close();
+  }
+});
+
+await check('http:post не пускает наружу', async () => {
+  for (const url of ['https://example.com/api/generate', 'file:///C:/Windows/System32/calc.exe', 'nonsense']) {
+    const res = await handlers.get('http:post')({}, { url, body: {} });
+    if (res?.ok) throw new Error(`пропущен адрес: ${url}`);
+  }
+});
+
+// ── Снимок экрана для контекста ─────────────────────────────────────────────
+await check('screen:capture без источников честно отказывает', async () => {
+  const res = await handlers.get('screen:capture')({});
+  if (res?.ok) throw new Error('вернул картинку без источников');
+  if (!res?.reason) throw new Error('нет причины отказа');
+});
+
+await check('screen:capture отдаёт dataURL, когда экран доступен', async () => {
+  const stub = electronStub.desktopCapturer;
+  const original = stub.getSources;
+  stub.getSources = async () => [{ thumbnail: { toDataURL: () => 'data:image/png;base64,QQ==' } }];
+  try {
+    const res = await handlers.get('screen:capture')({});
+    if (!res?.ok) throw new Error(res?.reason || 'не снялось');
+    if (!String(res.image).startsWith('data:image/png')) throw new Error('не dataURL');
+    if (!(res.width > 0 && res.height > 0)) throw new Error('нет размеров экрана');
+  } finally {
+    stub.getSources = original;
+  }
+});
+
+// Этот кейс подменяет process.platform и оставляет таймеры вставки (буфер
+// возвращается через 700 мс), поэтому держим его последним в файле.
+await check('вставка не забирает фокус у чужого окна', async () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  const restoreFocused = mainWin.isFocused;
+  try {
+    // окно ZSpeakly не в фокусе: человек печатает в браузере
+    mainWin.isFocused = () => false;
+    mainWin._focusCalls = 0;
+    mainWin._inactiveCalls = 0;
+    mainWin._showCalls = 0;
+    mainWin._visible = false;
+    await handlers.get('text:insert')({}, 'текст в чужое окно');
+    await new Promise((r) => setTimeout(r, 400));
+    if (mainWin._focusCalls > 0) throw new Error('окно забрало фокус после вставки');
+    if (mainWin._showCalls > 0) throw new Error('окно показалось поверх чужого приложения');
+    if (mainWin._visible) throw new Error('скрытое окно всплыло после вставки');
+
+    // окно было в фокусе: его прячем, а после вставки возвращаем без фокуса
+    mainWin.isFocused = () => true;
+    mainWin._visible = true;
+    mainWin._focusCalls = 0;
+    mainWin._inactiveCalls = 0;
+    await handlers.get('text:insert')({}, 'текст из окна приложения');
+    await new Promise((r) => setTimeout(r, 500));
+    if (mainWin._focusCalls > 0) throw new Error('после возврата окно снова забрало фокус');
+    if (mainWin._inactiveCalls === 0) throw new Error('окно не вернулось на экран');
+  } finally {
+    mainWin.isFocused = restoreFocused;
+    Object.defineProperty(process, 'platform', realPlatform);
+  }
 });
 
 console.log(`\nOK (${ok.length}):`);

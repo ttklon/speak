@@ -6,13 +6,11 @@ import { writeClipboard } from '../lib/clipboard.js';
 import { typeOut } from '../lib/feedback.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
-import { keysLabel, timeHM, truncate, dayLabel, formatSeconds } from '../lib/utils.js';
+import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
 import { APP } from '../lib/config.js';
 import Icon from '../components/ui/Icon.jsx';
 import EditDictationModal from '../components/modals/EditDictationModal.jsx';
 import { Button, SearchInput } from '../components/ui/Controls.jsx';
-
-const STAT_MINUTES = 144; // «144 мин» экономии — как в кадре видео
 
 function HeroStat({ value, unit, label }) {
   return (
@@ -27,7 +25,7 @@ function HeroStat({ value, unit, label }) {
 }
 
 export default function HomePage() {
-  const { dictations, voiceHotkeys, settings, deleteDictation } = useAppData();
+  const { dictations, voiceHotkeys, settings, deleteDictation, addDictation } = useAppData();
   const { state, draft, start, stop, last, elapsed } = useDictation();
   const { push } = useToast();
   const [query, setQuery] = useState('');
@@ -35,6 +33,9 @@ export default function HomePage() {
   const [hoverId, setHoverId] = useState(null);
   const [snippet, setSnippet] = useState(null);
   const [editing, setEditing] = useState(null);
+  // Готовность диктовки: «Всё готово» не должно быть обещанием на пустой
+  // установке без модели whisper. В браузере опираемся на Web Speech.
+  const [readiness, setReadiness] = useState(null); // null | 'ready' | 'no-model'
   // эффект печати: постепенно проявляем свежий результат
   const [typed, setTyped] = useState('');
   const [typedId, setTypedId] = useState(null);
@@ -92,12 +93,60 @@ export default function HomePage() {
     }
   };
 
+  // Esc закрывает просмотр расшифровки: остальные окна так умеют, а эта
+  // панель раньше закрывалась только щелчком мимо или крестиком.
+  useEffect(() => {
+    if (!snippet) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setSnippet(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [snippet]);
+
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.sttStatus) {
+      const hasWeb = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+      setReadiness(hasWeb ? 'ready' : 'no-model');
+      return undefined;
+    }
+    let alive = true;
+    bridge
+      .sttStatus(settings.whisperModel)
+      .then((res) => {
+        if (alive) setReadiness(res?.available ? 'ready' : 'no-model');
+      })
+      .catch(() => {
+        if (alive) setReadiness('no-model');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [settings.whisperModel]);
+
   return (
     <div className="page page--home scroll-area">
       <header className="hero">
         <p className="hero__hello">
           {settings.userName ? `Привет, ${settings.userName}. ` : ''}
-          {state === 'listening' ? 'Записываю…' : 'Всё готово к диктовке.'}
+          {state === 'listening'
+            ? 'Записываю…'
+            : readiness === 'no-model'
+              ? 'Модель распознавания ещё не подключена — диктовка не заработает, пока её нет.'
+              : 'Всё готово к диктовке.'}
+          {readiness === 'no-model' && state !== 'listening' ? (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => navigate('settings', { section: 'features' })}
+              >
+                Выбрать модель
+              </button>
+            </>
+          ) : null}
         </p>
         <h1 className="hero__title">
           Не печатай,
@@ -112,8 +161,8 @@ export default function HomePage() {
         </p>
 
         <div className="hero__stats">
-          <HeroStat value={STAT_MINUTES} unit="мин" label="сэкономлено времени" />
-          <HeroStat value="9.0" unit="к" label="количество слов" />
+          <HeroStat value={formatK(totalWords)} unit="" label="слов в истории" />
+          <HeroStat value={Math.round(totalSeconds / 60)} unit="мин" label="речи продиктовано" />
           <button
             type="button"
             className={`hero__mic ${listening ? 'is-recording' : ''}`}
@@ -223,13 +272,25 @@ export default function HomePage() {
                 navigate('settings', { section: 'about' });
                 return;
               }
-              const res = await bridge.checkUpdates();
+              // Сбой сети или самого обновлятора раньше проходил молча:
+              // человек нажимал и не получал ничего. Теперь — честный тост.
+              let res = null;
+              try {
+                res = await bridge.checkUpdates();
+              } catch (err) {
+                push({ title: 'Не удалось проверить обновления', description: String(err?.message || err), tone: 'warn' });
+                return;
+              }
               if (res?.status === 'available') {
                 push({ title: `Доступна ${res.version}`, description: 'Откройте «О программе», чтобы скачать.', tone: 'success' });
               } else if (res?.status === 'latest') {
                 push({ title: 'Обновлений нет', description: `Установлена ${APP.version}.`, tone: 'success' });
-              } else if (res?.status === 'unavailable' || res?.status === 'error') {
+              } else if (res?.status === 'error') {
+                push({ title: 'Не удалось проверить обновления', description: res.reason || 'нет связи с GitHub', tone: 'warn' });
+              } else if (res?.status === 'unavailable') {
                 push({ title: 'Автообновление недоступно', description: res.reason, tone: 'warn' });
+              } else {
+                push({ title: 'Проверка не ответила', description: 'Обновлятор молчит — попробуйте позже.', tone: 'warn' });
               }
             }}
           >
@@ -275,9 +336,18 @@ export default function HomePage() {
                 size="sm"
                 icon={<Trash2 size={12} />}
                 onClick={() => {
-                  deleteDictation(snippet.id);
+                  // Промах мыши не должен стирать расшифровку навсегда:
+                  // в тосте есть «Вернуть» на несколько секунд.
+                  const removed = snippet;
+                  deleteDictation(removed.id);
                   setSnippet(null);
-                  push({ title: 'Запись удалена', tone: 'warn' });
+                  push({
+                    title: 'Запись удалена',
+                    description: 'Можно вернуть — кнопка в этом сообщении.',
+                    tone: 'warn',
+                    ttl: 8000,
+                    action: { label: 'Вернуть', onClick: () => addDictation(removed) },
+                  });
                 }}
               >
                 Удалить

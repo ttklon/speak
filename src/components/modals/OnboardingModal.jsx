@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Mic } from 'lucide-react';
+import { Mic, TriangleAlert } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import { Button } from '../ui/Controls.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { keysLabel } from '../../lib/utils.js';
 import { APP } from '../../lib/config.js';
+import { engineName } from '../../lib/recognition/engine.js';
+import { navigate } from '../../lib/router.js';
 
 /**
  * Первый запуск: одно поле — как вас зовут. Никакой регистрации и почты,
@@ -24,6 +26,21 @@ export default function OnboardingModal() {
     if (open) setName(preset);
   }, [open, preset]);
 
+  // Офлайн-диктовку даёт только whisper.cpp. Web Speech в браузере требует
+  // интернета, поэтому на чистой установке сразу говорим, где взять движок.
+  const engine = engineName();
+  const engineReady = /whisper\.cpp/.test(engine);
+  const engineHint = /Web Speech/.test(engine)
+    ? 'Сейчас доступен только Web Speech — он работает в браузере и требует интернета. Для офлайн-диктовки нажмите «Скачать модель».'
+    : 'Движок распознавания ещё не установлен. Нажмите «Скачать модель» — это один раз, дальше всё работает без интернета.';
+
+  const openModelSetup = () => {
+    const clean = name.trim().slice(0, 40);
+    updateSettings({ onboarded: true, userName: clean });
+    if (clean) setProfile({ ...profile, name: clean });
+    navigate('settings', { section: 'features' });
+  };
+
   const done = () => {
     const clean = name.trim().slice(0, 40);
     updateSettings({ onboarded: true, userName: clean });
@@ -38,9 +55,16 @@ export default function OnboardingModal() {
       width={420}
       hideClose
       footer={
-        <Button variant="white" onClick={done}>
-          Начать работу
-        </Button>
+        <>
+          {engineReady ? null : (
+            <Button variant="ghost" onClick={openModelSetup} style={{ marginRight: 'auto' }}>
+              Скачать модель
+            </Button>
+          )}
+          <Button variant="white" onClick={done}>
+            Начать работу
+          </Button>
+        </>
       }
     >
       <div className="onboarding">
@@ -69,10 +93,16 @@ export default function OnboardingModal() {
         <div className="onboarding__hint">
           <Mic size={12} />
           <span>
-            Диктовка — {keysLabel(settings.dictationKeys || ['Ctrl', 'Alt', 'Space'])}. Удерживайте клавишу и
-            говорите.
+            Диктовка — {keysLabel(settings.dictationKeys || ['Ctrl', 'Alt', 'Space'])}. Нажмите, говорите,
+            нажмите ещё раз — текст вставится.
           </span>
         </div>
+        {engineReady ? null : (
+          <div className="onboarding__hint onboarding__hint--warn">
+            <TriangleAlert size={12} />
+            <span>{engineHint}</span>
+          </div>
+        )}
       </div>
     </Modal>
   );

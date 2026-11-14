@@ -1,0 +1,92 @@
+name: Cleanup Actions storage
+
+# GitHub-хранилище переполняется не релизами (они весят ~1,6 ГБ на все версии),
+# а артефактами и кэшами: каждая сборка оставляет ~170 МБ установщика, а кэш
+# Electron — ~230 МБ на ключ. Этот workflow чистит старое автоматически.
+#
+# Запускается: по расписанию, вручную (workflow_dispatch) и при изменении самого
+# файла — чтобы можно было убрать накопленное сразу после правки.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 2 * * *'
+  push:
+    paths:
+      - .github/workflows/cleanup.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Удалить старые артефакты и кэши
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const DAY = 24 * 60 * 60 * 1000;
+            const artifactAge = 1 * DAY;   // артефакты старше суток не нужны
+            const cacheAge = 7 * DAY;      // кэши, к которым не обращались неделю
+            const now = Date.now();
+            const mb = (b) => `${(b / 1048576).toFixed(1)} МБ`;
+
+            let freed = 0;
+            let removedArtifacts = 0;
+            let removedCaches = 0;
+            const kept = [];
+
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner, repo, per_page: 100,
+            });
+            for (const a of artifacts) {
+              const created = new Date(a.created_at).getTime();
+              if (now - created < artifactAge) {
+                kept.push(`артефакт ${a.name} (свежий, ${a.created_at})`);
+                continue;
+              }
+              try {
+                await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id });
+                freed += a.size_in_bytes || 0;
+                removedArtifacts += 1;
+                core.info(`удалён артефакт ${a.name} — ${mb(a.size_in_bytes || 0)}`);
+              } catch (e) {
+                core.warning(`не удалось удалить артефакт ${a.name}: ${e.message}`);
+              }
+            }
+
+            const caches = await github.paginate(github.rest.actions.getActionsCacheList, {
+              owner, repo, per_page: 100,
+            });
+            for (const c of caches) {
+              const used = new Date(c.last_accessed_at || c.created_at).getTime();
+              if (now - used < cacheAge) continue;
+              try {
+                await github.rest.actions.deleteActionsCacheById({ owner, repo, cache_id: c.id });
+                freed += c.size_in_bytes || 0;
+                removedCaches += 1;
+                core.info(`удалён кэш ${c.key} — ${mb(c.size_in_bytes || 0)}`);
+              } catch (e) {
+                core.warning(`не удалось удалить кэш ${c.key}: ${e.message}`);
+              }
+            }
+
+            await core.summary
+              .addHeading('Очистка хранилища Actions')
+              .addTable([
+                [{ data: 'Что', header: true }, { data: 'Сколько', header: true }],
+                ['Удалено артефактов', String(removedArtifacts)],
+                ['Удалено кэшей', String(removedCaches)],
+                ['Освобождено', mb(freed)],
+              ])
+              .addRaw(
+                kept.length
+                  ? `\nСвежие артефакты оставлены:\n${kept.map((l) => `- ${l}`).join('\n')}\n`
+                  : '\nСвежих артефактов не было.\n',
+              )
+              .write();

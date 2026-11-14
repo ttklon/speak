@@ -63,6 +63,11 @@ const TERMS = {
 
 function stripFillers(text) {
   let out = ` ${text} `;
+  // Тянущиеся междометия, которые движок пишет по-разному: «э-э», «эээ», «а-а-а»,
+  // «м-м». В списке слов их не перечислить — срезаем по шаблону.
+  out = out.replace(/(^|\s)(?:э|а|м|ы)(?:[-–—]?(?:э|а|м|ы))+(?=[\s,.!?…])/giu, ' ');
+  // Одиночное «э» перед запятой — тоже заминка, а не слово.
+  out = out.replace(/(^|\s)э{1,2}(?=\s*[,.]|\s)/giu, ' ');
   for (const f of FILLERS) {
     const re = new RegExp(`(\\s)${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\s,.!?])`, 'giu');
     out = out.replace(re, ' ');
@@ -98,6 +103,9 @@ export const OPS = {
   clean(text) {
     if (!text) return '';
     let out = stripFillers(text);
+    // типографика: дефис, окружённый пробелами, — это тире (whisper так и пишет
+    // «я пришёл - увидел», а в тексте должно быть «—»)
+    out = out.replace(/\s+-\s+/g, ' — ');
     out = out.replace(/\s+([,.;:!?])/g, '$1');
     out = out.replace(/([,.;:!?])(?=[^\s\d])/g, '$1 ');
     out = capitalizeSentences(out);
@@ -227,9 +235,82 @@ export const OPS = {
   },
 };
 
+/**
+ * «Модель не отвечает» запоминаем на минуту.
+ *
+ * Раньше каждая AI-инструкция при выключенном Ollama висела 6–7 секунд на
+ * таймауте, и только потом срабатывали офлайн-правила. Теперь первый сбой
+ * включает паузу: остальные инструкции сразу идут офлайн. Любой успешный
+ * ответ (или кнопка «Проверить соединение» в «Настройки → Сеть») паузу снимает.
+ */
+const LLM_BACKOFF_MS = 60 * 1000;
+let llmDownUntil = 0;
+
+export function llmIsDown() {
+  return Date.now() < llmDownUntil;
+}
+
+export function resetLlmBackoff() {
+  llmDownUntil = 0;
+}
+
+function markLlm(ok) {
+  llmDownUntil = ok ? 0 : Date.now() + LLM_BACKOFF_MS;
+}
+
 /** Попытка локальной LLM (Ollama). Возвращает null, если недоступна. */
+/**
+ * Правдоподобен ли ответ модели для диктовки: она должна править, а не
+ * пересказывать. Отсекаем «модель выкинула половину», «модель дописала от
+ * себя» и «модель потеряла числа» — вместо такого ответа остаются офлайн-правила.
+ */
+export function saneRewrite(source, out) {
+  const a = String(source || '').trim();
+  let b = String(out || '').trim();
+  if (!a || !b) return null;
+  // модель любит обернуть ответ в кавычки или приписать «Вот исправленный текст:»
+  b = b.replace(/^(вот\s+)?(исправленный|готовый|итоговый)\s+текст\s*:\s*/i, '');
+  b = b.replace(/^["'«„]+|["'»“]+$/g, '').trim();
+  if (!b) return null;
+  if (b.length < a.length * 0.5) return null;
+  if (b.length > a.length * 2.2) return null;
+  const numbers = a.match(/\d+/g) || [];
+  if (numbers.some((n) => !b.includes(n))) return null;
+  return b;
+}
+
+/** Промпт для чистки расшифровки: правит знаки и паразитов, не пересказывает. */
+export const DICTATION_PROMPT =
+  'Ты редактор расшифровки речи. Расставь знаки препинания и заглавные буквы, ' +
+  'убери слова-паразиты и повторы, исправь очевидные оговорки. Не добавляй новых ' +
+  'мыслей, не пересказывай, не переводи, не меняй числа и имена. Ответь только ' +
+  'исправленным текстом, без пояснений.';
+
+/**
+ * Вторая стадия чистки диктовки — локальная модель.
+ *
+ * Включается только осознанно («Переписывать диктовку моделью» в настройках) и
+ * только если задан адрес Ollama. При любом сбое возвращает null, и остаётся
+ * результат офлайн-правил: диктовка не должна ломаться из-за модели.
+ */
+export async function polishDictation(text, settings = {}, { timeout = 6000 } = {}) {
+  if (!text || !settings.aiEndpoint) return null;
+  if (settings.aiDictationRewrite !== true) return null;
+  if (settings.aiProcessing === false) return null;
+  const out = await llmRewrite({
+    endpoint: settings.aiEndpoint,
+    model: settings.aiModel,
+    system: DICTATION_PROMPT,
+    text,
+    timeout,
+  });
+  return saneRewrite(text, out);
+}
+
 export async function llmRewrite({ endpoint, model, system, text, timeout = 6000 }) {
   if (!endpoint || !text) return null;
+  // недавно уже не ответила — не тратим время человека
+  if (llmIsDown()) return null;
   const url = `${endpoint.replace(/\/$/, '')}/api/generate`;
   const body = {
     model: model || 'qwen2.5:0.5b',
@@ -244,10 +325,15 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
   if (bridge?.httpPost) {
     try {
       const res = await bridge.httpPost({ url, body, timeout });
-      if (!res?.ok) return null;
+      if (!res?.ok) {
+        markLlm(false);
+        return null;
+      }
       const out = String(res.data?.response || '').trim();
+      markLlm(Boolean(out));
       return out || null;
     } catch {
+      markLlm(false);
       return null;
     }
   }
@@ -261,50 +347,20 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      markLlm(false);
+      return null;
+    }
     const data = await res.json();
     const out = (data?.response || '').trim();
+    markLlm(Boolean(out));
     return out || null;
   } catch {
+    markLlm(false);
     return null;
   } finally {
     clearTimeout(t);
   }
-}
-
-export async function runOp(opId, text, { settings, presetPrompt } = {}) {
-  const offline = {
-    clean: () => OPS.clean(text),
-    formal: () => OPS.formal(text),
-    shorten: () => OPS.shorten(text),
-    bullets: () => OPS.bullets(text),
-    search: () => OPS.searchQuery(text),
-    terms: () => OPS.lowerTerms(text),
-    summary: () => OPS.summary(text),
-  };
-
-  if (settings?.aiProcessing && settings?.aiEndpoint) {
-    const promptMap = {
-      formal: 'Перепиши текст в официально-деловом стиле. Ответь только текстом.',
-      shorten: 'Сократи текст на 30%, сохранив смысл. Ответь только текстом.',
-      summary: 'Сделай краткое резюме: тезисы, решения, задачи. Ответь только текстом.',
-      terms: 'Замени сложные термины простыми пояснениями. Ответь только текстом.',
-      search: 'Сформулируй короткий поисковый запрос из текста. Ответь только запросом.',
-    };
-    const prompt = presetPrompt || promptMap[opId];
-    if (prompt) {
-      const llm = await llmRewrite({
-        endpoint: settings.aiEndpoint,
-        model: settings.aiModel,
-        system: prompt,
-        text,
-      });
-      if (llm) return { text: OPS.clean(llm), engine: 'llm' };
-    }
-  }
-
-  const fn = offline[opId] || offline.clean;
-  return { text: fn(), engine: 'offline' };
 }
 
 export default OPS;

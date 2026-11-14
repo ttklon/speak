@@ -26,9 +26,15 @@ export default function DictionaryPage() {
   }, [dictionary, query, tab]);
 
   const submit = () => {
+    // слово уже есть — добавление заменит его, поэтому и сообщение другое
+    const exists = dictionary.some((w) => w.word.toLowerCase() === word.trim().toLowerCase());
     const entry = addDictionaryWord(word, pron);
     if (entry) {
-      push({ title: 'Слово добавлено', description: entry.word, tone: 'success' });
+      push({
+        title: exists ? 'Слово обновлено' : 'Слово добавлено',
+        description: exists ? `${entry.word} — уже было в словаре` : entry.word,
+        tone: 'success',
+      });
       setWord('');
       setPron('');
       setOpen(false);
@@ -90,7 +96,20 @@ export default function DictionaryPage() {
               <button
                 type="button"
                 className="icon-btn icon-btn--sm icon-btn--danger"
-                onClick={() => removeDictionaryWord(entry.id)}
+                onClick={() => {
+                  removeDictionaryWord(entry.id);
+                  // слово можно вернуть: список ведётся вручную и терять его жалко
+                  push({
+                    title: 'Слово удалено',
+                    description: entry.word,
+                    tone: 'warn',
+                    ttl: 8000,
+                    action: {
+                      label: 'Вернуть',
+                      onClick: () => addDictionaryWord(entry.word, entry.pronunciation),
+                    },
+                  });
+                }}
                 aria-label="Удалить"
               >
                 <Trash2 size={12} />

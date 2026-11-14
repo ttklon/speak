@@ -5,6 +5,7 @@ import { Button, Keys, SearchInput, Tabs } from '../components/ui/Controls.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import ShortcutRecorder from '../components/modals/ShortcutRecorder.jsx';
 import AddInstructionModal from '../components/modals/AddInstructionModal.jsx';
+import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
 import { keysLabel, toAccelerator } from '../lib/utils.js';
@@ -34,6 +35,8 @@ export default function HotkeysPage() {
   const [tab, setTab] = useState('voice');
   const [recorder, setRecorder] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
+  // сброс сочетаний затирает настроенные клавиши — спрашиваем подтверждение
+  const [confirmReset, setConfirmReset] = useState(false);
   const [query, setQuery] = useState('');
 
   /** Все включённые AI-инструкции уходят в main-процесс как глобальные хоткеи. */
@@ -50,20 +53,8 @@ export default function HotkeysPage() {
   // регистрация висела здесь, и после ухода со страницы сочетания оставались
   // от последнего её рендера.
 
-  // Сочетание, занятое другой программой: показываем прямо в разделе
-  useEffect(() => {
-    const onConflict = (e) => {
-      const d = e.detail || {};
-      push({
-        title: 'Сочетание занято',
-        description: `${keysLabel(d.keys || [])} уже использует другая программа — выберите другое.`,
-        tone: 'warn',
-        ttl: 10000,
-      });
-    };
-    window.addEventListener('zs:hotkey-conflict', onConflict);
-    return () => window.removeEventListener('zs:hotkey-conflict', onConflict);
-  }, [push]);
+  // Тост о занятом сочетании показывает App.jsx — он живёт всё время работы
+  // приложения, поэтому сообщение не теряется, если раздел ещё не открывали.
 
   // Хоткей нажали в системе — выполняем инструкцию здесь, в рендерере
   useEffect(() => {
@@ -81,8 +72,34 @@ export default function HotkeysPage() {
    * перерегистрирует всё при изменении — иначе один отправитель затирал
    * сочетания другого.
    */
+  // Сочетания проверяем на дубли: Windows регистрирует глобальные клавиши
+  // по одной, и второе такое же молча не работало. Раньше можно было назначить
+  // Ctrl+Shift+9 двум действиям и не понять, почему одно не срабатывает.
+  const comboOf = (keys) => (keys || []).join('+').toLowerCase();
   const applyCombo = (hk, keys) => {
     if (!keys?.length) return;
+    const wanted = comboOf(keys);
+    const twin = voiceHotkeys.find(
+      (h) => h.id !== hk.id && h.enabled !== false && h.keys?.length && comboOf(h.keys) === wanted,
+    );
+    const dictationTaken =
+      hk.id !== 'dictation' && comboOf(settings.dictationKeys) === wanted;
+    if (twin) {
+      push({
+        title: 'Сочетание занято',
+        description: `${keysLabel(keys)} уже закреплено за «${twin.title}». Выберите другое.`,
+        tone: 'warn',
+      });
+      return;
+    }
+    if (dictationTaken) {
+      push({
+        title: 'Сочетание занято',
+        description: `${keysLabel(keys)} уже запускает диктовку. Выберите другое.`,
+        tone: 'warn',
+      });
+      return;
+    }
     if (hk.id === 'dictation') {
       updateSettings({ dictationKeys: keys, dictationKey: toAccelerator(keys) });
     }
@@ -209,6 +226,7 @@ export default function HotkeysPage() {
                     <div className="hk-row__desc">{describeStyle(style)}</div>
                   </div>
                   <Toggle
+                    label="Стиль письма"
                     checked={Boolean(settings.useWritingStyle)}
                     onChange={(v) => {
                       updateSettings({ useWritingStyle: v });
@@ -227,7 +245,7 @@ export default function HotkeysPage() {
           ))}
 
           <div className="hk-reset">
-            <Button variant="bare" size="sm" icon={<RefreshCw size={12} />} onClick={resetHotkeys}>
+            <Button variant="bare" size="sm" icon={<RefreshCw size={12} />} onClick={() => setConfirmReset(true)}>
               Сбросить все сочетания
             </Button>
           </div>
@@ -354,6 +372,21 @@ export default function HotkeysPage() {
           setAddOpen(false);
           setTab('custom');
         }}
+      />
+      <ConfirmDialog
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={() => {
+          resetHotkeys();
+          push({
+            title: 'Сочетания сброшены',
+            description: 'Голосовые сочетания вернулись к стандартным: диктовка — Ctrl+Alt+Space.',
+            tone: 'success',
+          });
+        }}
+        title="Сбросить все сочетания?"
+        description="Голосовые сочетания вернутся к стандартным. Ваши AI-инструкции и их клавиши останутся как есть."
+        confirmLabel="Сбросить"
       />
     </div>
   );

@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   applyDictionary,
   captureCombo,
-  formatMinutes,
+  dayLabel,
   keysLabel,
   plural,
   postProcess,
-  searchScore,
   timeHM,
   toAccelerator,
   truncate,
@@ -86,25 +85,26 @@ describe('форматирование', () => {
     d.setHours(9, 5, 0, 0);
     expect(timeHM(d)).toBe('09:05');
   });
-  it('минуты и часы', () => {
-    expect(formatMinutes(40)).toBe('40 мин');
-    expect(formatMinutes(90)).toBe('1 ч 30 мин');
-    expect(formatMinutes(120)).toBe('2 ч');
-  });
   it('обрезка по длине', () => {
     expect(truncate('абвгдеёжз', 5)).toBe('абвг…');
     expect(truncate('коротко', 20)).toBe('коротко');
   });
 });
 
-describe('поиск', () => {
-  it('находит подстроку', () => {
-    expect(searchScore('Привет, как дела?', 'как дела')).toBeGreaterThan(50);
+describe('dayLabel', () => {
+  const now = new Date(2026, 10, 11, 12, 0, 0);
+
+  it('сегодня и вчера — словами', () => {
+    expect(dayLabel(new Date(2026, 10, 11, 8, 0), now)).toBe('Сегодня');
+    expect(dayLabel(new Date(2026, 10, 10, 23, 0), now)).toBe('Вчера');
   });
-  it('не находит несуществующее', () => {
-    expect(searchScore('Привет', 'абракадабра')).toBe(0);
+
+  it('называет число дней, а не только «дня назад»', () => {
+    expect(dayLabel(new Date(2026, 10, 9, 12, 0), now)).toBe('2 дня назад');
+    expect(dayLabel(new Date(2026, 10, 6, 12, 0), now)).toBe('5 дней назад');
   });
-  it('пустой запрос — ноль', () => {
-    expect(searchScore('что угодно', '')).toBe(0);
+
+  it('старше недели — дата', () => {
+    expect(dayLabel(new Date(2026, 9, 1, 12, 0), now)).toMatch(/^0?1 /);
   });
 });

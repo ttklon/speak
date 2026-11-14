@@ -10,6 +10,7 @@ import ProfileModal from './components/modals/ProfileModal.jsx';
 import DictationHUD from './components/ui/DictationHUD.jsx';
 import OnboardingModal from './components/modals/OnboardingModal.jsx';
 import { useRoute, navigate, replace } from './lib/router.js';
+import { keysLabel } from './lib/utils.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
 
@@ -27,6 +28,11 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('account');
   const [profileOpen, setProfileOpen] = useState(false);
+
+  // «НОВОЕ» у буфера — не вечная наклейка: после первого захода гаснет
+  useEffect(() => {
+    if (route.page === 'clipboard' && !settings.seenClipboard) updateSettings({ seenClipboard: true });
+  }, [route.page, settings.seenClipboard, updateSettings]);
 
   const prevPage = useRef(route.page);
   const openedFromHash = useRef(false);
@@ -76,12 +82,13 @@ export default function App() {
   }, []);
 
   // Команды из трея / меню Electron
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
+  // Тема: тёмная / светлая / как в системе. Значение уходит в data-theme,
+  // палитра живёт в base.css (светлая там уже была, но выбрать её было нельзя).
   useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
+    const theme = ['light', 'system', 'dark'].includes(settings.theme) ? settings.theme : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
+    document.documentElement.style.colorScheme =
+      theme === 'system' ? 'light dark' : theme === 'light' ? 'light' : 'dark';
   }, [settings.theme]);
 
   // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
@@ -93,22 +100,24 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
+  // Место в localStorage кончается — раньше запись тихо терялась. Говорим
+  // об этом один раз в 30 секунд, чтобы не заваливать тостами.
   useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
-  }, [settings.theme]);
-
-  // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
-  // отдельно. Раньше это происходило только при ручном щелчке тумблера —
-  // после переезда профиля или переустановки автозапуск молча терялся.
-  useEffect(() => {
-    const bridge = window.zspeakly?.native;
-    if (!bridge?.setAutoLaunch) return;
-    bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
-  }, [settings.autoLaunch]);
+    let lastAt = 0;
+    const onStorageError = (event) => {
+      const now = Date.now();
+      if (now - lastAt < 30_000) return;
+      lastAt = now;
+      push({
+        title: 'Не удалось сохранить данные',
+        description: 'Место в браузере закончилось. Удалите крупные записи буфера или снимки.',
+        tone: 'warn',
+        ttl: 10_000,
+      });
+    };
+    window.addEventListener('zs:storage-error', onStorageError);
+    return () => window.removeEventListener('zs:storage-error', onStorageError);
+  }, [push]);
 
   // AI-инструкции должны срабатывать в любом приложении и на любой странице,
   // а не только когда открыт раздел «Горячие клавиши». Регистрируем их здесь,
@@ -148,10 +157,6 @@ export default function App() {
       }
       if (command === 'clipboard') navigate('clipboard');
       if (command === 'home') navigate('home');
-      if (command === 'mobile') {
-        setSettingsSection('account');
-        setSettingsOpen(true);
-      }
       if (command === 'about') {
         setSettingsSection('about');
         setSettingsOpen(true);
@@ -159,14 +164,23 @@ export default function App() {
     });
   }, []);
 
-  // Сочетание занято другой программой — сказать вслух, а не молчать
+  // Сочетание занято — сказать вслух, а не молчать. Слушаем на уровне
+  // приложения: конфликт может всплыть при запуске, когда раздел «Горячие
+  // клавиши» ещё не открывали, и раньше сообщение просто терялось.
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onHotkeyConflict) return undefined;
     return bridge.onHotkeyConflict((payload) => {
+      const keys = keysLabel(payload?.keys || []);
+      push({
+        title: payload?.id === 'dictation' ? 'Сочетание диктовки занято' : 'Сочетание занято',
+        description: `${keys || 'Сочетание'} — ${payload?.reason || 'уже используется другой программой'}. Выберите другое в «Горячих клавишах».`,
+        tone: 'warn',
+        ttl: 10000,
+      });
       window.dispatchEvent(new CustomEvent('zs:hotkey-conflict', { detail: payload }));
     });
-  }, []);
+  }, [push]);
 
   // Новые элементы буфера из main-процесса
   useEffect(() => {

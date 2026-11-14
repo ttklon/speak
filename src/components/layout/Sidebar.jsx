@@ -7,10 +7,13 @@ import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 
 export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPresets }) {
-  const { profile } = useAppData();
+  const { profile, settings } = useAppData();
   const { push } = useToast();
   const [hovered, setHovered] = useState(null);
 
+  // Имя задаётся при первом запуске и живёт в настройках; профиль может быть
+  // пустым (старые установки) — тогда подпись совпадает с приветствием «Привет, Имя».
+  const displayName = profile?.name || settings.userName || '';
   const go = (id) => navigate(id);
 
   return (
@@ -27,7 +30,9 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
           >
             <Icon name={item.icon} size={15} strokeWidth={1.6} className="nav-item__icon" />
             <span className="nav-item__label">{item.label}</span>
-            {item.badge ? <span className="badge-new">{item.badge}</span> : null}
+            {item.badge && !(item.id === 'clipboard' && settings.seenClipboard) ? (
+              <span className="badge-new">{item.badge}</span>
+            ) : null}
           </button>
         ))}
       </nav>
@@ -49,8 +54,8 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
         </button>
 
         <button type="button" className="profile" onClick={onOpenProfile} title="Профиль">
-          <span className="profile__avatar">{(profile?.name || 'Z')[0].toUpperCase()}</span>
-          <span className="profile__email">{profile?.name || 'локальный профиль'}</span>
+          <span className="profile__avatar">{(displayName || 'Z')[0].toUpperCase()}</span>
+          <span className="profile__email">{displayName || 'локальный профиль'}</span>
           <User size={12} className="profile__logout" />
         </button>
       </div>

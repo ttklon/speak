@@ -13,7 +13,6 @@ import {
   DEFAULT_VOICE_HOTKEYS,
   STORAGE_KEYS,
 } from '../lib/config.js';
-import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../lib/seed.js';
 import { uid } from '../lib/utils.js';
 import { pruneByAge } from '../lib/retention.js';
 
@@ -62,9 +61,13 @@ export function AppDataProvider({ children }) {
   const [settings, setSettings] = usePersistentState(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS, {
     merge: DEFAULT_SETTINGS,
   });
-  const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => buildSeedDictations());
-  const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => SEED_DICTIONARY);
-  const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => buildSeedClipboard());
+  // Новый пользователь начинает с пустой историей, буфером и словарём: раньше
+  // здесь подставлялись демонстрационные записи из видео, и приложение
+  // выглядело так, будто за вас уже что-то надиктовали и накопировали.
+  // Демо-наборы остались только для тестов и скриншотов (src/lib/seed.js).
+  const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => []);
+  const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => []);
+  const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => []);
   const [voiceHotkeys, setVoiceHotkeys] = usePersistentState(STORAGE_KEYS.hotkeys, () => DEFAULT_VOICE_HOTKEYS);
   const [presets, setPresets] = usePersistentState(STORAGE_KEYS.presets, () => DEFAULT_AI_PRESETS);
   const [instructions, setInstructions] = usePersistentState(
@@ -72,12 +75,9 @@ export function AppDataProvider({ children }) {
     () => DEFAULT_CUSTOM_INSTRUCTIONS,
   );
   const [stats, setStats] = usePersistentState(STORAGE_KEYS.stats, () => DEFAULT_STATS);
-  const [profile, setProfile] = usePersistentState(STORAGE_KEYS.profile, () => ({
-    name: '',
-    email: 'me@zspeakly.local',
-    plan: 'Free · безлимит',
-    credits: 0,
-  }));
+  // профиль — только имя: почта, «подписка» и credits были выдуманными
+  // полями из макета и нигде не использовались
+  const [profile, setProfile] = usePersistentState(STORAGE_KEYS.profile, () => ({ name: '' }));
   const [merged, setMerged] = useState(false);
 
   // «Хранить» в настройках данных раньше было декорацией: срок сохранялся,
@@ -180,6 +180,8 @@ export function AppDataProvider({ children }) {
         pronunciation: String(pronunciation || '').trim(),
         createdAt: Date.now(),
       };
+      // то же слово (без учёта регистра) не дублируем, а обновляем: иначе список
+      // рос бы копиями, а whisper получал бы один и тот же термин дважды
       setDictionary((prev) => [entry, ...prev.filter((w) => w.word.toLowerCase() !== clean.toLowerCase())]);
       return entry;
     },
@@ -195,11 +197,20 @@ export function AppDataProvider({ children }) {
     (item) => {
       setClipboard((prev) => {
         if (item.hidePasswords && item.kind === 'password') return prev;
-        const dedup = prev.filter((p) => !(p.kind === item.kind && p.text && p.text === item.text));
-        return [{ ...item, id: item.id || uid('clip'), createdAt: item.createdAt || Date.now() }, ...dedup].slice(
-          0,
-          settings.clipboardMaxItems || 10000,
-        );
+        // у зашифрованного пароля текста нет — сравниваем шифр, иначе все
+        // пароли схлопывались бы в одну запись
+        const sameKey = (a, b) =>
+          a.kind === b.kind && Boolean(a.cipher || a.text) && (a.cipher || a.text) === (b.cipher || b.text);
+        const dedup = prev.filter((p) => !sameKey(p, item));
+        const next = [{ ...item, id: item.id || uid('clip'), createdAt: item.createdAt || Date.now() }, ...dedup];
+        // Лимит истории не должен выбрасывать закреплённое: человек закрепил
+        // запись именно для того, чтобы она осталась.
+        const limit = settings.clipboardMaxItems || 10000;
+        const kept = [];
+        for (const entry of next) {
+          if (kept.length < limit || entry.pinned) kept.push(entry);
+        }
+        return kept;
       });
     },
     [setClipboard, settings.clipboardMaxItems],
@@ -207,6 +218,13 @@ export function AppDataProvider({ children }) {
 
   const removeClipboardItem = useCallback(
     (id) => setClipboard((prev) => prev.filter((c) => c.id !== id)),
+    [setClipboard],
+  );
+
+  /** Правка записи буфера: нужна для «скриншота с заметкой» — подпись пишет человек. */
+  const updateClipboardItem = useCallback(
+    (id, patch) =>
+      setClipboard((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch, editedAt: Date.now() } : c))),
     [setClipboard],
   );
 
@@ -275,23 +293,111 @@ export function AppDataProvider({ children }) {
     setVoiceHotkeys(DEFAULT_VOICE_HOTKEYS);
     setSettings(DEFAULT_SETTINGS);
     setStats(DEFAULT_STATS);
+    // имя живёт и в профиле: без этого после сброса в сайдбаре оставалось
+    // прежнее имя, хотя приложение обещало «настройки по умолчанию»
+    setProfile({ name: '' });
   }, [
     setDictations, setClipboard, setDictionary,
-    setInstructions, setPresets, setVoiceHotkeys, setSettings, setStats,
+    setInstructions, setPresets, setVoiceHotkeys, setSettings, setStats, setProfile,
   ]);
 
-  // Автоочистка старых записей по настройкам хранения
-  useEffect(() => {
-    const days = Number(settings.dictationRetentionDays || 0);
-    if (!days) return;
-    const cutoff = Date.now() - days * 86400000;
-    setDictations((prev) => {
-      const next = prev.filter((d) => d.createdAt >= cutoff);
-      return next.length === prev.length ? prev : next;
-    });
-  }, [settings.dictationRetentionDays, setDictations]);
-
   const bytes = useMemo(() => storageBytes(), [dictations, clipboard, dictionary]);
+
+  // Резервная копия: словарь, инструкции, настройки, пресеты и история.
+  // Буфер обмена намеренно не выгружается — там бывают пароли и коды.
+  const exportBackup = useCallback(
+    () => ({
+      app: 'ZSpeakly',
+      format: 1,
+      exportedAt: new Date().toISOString(),
+      settings,
+      dictations,
+      dictionary,
+      voiceHotkeys,
+      presets,
+      instructions,
+      stats,
+      profile,
+    }),
+    [settings, dictations, dictionary, voiceHotkeys, presets, instructions, stats, profile],
+  );
+
+  const importBackup = useCallback(
+    (payload) => {
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error('это не файл резервной копии ZSpeakly');
+      }
+      if (payload.app && payload.app !== 'ZSpeakly') {
+        throw new Error(`копия от другого приложения: ${String(payload.app).slice(0, 40)}`);
+      }
+      const lists = ['dictations', 'dictionary', 'voiceHotkeys', 'presets', 'instructions'];
+      const hasList = lists.some((k) => Array.isArray(payload[k]));
+      const hasSettings = payload.settings && typeof payload.settings === 'object';
+      if (!hasList && !hasSettings) throw new Error('в файле нет данных ZSpeakly');
+
+      // файл мог быть собран руками или другой версией: мусорные строки
+      // не должны ронять список на первом же рендере
+      const cleanDictations = (list) =>
+        list
+          .filter((d) => d && typeof d.text === 'string' && d.text.trim())
+          .map((d, i) => ({
+            id: String(d.id || `d-import-${Date.now()}-${i}`),
+            text: String(d.text).slice(0, 8000),
+            createdAt: Number(d.createdAt) || Date.now(),
+            durationMs: Number(d.durationMs) || 0,
+            words: Number(d.words) || String(d.text).trim().split(/\s+/).length,
+            language: typeof d.language === 'string' ? d.language : undefined,
+            source: d.source === 'dictation' ? 'dictation' : 'import',
+          }));
+      const cleanDictionary = (list) =>
+        list
+          .filter((w) => w && typeof w.word === 'string' && w.word.trim())
+          .map((w, i) => ({
+            id: String(w.id || `w-import-${Date.now()}-${i}`),
+            word: String(w.word).trim().slice(0, 60),
+            pronunciation: String(w.pronunciation || '').trim().slice(0, 60),
+            createdAt: Number(w.createdAt) || Date.now(),
+          }));
+
+      const applied = [];
+      if (hasSettings) {
+        setSettings({ ...DEFAULT_SETTINGS, ...payload.settings });
+        applied.push('настройки');
+      }
+      if (Array.isArray(payload.dictations)) {
+        const clean = cleanDictations(payload.dictations);
+        setDictations(clean);
+        applied.push(`диктовки (${clean.length})`);
+      }
+      if (Array.isArray(payload.dictionary)) {
+        const clean = cleanDictionary(payload.dictionary);
+        setDictionary(clean);
+        applied.push(`словарь (${clean.length})`);
+      }
+      if (Array.isArray(payload.voiceHotkeys)) {
+        setVoiceHotkeys(payload.voiceHotkeys);
+        applied.push('голосовые сочетания');
+      }
+      if (Array.isArray(payload.presets)) {
+        setPresets(payload.presets);
+        applied.push(`AI-инструкции (${payload.presets.length})`);
+      }
+      if (Array.isArray(payload.instructions)) {
+        setInstructions(payload.instructions);
+        applied.push(`свои инструкции (${payload.instructions.length})`);
+      }
+      if (payload.stats && typeof payload.stats === 'object') {
+        setStats({ ...DEFAULT_STATS, ...payload.stats });
+        applied.push('счётчики');
+      }
+      if (payload.profile && typeof payload.profile === 'object') {
+        setProfile({ name: String(payload.profile.name || '').slice(0, 40) });
+        applied.push('профиль');
+      }
+      return applied;
+    },
+    [setSettings, setDictations, setDictionary, setVoiceHotkeys, setPresets, setInstructions, setStats, setProfile],
+  );
 
   const value = useMemo(
     () => ({
@@ -308,6 +414,7 @@ export function AppDataProvider({ children }) {
       clipboard,
       addClipboardItem,
       removeClipboardItem,
+      updateClipboardItem,
       toggleClipboardPin,
       clearClipboard,
       voiceHotkeys,
@@ -326,12 +433,15 @@ export function AppDataProvider({ children }) {
       profile,
       setProfile,
       resetAll,
+      exportBackup,
+      importBackup,
       storageSize: bytes,
     }),
     [
+      exportBackup, importBackup,
       settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, clearDictations,
       dictionary, addDictionaryWord, removeDictionaryWord, clipboard, addClipboardItem,
-      removeClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
+      removeClipboardItem, updateClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
       updateHotkey, resetHotkeys, presets, togglePreset, updatePresetKeys, instructions, addInstruction,
       removeInstruction, updateInstruction, stats, recordWords, profile, setProfile, resetAll, bytes,
     ],

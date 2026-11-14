@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
@@ -6,6 +6,7 @@ import { plural } from '../../../lib/ai/style.js';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
+import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 function retentionLabel(value) {
   return (
@@ -23,13 +24,101 @@ export default function DataSection({ onOpenSection }) {
     clipboard,
     clearDictations,
     clearClipboard,
+    exportBackup,
+    importBackup,
   } = useAppData();
   const { push } = useToast();
+  // «Удалить сейчас» стирало всю историю одним щелчком — теперь с подтверждением
+  const [confirmDictations, setConfirmDictations] = useState(false);
+  const [pendingBackup, setPendingBackup] = useState(null);
+  const fileRef = useRef(null);
+
+  const downloadBackup = async () => {
+    let data;
+    try {
+      data = exportBackup();
+    } catch (err) {
+      push({ title: 'Не удалось собрать копию', description: String(err?.message || err), tone: 'warn' });
+      return;
+    }
+    const json = JSON.stringify(data, null, 2);
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    // локальная дата: toISOString отдаёт UTC и ночью показывает «завтра»
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const bridge = window.zspeakly?.native;
+    // В установленной версии файл кладёт главный процесс — рядом с отчётом
+    // диагностики, и сразу показывает его в проводнике.
+    if (bridge?.saveBackup) {
+      try {
+        const res = await bridge.saveBackup(json);
+        push(
+          res?.ok
+            ? {
+                title: 'Копия сохранена',
+                description: `${res.path || `zspeakly-backup-${stamp}.json`} — история (${dictations.length}) и настройки.`,
+                tone: 'success',
+              }
+            : { title: 'Не удалось сохранить копию', description: res?.reason, tone: 'warn' },
+        );
+        return;
+      } catch (err) {
+        push({ title: 'Не удалось сохранить копию', description: String(err?.message || err), tone: 'warn' });
+        return;
+      }
+    }
+    // Браузер: обычная загрузка файла
+    try {
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `zspeakly-backup-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      push({
+        title: 'Копия скачана',
+        description: `zspeakly-backup-${stamp}.json — ${dictations.length} записей истории и настройки. Буфер обмена не выгружается.`,
+        tone: 'success',
+      });
+    } catch (err) {
+      push({ title: 'Не удалось скачать копию', description: String(err?.message || err), tone: 'warn' });
+    }
+  };
+
+  const readBackupFile = async (file) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        // сообщение JSON.parse на английском и со фрагментом файла — бесполезно
+        throw new Error('это не JSON-файл: выберите копию, скачанную из ZSpeakly');
+      }
+      if (payload?.app && payload.app !== 'ZSpeakly') {
+        throw new Error(`это копия другого приложения (${String(payload.app).slice(0, 40)})`);
+      }
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error('в файле нет данных ZSpeakly');
+      }
+      setPendingBackup({ payload, name: file.name });
+    } catch (err) {
+      push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
 
   // Реальный размер именно диктовок. Раньше здесь было storageSize * 0.42 —
   // придуманное число, которое ничего не измеряло.
+  // Blob.size уже возвращает байты UTF-8: умножать на 2 (как для UTF-16
+  // в localStorage) здесь не нужно — было двойное счисление.
   const dictationBytes = useMemo(
-    () => new Blob([JSON.stringify(dictations)]).size * 2,
+    () => new Blob([JSON.stringify(dictations)]).size,
     [dictations],
   );
 
@@ -70,8 +159,11 @@ export default function DataSection({ onOpenSection }) {
             variant="bare"
             size="sm"
             onClick={() => {
-              clearDictations();
-              push({ title: 'История диктовок очищена', tone: 'success' });
+              if (!dictations.length) {
+                push({ title: 'История уже пуста', tone: 'success' });
+                return;
+              }
+              setConfirmDictations(true);
             }}
           >
             Удалить сейчас
@@ -186,9 +278,9 @@ export default function DataSection({ onOpenSection }) {
             Отправка ошибок
             <div className="setting-row__desc">
               Чтобы падения и сбои распознавания можно было починить. Уходят только технические
-              события — без текста диктовки, буфера обмена и имени. По умолчанию включено,
-              выключается одним тумблером. Прежний тумблер «Телеметрия» на это не влияет: сбора
-              статистики в приложении нет.
+              события — без текста диктовки, буфера обмена и имени. По умолчанию журнал пишется
+              только на этом компьютере: наружу ничего не уходит, пока не указан адрес приёмника.
+              Прежний тумблер «Телеметрия» на это не влияет: сбора статистики в приложении нет.
             </div>
           </div>
           <Toggle
@@ -211,10 +303,51 @@ export default function DataSection({ onOpenSection }) {
           </Button>
         </div>
         <div className="setting-row">
-          <div className="setting-row__label">Уведомления</div>
+          <div className="setting-row__label">
+            Уведомления
+            <div className="setting-row__desc">
+              Тост Windows после расшифровки — по клику открывается окно ZSpeakly. Тихий: звука
+              нет. В браузере системных уведомлений нет, там настройка ничего не меняет.
+            </div>
+          </div>
           <Toggle
             checked={settings.notifications}
             onChange={(v) => updateSettings({ notifications: v })}
+          />
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Резервная копия</div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Скачать копию
+            <div className="setting-row__desc">
+              Словарь, свои инструкции, AI-инструкции, сочетания, настройки, профиль и история
+              диктовок — одним JSON-файлом. Буфер обмена не выгружается: там бывают пароли и коды.
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={downloadBackup}>
+            Скачать
+          </Button>
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Восстановить из файла
+            <div className="setting-row__desc">
+              Заменит текущие данные тем, что лежит в файле. Перед восстановлением спросим
+              подтверждение и покажем, что внутри.
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
+            Выбрать файл
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => readBackupFile(e.target.files?.[0])}
           />
         </div>
       </div>
@@ -224,6 +357,45 @@ export default function DataSection({ onOpenSection }) {
           Что хранится на диске
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingBackup)}
+        onClose={() => setPendingBackup(null)}
+        onConfirm={() => {
+          const current = pendingBackup;
+          setPendingBackup(null);
+          if (!current) return;
+          try {
+            const applied = importBackup(current.payload);
+            push({
+              title: 'Копия восстановлена',
+              description: `${current.name}: ${applied.join(', ')}.`,
+              tone: 'success',
+            });
+          } catch (err) {
+            push({ title: 'Не удалось восстановить', description: String(err?.message || err), tone: 'warn' });
+          }
+        }}
+        title="Восстановить данные из копии?"
+        description={
+          pendingBackup
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Текущие история, словарь и настройки будут заменены.`
+            : ''
+        }
+        confirmLabel="Восстановить"
+      />
+
+      <ConfirmDialog
+        open={confirmDictations}
+        onClose={() => setConfirmDictations(false)}
+        onConfirm={() => {
+          clearDictations();
+          push({ title: 'История диктовок очищена', description: 'Отменить это нельзя.', tone: 'success' });
+        }}
+        title="Удалить всю историю диктовок?"
+        description={`Будут удалены все расшифровки (${dictations.length} шт.). Настройки, словарь и буфер останутся.`}
+        confirmLabel="Удалить"
+      />
     </div>
   );
 }

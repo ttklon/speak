@@ -113,7 +113,7 @@ export default function AboutSection() {
           <span className="kv-row__value">Ctrl + K</span>
         </div>
         <div className="kv-row">
-          <span className="kv-row__key">Демо-диктовка (браузер)</span>
+          <span className="kv-row__key">Диктовка в браузере (превью)</span>
           <span className="kv-row__value">Alt + D</span>
         </div>
       </div>

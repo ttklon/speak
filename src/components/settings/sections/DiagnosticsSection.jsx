@@ -6,6 +6,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 import { localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
+import { APP } from '../../../lib/config.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -103,7 +104,41 @@ export default function DiagnosticsSection() {
   const saveReport = async () => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.diagSaveReport) {
-      push({ title: 'Только в приложении', description: 'Открыть Windows-сборку ZSpeakly.', tone: 'warn' });
+      // В браузере (превью) отчёт можно честно скачать файлом: Blob + <a download>.
+      // Раньше кнопка просто упиралась в «только в приложении».
+      try {
+        const events = localEvents()
+          .slice(-200)
+          .map((e) => `[${new Date(e.at).toLocaleString('ru-RU')}] ${e.level}/${e.scope}: ${e.message}`)
+          .join('\n');
+        const text = [
+          'ZSpeakly — отчёт о работе (браузер)',
+          `Версия: ${APP?.version || '—'} · ${APP?.build || ''}`,
+          `Браузер: ${navigator.userAgent}`,
+          `Язык: ${navigator.language} · Платформа: ${navigator.platform || '—'}`,
+          `Экран: ${window.screen?.width}×${window.screen?.height}`,
+          `Адрес: ${location.origin}`,
+          '',
+          `Событий в журнале: ${events ? events.split('\n').length : 0}`,
+          events || 'журнал пуст',
+        ].join('\n');
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'zspeakly-report.txt';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        push({
+          title: 'Отчёт скачан',
+          description: 'Файл zspeakly-report.txt в папке загрузок браузера.',
+          tone: 'success',
+        });
+      } catch (err) {
+        push({ title: 'Не удалось сохранить отчёт', description: String(err?.message || err), tone: 'warn' });
+      }
       return;
     }
     setBusy('report');
@@ -216,8 +251,8 @@ export default function DiagnosticsSection() {
     <div>
       <h2 className="settings-section__title">Диагностика</h2>
       <p className="settings-section__desc">
-        Чтобы ошибки можно было починить, а не угадывать. По умолчанию отправка включена, её можно
-        выключить в любой момент.
+        Чтобы ошибки можно было починить, а не угадывать. По умолчанию журнал пишется только на
+        этом компьютере; отправку на сервер можно включить в любой момент, указав адрес приёмника.
       </p>
 
       <div className="settings-group">
@@ -226,10 +261,11 @@ export default function DiagnosticsSection() {
           <div className="setting-row__label">
             Отправлять ошибки и логи
             <div className="setting-row__desc">
-              Уходят только технические события: уровни, тексты ошибок, версия, платформа и состояние
-              движка распознавания. <strong>Не уходят:</strong> распознанный текст, содержимое буфера
-              обмена, словарь, имя пользователя и звук. Почта и пути вида C:\Users\Имя вырезаются перед
-              отправкой.
+              Журнал всегда пишется локально. Отправка на сервер происходит только если ниже указан
+              адрес приёмника: уходят одни технические события — уровни, тексты ошибок, версия,
+              платформа и состояние движка распознавания. <strong>Не уходят:</strong> распознанный
+              текст, содержимое буфера обмена, словарь, имя пользователя и звук. Почта и пути вида
+              C:\Users\Имя вырезаются перед отправкой.
             </div>
           </div>
           <Toggle checked={settings.diagnostics !== false} onChange={toggleEnabled} />
@@ -256,17 +292,18 @@ export default function DiagnosticsSection() {
         </div>
         <div className="settings-group__desc">
           По умолчанию ничего никуда не уходит: журнал лежит на этом компьютере. Если что-то не
-          работает — нажмите «Сохранить отчёт в файл»: на Рабочем столе появится текстовый файл
-          с журналом и окружением, его достаточно приложить к сообщению. Кнопка «Скопировать
+          работает — нажмите «Сохранить отчёт в файл»: на Рабочем столе (в браузере — в папке
+          загрузок) появится текстовый файл с журналом и окружением, его достаточно приложить
+          к сообщению. Кнопка «Скопировать
           ошибки» делает то же самое, но в буфер обмена. Отправка на сервер нужна только тем,
           у кого он есть.
         </div>
-        <div className="setting-row">
+        <div className="setting-row setting-row--wrap">
           <div className="setting-row__label">
             Адрес приёмника
             <div className="setting-row__desc">
-              По умолчанию — сервер ZSpeakly. Можно указать свой (например, развёрнутый из папки
-              server). Пустое поле — ничего не отправлять: журнал остаётся на компьютере.
+              По умолчанию пусто — журнал остаётся на компьютере. Можно указать свой приёмник
+              (например, развёрнутый из папки server): тогда события дополнительно уйдут туда.
             </div>
           </div>
           <div className="row-8">
@@ -281,7 +318,7 @@ export default function DiagnosticsSection() {
               variant="white"
               size="sm"
               onClick={saveEndpoint}
-              disabled={busy === 'endpoint' || !isElectron()}
+              disabled={busy === 'endpoint'}
             >
               {busy === 'endpoint' ? 'Сохраняю…' : 'Сохранить'}
             </Button>
@@ -293,7 +330,7 @@ export default function DiagnosticsSection() {
                 setEndpointDraft('');
                 saveEndpoint('');
               }}
-              disabled={busy === 'endpoint' || !isElectron()}
+              disabled={busy === 'endpoint'}
             >
               Только на компьютере
             </Button>
@@ -308,13 +345,13 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="row-8" style={{ flexWrap: 'wrap', marginTop: 8 }}>
-          <Button variant="white" size="sm" onClick={saveReport} disabled={busy === 'report' || !isElectron()}>
+          <Button variant="white" size="sm" onClick={saveReport} disabled={busy === 'report'}>
             {busy === 'report' ? 'Сохраняю…' : 'Сохранить отчёт в файл'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy === 'send' || !isElectron()}>
+          <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy === 'send'}>
             {busy === 'send' ? 'Отправляю…' : 'Отправить сейчас'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={ping} disabled={busy === 'ping' || !isElectron()}>
+          <Button variant="ghost" size="sm" onClick={ping} disabled={busy === 'ping'}>
             {busy === 'ping' ? 'Проверяю…' : 'Проверить канал'}
           </Button>
           <Button variant="ghost" size="sm" onClick={copyLogs}>

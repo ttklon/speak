@@ -7,13 +7,13 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.4.4',
-  build: '2026.11.09',
+  version: '1.4.5',
+  build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
   freeNote: 'Всё локально: без облака, подписки и лимитов слов.',
   description:
-    'Удерживайте клавишу для диктовки. Дважды нажмите клавишу, чтобы включить режим агента.',
+    'Нажмите клавишу — запись начнётся, нажмите ещё раз — текст вставится. Двойное нажатие открывает режим агента.',
 };
 
 export const NAV = [
@@ -27,8 +27,10 @@ export const CLIPBOARD_TABS = [
   { id: 'text', label: 'Текст' },
   { id: 'format', label: 'Формат' },
   { id: 'image', label: 'Изображение' },
-  { id: 'file', label: 'Файл' },
-  { id: 'password', label: 'Зашифрованные' },
+  // здесь только записи экрана: копирование файлов из проводника Windows
+  // пока не перехватываем, поэтому и подпись честная
+  { id: 'file', label: 'Видео' },
+  { id: 'password', label: 'Пароли' },
 ];
 
 export const LANGUAGES = [
@@ -49,7 +51,7 @@ export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'dictation',
     title: 'Диктовка',
-    description: 'Удерживайте для речи, отпустите для транскрипции',
+    description: 'Нажмите — запись начнётся, нажмите ещё раз — текст вставится в активное поле',
     keys: ['Ctrl', 'Alt', 'Space'],
     mode: 'hold',
     enabled: true,
@@ -60,7 +62,7 @@ export const DEFAULT_VOICE_HOTKEYS = [
     id: 'agent',
     title: 'Режим агента',
     description:
-      'Двойное нажатие — короткий вопрос локальной модели (Ollama): ответ по выделенному тексту. Без облака; без модели честно скажет, что её нет.',
+      'Двойное нажатие — короткий вопрос локальной модели (Ollama): ответ по выделенному тексту. Одиночное нажатие на том же сочетании запускает обычную диктовку, но с паузой ~0,4 с — приложение ждёт второе нажатие. Без облака; без модели честно скажет, что её нет.',
     keys: ['Ctrl', 'Alt', 'Space'],
     double: true,
     enabled: false,
@@ -80,8 +82,11 @@ export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'screen-aware',
     title: 'Диктовка с учётом экрана',
+    // Честно: снимок экрана снимается в память, но офлайн-распознавание его не
+    // использует — контекст пригодится только локальной модели с поддержкой
+    // изображений. Раньше подпись обещала больше, чем приложение делало.
     description:
-      'Удерживайте, чтобы говорить. ZSpeakly использует содержимое экрана, чтобы отвечать на вопросы или писать ответы за вас.',
+      'Нажмите, чтобы говорить, нажмите ещё раз — текст вставится. Снимок экрана снимается в память (на диск не пишется) как контекст для локальной модели с поддержкой изображений; обычное распознавание идёт как всегда.',
     keys: ['Ctrl', 'Alt', 'S'],
     mode: 'hold',
     enabled: true,
@@ -141,7 +146,7 @@ export const DEFAULT_CUSTOM_INSTRUCTIONS = [];
 export const CLIPBOARD_HOTKEYS = [
   { id: 'screenshot', title: 'Скриншот', keys: ['Shift', 'Ctrl', 'A'] },
   { id: 'record', title: 'Запись экрана', keys: ['Shift', 'Ctrl', 'R'] },
-  { id: 'shot-note', title: 'Скриншот с придумкой', keys: ['Shift', 'Ctrl', 'S'] },
+  { id: 'shot-note', title: 'Скриншот-заметка', keys: ['Shift', 'Ctrl', 'S'] },
   { id: 'panel', title: 'Открыть панель', keys: ['Shift', 'Ctrl', 'V'] },
 ];
 
@@ -157,18 +162,31 @@ export const DEFAULT_SETTINGS = {
   translateTarget: 'en',
   aiProcessing: true,
   aiEndpoint: 'http://localhost:11434', // Ollama, опционально
+  // вторая стадия чистки диктовки моделью: по умолчанию выключена, потому что
+  // добавляет 1–3 секунды к каждой вставке
+  aiDictationRewrite: false,
   aiModel: 'qwen2.5:0.5b',
   clipboardMonitor: true,
   clipboardMaxItems: 10000,
   clipboardRetentionDays: 30,
   dictationRetentionDays: 30,
   whisperModel: 'small',
+  // Держать модель в памяти (whisper-server): первая диктовка без холодного старта.
+  keepModelLoaded: false,
   audioDeviceId: 'default',
+  // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
+  // По умолчанию выключено — микрофон работал бы всё время.
+  micPreroll: false,
+  // промежуточная расшифровка whisper: текст в плашке обновляется по ходу речи
+  liveWhisper: true,
+  // способ вставки: 'clipboard' — буфер + Ctrl+V, 'sendinput' — без буфера
+  insertMethod: 'clipboard',
   autoLaunch: false,
   theme: 'dark',
   soundFeedback: true,
   typingEffect: false,
   showFloatingIndicator: true,
+  seenClipboard: false, // плашка «НОВОЕ» гаснет после первого захода в буфер
   notifications: true,
   // отправка ошибок и служебных логов (без текста диктовки); по умолчанию включена
   diagnostics: true,
@@ -182,10 +200,38 @@ export const DEFAULT_SETTINGS = {
  */
 export const LOG_ENDPOINT = '';
 
+/**
+ * Каталог моделей whisper.cpp (ggml). Размеры и скорость — как в официальном
+ * репозитории ggml-org/whisper.cpp и в замерах сообщества: скорость указана
+ * как «во сколько раз быстрее реального времени» на обычном ноутбучном CPU,
+ * без GPU-ускорения.
+ *
+ * Turbo — тот же large-v3, но с 4 декодерными слоями вместо 32: почти такое же
+ * качество при втрое большей скорости. Для диктовки это лучший выбор, ему и
+ * отдаём пометку «рекомендуем». Квант q5_0 — тот же turbo, но втрое меньше.
+ */
 export const MODELS = [
-  { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '300 МБ', speed: '0.4×', quality: '85% ru' },
-  { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '600 МБ', speed: '0.8×', quality: '93% ru' },
-  { id: 'medium', label: 'Whisper medium', size: '1.5 ГБ', ram: '1.5 ГБ', speed: '1.5×', quality: '96% ru' },
+  { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '≈300 МБ', speed: '≈8×', quality: 'черновая расшифровка' },
+  { id: 'base', label: 'Whisper base', size: '142 МБ', ram: '≈400 МБ', speed: '≈6×', quality: 'базовая' },
+  { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '≈700 МБ', speed: '≈3×', quality: 'хорошая' },
+  {
+    id: 'large-v3-turbo',
+    label: 'Whisper large-v3 turbo',
+    size: '1.5 ГБ',
+    ram: '≈2 ГБ',
+    speed: '≈2,5×',
+    quality: 'почти large-v3',
+    recommended: true,
+  },
+  {
+    id: 'large-v3-turbo-q5_0',
+    label: 'Whisper large-v3 turbo (q5_0)',
+    size: '547 МБ',
+    ram: '≈900 МБ',
+    speed: '≈3×',
+    quality: 'почти large-v3, меньше памяти',
+  },
+  { id: 'medium', label: 'Whisper medium', size: '1.5 ГБ', ram: '≈2 ГБ', speed: '≈1,2×', quality: 'высокая' },
 ];
 
 export const STORAGE_KEYS = {

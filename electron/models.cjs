@@ -11,10 +11,15 @@ const path = require('node:path');
 const https = require('node:https');
 const { app } = require('electron');
 
+// Реальные файлы из ggml-org/whisper.cpp на Hugging Face (те же имена, что в
+// официальном download-ggml-model.sh). mb — ожидаемый размер для прогресса.
 const MODELS = {
   tiny: { file: 'ggml-tiny.bin', mb: 75 },
+  base: { file: 'ggml-base.bin', mb: 142 },
   small: { file: 'ggml-small.bin', mb: 466 },
-  medium: { file: 'ggml-medium.bin', mb: 1500 },
+  'large-v3-turbo': { file: 'ggml-large-v3-turbo.bin', mb: 1549 },
+  'large-v3-turbo-q5_0': { file: 'ggml-large-v3-turbo-q5_0.bin', mb: 547 },
+  medium: { file: 'ggml-medium.bin', mb: 1530 },
 };
 
 function dirs() {
@@ -52,6 +57,29 @@ function modelStatus() {
   return { models: out, bin };
 }
 
+/**
+ * Отмена текущей загрузки: модель весит сотни мегабайт, и раньше
+ * единственным способом остановить её было закрыть приложение.
+ * Держим ссылку на активный запрос и файл, чтобы убрать .part.
+ */
+let active = null;
+
+function cancelDownload() {
+  if (!active) return { ok: false, reason: 'нечего отменять' };
+  const { req, file, tmp } = active;
+  active = null;
+  try {
+    req?.destroy();
+  } catch {}
+  try {
+    file?.destroy();
+  } catch {}
+  try {
+    if (tmp) fs.rmSync(tmp, { force: true });
+  } catch {}
+  return { ok: true };
+}
+
 /** Скачивание с редиректами и прогрессом. */
 function download(url, dest, onProgress, redirects = 0) {
   return new Promise((resolve, reject) => {
@@ -77,13 +105,28 @@ function download(url, dest, onProgress, redirects = 0) {
         let received = 0;
         const tmp = `${dest}.part`;
         const file = fs.createWriteStream(tmp);
+        active = { req, file, tmp };
         res.on('data', (chunk) => {
+          if (!active) {
+            // отменили посреди загрузки — прекращаем читать поток
+            res.destroy();
+            return;
+          }
           received += chunk.length;
           if (total) onProgress?.(Math.round((received / total) * 100), received, total);
+        });
+        res.on('close', () => {
+          if (!active) reject(new Error('скачивание отменено'));
         });
         res.pipe(file);
         file.on('finish', () => {
           file.close(() => {
+            if (!active) {
+              fs.rmSync(tmp, { force: true });
+              reject(new Error('скачивание отменено'));
+              return;
+            }
+            active = null;
             fs.renameSync(tmp, dest);
             resolve({ bytes: received });
           });
@@ -235,9 +278,34 @@ async function importModel(sourcePath, onProgress) {
     return { ok: false, reason: 'это не похоже на модель whisper.cpp (меньше 20 МБ)' };
   }
 
-  // имя определяем по размеру: tiny ≈ 75, base ≈ 142, small ≈ 466, medium ≈ 1500 МБ
+  // Настоящий ggml-файл начинается с магии «ggml» (или «GGUF» у новых сборок).
+  // Раньше подходил любой .bin — и человек мог «подключить» случайный файл.
+  try {
+    const head = Buffer.alloc(4);
+    const fd = fs.openSync(file, 'r');
+    fs.readSync(fd, head, 0, 4, 0);
+    fs.closeSync(fd);
+    const magic = head.toString('latin1');
+    if (magic !== 'ggml' && magic !== 'GGUF') {
+      return {
+        ok: false,
+        reason: 'файл не в формате ggml — скачайте модель ggml-*.bin (whisper.cpp / Hugging Face)',
+      };
+    }
+  } catch (err) {
+    return { ok: false, reason: `не удалось прочитать начало файла: ${err.message}` };
+  }
+
+  // Имя берём из названия файла, если оно совпадает с известной моделью,
+  // иначе — по размеру (размеры различаются в разы, спутать сложно).
   const mb = stat.size / (1024 * 1024);
-  const guess = mb < 110 ? 'tiny' : mb < 300 ? 'base' : mb < 900 ? 'small' : 'medium';
+  const byName = /ggml-([a-z0-9._-]+)\.bin$/i.exec(path.basename(file));
+  const known = byName && MODELS[byName[1]] ? byName[1] : '';
+  const guess =
+    known ||
+    Object.entries(MODELS)
+      .map(([id, meta]) => ({ id, diff: Math.abs(meta.mb - mb) }))
+      .sort((a, b) => a.diff - b.diff)[0].id;
   const target = path.join(ensureDirs().models, `ggml-${guess}.bin`);
 
   try {
@@ -249,4 +317,4 @@ async function importModel(sourcePath, onProgress) {
   return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
 }
 
-module.exports = { modelStatus, downloadModel, downloadEngine, importModel, MODELS };
+module.exports = { modelStatus, downloadModel, downloadEngine, importModel, cancelDownload, MODELS };

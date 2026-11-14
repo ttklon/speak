@@ -47,11 +47,12 @@ src/                          renderer (React 18 + Vite)
 ## Поток диктовки
 
 1. **Старт.** Глобальный хоткей `Ctrl+Alt+Space` ловится в main (`globalShortcut`) →
-   `webContents.send('hotkey', {type:'down'})`. В браузере — `Alt+D` или кнопка «Начать диктовку».
+   `webContents.send('hotkey', {type:'down'})`. В браузере-превью — `Alt+D` или кнопка «Начать диктовку».
 2. **Запись.** `createRecognizer()` выбирает движок:
    - native whisper.cpp (если main нашёл бинарник и модель),
    - Web Speech API,
-   - демо-движок (если Web Speech не поднялся за 2 с — сторож `watchdog`).
+   - если Web Speech не поднялся за 2 с (`watchdog`) или недоступен — честная ошибка с подсказкой;
+     выдуманного «демо-текста» нет.
 3. **Живой текст.** `onPartial` обновляет HUD и блок «Живая диктовка».
 4. **Финиш.** `onEnd` → `finish()`: словарь → постобработка → запись в историю → статистика.
 5. **Вставка.** В Electron `native.insertText(text)` кладёт текст в буфер и отправляет `Ctrl+V`
@@ -76,12 +77,30 @@ src/                          renderer (React 18 + Vite)
 ## Распознавание речи
 
 ```
-renderer ──start──▶ main ──spawn──▶ whisper-cli -m ggml-small.bin -f rec.wav -l ru -otxt
-        ◀──line─── main ◀──stdout/файл .txt
+renderer ──PCM 16 кГц──▶ main ──writeWav──▶ whisper-cli
+   -m ggml-large-v3-turbo.bin -f rec.wav -l ru -t <ядра> -nt -np -sns -otxt -of rec.wav.out
+        ◀──.out.txt / stdout─── main ◀──текст + ms + rms
 ```
+
+Перед запуском main считает громкость записи (`analysePcm`): тишину и записи короче 0,3 с в
+whisper не отправляет, а отвечает `code: 'silent' | 'too-short'` — иначе на пустом звуке модель
+выдаёт «Спасибо за просмотр». Ответ, целиком совпавший с известной фразой-галлюцинацией
+(`isPhantom`), тоже отбрасывается с `code: 'phantom'`.
 
 Поиск бинарника: `resources/bin`, `%APPDATA%\ZSpeakly\bin`, `PATH`.
 Модели: `resources/models`, `%APPDATA%\ZSpeakly\models`, `models/` (игнорируется в Git).
+Если выбранная модель не скачана, берётся ближайшая доступная
+(turbo → q5_0 → small → base → tiny → medium), а не «ничего».
+
+`--prompt` собирается из словаря (`zs:dictionary`) и терминов с экрана (не больше 500 символов).
+
+Настройка «Держать модель в памяти» (`keepModelLoaded`) включает серверный режим: рядом с
+`whisper-cli` ищется `whisper-server.exe`, он поднимается на `127.0.0.1` со случайным портом
+(`-m`, `--host`, `--port`, `-t`, `-nt`, `-sns`), а распознавание идёт `POST /inference`
+(multipart: `file`, `language`, `prompt`, `response_format=json`). Модель остаётся загруженной,
+первая диктовка не платит за холодный старт. Если сервер не найден или не поднялся за 20 с,
+запрос молча уходит в обычный `whisper-cli`, а повторные попытки сервера замирают на 5 минут.
+Сервер закрывается при выходе из приложения (`before-quit`).
 
 Статус доступен через `native.sttStatus(model)` — интерфейс показывает движок в
 Настройки → Функции → «Модель распознавания».
@@ -114,7 +133,7 @@ renderer ──start──▶ main ──spawn──▶ whisper-cli -m ggml-smal
 
 | Процесс | Зачем | Если нет |
 |---|---|---|
-| `whisper-cli.exe` (C++ из whisper.cpp) | офлайн-распознавание | Web Speech или демо-движок |
+| `whisper-cli.exe` (C++ из whisper.cpp) | офлайн-распознавание | Web Speech, иначе честная ошибка |
 | `powershell.exe` (SendKeys) | вставка текста в чужое окно на Windows | текст остаётся в буфере |
 | `tasklist.exe` | имя приложения-источника для буфера | источник = «Системный буфер» |
 
