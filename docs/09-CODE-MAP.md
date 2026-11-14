@@ -316,7 +316,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 
 ```bash
 npm test                  # 130 тестов (vitest + jsdom)
-npm run test:main         # 70 смоук-проверок main-процесса
+npm run test:main         # 72 смоук-проверки main-процесса
 npm run test:ui           # E2E: обход кнопок, 69 сценариев (216 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика

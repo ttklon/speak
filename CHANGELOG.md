@@ -52,7 +52,7 @@
 | Что | Результат |
 |---|---|
 | `npm test` | 130 тестов |
-| `npm run test:main` | 70 смоук-проверок |
+| `npm run test:main` | 72 смоук-проверки |
 | `npm run test:ui` | 69 сценариев / 216 проверок |
 | `npm run check:ipc` | 52 invoke, 2 send, 57 обработчиков |
 | `npm run check:settings` | 36 значений, все читаются и находятся поиском |
