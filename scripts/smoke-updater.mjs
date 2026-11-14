@@ -4,6 +4,7 @@
  * не влиял — это был тихий обман интерфейса.
  */
 
+import fs from 'node:fs';
 import Module from 'node:module';
 import path from 'node:path';
 
@@ -60,6 +61,22 @@ check('возврат на стабильный выключает предре�
 check('мусор в канале не ломает апдейтер', () => {
   updater.setChannel('что-то странное');
   if (fakeUpdater.allowPrerelease) throw new Error('непонятное значение включило бету');
+});
+
+// Без build.publish electron-builder не создаёт latest.yml и app-update.yml, а
+// установленное приложение просто не видит новых версий — молча, без ошибки.
+check('в package.json есть источник обновлений (build.publish → github)', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
+  const publish = Array.isArray(pkg.build?.publish) ? pkg.build.publish : [pkg.build?.publish];
+  const gh = publish.find((p) => p && p.provider === 'github');
+  if (!gh) throw new Error('build.publish с provider=github не задан');
+  if (gh.owner !== 'ttklon' || gh.repo !== 'speak') {
+    throw new Error(`источник обновлений указывает на ${gh.owner}/${gh.repo}`);
+  }
+  if (!pkg.repository?.url?.includes('github.com/ttklon/speak')) {
+    throw new Error('repository не совпадает с publish — update будет искать не тот репозиторий');
+  }
+  if (!pkg.dependencies?.['electron-updater']) throw new Error('electron-updater не в зависимостях');
 });
 
 console.log(`\nOK (${ok.length}):`);

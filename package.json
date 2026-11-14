@@ -90,6 +90,18 @@
     },
     "portable": {
       "artifactName": "ZSpeakly-${version}-portable.exe"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ttklon",
+        "repo": "speak",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ttklon/speak"
   }
 }
