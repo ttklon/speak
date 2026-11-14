@@ -204,8 +204,8 @@ npm run electron:dev
 
 ```powershell
 npm run dist:win
-# release\ZSpeakly-Setup-1.4.5.exe      — NSIS-установщик
-# release\ZSpeakly-1.4.5-portable.exe   — портативная версия
+# release\ZSpeakly-Setup-1.5.0.exe      — NSIS-установщик
+# release\ZSpeakly-1.5.0-portable.exe   — портативная версия
 ```
 
 Готовые сборки не нужно собирать самому: они лежат в
@@ -280,6 +280,11 @@ powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
 - Всё хранится локально: `%APPDATA%\ZSpeakly\profile.json` (Electron) или localStorage (браузер).
 - Аудио и тексты не отправляются в сеть. Телеметрии нет.
 - Словарь и постобработка работают без интернета.
+
+## Что изменилось
+
+История версий — в [CHANGELOG.md](CHANGELOG.md): там же указано, какие проверки проходила каждая
+версия (юнит-тесты, смоук main-процесса, E2E «нажать всё», контракты IPC и настроек).
 
 ## Разработка
 
