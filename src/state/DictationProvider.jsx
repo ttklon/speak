@@ -51,6 +51,9 @@ export function DictationProvider({ children }) {
   const [mode, setMode] = useState('hold');
   const [elapsed, setElapsed] = useState(0);
   const [hudOpen, setHudOpen] = useState(false);
+  // живая расшифровка возможна только с whisper.cpp: браузерный движок сам
+  // отдаёт промежуточный текст, а whisper нужно спрашивать повторно
+  const liveText = settings.liveWhisper !== false && hasNativeStt();
   // отдельное окно индикатора реально показано (а не просто «должно быть»)
   const [hudNativeOn, setHudNativeOn] = useState(false);
   const hudHiddenByUser = useRef(false);
@@ -357,6 +360,9 @@ export function DictationProvider({ children }) {
         // контекст экрана читаем в момент остановки, а не старта: модель могла
         // ещё не ответить, когда человек уже отпустил клавишу
         getContextPrompt: () => (opts.screenAware ? screenTermsRef.current : ''),
+        // 2,5 с — компромисс: whisper на коротком отрезке успевает за это время,
+        // а текст в плашке не отстаёт от речи на полминуты
+        streamIntervalMs: settingsRef.current.liveWhisper !== false ? 2500 : 0,
         onStart: () => setState('listening'),
         onPartial: ({ text, interim }) => {
           const composed = [text, interim].filter(Boolean).join(' ');
@@ -661,11 +667,13 @@ export function DictationProvider({ children }) {
       draft,
       // движок нужен плашке, чтобы не обещать живой текст там, где его нет
       engine,
+      // а этот флаг — когда живой текст действительно включён
+      live: liveText,
       error: error?.title || '',
       hint: hintFull,
       hintFull,
     });
-  }, [state, level, elapsed, draft, error, hudAllowed, engine]);
+  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText]);
 
   // Сообщаем main, что реально происходит: от этого зависят пункт
   // «Остановить диктовку» в трее и поведение глобального сочетания.

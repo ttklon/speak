@@ -89,6 +89,21 @@ export default function FeaturesSection() {
           />
         </div>
         <div className="setting-row">
+          <div className="setting-row__label">
+            Живая расшифровка
+            <div className="setting-row__desc">
+              Пока вы говорите, приложение раз в 2,5 секунды просит whisper.cpp распознать уже
+              сказанное — текст в плашке появляется по ходу речи. Работает только с whisper.cpp:
+              в браузере текст и так приходит частями. На слабом компьютере это заметная нагрузка,
+              выключите — расшифровка будет одна, после остановки.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.liveWhisper !== false}
+            onChange={(v) => updateSettings({ liveWhisper: v })}
+          />
+        </div>
+        <div className="setting-row">
           <div className="setting-row__label">Дополнительные варианты</div>
           <Button variant="ghost" size="sm" onClick={() => setShowLanguages((v) => !v)}>
             {showLanguages ? 'Скрыть' : 'Выбрать варианты'}

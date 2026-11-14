@@ -145,9 +145,44 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     ctx.close().catch(() => {});
   };
 
+  // Склеивает уже записанное в PCM 16 кГц — для промежуточной расшифровки,
+  // не останавливая микрофон. Хвост длиннее maxSeconds отбрасываем: whisper
+  // на минуте речи работает заметно дольше, чем длится сама диктовка.
+  const snapshot = ({ maxSeconds = 30 } = {}) => {
+    let from = 0;
+    let count = frames;
+    const limit = Math.floor(maxSeconds * ctx.sampleRate);
+    if (limit > 0 && frames > limit) {
+      count = limit;
+      from = frames - limit;
+    }
+    const part = new Float32Array(count);
+    let offset = 0;
+    let start = 0;
+    for (const c of chunks) {
+      const end = start + c.length;
+      // окно [from, from+count) может начинаться внутри чанка
+      const a = Math.max(start, from);
+      const b = Math.min(end, from + count);
+      if (b > a) {
+        part.set(c.subarray(a - start, b - start), offset);
+        offset += b - a;
+      }
+      start = end;
+      if (start >= from + count) break;
+    }
+    return {
+      pcm: toInt16(resampleTo16k(part, ctx.sampleRate)),
+      durationMs: Math.round((count / ctx.sampleRate) * 1000),
+      truncated: from > 0,
+    };
+  };
+
   return {
     /** true, если запись идёт не с выбранного микрофона, а с системного */
     fellBack,
+    /** накопленный звук без остановки записи (для живой расшифровки) */
+    snapshot,
     get sampleRate() {
       return ctx.sampleRate;
     },

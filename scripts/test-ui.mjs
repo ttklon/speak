@@ -935,15 +935,18 @@ async function scenarioHudPromise(browser) {
   });
   await page.goto(`${BASE}/electron/hud.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#text', { timeout: 10_000 });
-  const textFor = async (engine) => {
+  const textFor = async (engine, live = false) => {
     await page.evaluate(
-      (eng) => window.__hudPush({ state: 'listening', level: 0.3, elapsed: 900, draft: '', engine: eng }),
-      engine,
+      ([eng, isLive]) =>
+        window.__hudPush({ state: 'listening', level: 0.3, elapsed: 900, draft: '', engine: eng, live: isLive }),
+      [engine, live],
     );
     await sleep(150);
     return page.evaluate(() => document.getElementById('text').textContent);
   };
   const whisper = await textFor('whisper.cpp (офлайн)');
+  // с включённой живой расшифровкой обещание другое — и оно правдиво
+  const whisperLive = await textFor('whisper.cpp (офлайн)', true);
   const web = await textFor('');
   const draft = await page.evaluate(() => {
     window.__hudPush({ state: 'listening', level: 0.3, elapsed: 900, draft: 'привет как дела', engine: 'whisper.cpp (офлайн)' });
@@ -954,6 +957,12 @@ async function scenarioHudPromise(browser) {
     'плашка: с whisper не обещает живой текст',
     /после остановки/i.test(whisper) && !/текст появится здесь/i.test(whisper),
     whisper,
+  );
+  record(
+    'сценарии',
+    'плашка: с живой расшифровкой обещает текст по ходу речи',
+    /текст появится здесь/i.test(whisperLive) && !/после остановки/i.test(whisperLive),
+    whisperLive,
   );
   record(
     'сценарии',
@@ -1109,6 +1118,82 @@ async function scenarioMissingMic(browser) {
 }
 
 // Лимит истории буфера не должен выбрасывать закреплённое.
+async function scenarioLiveWhisper(browser) {
+  // Живая расшифровка: пока человек говорит, whisper спрашивают повторно и
+  // текст в черновике обновляется. Без настройки — ни одного лишнего вызова.
+  const run = async (liveWhisper) => {
+    const page = await openPage(browser, '#/home', {
+      settings: { liveWhisper },
+      patchNative: () => {
+        const native = window.zspeakly && window.zspeakly.native;
+        if (!native) return;
+        native.transcribePcm = async (payload) => {
+          const partial = payload?.partial === true;
+          window.__liveCalls = window.__liveCalls || [];
+          window.__liveCalls.push({ partial, durationMs: payload?.durationMs || 0 });
+          return {
+            ok: true,
+            text: partial ? 'живой текст по ходу речи' : 'итоговый текст диктовки',
+            engine: 'whisper',
+          };
+        };
+      },
+    });
+    takeErrors(page);
+    await page.evaluate(() => {
+      window.__liveCalls = [];
+    });
+    await page.evaluate(() => document.querySelector('.hero__mic').click());
+    await sleep(4200);
+    const during = await page.evaluate(() => ({
+      calls: (window.__liveCalls || []).slice(),
+      draft: document.querySelector('.live-draft__text')?.innerText || '',
+    }));
+    await page.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+    await sleep(2200);
+    const after = await page.evaluate(() => ({
+      calls: (window.__liveCalls || []).slice(),
+      inserted: (window.__bridgeCalls || [])
+        .filter((c) => c.channel === 'text:insert')
+        .map((c) => String(c.args?.[0] || '')),
+      draft: document.querySelector('.live-draft__text')?.innerText || '',
+    }));
+    const errors = takeErrors(page);
+    await page.close();
+    return { during, after, errors };
+  };
+
+  const on = await run(true);
+  const off = await run(false);
+  const partials = on.during.calls.filter((c) => c.partial).length;
+  record(
+    'сценарии',
+    'живая расшифровка: пока говоришь, whisper спрашивают повторно',
+    partials >= 1 && on.during.calls.every((c) => c.durationMs > 0),
+    `${partials} промежуточных вызовов за 4 с`,
+  );
+  record(
+    'сценарии',
+    'живая расшифровка: черновик обновляется до остановки',
+    /живой текст/i.test(on.during.draft),
+    on.during.draft.slice(0, 60) || 'пусто',
+  );
+  record(
+    'сценарии',
+    'живая расшифровка: итог приходит отдельным проходом',
+    on.after.calls.some((c) => !c.partial) && /итоговый текст/i.test(on.after.inserted.join(' ')),
+    on.after.inserted.join(' | ').slice(0, 60) || 'вставок нет',
+  );
+  record(
+    'сценарии',
+    'живая расшифровка: выключенная настройка не тратит процессор',
+    off.during.calls.length === 0 && off.after.calls.filter((c) => c.partial).length === 0,
+    `${off.during.calls.length} промежуточных вызовов`,
+  );
+  const errors = [...on.errors, ...off.errors];
+  record('сценарии', 'живая расшифровка: без ошибок консоли', errors.length === 0, errors[0] || '');
+}
+
 async function scenarioPinnedLimit(browser) {
   const pinned = { id: 'pin-1', kind: 'text', text: 'закреплённая запись', source: 'тест', createdAt: Date.now(), pinned: true };
   const page = await openPage(browser, '#/clipboard', {
@@ -3434,6 +3519,7 @@ async function main() {
       ['вставка не удалась', scenarioInsertFailed],
       ['обещания плашки', scenarioHudPromise],
       ['предролл микрофона', scenarioMicPreroll],
+      ['живая расшифровка', scenarioLiveWhisper],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['пароли', scenarioPasswordVault],
       ['словарь', scenarioDictionary],

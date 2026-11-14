@@ -203,9 +203,9 @@
         const seconds = Math.max(0, (p.elapsed || 0) / 1000);
         timeEl.textContent = state === 'idle' || state === 'error' ? '' : `${seconds.toFixed(1)} с`;
         const draft = (p.draft || '').trim();
-        // У whisper.cpp промежуточного текста нет — обещать «текст появится здесь»
-        // нельзя: честнее сказать, что расшифровка будет после остановки.
-        const noLiveText = /whisper/i.test(String(p.engine || ''));
+        // У whisper.cpp текст по умолчанию появляется после остановки. Если
+        // включена живая расшифровка (p.live), обещание другое — и оно правдиво.
+        const noLiveText = /whisper/i.test(String(p.engine || '')) && !p.live;
         const idleHint = noLiveText
           ? 'Говорите — расшифровка появится после остановки'
           : 'Говорите — текст появится здесь';

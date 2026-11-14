@@ -177,6 +177,8 @@ export const DEFAULT_SETTINGS = {
   // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
   // По умолчанию выключено — микрофон работал бы всё время.
   micPreroll: false,
+  // промежуточная расшифровка whisper: текст в плашке обновляется по ходу речи
+  liveWhisper: true,
   autoLaunch: false,
   theme: 'dark',
   soundFeedback: true,

@@ -81,9 +81,9 @@
 | `state/ToastProvider.jsx` | Тосты с тоном, TTL, действием |
 | `lib/audio/ringBuffer.js` | Кольцевой буфер отсчётов для предролла: `push`, `tail`, `clear` |
 | `lib/audio/micWarm.js` | «Горячий микрофон»: поток и `ScriptProcessor` открыты заранее, последние `prerollMs` лежат в кольце; `take()` отдаёт их записи один раз, `close()` закрывает устройство; состояние `off/opening/open/failed` видно в настройках |
-| `lib/recognition/engine.js` | Выбор движка: `whisper.cpp` → Web Speech → честная ошибка «распознавание недоступно» (выдуманного текста нет) |
+| `lib/recognition/engine.js` | Выбор движка: `whisper.cpp` → Web Speech → честная ошибка «распознавание недоступно» (выдуманного текста нет); `streamIntervalMs` — живая расшифровка: повторные запросы по `recorder.snapshot()` раз в 2,5 с, итоговый проход всегда последний и точнее |
 | `lib/recognition/errors.js` | Человеческие тексты ошибок распознавания |
-| `lib/audio/pcmRecorder.js` | `getUserMedia` → `ScriptProcessor` → ресемплинг в 16 кГц → `Int16Array` + RMS-уровень |
+| `lib/audio/pcmRecorder.js` | `getUserMedia` → `ScriptProcessor` → ресемплинг в 16 кГц → `Int16Array` + RMS-уровень; `snapshot({maxSeconds})` отдаёт уже записанный звук, не останавливая микрофон |
 | `lib/audio/devices.js` | Список микрофонов, разрешение, анализатор уровня |
 | `lib/ai/textops.js` | Офлайн-операции: `clean`, `formal`, `shorten`, `bullets`, `searchQuery`, `lowerTerms`, `summary`, `todos`; `llmRewrite()` через Ollama с бэкоффом 60 с (`llmIsDown`/`resetLlmBackoff`): после таймаута следующие запросы не ждут, инструкции идут офлайн |
 | `lib/ai/vision.js` | Экранный контекст: `describeScreen()` шлёт скриншот в локальную модель (`images[]`), `mergePromptParts()` собирает подсказку (термины ≤300 симв. + словарь), различает «модель без картинок» (400) и «модели нет» (404) |
@@ -314,7 +314,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ```bash
 npm test                  # 125 тестов (vitest + jsdom)
 npm run test:main         # 66 смоук-проверок main-процесса
-npm run test:ui           # E2E: обход кнопок, 67 сценариев (201 проверка), контраст/вёрстка
+npm run test:ui           # E2E: обход кнопок, 68 сценариев (208 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений

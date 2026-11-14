@@ -126,6 +126,59 @@ export function createRecognizer(opts = {}) {
     let recorder = null;
     let text = '';
     let stopped = false;
+    // живая расшифровка: whisper не отдаёт слова по мере речи, поэтому раз в
+    // intervalMs отправляем накопленный звук заново и показываем, что вышло
+    const streamInterval = Number(opts.streamIntervalMs) || 0;
+    let streamTimer = null;
+    let streamGen = 0;
+
+    const stopStream = () => {
+      streamGen += 1;
+      if (streamTimer) clearTimeout(streamTimer);
+      streamTimer = null;
+    };
+
+    const scheduleStream = () => {
+      if (stopped || !streamInterval || !recorder) return;
+      streamTimer = setTimeout(runStreamTick, streamInterval);
+    };
+
+    const runStreamTick = async () => {
+      streamTimer = null;
+      if (stopped || !recorder) return;
+      const gen = streamGen;
+      let snap = null;
+      try {
+        snap = recorder.snapshot?.({ maxSeconds: 30 });
+      } catch {
+        snap = null;
+      }
+      // меньше секунды речи whisper почти всегда возвращает пустоту — зря греем CPU
+      if (!snap?.pcm?.length || snap.durationMs < 900) {
+        scheduleStream();
+        return;
+      }
+      try {
+        const res = await native.transcribePcm?.({
+          pcm: snap.pcm,
+          durationMs: snap.durationMs,
+          lang: String(lang || 'ru').slice(0, 2),
+          model: opts.model || 'small',
+          // словарь и экранный контекст — только для итогового прохода:
+          // иначе промежуточный текст будет «умнее» финального
+          useDictionary: false,
+          contextPrompt: '',
+          partial: true,
+        });
+        if (stopped || gen !== streamGen) return;
+        if (res?.ok && String(res.text || '').trim()) {
+          onPartial?.({ text: String(res.text).trim(), interim: '', live: true });
+        }
+      } catch {
+        /* промежуточный сбой не должен ломать диктовку */
+      }
+      scheduleStream();
+    };
 
     return {
       kind: 'native',
@@ -147,6 +200,7 @@ export function createRecognizer(opts = {}) {
             });
           }
           onStart?.();
+          scheduleStream();
         } catch (err) {
           // нет микрофона или отказали в доступе — сообщаем честно
           // Причина от браузера (NotAllowedError, NotFoundError) важнее
@@ -167,6 +221,9 @@ export function createRecognizer(opts = {}) {
       async stop() {
         if (!recorder || stopped) return { text };
         stopped = true;
+        // недоработанный промежуточный запрос больше не нужен: финальный
+        // проход по всей записи всё равно точнее
+        stopStream();
         const { pcm, durationMs } = recorder.stop();
         if (!pcm?.length) {
           onError?.({ code: 'no-audio', title: 'Запись пустая', hint: 'Микрофон ничего не передал. Проверьте устройство в настройках.' });
@@ -236,6 +293,7 @@ export function createRecognizer(opts = {}) {
       },
       abort() {
         stopped = true;
+        stopStream();
         recorder?.abort?.();
         recorder = null;
       },

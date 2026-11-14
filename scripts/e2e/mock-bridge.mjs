@@ -136,6 +136,8 @@ export function installMockBridge() {
           model: payload?.model,
           useDictionary: payload?.useDictionary,
           contextPrompt: payload?.contextPrompt,
+          // true — промежуточный проход живой расшифровки
+          partial: payload?.partial === true,
         },
       ]);
       return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper' };
