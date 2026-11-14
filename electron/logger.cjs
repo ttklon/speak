@@ -340,7 +340,7 @@ const logger = {
    * Готовый текстовый отчёт для файла или буфера: журнал + окружение.
    * Именно это человек прикладывает, когда что-то «не работает».
    */
-  report({ limit = 200 } = {}) {
+  report({ limit = 200, settings = null } = {}) {
     const lines = [];
     const c = context || {};
     lines.push('ZSpeakly — отчёт диагностики');
@@ -351,6 +351,20 @@ const logger = {
     lines.push(`отправка на сервер: ${enabled && endpoint ? 'включена' : 'выключена'}`);
     lines.push(`идентификатор установки: ${installId}`);
     lines.push(`журнал: ${filePath || '—'}`);
+    // Настройки, которые объясняют поведение диктовки. Без самого текста,
+    // буфера и слов словаря — только то, что нужно для разбора.
+    const st = settings && typeof settings === 'object' ? settings : null;
+    if (st) {
+      lines.push('');
+      lines.push('── настройки диктовки ──');
+      lines.push(`модель: ${st.model || '?'}${st.keepModelLoaded ? ' (держится в памяти)' : ''}`);
+      lines.push(`язык: ${st.language || '?'}`);
+      lines.push(`живая расшифровка: ${st.liveWhisper ? 'включена' : 'выключена'}`);
+      lines.push(`горячий микрофон: ${st.micPreroll ? 'включён' : 'выключен'}`);
+      lines.push(`вставка: ${st.insertMethod === 'sendinput' ? 'SendInput без буфера' : 'буфер обмена + Ctrl+V'}`);
+      lines.push(`микрофон: ${st.customMic ? 'выбран пользователем' : 'системный'}`);
+      lines.push(`слов в словаре: ${Number(st.dictionaryWords) || 0}`);
+    }
     lines.push('');
     lines.push(`── последние события (${Math.min(limit, buffered.length)}) ──`);
     const rows = buffered.slice(-limit);

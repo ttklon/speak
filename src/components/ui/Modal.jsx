@@ -20,13 +20,40 @@ export default function Modal({
   headClassName = '',
 }) {
   const ref = useRef(null);
+  // куда вернуть фокус, когда окно закроется
+  const opener = useRef(null);
 
   useEffect(() => {
     if (!open) return undefined;
+    try {
+      opener.current = document.activeElement;
+    } catch {
+      opener.current = null;
+    }
+    const focusables = () =>
+      [...(ref.current?.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || [])].filter((el) => el.offsetParent !== null || el === document.activeElement);
     const onKey = (e) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         onClose?.();
+        return;
+      }
+      // Tab не должен уходить в приложение за модалкой: иначе фокус
+      // «теряется» и клавиатурой пользоваться невозможно
+      if (e.key === 'Tab') {
+        const list = focusables();
+        if (!list.length) return;
+        const first = list[0];
+        const last = list[list.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
     document.addEventListener('keydown', onKey);
@@ -40,6 +67,12 @@ export default function Modal({
     return () => {
       document.removeEventListener('keydown', onKey);
       clearTimeout(t);
+      // возвращаем фокус туда, откуда окно открыли
+      try {
+        if (opener.current && document.contains(opener.current)) opener.current.focus?.();
+      } catch {
+        /* элемент мог исчезнуть вместе с окном */
+      }
     };
   }, [open, onClose]);
 

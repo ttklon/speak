@@ -26,7 +26,10 @@ async function readSelection() {
   const bridge = native();
   if (bridge?.readSelection) {
     const selected = await bridge.readSelection();
-    if (selected) return selected;
+    // мост отдаёт строку; объект {text} тоже примем — иначе выделение молча
+    // превращалось в «[object Object]» и инструкция «ничего не меняла»
+    if (typeof selected === 'string' && selected) return selected;
+    if (selected && typeof selected.text === 'string' && selected.text) return selected.text;
   }
   try {
     return await readClipboard();
@@ -84,7 +87,10 @@ export function useTextAction() {
           source,
           settings,
         );
-        const result = profile && raw ? applyStyle(raw, profile) : raw;
+        // движок может вернуть текст с честной пометкой (частичный перевод)
+        const rawText = typeof raw === 'string' ? raw : String(raw?.text || '');
+        const note = typeof raw === 'object' && raw ? String(raw.note || '') : '';
+        const result = profile && rawText ? applyStyle(rawText, profile) : rawText;
         if (!result || result === source) {
           push({
             title: 'Изменений нет',
@@ -96,8 +102,8 @@ export function useTextAction() {
         const where = await writeSelection(result);
         push({
           title: where === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${instruction.title}`,
-          description: truncate(result, 90),
-          tone: where === 'failed' ? 'warn' : 'success',
+          description: [truncate(result, 90), note].filter(Boolean).join(' — '),
+          tone: where === 'failed' || note ? 'warn' : 'success',
         });
       } catch (err) {
         push({ title: 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });

@@ -148,9 +148,10 @@ export function installMockBridge() {
       record('text:paste');
       return true;
     },
+    // как настоящий main: строка, а не объект
     readSelection: async () => {
       record('text:read-selection');
-      return { text: 'выделенный текст со страницы' };
+      return 'выделенный текст со страницы';
     },
     replaceSelection: ok('text:replace-selection'),
 

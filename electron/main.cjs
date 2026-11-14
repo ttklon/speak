@@ -1317,7 +1317,22 @@ function registerIpc() {
   // Рабочем столе и проводник с выделенным файлом.
   ipcMain.handle('diag:save-report', async () => {
     try {
-      const text = logger.report({ limit: 300 });
+      // снимок настроек: по отчёту должно быть видно, как была настроена
+      // диктовка. Слова словаря и id микрофона не выводятся — только счётчики.
+      const s = store?.get('zs:settings') || {};
+      const text = logger.report({
+        limit: 300,
+        settings: {
+          model: s.whisperModel || 'small',
+          keepModelLoaded: s.keepModelLoaded === true,
+          language: s.language || 'ru',
+          liveWhisper: s.liveWhisper !== false,
+          micPreroll: s.micPreroll === true,
+          insertMethod: s.insertMethod || 'clipboard',
+          customMic: Boolean(s.audioDeviceId && s.audioDeviceId !== 'default'),
+          dictionaryWords: (store?.get('zs:dictionary') || []).length,
+        },
+      });
       const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
       const dir = app.getPath('desktop') || app.getPath('documents');
       fs.mkdirSync(dir, { recursive: true });

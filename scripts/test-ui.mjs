@@ -1638,6 +1638,93 @@ async function scenarioAiInstruction(browser) {
   const produced = /Переписанный|готово|Готово|скопирован/i.test(body);
   record('сценарии', 'AI-инструкция запускается и даёт результат', triggered && (produced || calls.includes('http:post')), calls.filter((c) => c.startsWith('http')).join(','));
   await page.close();
+
+  // Без локальной модели «Перевести на английский» раньше молча возвращала
+  // пустоту и человек видел «Изменений нет». Проверяем, что перевод идёт
+  // офлайн-словарём и честно предупреждает о частичности.
+  const offline = await openPage(browser, '#/hotkeys', {
+    settle: 400,
+    settings: { aiProcessing: false },
+    patchNative: () => {
+      const native = window.zspeakly && window.zspeakly.native;
+      if (!native) return;
+      native.readSelection = async () => ({ text: 'спасибо за встречу и за помощь' });
+    },
+  });
+  takeErrors(offline);
+  await offline.evaluate(() => {
+    const tab = [...document.querySelectorAll('.tabs__tab')].find((t) => /Рекомендуемые/i.test(t.innerText));
+    tab?.click();
+  });
+  await sleep(300);
+  const pressed = await offline.evaluate(() => {
+    const row = [...document.querySelectorAll('.hk-row, .preset-row')].find((r) =>
+      /Перевести на английский/i.test(r.innerText),
+    );
+    const btn = row && [...row.querySelectorAll('button')].find((b) => /Попробовать/i.test(b.innerText.trim()));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(1200);
+  const toast = await offline.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+  );
+  record(
+    'сценарии',
+    'AI-инструкция без модели переводит офлайн и предупреждает о частичности',
+    pressed && /thank/i.test(toast) && /модель/i.test(toast) && !/Изменений нет/i.test(toast),
+    toast.slice(0, 90) || 'тоста нет',
+  );
+  const offlineErrors = takeErrors(offline);
+  record('сценарии', 'AI-инструкция без модели: без ошибок консоли', offlineErrors.length === 0, offlineErrors[0] || '');
+  await offline.close();
+}
+
+// Модалка должна быть проходима с клавиатуры: Tab не убегает в приложение,
+// Esc закрывает, фокус возвращается на кнопку, которая её открыла.
+async function scenarioModalFocus(browser) {
+  const page = await openPage(browser, '#/hotkeys', { settle: 400 });
+  takeErrors(page);
+  const opened = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => /Добавить новую инструкцию/i.test(b.innerText));
+    if (!btn) return false;
+    btn.focus();
+    btn.click();
+    return true;
+  });
+  await sleep(400);
+  const modal = await page.evaluate(() => Boolean(document.querySelector('.modal')));
+  let inside = true;
+  for (let i = 0; i < 16; i += 1) {
+    await page.keyboard.press('Tab');
+    const ok = await page.evaluate(() => {
+      const m = document.querySelector('.modal');
+      return m ? m.contains(document.activeElement) : false;
+    });
+    if (!ok) inside = false;
+  }
+  record(
+    'сценарии',
+    'модалка: Tab не уводит фокус за окно',
+    opened && modal && inside,
+    modal ? (inside ? 'фокус держится' : 'фокус ушёл наружу') : 'окно не открылось',
+  );
+  await page.keyboard.press('Escape');
+  await sleep(350);
+  const after = await page.evaluate(() => ({
+    closed: !document.querySelector('.modal'),
+    focused: /Добавить новую инструкцию/i.test(document.activeElement?.innerText || ''),
+  }));
+  record(
+    'сценарии',
+    'модалка: Esc закрывает и возвращает фокус на кнопку',
+    after.closed && after.focused,
+    `закрылась: ${after.closed ? 'да' : 'нет'} · фокус вернулся: ${after.focused ? 'да' : 'нет'}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'модалка: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
 }
 
 async function scenarioBridgeWiring(browser) {
@@ -3581,6 +3668,7 @@ async function main() {
       ['правка расшифровки', scenarioEditSnippet],
       ['AI-инструкция', scenarioAiInstruction],
       ['мост', scenarioBridgeWiring],
+      ['модалка и фокус', scenarioModalFocus],
       ['профиль', scenarioProfile],
       ['запись сочетания', scenarioRecorder],
       ['новая инструкция', scenarioInstruction],

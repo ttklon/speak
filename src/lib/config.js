@@ -191,6 +191,13 @@ export const DEFAULT_SETTINGS = {
   // отправка ошибок и служебных логов (без текста диктовки); по умолчанию включена
   diagnostics: true,
   hidePasswords: true,
+  // закрытие окна сворачивает в трей, а не выходит из приложения
+  closeToTray: true,
+  // проверять обновления при запуске (наружу уходит только номер версии)
+  checkUpdates: true,
+  updateChannel: 'stable', // stable | beta
+  // применять словарь при диктовке: и подсказкой whisper, и заменой в тексте
+  dictionaryEnabled: true,
 };
 
 /**

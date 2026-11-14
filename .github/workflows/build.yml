@@ -57,6 +57,9 @@ jobs:
       - name: Индекс настроек актуален
         run: npm run settings:index:check
 
+      - name: Настройки не пустышки (каждая читается и находится)
+        run: npm run check:settings
+
       - name: Build renderer
         run: npm run build
 

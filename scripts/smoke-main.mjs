@@ -834,6 +834,18 @@ await check('отчёт диагностики сохраняется файло
   const text = fs.readFileSync(res.path, 'utf8');
   if (!text.includes('отчёт диагностики')) throw new Error('в файле нет заголовка отчёта');
   if (!text.includes('система:')) throw new Error('в отчёте нет окружения');
+  // по отчёту должно быть видно, как была настроена диктовка
+  const st = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...st, insertMethod: 'sendinput', micPreroll: true });
+  handlers.get('store:set')({}, 'zs:dictionary', [{ word: 'СекретноеСлово', pronunciation: 'секрет' }]);
+  const res2 = await save({});
+  const text2 = fs.readFileSync(res2.path, 'utf8');
+  for (const needle of ['настройки диктовки', 'SendInput без буфера', 'горячий микрофон: включён', 'слов в словаре: 1']) {
+    if (!text2.includes(needle)) throw new Error(`в отчёте нет «${needle}»`);
+  }
+  if (text2.includes('СекретноеСлово')) throw new Error('в отчёт попали слова словаря');
+  fs.rmSync(res2.path, { force: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...st, insertMethod: 'clipboard', micPreroll: false });
   fs.rmSync(res.path, { force: true });
 });
 
