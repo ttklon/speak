@@ -211,7 +211,30 @@ const cpStub = {
     if (typeof cb === 'function') {
       setTimeout(() => (spawnPlan.execError ? cb(new Error('SendKeys недоступен')) : cb(null, '', '')), 0);
     }
-    return { on: () => {} };
+    // SendInput-помощник общается через stdin/stdout: отдаём то, что велел тест
+    const listeners = {};
+    const plan = spawnPlan.sendInput;
+    const child = {
+      on: (event, fn) => {
+        if (fn) listeners[event] = fn;
+      },
+      stdout: {
+        on: (event, fn) => {
+          if (event !== 'data' || !fn) return;
+          if (plan) setTimeout(() => fn(Buffer.from(plan.out || '')), 0);
+        },
+      },
+      stderr: { on: () => {} },
+      stdin: {
+        write: (data) => {
+          spawnPlan.stdin = String(data);
+        },
+        end: () => {},
+      },
+      kill: () => {},
+    };
+    if (plan) setTimeout(() => listeners.close?.(plan.code ?? 0), 5);
+    return child;
   },
   exec: (cmd, opts, cb) => {
     spawnCalls.push({ file: cmd, args: [] });
@@ -480,6 +503,82 @@ await check('неудачная вставка оставляет текст в 
     }
   } finally {
     spawnPlan.execError = false;
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('SendInput: скрипт действительно вызывает SendInput с UNICODE', async () => {
+  const { buildScript, parseOutput } = require(path.resolve('electron/sendInput.cjs'));
+  const script = buildScript();
+  if (!/SendInput\(/.test(script)) throw new Error('скрипт не зовёт SendInput');
+  if (!/KEYEVENTF_UNICODE/.test(script)) throw new Error('нет флага UNICODE — кириллица не введётся');
+  if (/\$args/.test(script)) throw new Error('текст не должен идти аргументами командной строки');
+  const done = parseOutput('p:25\nok:40\n', 40);
+  if (!done.ok || done.sent !== 40) throw new Error(`разбор успеха: ${JSON.stringify(done)}`);
+  const cut = parseOutput('p:25\nerr:sendinput 5\np:25\n', 40);
+  if (cut.ok || cut.sent !== 25) throw new Error(`разбор обрыва: ${JSON.stringify(cut)}`);
+});
+
+await check('вставка без буфера: текст уходит в окно, буфер не тронут', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  try {
+    const text = 'диктовка без буфера';
+    clipboardText.value = 'чужой буфер';
+    spawnPlan.stdin = '';
+    spawnPlan.sendInput = { out: `p:25\nok:${text.length}\n`, code: 0 };
+    spawnCalls.length = 0;
+    const ok = await handlers.get('text:insert')({}, text);
+    if (ok !== true) throw new Error(`вставка не удалась: ${JSON.stringify(ok)}`);
+    if (clipboardText.value !== 'чужой буфер') throw new Error(`буфер перетёрт: ${clipboardText.value}`);
+    const decoded = Buffer.from(spawnPlan.stdin, 'base64').toString('utf8');
+    if (decoded !== text) throw new Error(`в помощник ушло не то: ${decoded}`);
+    const usedPaste = spawnCalls.some((c) => (c.args || []).some((a) => /SendWait|\^v/.test(String(a))));
+    if (usedPaste) throw new Error('вставка всё-таки пошла через буфер');
+  } finally {
+    spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('вставка без буфера: обрыв на середине не дублирует текст', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  try {
+    clipboardText.value = 'чужой буфер';
+    spawnPlan.sendInput = { out: 'p:7\nerr:sendinput 5\n', code: 2 };
+    spawnCalls.length = 0;
+    const res = await handlers.get('text:insert')({}, 'длинная диктовка на сорок символов и ещё');
+    if (!res || res.partial !== 7) throw new Error(`не сообщили про частичный ввод: ${JSON.stringify(res)}`);
+    if (clipboardText.value !== 'чужой буфер') throw new Error(`буфер тронут: ${clipboardText.value}`);
+    const usedPaste = spawnCalls.some((c) => (c.args || []).some((a) => /SendWait|\^v/.test(String(a))));
+    if (usedPaste) throw new Error('после обрыва текст вставили буфером — будет дубль');
+  } finally {
+    spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('вставка без буфера: полный отказ уходит на буфер', async () => {
+  const realPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  try {
+    spawnPlan.sendInput = { out: 'err:empty\n', code: 3 };
+    const text = 'запасной путь через буфер';
+    const ok = await handlers.get('text:insert')({}, text);
+    if (ok !== true) throw new Error('SendInput не ввёл ничего, а буферный путь не сработал');
+    if (clipboardText.value !== text) throw new Error(`в буфере: ${clipboardText.value}`);
+  } finally {
+    spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   }
 });

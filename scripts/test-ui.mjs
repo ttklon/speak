@@ -916,6 +916,39 @@ async function scenarioInsertFailed(browser) {
   const errors = takeErrors(page);
   record('сценарии', 'вставка не удалась: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
+
+  // Вставка «без буфера» может оборваться на середине: тогда нельзя ни
+  // повторять вставку, ни молчать — человеку нужен честный отчёт.
+  const partialPage = await openPage(browser, '#/home', {
+    patchNative: () => {
+      const native = window.zspeakly && window.zspeakly.native;
+      if (!native) return;
+      native.transcribePcm = async () => ({ ok: true, text: 'ну привет как дела', engine: 'whisper' });
+      window.__insertCount = 0;
+      native.insertText = async () => {
+        window.__insertCount += 1;
+        return { ok: false, partial: 7, total: 40 };
+      };
+    },
+  });
+  takeErrors(partialPage);
+  await partialPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await partialPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const partial = await partialPage.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+    inserts: window.__insertCount || 0,
+  }));
+  record(
+    'сценарии',
+    'вставка без буфера: обрыв на середине — правдивый тост, без повтора',
+    /введено 7 из 40/i.test(partial.toast) && partial.inserts === 1,
+    `${partial.inserts} вставок · ${partial.toast.slice(0, 70)}`,
+  );
+  const partialErrors = takeErrors(partialPage);
+  record('сценарии', 'вставка без буфера: без ошибок консоли', partialErrors.length === 0, partialErrors[0] || '');
+  await partialPage.close();
 }
 
 // Плавающая плашка не должна обещать живой текст там, где его нет: у whisper.cpp
@@ -1533,6 +1566,13 @@ async function scenarioSettingsSearch(browser) {
     'поиск по настройкам: строки отдельного компонента тоже находятся',
     extra,
     extra ? 'нашёл «Горячий микрофон»' : 'не нашёл',
+  );
+  const insertMethod = await byDesc('sendinput', 'Способ вставки');
+  record(
+    'сценарии',
+    'поиск по настройкам: находит способ вставки',
+    insertMethod,
+    insertMethod ? 'нашёл «Способ вставки»' : 'не нашёл',
   );
   const tailWord = await byDesc('кнопки', 'Плавающий индикатор');
   const telemetry = await byDesc('телеметрии', 'Проверять обновления');
@@ -3177,7 +3217,7 @@ async function scenarioDictationModes(browser) {
     posts: (window.__bridgeCalls || []).filter((c) => c.channel === 'http:post').length,
     toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
     dictations: (window.__e2e.read('zs.dictations') || []).length,
-    inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+    inserts: window.__insertCount || 0,
   }));
   record('режимы', '«агент» спрашивает локальную модель и показывает ответ', agent.posts > 0 && /Ответ агента готов/i.test(agent.toast), agent.toast.slice(0, 60));
   record('режимы', 'ответ агента попадает в историю и не вставляется сам', agent.dictations === before + 1 && agent.inserts === 0, `${before} → ${agent.dictations}, вставок ${agent.inserts}`);

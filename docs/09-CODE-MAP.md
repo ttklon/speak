@@ -83,6 +83,7 @@
 | `lib/audio/micWarm.js` | «Горячий микрофон»: поток и `ScriptProcessor` открыты заранее, последние `prerollMs` лежат в кольце; `take()` отдаёт их записи один раз, `close()` закрывает устройство; состояние `off/opening/open/failed` видно в настройках |
 | `lib/recognition/engine.js` | Выбор движка: `whisper.cpp` → Web Speech → честная ошибка «распознавание недоступно» (выдуманного текста нет); `streamIntervalMs` — живая расшифровка: повторные запросы по `recorder.snapshot()` раз в 2,5 с, итоговый проход всегда последний и точнее |
 | `lib/recognition/errors.js` | Человеческие тексты ошибок распознавания |
+| `electron/sendInput.cjs` | Вставка без буфера: PowerShell + `SendInput` (`KEYEVENTF_UNICODE`), текст из stdin в base64, прогресс строками `p:/ok:/err:`; при обрыве на середине возвращает число введённых символов, чтобы вставку не повторили буфером |
 | `lib/audio/pcmRecorder.js` | `getUserMedia` → `ScriptProcessor` → ресемплинг в 16 кГц → `Int16Array` + RMS-уровень; `snapshot({maxSeconds})` отдаёт уже записанный звук, не останавливая микрофон |
 | `lib/audio/devices.js` | Список микрофонов, разрешение, анализатор уровня |
 | `lib/ai/textops.js` | Офлайн-операции: `clean`, `formal`, `shorten`, `bullets`, `searchQuery`, `lowerTerms`, `summary`, `todos`; `llmRewrite()` через Ollama с бэкоффом 60 с (`llmIsDown`/`resetLlmBackoff`): после таймаута следующие запросы не ждут, инструкции идут офлайн |
@@ -313,8 +314,8 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 
 ```bash
 npm test                  # 125 тестов (vitest + jsdom)
-npm run test:main         # 66 смоук-проверок main-процесса
-npm run test:ui           # E2E: обход кнопок, 68 сценариев (207 проверок), контраст/вёрстка
+npm run test:main         # 70 смоук-проверок main-процесса
+npm run test:ui           # E2E: обход кнопок, 68 сценариев (210 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений

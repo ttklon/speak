@@ -179,6 +179,8 @@ export const DEFAULT_SETTINGS = {
   micPreroll: false,
   // промежуточная расшифровка whisper: текст в плашке обновляется по ходу речи
   liveWhisper: true,
+  // способ вставки: 'clipboard' — буфер + Ctrl+V, 'sendinput' — без буфера
+  insertMethod: 'clipboard',
   autoLaunch: false,
   theme: 'dark',
   soundFeedback: true,

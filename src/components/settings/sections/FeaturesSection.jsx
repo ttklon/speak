@@ -191,6 +191,30 @@ export default function FeaturesSection() {
           />
         </div>
       </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Вставка текста</div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Способ вставки
+            <div className="setting-row__desc">
+              «Буфер обмена» кладёт текст в буфер и жмёт Ctrl+V, прежнее содержимое возвращается через
+              полсекунды — это работает почти везде. «Без буфера (SendInput)» отправляет клавиатурные
+              события прямо в активное окно: чужой буфер не трогается вовсе, работает и там, где Ctrl+V
+              перехвачен. Только Windows; на длинном тексте ввод идёт по символу и заметно медленнее.
+            </div>
+          </div>
+          <Select
+            value={settings.insertMethod === 'sendinput' ? 'sendinput' : 'clipboard'}
+            onChange={(v) => updateSettings({ insertMethod: v })}
+            options={[
+              { value: 'clipboard', label: 'Буфер обмена' },
+              { value: 'sendinput', label: 'Без буфера' },
+            ]}
+            width={170}
+          />
+        </div>
+      </div>
     </div>
   );
 }

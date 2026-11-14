@@ -14,6 +14,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { execFile } = require('node:child_process');
+const { sendUnicodeText } = require('./sendInput.cjs');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
   clipboard, shell, dialog, screen, session, safeStorage,
@@ -1053,6 +1054,18 @@ function registerIpc() {
     if (!value) return false;
     lastInsertedText = value;
     lastInsertedAt = Date.now();
+    // Настройка «Способ вставки»: SendInput не трогает буфер обмена вовсе.
+    // Если он не смог ввести ни одного символа — спокойно идём путём буфера.
+    const insertMethod = String((store?.get('zs:settings') || {}).insertMethod || 'clipboard');
+    if (insertMethod === 'sendinput' && process.platform === 'win32') {
+      const direct = await insertViaSendInput(value);
+      if (direct !== null) {
+        // Буфер остался чужим: мониторинг не должен счесть это своей записью,
+        // поэтому запоминаем актуальное содержимое, а не наш текст.
+        lastClipboardText = clipboard.readText() || '';
+        return direct;
+      }
+    }
     lastClipboardText = value; // чтобы мониторинг не добавил это в историю
     // Вставляем через буфер обмена, но чужой буфер не съедаем: копируем текст,
     // вставляем его в активное окно и возвращаем прежнее содержимое. Иначе
@@ -1535,12 +1548,10 @@ function replaceSelection(text) {
  * Если в переменной окружения ZSPEAKLY_INPUT=app указан путь к helper.exe
  * (SendInput, вставка за ~30 мс), используется он.
  */
-function pasteToActiveWindow() {
-  if (process.platform !== 'win32') return Promise.resolve(false);
-
-  // Прячем окно, только если фокус был в нём: тогда он вернётся туда, где
-  // человек печатал. Если окно и так не в фокусе — ничего не трогаем, иначе
-  // после вставки оно всплывало поверх чужого приложения.
+// Прячем окно, только если фокус был в нём: тогда он вернётся туда, где
+// человек печатал. Если окно и так не в фокусе — ничего не трогаем, иначе
+// после вставки оно всплывало поверх чужого приложения.
+function hideWindowForInsert() {
   try {
     const focused = Boolean(mainWindow?.isFocused?.() && mainWindow?.isVisible?.());
     if (focused) mainWindow.hide();
@@ -1549,6 +1560,34 @@ function pasteToActiveWindow() {
   } catch {
     windowHiddenForInsert = false;
   }
+}
+
+/**
+ * Вставка без буфера обмена: SendInput с UNICODE-сканкодами.
+ *
+ * Возвращает:
+ *   true — текст введён целиком;
+ *   { ok: false, partial, total } — введена только часть, повторять нельзя;
+ *   null — SendInput не дал ничего, можно спокойно идти путём буфера.
+ */
+async function insertViaSendInput(value) {
+  hideWindowForInsert();
+  const res = await sendUnicodeText({ text: value, execFile });
+  restoreWindowAfterInsert();
+  if (res.ok) return true;
+  if (res.sent > 0) {
+    // Часть символов уже в чужом окне. Буфером дублировать нельзя: текст
+    // задвоится, и человек не поймёт, почему. Пусть интерфейс скажет правду.
+    console.warn('[insert] SendInput ввёл часть текста:', res.sent, 'из', res.total);
+    return { ok: false, partial: res.sent, total: res.total, reason: res.reason || '' };
+  }
+  return null;
+}
+
+function pasteToActiveWindow() {
+  if (process.platform !== 'win32') return Promise.resolve(false);
+
+  hideWindowForInsert();
 
   return new Promise((resolve) => {
     const helper = process.env.ZSPEAKLY_INPUT;
