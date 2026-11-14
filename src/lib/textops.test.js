@@ -5,7 +5,6 @@ import {
   llmRewrite,
   polishDictation,
   resetLlmBackoff,
-  runOp,
   saneRewrite,
 } from './ai/textops.js';
 import { offlineTranslate, translate } from './translate.js';
@@ -108,12 +107,6 @@ describe('translate', () => {
     const res = await translate('Спасибо', { from: 'ru', to: 'en', settings: { aiProcessing: false } });
     expect(res.engine).toBe('offline');
     expect(res.text.toLowerCase()).toContain('thanks');
-  });
-
-  it('runOp возвращает офлайн-результат при выключенном ИИ', async () => {
-    const res = await runOp('clean', 'ну привет как дела', { settings: { aiProcessing: false } });
-    expect(res.engine).toBe('offline');
-    expect(res.text).toBe('Привет как дела.');
   });
 
   describe('сокращение не рвёт мысль', () => {

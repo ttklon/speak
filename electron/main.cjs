@@ -191,6 +191,23 @@ function updateTrayTooltip() {
   }
 }
 
+/** Склеивает куски подсказки через запятую, убирая повторы (без учёта регистра). */
+function mergePromptParts(...parts) {
+  const seen = new Set();
+  const words = [];
+  for (const part of parts) {
+    for (const raw of String(part || '').split(',')) {
+      const word = raw.trim();
+      if (!word) continue;
+      const key = word.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      words.push(word);
+    }
+  }
+  return words.join(', ');
+}
+
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
     {
@@ -971,7 +988,9 @@ function registerIpc() {
             .map((d) => d.word)
             .slice(0, 40)
             .join(', ');
-    const prompt = [context, dictionaryPrompt].filter(Boolean).join(', ').slice(0, 500);
+    // Склейка без дублей: «Атлас» из словаря и «Атлас» с экрана — одно слово,
+    // иначе подсказка раздувается и вытесняет полезные термины за лимит.
+    const prompt = mergePromptParts(context, dictionaryPrompt).slice(0, 500);
     try {
       const started = Date.now();
       const keepLoaded = (store?.get('zs:settings') || {}).keepModelLoaded === true;

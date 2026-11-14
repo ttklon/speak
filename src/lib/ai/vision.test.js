@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { MAX_CONTEXT_CHARS, describeScreen, mergePromptParts } from './vision.js';
+import { describeScreen } from './vision.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -7,17 +7,6 @@ afterEach(() => {
 });
 
 describe('контекст экрана', () => {
-  it('склеивает подсказки без дублей и сохраняет порядок', () => {
-    expect(mergePromptParts('Алтайтара, ZSpeakly', 'ZSpeakly, whisper', '')).toBe(
-      'Алтайтара, ZSpeakly, whisper',
-    );
-  });
-
-  it('не раздувает подсказку сверх лимита', () => {
-    const long = Array.from({ length: 80 }, (_, i) => `термин-${i}`).join(', ');
-    expect(mergePromptParts(long).length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS + 200);
-  });
-
   it('без моста в браузере честно говорит, что модель недоступна', async () => {
     globalThis.window = {};
     const res = await describeScreen('data:image/png;base64,AAA', { endpoint: 'http://localhost:11434' });

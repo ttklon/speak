@@ -33,17 +33,6 @@ export function read(key) {
 }
 
 /** Асинхронный вариант — если понадобится неблокирующий доступ. */
-export async function readAsync(key) {
-  try {
-    const b = bridge();
-    if (b?.get) return await b.get(key);
-    return readRaw(key);
-  } catch (err) {
-    console.warn('[storage] read failed', key, err);
-    return null;
-  }
-}
-
 export function write(key, value) {
   try {
     const b = bridge();

@@ -31,28 +31,9 @@ export function dayLabel(value, now = new Date()) {
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
 }
 
-export function relativeTime(value, now = new Date()) {
-  const d = value instanceof Date ? value : new Date(value);
-  const mins = Math.max(0, Math.round((now - d) / 60000));
-  if (mins < 1) return 'только что';
-  if (mins < 60) return `${mins} ${plural(mins, 'минуту', 'минуты', 'минут')} назад`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} ${plural(hours, 'час', 'часа', 'часов')} назад`;
-  const days = Math.round(hours / 24);
-  return `${days} ${plural(days, 'день', 'дня', 'дней')} назад`;
-}
-
 export function words(text = '') {
   const matches = String(text).match(/[\p{L}\p{N}’'-]+/gu);
   return matches ? matches.length : 0;
-}
-
-export function formatMinutes(totalMinutes) {
-  const m = Math.max(0, Math.round(totalMinutes));
-  if (m < 60) return `${m} мин`;
-  const h = Math.floor(m / 60);
-  const rest = m % 60;
-  return rest ? `${h} ч ${rest} мин` : `${h} ч`;
 }
 
 export function formatK(n) {
@@ -66,10 +47,6 @@ export function formatSeconds(ms) {
   return `${s.toFixed(1)} с`;
 }
 
-export function clamp(n, min, max) {
-  return Math.min(max, Math.max(min, n));
-}
-
 export function uid(prefix = 'id') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -81,27 +58,6 @@ export function truncate(text = '', max = 120) {
 }
 
 /** Подсветка найденных фрагментов: "Привет, как дела?" → результаты по слову. */
-export function normalizeQuery(q = '') {
-  return q
-    .toLowerCase()
-    .replace(/[«»"'`]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-export function searchScore(text = '', query = '') {
-  const q = normalizeQuery(query);
-  if (!q) return 0;
-  const t = normalizeQuery(text);
-  if (!t) return 0;
-  if (t.includes(q)) return 100 - Math.min(50, t.indexOf(q) / 20);
-  const tokens = q.split(' ').filter((w) => w.length > 2);
-  if (!tokens.length) return 0;
-  const hit = tokens.filter((w) => t.includes(w)).length;
-  return (hit / tokens.length) * 60;
-}
-
-/** Keys: ['Ctrl','Alt','Space'] → «Ctrl + Alt + Space» */
 export function keysLabel(keys = []) {
   return keys.join(' + ');
 }
@@ -223,10 +179,6 @@ export function postProcess(text = '', { capitalize = true } = {}) {
   out = out.replace(/(^|[.!?]\s+)([а-яёa-z])/gu, (m, pre, ch) => `${pre}${ch.toUpperCase()}`);
   if (!capitalize) return out;
   return out;
-}
-
-export function escapeRegExp(s = '') {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Цвет по типу буфера/элемента */

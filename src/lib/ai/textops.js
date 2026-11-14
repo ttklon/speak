@@ -363,39 +363,4 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
   }
 }
 
-export async function runOp(opId, text, { settings, presetPrompt } = {}) {
-  const offline = {
-    clean: () => OPS.clean(text),
-    formal: () => OPS.formal(text),
-    shorten: () => OPS.shorten(text),
-    bullets: () => OPS.bullets(text),
-    search: () => OPS.searchQuery(text),
-    terms: () => OPS.lowerTerms(text),
-    summary: () => OPS.summary(text),
-  };
-
-  if (settings?.aiProcessing && settings?.aiEndpoint) {
-    const promptMap = {
-      formal: 'Перепиши текст в официально-деловом стиле. Ответь только текстом.',
-      shorten: 'Сократи текст на 30%, сохранив смысл. Ответь только текстом.',
-      summary: 'Сделай краткое резюме: тезисы, решения, задачи. Ответь только текстом.',
-      terms: 'Замени сложные термины простыми пояснениями. Ответь только текстом.',
-      search: 'Сформулируй короткий поисковый запрос из текста. Ответь только запросом.',
-    };
-    const prompt = presetPrompt || promptMap[opId];
-    if (prompt) {
-      const llm = await llmRewrite({
-        endpoint: settings.aiEndpoint,
-        model: settings.aiModel,
-        system: prompt,
-        text,
-      });
-      if (llm) return { text: OPS.clean(llm), engine: 'llm' };
-    }
-  }
-
-  const fn = offline[opId] || offline.clean;
-  return { text: fn(), engine: 'offline' };
-}
-
 export default OPS;

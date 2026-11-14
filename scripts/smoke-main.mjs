@@ -908,7 +908,7 @@ await check('пропуск движка: whisper получает --prompt со
     lang: 'ru',
     model: 'small',
     useDictionary: true,
-    contextPrompt: 'Список задач, дедлайн, проект «Атлас»',
+    contextPrompt: 'Список задач, дедлайн, проект «Атлас», ZSpeakly',
   });
   const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
   if (!call) throw new Error(`whisper не запускался: ${JSON.stringify(spawnCalls)}`);
@@ -917,6 +917,13 @@ await check('пропуск движка: whisper получает --prompt со
   const prompt = call.args[i + 1];
   if (!prompt.includes('ZSpeakly') || !prompt.includes('Алтайтара')) throw new Error(`словаря нет: ${prompt}`);
   if (!prompt.includes('Атлас')) throw new Error(`контекста экрана нет: ${prompt}`);
+  // «ZSpeakly» встречается и в словаре, и в контексте — подсказка не должна
+  // повторять одно слово дважды, иначе полезные термины вытесняются за лимит
+  const repeated = prompt
+    .split(',')
+    .map((w) => w.trim().toLowerCase())
+    .filter((w, idx, all) => w && all.indexOf(w) !== idx);
+  if (repeated.length) throw new Error(`повторы в подсказке: ${repeated.join(', ')}`);
   if (res?.text !== 'Проверка диктовки') throw new Error(`текст не вернулся: ${JSON.stringify(res)}`);
 });
 

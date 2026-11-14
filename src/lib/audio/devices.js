@@ -1,30 +1,4 @@
-/** Микрофоны и разрешения: общий мост для диктовки, встреч и перевода. */
-
-let permissionState = 'unknown';
-
-export function setPermission(state) {
-  permissionState = state;
-}
-
-export function getPermission() {
-  return permissionState;
-}
-
-export async function ensureMicPermission() {
-  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-    return { ok: false, reason: 'unsupported' };
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    permissionState = 'granted';
-    // сразу отпускаем поток: он нужен только для разрешения
-    stream.getTracks().forEach((t) => t.stop());
-    return { ok: true };
-  } catch (err) {
-    permissionState = err?.name === 'NotAllowedError' ? 'denied' : 'error';
-    return { ok: false, reason: err?.name || 'error', message: err?.message };
-  }
-}
+/** Микрофоны: список устройств ввода и анализатор уровня для индикатора. */
 
 /**
  * Превращает ответ enumerateDevices в пункты списка.
@@ -87,15 +61,4 @@ export async function createLevelMeter(stream) {
       }
     },
   };
-}
-
-/** Длительность WAV/blоb для записи встреч. */
-export function msToClock(ms) {
-  const total = Math.floor(ms / 1000);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return h > 0
-    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-    : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }

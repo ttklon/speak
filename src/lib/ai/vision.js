@@ -90,21 +90,4 @@ export async function describeScreen(dataUrl, { endpoint, model, timeout = 15000
     : { ok: false, terms: '', reason: 'на экране не нашлось текста' };
 }
 
-/** Строка для подсказки whisper: контекст экрана + словарь, без дублей. */
-export function mergePromptParts(...parts) {
-  const seen = new Set();
-  const words = [];
-  for (const part of parts) {
-    for (const raw of String(part || '').split(',')) {
-      const word = raw.trim();
-      if (!word) continue;
-      const key = word.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      words.push(word);
-    }
-  }
-  return words.join(', ').slice(0, MAX_CONTEXT_CHARS + 200);
-}
-
 export default describeScreen;

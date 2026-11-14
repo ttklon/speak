@@ -24,14 +24,6 @@ export function Button({
   );
 }
 
-export function Pill({ children, tone = 'default', className = '', ...rest }) {
-  return (
-    <span className={`pill pill--${tone} ${className}`} {...rest}>
-      {children}
-    </span>
-  );
-}
-
 export function Keys({ keys = [], size = 'md', onRemove, className = '' }) {
   return (
     <span className={`keys keys--${size} ${className}`}>
@@ -147,8 +139,4 @@ export function EmptyState({ title, description, action, icon, compact = false }
       {action ? <div className="empty__action">{action}</div> : null}
     </div>
   );
-}
-
-export function Spinner({ size = 16 }) {
-  return <Loader2 size={size} className="spin" />;
 }

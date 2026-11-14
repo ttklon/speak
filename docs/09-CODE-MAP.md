@@ -313,7 +313,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ## 12. Проверки перед коммитом
 
 ```bash
-npm test                  # 125 тестов (vitest + jsdom)
+npm test                  # 117 тестов (vitest + jsdom)
 npm run test:main         # 70 смоук-проверок main-процесса
 npm run test:ui           # E2E: обход кнопок, 68 сценариев (210 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
