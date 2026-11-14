@@ -172,6 +172,24 @@ function iconPath() {
 // должна это отражать, иначе там годами висит «Ctrl+Alt+Space».
 let trayDictKey = 'Control+Alt+Space';
 
+// Что нибудь в трее объясняет происходящее: открытый «горячим микрофоном»
+// поток незаметен иначе, а незнакомый значок в системном индикаторе пугает.
+let micWarmOpen = false;
+let unreadCount = 0;
+
+function trayTooltip() {
+  const base = unreadCount > 0 ? `ZSpeakly — ${unreadCount} новых` : 'ZSpeakly — офлайн голосовой ввод';
+  return micWarmOpen ? `${base} · микрофон открыт заранее` : base;
+}
+
+function updateTrayTooltip() {
+  try {
+    tray?.setToolTip(trayTooltip());
+  } catch {
+    /* ignore */
+  }
+}
+
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
     {
@@ -191,6 +209,11 @@ function buildTrayMenu() {
             click: () => mainWindow?.webContents.send('dictation:stop', { from: 'tray' }),
           },
         ]
+      : []),
+    // Если «горячий микрофон» включён, микрофон открыт прямо сейчас — об этом
+    // лучше сказать в меню, чем оставлять пользователя догадываться.
+    ...(micWarmOpen
+      ? [{ label: 'Микрофон открыт заранее (горячий микрофон)', enabled: false }]
       : []),
     { label: 'Буфер обмена', click: () => navigate('clipboard') },
     { label: 'Настройки', click: () => sendCommand('settings') },
@@ -354,6 +377,13 @@ function registerHudIpc() {
     dictationActive = state === 'listening';
     refreshTrayMenu();
   });
+  ipcMain.on('mic:warm', (_e, open) => {
+    const next = !!open;
+    if (next === micWarmOpen) return;
+    micWarmOpen = next;
+    updateTrayTooltip();
+    refreshTrayMenu();
+  });
   ipcMain.handle('hud:show', () => showHudWindow());
   ipcMain.handle('hud:hide', () => hideHudWindow());
   ipcMain.handle('hud:update', (_e, state) => {
@@ -388,7 +418,7 @@ function createTray() {
   const trayIcon = icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 18, height: 18 });
 
   tray = new Tray(trayIcon);
-  tray.setToolTip('ZSpeakly — офлайн голосовой ввод');
+  updateTrayTooltip();
   tray.setContextMenu(buildTrayMenu());
   tray.on('double-click', () => {
     mainWindow?.show();
@@ -869,11 +899,8 @@ function registerIpc() {
   ipcMain.handle('win:close', () => mainWindow?.close());
   ipcMain.handle('win:badge', (_e, value) => {
     // На Windows бейдж не поддерживается — обновляем подсказку в трее.
-    try {
-      tray?.setToolTip(Number(value) ? `ZSpeakly — ${value} новых` : 'ZSpeakly — офлайн голосовой ввод');
-    } catch {
-      /* ignore */
-    }
+    unreadCount = Math.max(0, Number(value) || 0);
+    updateTrayTooltip();
   });
 
   ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {

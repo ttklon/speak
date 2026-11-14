@@ -1037,6 +1037,35 @@ async function scenarioMicPreroll(browser) {
   );
   const statusErrors = [...onStatus.errors, ...offStatus.errors];
   record('сценарии', 'предролл: статус без ошибок консоли', statusErrors.length === 0, statusErrors[0] || '');
+
+  // Трей должен узнать про открытый микрофон, иначе индикатор в системе
+  // выглядит необъяснимо.
+  const warmCalls = async (micPreroll) => {
+    const page = await openPage(browser, '#/settings?section=app&from=home', {
+      settings: { micPreroll },
+      settle: 500,
+    });
+    takeErrors(page);
+    await sleep(micPreroll ? 1500 : 400);
+    const list = await page.evaluate(() =>
+      (window.__bridgeCalls || [])
+        .filter((c) => c.channel === 'mic:warm')
+        .map((c) => c.args?.[0]),
+    );
+    const errors3 = takeErrors(page);
+    await page.close();
+    return { list, errors: errors3 };
+  };
+  const warmOn = await warmCalls(true);
+  const warmOff = await warmCalls(false);
+  record(
+    'сценарии',
+    'предролл: трей узнаёт, что микрофон открыт',
+    warmOn.list.includes(true) && warmOff.list.every((v) => v !== true),
+    `вкл: ${warmOn.list.join(',') || '—'} · выкл: ${warmOff.list.join(',') || '—'}`,
+  );
+  const warmErrors = [...warmOn.errors, ...warmOff.errors];
+  record('сценарии', 'предролл: канал трея без ошибок консоли', warmErrors.length === 0, warmErrors[0] || '');
 }
 
 // Микрофон из настроек пропал (выдернули USB): диктовка не должна молча

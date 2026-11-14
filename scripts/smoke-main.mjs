@@ -27,6 +27,7 @@ const windowInstances = [];
 // шаблоны меню трея: проверяем, что подпись сочетания обновляется
 const trayTemplates = [];
 const trayMenus = [];
+const trayTooltips = [];
 // Окно-заглушка: запоминаем options и состояние, чтобы проверять плавающий
 // индикатор (alwaysOnTop, focusable, showInactive, hide, loadFile).
 const makeWindow = (options = {}) => {
@@ -134,7 +135,9 @@ const electronStub = {
     return win;
   }, { getAllWindows: () => windowInstances }),
   Tray: class {
-    setToolTip() {}
+    setToolTip(text) {
+      trayTooltips.push(text);
+    }
     setContextMenu(menu) {
       trayMenus.push(menu);
     }
@@ -1077,6 +1080,32 @@ await check('трей и сочетание знают реальное сост
     (i) => i.label === 'Остановить диктовку',
   );
   if (stillNoStop) throw new Error('неизвестное состояние включило запись');
+});
+
+await check('трей говорит, что микрофон открыт заранее', async () => {
+  const handler = onHandlers.get('mic:warm');
+  if (!handler) throw new Error('нет обработчика mic:warm');
+  handler({}, true);
+  const menu = trayTemplates[trayTemplates.length - 1] || [];
+  if (!menu.some((i) => /Микрофон открыт заранее/.test(i.label || ''))) {
+    throw new Error(`в меню нет строки про открытый микрофон: ${menu.map((i) => i.label || i.type).join(' · ')}`);
+  }
+  if (!trayTooltips.some((t) => /микрофон открыт заранее/.test(String(t)))) {
+    throw new Error(`подсказка трея молчит: ${trayTooltips.join(' | ')}`);
+  }
+  // подсказка про непрочитанное не должна теряться
+  await handlers.get('win:badge')({}, 3);
+  const withBadge = trayTooltips[trayTooltips.length - 1];
+  if (!/3 новых/.test(withBadge) || !/микрофон открыт заранее/.test(withBadge)) {
+    throw new Error(`счётчик и микрофон не уживаются: ${withBadge}`);
+  }
+  await handlers.get('win:badge')({}, 0);
+  handler({}, false);
+  const after = trayTemplates[trayTemplates.length - 1] || [];
+  if (after.some((i) => /Микрофон открыт заранее/.test(i.label || ''))) throw new Error('строка осталась после закрытия');
+  if (!/офлайн голосовой ввод/.test(String(trayTooltips[trayTooltips.length - 1]))) {
+    throw new Error(`подсказка не вернулась к обычной: ${trayTooltips[trayTooltips.length - 1]}`);
+  }
 });
 
 await check('трей: во время записи появляется «Остановить диктовку»', async () => {

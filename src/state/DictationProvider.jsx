@@ -673,6 +673,12 @@ export function DictationProvider({ children }) {
     window.zspeakly?.native?.dictationState?.(state);
   }, [state]);
 
+  // Трей тоже говорит правду: пока «горячий микрофон» держит устройство
+  // открытым, это видно в его подсказке и меню.
+  useEffect(() => {
+    window.zspeakly?.native?.micWarm?.(micWarmState === 'open');
+  }, [micWarmState]);
+
   // «Крестик» на плавающем окне: запись продолжается, но индикатор переезжает
   // внутрь окна приложения — иначе остановить запись было бы нечем.
   useEffect(() => {

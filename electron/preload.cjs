@@ -82,6 +82,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     onDictationStop: (cb) => on('dictation:stop', cb),
     onHudClosed: (cb) => on('hud:closed', cb),
     dictationState: (state) => ipcRenderer.send('dictation:state', state),
+    // трей показывает, что микрофон держится открытым заранее
+    micWarm: (open) => ipcRenderer.send('mic:warm', !!open),
     checkUpdates: () => ipcRenderer.invoke('update:check'),
     setUpdateChannel: (channel) => ipcRenderer.invoke('update:channel', channel),
     downloadUpdate: () => ipcRenderer.invoke('update:download'),
