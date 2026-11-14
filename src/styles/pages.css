@@ -821,6 +821,11 @@
   max-width: 460px;
 }
 
+.setting-row__state {
+  /* живой статус строки настроек: «сейчас микрофон открыт» и подобное */
+  color: var(--text-3);
+}
+
 .setting-row__value {
   font-size: 11px;
   color: var(--text-3);

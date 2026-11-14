@@ -1012,6 +1012,31 @@ async function scenarioMicPreroll(browser) {
   );
   const errors = [...on.errors, ...off.errors];
   record('сценарии', 'предролл: без ошибок консоли', errors.length === 0, errors[0] || '');
+
+  // В настройках видно, держим ли мы микрофон открытым прямо сейчас — иначе
+  // тумблер про приватность ничего не объясняет.
+  const status = async (micPreroll) => {
+    const page = await openPage(browser, '#/settings?section=app&from=home', {
+      settings: { micPreroll },
+      settle: 500,
+    });
+    takeErrors(page);
+    await sleep(micPreroll ? 1200 : 300);
+    const text = await page.evaluate(() => document.body.innerText);
+    const errors2 = takeErrors(page);
+    await page.close();
+    return { text, errors: errors2 };
+  };
+  const onStatus = await status(true);
+  const offStatus = await status(false);
+  record(
+    'сценарии',
+    'предролл: в настройках видно, открыт микрофон или нет',
+    /Сейчас: микрофон открыт/.test(onStatus.text) && /микрофон закрыт/.test(offStatus.text),
+    `${/Сейчас: микрофон открыт/.test(onStatus.text) ? 'открыт' : 'нет'} · ${/микрофон закрыт/.test(offStatus.text) ? 'закрыт' : 'нет'}`,
+  );
+  const statusErrors = [...onStatus.errors, ...offStatus.errors];
+  record('сценарии', 'предролл: статус без ошибок консоли', statusErrors.length === 0, statusErrors[0] || '');
 }
 
 // Микрофон из настроек пропал (выдернули USB): диктовка не должна молча

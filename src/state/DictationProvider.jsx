@@ -82,6 +82,8 @@ export function DictationProvider({ children }) {
   const rewriteWarnedAt = useRef(0);
   // «горячий микрофон»: поток открыт заранее, последние 600 мс лежат в буфере
   const micWarm = useRef(null);
+  // достаточный ли статус, чтобы интерфейс не врал про открытый микрофон
+  const [micWarmState, setMicWarmState] = useState('off'); // off | opening | open | failed
 
   // ошибка не должна висеть на экране навсегда: 12 секунд — и убираем
   useEffect(() => {
@@ -246,6 +248,7 @@ export function DictationProvider({ children }) {
     if (!wanted) {
       current?.close?.();
       micWarm.current = null;
+      setMicWarmState('off');
       return undefined;
     }
     const warm = createMicWarm({
@@ -253,13 +256,19 @@ export function DictationProvider({ children }) {
       deviceId: settingsRef.current?.audioDeviceId || 'default',
     });
     micWarm.current = warm;
-    warm.open().catch((err) => {
-      diag.warn('mic', 'Горячий микрофон не открылся', { reason: String(err?.message || err) });
-      if (micWarm.current === warm) micWarm.current = null;
-    });
+    setMicWarmState('opening');
+    warm
+      .open()
+      .then(() => setMicWarmState('open'))
+      .catch((err) => {
+        diag.warn('mic', 'Горячий микрофон не открылся', { reason: String(err?.message || err) });
+        setMicWarmState('failed');
+        if (micWarm.current === warm) micWarm.current = null;
+      });
     return () => {
       warm.close();
       if (micWarm.current === warm) micWarm.current = null;
+      setMicWarmState('off');
     };
   }, [settings.micPreroll, settings.audioDeviceId]);
 
@@ -697,6 +706,8 @@ export function DictationProvider({ children }) {
       hudOpen,
       nativeHud: hudAllowed && hudNativeOn,
       engine,
+      // видно в настройках: держим ли микрофон открытым прямо сейчас
+      micWarmState,
       hasWebSpeech,
       start,
       stop,
@@ -707,7 +718,7 @@ export function DictationProvider({ children }) {
       formatK,
       askAgent,
     }),
-    [state, draft, level, error, last, mode, elapsed, hudOpen, hudAllowed, hudNativeOn, engine, start, stop, toggle, finish, askAgent],
+    [state, draft, level, error, last, mode, elapsed, hudOpen, hudAllowed, hudNativeOn, engine, micWarmState, start, stop, toggle, finish, askAgent],
   );
 
   return <DictationContext.Provider value={value}>{children}</DictationContext.Provider>;

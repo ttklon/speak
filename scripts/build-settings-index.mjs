@@ -29,7 +29,7 @@ const SECTION_LABELS = {
 // Компоненты, которые рисуют строки настроек внутри раздела: без них поиск не
 // находил ни «Устройство микрофона», ни «Горячий микрофон».
 const EXTRA_FILES = {
-  data: ['MicTester.jsx'],
+  app: ['MicTester.jsx'],
 };
 
 const SECTION_FILES = {
