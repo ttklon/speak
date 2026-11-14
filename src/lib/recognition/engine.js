@@ -172,7 +172,14 @@ export function createRecognizer(opts = {}) {
         });
         if (stopped || gen !== streamGen) return;
         if (res?.ok && String(res.text || '').trim()) {
-          onPartial?.({ text: String(res.text).trim(), interim: '', live: true });
+          // truncated — распознан только хвост записи: интерфейс обязан
+          // показать это, а не выдавать хвост за весь текст
+          onPartial?.({
+            text: String(res.text).trim(),
+            interim: '',
+            live: true,
+            truncated: snap.truncated === true,
+          });
         }
       } catch {
         /* промежуточный сбой не должен ломать диктовку */

@@ -81,6 +81,7 @@
 | `state/ToastProvider.jsx` | Тосты с тоном, TTL, действием |
 | `lib/audio/ringBuffer.js` | Кольцевой буфер отсчётов для предролла: `push`, `tail`, `clear` |
 | `lib/audio/micWarm.js` | «Горячий микрофон»: поток и `ScriptProcessor` открыты заранее, последние `prerollMs` лежат в кольце; `take()` отдаёт их записи один раз, `close()` закрывает устройство; состояние `off/opening/open/failed` видно в настройках |
+| `lib/recognition/liveDraft.js` | Текст живой расшифровки: если whisper успел пересчитать только хвост записи (окно 30 с), начало помечается многоточием — хвост не выдаётся за весь текст |
 | `lib/recognition/engine.js` | Выбор движка: `whisper.cpp` → Web Speech → честная ошибка «распознавание недоступно» (выдуманного текста нет); `streamIntervalMs` — живая расшифровка: повторные запросы по `recorder.snapshot()` раз в 2,5 с, итоговый проход всегда последний и точнее |
 | `lib/recognition/errors.js` | Человеческие тексты ошибок распознавания |
 | `electron/sendInput.cjs` | Вставка без буфера: PowerShell + `SendInput` (`KEYEVENTF_UNICODE`), текст из stdin в base64, прогресс строками `p:/ok:/err:`; при обрыве на середине возвращает число введённых символов, чтобы вставку не повторили буфером |
@@ -313,9 +314,9 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ## 12. Проверки перед коммитом
 
 ```bash
-npm test                  # 117 тестов (vitest + jsdom)
+npm test                  # 121 тест (vitest + jsdom)
 npm run test:main         # 70 смоук-проверок main-процесса
-npm run test:ui           # E2E: обход кнопок, 68 сценариев (210 проверок), контраст/вёрстка
+npm run test:ui           # E2E: обход кнопок, 68 сценариев (211 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений

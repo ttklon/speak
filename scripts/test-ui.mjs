@@ -2189,6 +2189,17 @@ async function scenarioDiagnostics(browser) {
   const body = await page.evaluate(() => document.body.innerText);
   record('сценарии', 'диагностика: отчёт сохраняется через мост', report && calls.includes('diag:save-report'), calls.filter((c) => c.startsWith('diag')).join(','));
   record('сценарии', 'диагностика: канал проверяется и статус виден', ping && calls.includes('diag:ping') && /канал|нет адреса|не настроен|приёмник/i.test(body));
+  // Снимок настроек: по нему видно, почему диктовка ведёт себя именно так
+  const snapshotRows = /Как сейчас работает диктовка/.test(body)
+    && /Живая расшифровка/.test(body)
+    && /Горячий микрофон/.test(body)
+    && /Вставка текста/.test(body);
+  record(
+    'сценарии',
+    'диагностика: виден снимок настроек диктовки',
+    snapshotRows,
+    snapshotRows ? 'движок, модель, живой текст, предролл, вставка' : 'строк не нашлось',
+  );
   const errors = takeErrors(page);
   record('сценарии', 'диагностика: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();

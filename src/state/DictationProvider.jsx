@@ -5,6 +5,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
+import { formatLiveDraft } from '../lib/recognition/liveDraft.js';
 import { createMicWarm } from '../lib/audio/micWarm.js';
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { useAppData } from './AppDataProvider.jsx';
@@ -377,10 +378,13 @@ export function DictationProvider({ children }) {
         // а текст в плашке не отстаёт от речи на полминуты
         streamIntervalMs: settingsRef.current.liveWhisper !== false ? 2500 : 0,
         onStart: () => setState('listening'),
-        onPartial: ({ text, interim }) => {
+        onPartial: ({ text, interim, truncated }) => {
           const composed = [text, interim].filter(Boolean).join(' ');
-          draftRef.current = composed;
-          setDraft(composed);
+          // живая расшифровка может прийти по хвосту записи — тогда начало
+          // помечено многоточием, чтобы черновик не выдавал себя за всё
+          const shown = formatLiveDraft({ text: composed, truncated: truncated === true });
+          draftRef.current = shown;
+          setDraft(shown);
         },
         onFinal: ({ text }) => {
           finalRef.current = text;

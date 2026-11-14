@@ -7,6 +7,7 @@ import { localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
 import { APP } from '../../../lib/config.js';
+import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -254,6 +255,51 @@ export default function DiagnosticsSection() {
         Чтобы ошибки можно было починить, а не угадывать. По умолчанию журнал пишется только на
         этом компьютере; отправку на сервер можно включить в любой момент, указав адрес приёмника.
       </p>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Как сейчас работает диктовка</div>
+        <div className="settings-group__desc">
+          Снимок настроек, которые чаще всего объясняют «почему не так»: их видно сразу, без
+          пролистывания разделов. Это же уходит в отчёт, если отправить его в поддержку.
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Движок</span>
+          <span className="kv-row__value">{engineName()}</span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Модель</span>
+          <span className="kv-row__value">
+            {settings.whisperModel || 'small'}
+            {settings.keepModelLoaded === true ? ' (держится в памяти)' : ''}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Живая расшифровка</span>
+          <span className="kv-row__value">
+            {settings.liveWhisper === false
+              ? 'выключена — текст после остановки'
+              : hasNativeStt()
+                ? 'включена — whisper пересчитывает запись раз в 2,5 с'
+                : 'включена, но работает только с whisper.cpp'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Горячий микрофон</span>
+          <span className="kv-row__value">
+            {settings.micPreroll === true
+              ? 'включён — микрофон открыт заранее, первые 0,6 с не теряются'
+              : 'выключен — запись начинается с нажатия'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Вставка текста</span>
+          <span className="kv-row__value">
+            {settings.insertMethod === 'sendinput'
+              ? 'SendInput без буфера обмена (только Windows)'
+              : 'буфер обмена + Ctrl+V, прежний буфер возвращается'}
+          </span>
+        </div>
+      </div>
 
       <div className="settings-group">
         <div className="settings-group__title">Отправка отчётов</div>
