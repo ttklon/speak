@@ -906,6 +906,50 @@ await check('models:status честно говорит, какая модель 
   if (dl.sizeMb < 1000) throw new Error(`размер turbo подозрительный: ${dl.sizeMb}`);
 });
 
+await check('старые временные wav убираются, свежие остаются', async () => {
+  const { cleanupTemp } = require(path.resolve('electron/tempCleanup.cjs'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-temp-'));
+  try {
+    const oldFile = path.join(dir, 'dictation-old.wav');
+    const freshFile = path.join(dir, 'dictation-fresh.wav');
+    fs.writeFileSync(oldFile, 'old');
+    fs.writeFileSync(freshFile, 'fresh');
+    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(oldFile, old, old);
+    const res = cleanupTemp({ dir });
+    if (res.removed !== 1) throw new Error(`удалено ${res.removed}, ожидалось 1`);
+    if (fs.existsSync(oldFile)) throw new Error('старый файл остался');
+    if (!fs.existsSync(freshFile)) throw new Error('свежий файл удалён — запись могла идти');
+    // отсутствие папки не считается ошибкой
+    const missing = cleanupTemp({ dir: path.join(dir, 'нет-такой') });
+    if (missing.error) throw new Error(`отсутствие папки: ${missing.error}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await check('живая расшифровка и финальный проход не пишут в один файл', async () => {
+  // два запроса почти одновременно: имена wav обязаны различаться, иначе
+  // звук одного перезапишет звук другого
+  runWhisper('Проверка диктовки');
+  spawnCalls.length = 0;
+  const pcm = speechPcm(500);
+  const payload = { pcm, durationMs: 500, lang: 'ru', model: 'small', useDictionary: false };
+  await Promise.all([
+    handlers.get('stt:transcribe-pcm')({}, { ...payload, partial: true }),
+    handlers.get('stt:transcribe-pcm')({}, payload),
+  ]);
+  const files = spawnCalls
+    .filter((c) => String(c.file).includes('whisper'))
+    .map((c) => c.args[c.args.indexOf('-f') + 1])
+    .filter(Boolean);
+  if (files.length < 2) throw new Error(`ожидалось два запуска, было ${files.length}`);
+  if (new Set(files).size !== files.length) throw new Error(`один и тот же wav: ${files.join(' | ')}`);
+  for (const f of files) {
+    if (fs.existsSync(f)) throw new Error(`временный wav остался: ${f}`);
+  }
+});
+
 await check('пропуск движка: whisper получает --prompt со словарём и контекстом', async () => {
   await handlers.get('store:set')({}, 'zs:dictionary', [
     { word: 'ZSpeakly', pronunciation: 'зи-спикли' },

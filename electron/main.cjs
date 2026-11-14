@@ -15,6 +15,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 const { sendUnicodeText } = require('./sendInput.cjs');
+const { randomUUID } = require('node:crypto');
+const { cleanupTemp } = require('./tempCleanup.cjs');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
   clipboard, shell, dialog, screen, session, safeStorage,
@@ -971,7 +973,9 @@ function registerIpc() {
     });
     const dir = path.join(app.getPath('temp'), 'zspeakly');
     fs.mkdirSync(dir, { recursive: true });
-    const wav = path.join(dir, `dictation-${Date.now()}.wav`);
+    // Имя уникальное: живая расшифровка и финальный проход могут идти почти
+    // одновременно, и два вызова с одним именем перезаписали бы друг другу звук.
+    const wav = path.join(dir, `dictation-${Date.now()}-${randomUUID().slice(0, 8)}.wav`);
     try {
       fs.writeFileSync(wav, writeWav(trimmed, payload?.sampleRate || 16000));
     } catch (err) {
@@ -1678,6 +1682,16 @@ app.on('before-quit', () => {
 
 app.whenReady().then(() => {
   store = new JsonStore();
+
+  // После аварийного закрытия во временной папке остаются wav: живая
+  // расшифровка пишет их каждые пару секунд. Свежие не трогаем — они могут
+  // принадлежать работающему экземпляру.
+  try {
+    const swept = cleanupTemp({ dir: path.join(app.getPath('temp'), 'zspeakly') });
+    if (swept.removed) console.info('[temp] удалено старых записей:', swept.removed);
+  } catch {
+    /* уборка не должна мешать запуску */
+  }
 
   // ── Инициализация журнала ─────────────────────────────────────────────
   // Без неё диагностика «включена», но пишет в никуда: файла нет, отправлять

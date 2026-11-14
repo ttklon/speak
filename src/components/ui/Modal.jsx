@@ -22,6 +22,11 @@ export default function Modal({
   const ref = useRef(null);
   // куда вернуть фокус, когда окно закроется
   const opener = useRef(null);
+  // onClose приходит стрелкой и меняется на каждый рендер: если держать его в
+  // зависимостях эффекта, эффект перезапускается при каждом вводе символа,
+  // «автофокус» заново выделяет поле — и набранное затирается. Держим в ref.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -37,7 +42,7 @@ export default function Modal({
     const onKey = (e) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose?.();
+        closeRef.current?.();
         return;
       }
       // Tab не должен уходить в приложение за модалкой: иначе фокус
@@ -74,7 +79,7 @@ export default function Modal({
         /* элемент мог исчезнуть вместе с окном */
       }
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
