@@ -202,7 +202,7 @@ const electronStub = {
 // перехватываем spawn/execFile — никаких реальных процессов в тесте
 const spawnCalls = [];
 // что «ответит» фейковый whisper (см. cpStub.spawn); null — процесс просто молчит
-const spawnPlan = { answer: null, execError: false };
+const spawnPlan = { answer: null, execError: false, failFirst: 0, failText: '', attempts: 0 };
 const globalShortcutRegs = [];
 const cpStub = {
   execFile: (file, args, opts, cb) => {
@@ -244,14 +244,30 @@ const cpStub = {
   spawn: (file, args) => {
     spawnCalls.push({ file, args });
     const listeners = {};
+    let stderrFn = null;
     const child = {
       on: (event, fn) => {
         if (fn) listeners[event] = fn;
       },
       stdout: { on: () => {} },
-      stderr: { on: () => {} },
+      stderr: {
+        on: (event, fn) => {
+          if (event === 'data' && fn) stderrFn = fn;
+        },
+      },
       kill: () => {},
     };
+    // «старая сборка»: первые N запусков ругаются на неизвестный аргумент
+    if (spawnPlan.failFirst > 0 && String(file).includes('whisper')) {
+      spawnPlan.attempts += 1;
+      if (spawnPlan.attempts <= spawnPlan.failFirst) {
+        setTimeout(() => {
+          stderrFn?.(Buffer.from(spawnPlan.failText || 'error: unknown argument: --vad'));
+          listeners.close?.(1);
+        }, 0);
+        return child;
+      }
+    }
     // «распознавание»: пишем тот же файл, что ждёт whisper.cjs (-otxt), и закрываемся
     if (spawnPlan.answer !== null) {
       const at = (args || []).indexOf('-of');
@@ -986,6 +1002,36 @@ await check('пропуск движка: whisper получает --prompt со
 // ── VAD: длинная диктовка режется по паузам ─────────────────────────────────
 const silencePcm = (ms = 500) => new Uint8Array(Math.round((16000 * ms) / 1000) * 2);
 
+await check('аргументы whisper: без контекста, жадное декодирование, VAD', () => {
+  const whisperLib = require(path.resolve('electron/whisper.cjs'));
+  if (typeof whisperLib.cliArgs !== 'function') throw new Error('нет cliArgs');
+  const args = whisperLib.cliArgs({
+    modelPath: 'm.bin',
+    wavPath: 'a.wav',
+    lang: 'ru',
+    threads: 4,
+    vadModel: 'vad.bin',
+    prompt: 'словарь',
+  });
+  const pair = (flag) => {
+    const i = args.indexOf(flag);
+    return i < 0 ? '' : args[i + 1];
+  };
+  if (pair('-mc') !== '0') throw new Error('нет -mc 0 (контекст прошлой диктовки)');
+  if (pair('-bs') !== '1') throw new Error('нет -bs 1 (beám search вместо greedy)');
+  if (!args.includes('--vad')) throw new Error('нет --vad');
+  if (pair('-vm') !== 'vad.bin') throw new Error('VAD-модель не передана');
+  if (pair('-vt') !== '0.5') throw new Error('нет порога VAD');
+  if (pair('-vsd') !== '500') throw new Error('нет минимальной тишины VAD');
+  if (pair('-l') !== 'ru') throw new Error('язык не передан');
+  if (pair('-of') !== 'a.wav.out') throw new Error('файл результата не задан');
+  if (pair('--prompt') !== 'словарь') throw new Error('--prompt не передан');
+  // без VAD-модели флагов VAD быть не должно: whisper.cpp упал бы на отсутствии файла
+  const plain = whisperLib.cliArgs({ modelPath: 'm.bin', wavPath: 'a.wav' });
+  if (plain.includes('--vad') || plain.includes('-vm')) throw new Error('VAD без модели');
+  if (plain.includes('--prompt')) throw new Error('пустой --prompt не нужен');
+});
+
 await check('splitBySilence режет по длинной паузе и не режет короткую', () => {
   const whisperLib = require(path.resolve('electron/whisper.cjs'));
   if (typeof whisperLib.splitBySilence !== 'function') throw new Error('нет splitBySilence');
@@ -999,6 +1045,36 @@ await check('splitBySilence режет по длинной паузе и не р
   }
   const continuous = whisperLib.splitBySilence(Buffer.from(speechPcm(30000)), 16000);
   if (continuous.length !== 2) throw new Error(`30 секунд речи не разрезаны на 25-секундные куски: ${continuous.length}`);
+});
+
+await check('старая сборка без --vad: проход повторяется и текст не теряется', async () => {
+  // VAD-модель на месте — приложение попробует --vad первым
+  const vadPath = path.join(userData, 'models', 'ggml-silero-v6.2.0.bin');
+  fs.writeFileSync(vadPath, 'fake-vad');
+  spawnPlan.failFirst = 1;
+  spawnPlan.failText = 'error: unknown argument: --vad';
+  spawnPlan.attempts = 0;
+  runWhisper('Текст после повтора');
+  spawnCalls.length = 0;
+  try {
+    const res = await handlers.get('stt:transcribe-pcm')({}, {
+      pcm: speechPcm(600),
+      durationMs: 600,
+      lang: 'ru',
+      model: 'small',
+      useDictionary: false,
+    });
+    const calls = spawnCalls.filter((c) => String(c.file).includes('whisper'));
+    if (calls.length < 2) throw new Error(`ожидался повтор, запусков: ${calls.length}`);
+    if (!calls[0].args.includes('--vad')) throw new Error('первый проход не пробовал VAD');
+    if (calls[1].args.includes('--vad')) throw new Error('повтор снова с --vad');
+    if (res?.text !== 'Текст после повтора') throw new Error(`текст потерян: ${JSON.stringify(res)}`);
+  } finally {
+    spawnPlan.failFirst = 0;
+    spawnPlan.attempts = 0;
+    fs.rmSync(vadPath, { force: true });
+    spawnPlan.answer = null;
+  }
 });
 
 await check('диктовка с паузой распознаётся по фрагментам', async () => {

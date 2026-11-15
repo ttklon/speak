@@ -240,6 +240,39 @@ jobs:
           }
           Get-ChildItem build/bin | Select-Object Name, Length
 
+      - name: VAD-модель (Silero) в установщик
+        shell: pwsh
+        # 864 КБ, но именно она отсекает тишину: с ней диктовка отвечает
+        # быстрее и не выдумывает фраз на пустом звуке. Файл кладём в models/,
+        # extraResources отдаёт его в resources/models. Если HuggingFace с
+        # раннера недоступен — не роняем сборку: приложение докачает модель
+        # само при первом запуске (models:prepare).
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          $url = 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin'
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile models/ggml-silero-v6.2.0.bin
+              if ((Get-Item models/ggml-silero-v6.2.0.bin).Length -gt 500000) { break }
+            } catch {
+              Write-Host "::warning title=vad::попытка $i: $_"
+              Start-Sleep -Seconds 10
+            }
+          }
+          if (-not (Test-Path models/ggml-silero-v6.2.0.bin)) {
+            # HuggingFace с раннера бывает недоступен: те же веса Silero лежат в
+            # пакете silero-vad на PyPI, собираем ggml-файл сами (скрипт сверен
+            # с официальным форматом whisper.cpp).
+            Write-Host '::notice title=vad::HuggingFace недоступен, собираем модель из пакета silero-vad'
+            python -m pip install --quiet --no-deps silero-vad numpy
+            python scripts/make-vad-model.py --out models/ggml-silero-v6.2.0.bin
+          }
+          if (Test-Path models/ggml-silero-v6.2.0.bin) {
+            Get-Item models/ggml-silero-v6.2.0.bin | Select-Object Name, Length
+          } else {
+            Write-Host '::warning title=vad::модель не скачалась — приложение докачает её при первом запуске'
+          }
+
       - name: Build + package (NSIS + portable)
         shell: pwsh
         env:

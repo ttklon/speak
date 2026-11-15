@@ -6,3 +6,9 @@
 
 Локально папка может быть пустой: тогда приложение докачает движок само при
 первом запуске (`models:prepare`). Файлы движка в Git не коммитятся.
+
+Рядом с движком в установщик едет модель определения речи
+`models/ggml-silero-v6.2.0.bin` (864 КБ): `extraResources` отдаёт папку `models` в
+`resources/models`, приложение находит её через `findVadModel()` и запускает
+whisper-cli с `--vad`. Как её получить, если HuggingFace недоступен, —
+`scripts/make-vad-model.py` и `models/README.md`.

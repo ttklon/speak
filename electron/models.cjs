@@ -15,11 +15,30 @@ const { app } = require('electron');
 // официальном download-ggml-model.sh). mb — ожидаемый размер для прогресса.
 const MODELS = {
   tiny: { file: 'ggml-tiny.bin', mb: 75 },
+  // Квантованные веса: то же качество почти без потерь, но в 2–3 раза меньше
+  // файл и заметно быстрее на CPU. Именно так работают быстрые диктовочные
+  // приложения: int8/q5 вместо fp16.
+  'tiny-q5_1': { file: 'ggml-tiny-q5_1.bin', mb: 32 },
   base: { file: 'ggml-base.bin', mb: 142 },
+  'base-q5_1': { file: 'ggml-base-q5_1.bin', mb: 60 },
   small: { file: 'ggml-small.bin', mb: 466 },
+  'small-q5_1': { file: 'ggml-small-q5_1.bin', mb: 190 },
   'large-v3-turbo': { file: 'ggml-large-v3-turbo.bin', mb: 1549 },
   'large-v3-turbo-q5_0': { file: 'ggml-large-v3-turbo-q5_0.bin', mb: 547 },
+  'large-v3-turbo-q8_0': { file: 'ggml-large-v3-turbo-q8_0.bin', mb: 874 },
   medium: { file: 'ggml-medium.bin', mb: 1530 },
+};
+
+/**
+ * VAD (Silero v6.2, ggml, меньше мегабайта): whisper запускается с `--vad`,
+ * тишина и паузы не гоняются через модель. Это тот самый «гейт» из быстрых
+ * диктовочных приложений: он и ускоряет ответ, и убирает выдуманные фразы
+ * на пустом звуке.
+ */
+const VAD = {
+  file: 'ggml-silero-v6.2.0.bin',
+  mb: 1,
+  url: 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin',
 };
 
 function dirs() {
@@ -54,7 +73,9 @@ function modelStatus() {
   const bin = ['whisper-cli.exe', 'whisper.exe', 'main.exe', 'whisper-cli'].some((n) =>
     fs.existsSync(path.join(d.bin, n)),
   );
-  return { models: out, bin };
+  const vadPath = path.join(d.models, VAD.file);
+  const vad = fs.existsSync(vadPath);
+  return { models: out, bin, vad, vadPath: vad ? vadPath : '', vadSizeMb: VAD.mb };
 }
 
 /**
@@ -153,6 +174,22 @@ async function downloadModel(id, onProgress) {
   const url = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${meta.file}`;
   try {
     await download(url, dest, onProgress);
+    return { ok: true, path: dest };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+/**
+ * VAD-модель: маленькая (0,9 МБ), но именно она отсекает тишину. Качаем без
+ * прогресса — файл настолько мал, что проценты только мешают.
+ */
+async function downloadVad() {
+  const d = ensureDirs();
+  const dest = path.join(d.models, VAD.file);
+  if (fs.existsSync(dest)) return { ok: true, already: true, path: dest };
+  try {
+    await download(VAD.url, dest, undefined);
     return { ok: true, path: dest };
   } catch (err) {
     return { ok: false, reason: err.message };
@@ -317,4 +354,4 @@ async function importModel(sourcePath, onProgress) {
   return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
 }
 
-module.exports = { modelStatus, downloadModel, downloadEngine, importModel, cancelDownload, MODELS };
+module.exports = { modelStatus, downloadModel, downloadVad, downloadEngine, importModel, cancelDownload, MODELS, VAD };

@@ -60,8 +60,8 @@
 | `hud-preload.cjs` | Мост окна индикатора: `window.hudBridge = { stop, close, onState }` — ничего больше |
 | `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native` (включая `hudShow/hudHide/hudUpdate/hudStatus`, `onDictationStop`, `onHudClosed`), `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
 | `store.cjs` | `JsonStore`: `%APPDATA%\ZSpeakly\profile.json`, кэш в памяти, `scheduleFlush` 180 мс, атомарная запись `.tmp` → `rename`, `sizeSync()` |
-| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; запуск с `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -otxt -of`, `--prompt`, таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `trimSilence()` (тишина по краям), `splitBySilence()` (VAD по громкости: паузы длиннее 700 мс режут запись на фрагменты, длиннее 25 с — дробятся), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк. Серверный режим: `ensureServer`/`transcribeViaServer` (whisper-server на 127.0.0.1, `POST /inference` multipart, ожидание готовности 8 с), `stopServer` на `before-quit`, откат на CLI при любой ошибке. `cancel()` убивает активный процесс и завершает проход с `code: 'cancelled'`; `isBusy()` — для очереди в main |
-| `models.cjs` | `modelStatus()` (что уже на диске), `downloadModel()` с Hugging Face и прогрессом, `downloadEngine()` — последний релиз `ggml-org/whisper.cpp` с `whisper-bin-x64.zip`, распаковка через `Expand-Archive`, `importModel()` — подхват файла и угадывание типа по размеру |
+| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; флаги собирает `cliArgs()`: `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -mc 0 -bs 1 -otxt -of`, `--prompt`, VAD `--vad -vm … -vt 0.5 -vsd 500 -vp 100` (модель ищет `findVadModel()`; если сборка не знает `--vad`, проход один раз повторяется без него), таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `trimSilence()` (тишина по краям), `splitBySilence()` (VAD по громкости: паузы длиннее 700 мс режут запись на фрагменты, длиннее 25 с — дробятся), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк. Серверный режим: `ensureServer`/`transcribeViaServer` (whisper-server на 127.0.0.1, `POST /inference` multipart, ожидание готовности 8 с), `stopServer` на `before-quit`, откат на CLI при любой ошибке. `cancel()` убивает активный процесс и завершает проход с `code: 'cancelled'`; `isBusy()` — для очереди в main |
+| `models.cjs` | `modelStatus()` (что уже на диске, включая VAD), `downloadModel()` с Hugging Face и прогрессом, `downloadVad()` — Silero `ggml-silero-v6.2.0.bin` (864 КБ), `downloadEngine()` — последний релиз `ggml-org/whisper.cpp` с `whisper-bin-x64.zip`, распаковка через `Expand-Archive`, `importModel()` — подхват файла и угадывание типа по размеру |
 | `wav.cjs` | PCM Int16 16 кГц → RIFF/WAVE без зависимостей |
 | `logger.cjs` | Журнал: буфер 400 событий, файл `logs/zspeakly.log` с обрезкой на 512 КБ, `redact()` (почта, `C:\Users\…`, `/home/…`, токены), `scrub()` (выбрасывает `text/transcript/pcm/audio/clipboard/word/prompt/selection`), отправка пачками по 40, `report()`, `ping()`, `sendNow()`, `installId` |
 | `updater.cjs` | `createUpdater()`: electron-updater, каналы stable/beta, `autoDownload`, события в `update:status`, честный `unavailable` в dev и portable |
@@ -112,11 +112,12 @@
 | Путь | Назначение |
 | --- | --- |
 | `scripts/check-ipc.mjs` | Сверяет `invoke/send` из preload с `ipcMain.handle/on` |
-| `scripts/smoke-main.mjs` | Грузит `main.cjs` с заглушкой Electron: 76 проверок — IPC, хоткеи, подсказка whisper (словарь + контекст экрана, ≤500), HTTP к локальной модели, снимок экрана, мониторинг буфера (новое копирование, своя вставка не дублируется, выключенный мониторинг молчит), двойное нажатие для «агента», сообщение о занятом сочетании, переключатель для своих сочетаний диктовки и screen-aware в E2E |
+| `scripts/smoke-main.mjs` | Грузит `main.cjs` с заглушкой Electron: 78 проверок — IPC, хоткеи, подсказка whisper (словарь + контекст экрана, ≤500), HTTP к локальной модели, снимок экрана, мониторинг буфера (новое копирование, своя вставка не дублируется, выключенный мониторинг молчит), двойное нажатие для «агента», сообщение о занятом сочетании, переключатель для своих сочетаний диктовки и screen-aware в E2E |
 | `scripts/test-ui.mjs` + `scripts/e2e/mock-bridge.mjs` | E2E в Chromium: мок моста `window.zspeakly` с журналом вызовов, обход всех кнопок/полей на каждом экране, 70 сценариев / 225 проверок: обход, режимы диктовки (кнопка, хоткей, свободные руки, агент, диктовка с учётом экрана), вставка текста в активное окно, настройки и их связь с main, контраст и переполнение в обеих темах и в узком окне (1024/900 px), доступные имена кнопок и видимый фокус |
 | `scripts/capture-screenshots.mjs` | 14 кадров интерфейса (тёмная и светлая темы) прямо из работающего Vite |
 | `scripts/capture-hud.mjs` | снимок плавающего индикатора из `electron/hud.html` (`docs/screenshots/16-dictation-hud.png`) |
-| `scripts/test-whisper-live.mjs` | Настоящий `whisper-cli` на WAV: разбор ответа, `code: 'empty'`, удаление `.out.txt`, отмена прохода (в CI — на скачанной сборке whisper.cpp) |
+| `scripts/test-whisper-live.mjs` | Настоящий `whisper-cli` на WAV: разбор ответа, `code: 'empty'`, удаление `.out.txt`, отмена прохода, подхват VAD-модели (`ZS_WHISPER_VAD`) — 9 проверок (в CI — на скачанной сборке whisper.cpp) |
+| `scripts/make-vad-model.py` | Собирает `ggml-silero-v6.2.0.bin` из пакета `silero-vad` (PyPI) в формате whisper.cpp: запасной путь, когда HuggingFace недоступен. Используется в CI и проверен побайтовым сравнением с официальным файлом |
 | `scripts/smoke-updater.mjs` | Канал stable/beta реально применяется |
 | `scripts/build-settings-index.mjs` | Генерирует индекс строк настроек для поиска (`--check` для CI) |
 | `scripts/dev-electron.mjs` | Vite + Electron с горячей перезагрузкой |
@@ -281,14 +282,18 @@ Ctrl+Alt+E (или своя инструкция)
 | Модель | Размер | RAM | Скорость | Качество |
 | --- | --- | --- | --- | --- |
 | tiny | 75 МБ | ≈300 МБ | ≈8× | черновая расшифровка |
-| base | 142 МБ | ≈400 МБ | ≈6× | базовая |
-| small | 466 МБ | ≈700 МБ | ≈3× | хорошая |
+| tiny-q5_1 | 32 МБ | ≈200 МБ | ≈10× | черновая, быстрее |
 | base (рекомендуем) | 142 МБ | ≈400 МБ | ≈6× | базовая, успевает в диктовке |
+| base-q5_1 | 60 МБ | ≈300 МБ | ≈8× | как base: файл в 2 раза меньше, разбор быстрее |
+| small | 466 МБ | ≈700 МБ | ≈3× | хорошая |
+| small-q5_1 | 190 МБ | ≈500 МБ | ≈5× | почти small, но заметно быстрее |
+| large-v3-turbo | 1.5 ГБ | ≈2 ГБ | ≈2,5× | почти large-v3, мощный CPU |
 | large-v3-turbo-q5_0 | 547 МБ | ≈900 МБ | ≈3× | почти large-v3, меньше памяти |
+| large-v3-turbo-q8_0 | 874 МБ | ≈1,3 ГБ | ≈2,8× | large-v3 почти без потерь |
 | medium | 1.5 ГБ | ≈2 ГБ | ≈1,2× | высокая |
 
 Скорость — во сколько раз быстрее реального времени на обычном ноутбучном CPU без GPU.
-Каталог: `src/lib/config.js` → `MODELS`, файлы и размеры — `electron/models.cjs` → `MODELS`
+Каталог: `src/lib/config.js` → `MODELS`, файлы и размеры — `electron/models.cjs` → `MODELS` (включая квантованные `tiny/base/small-q5_1` и `large-v3-turbo-q8_0`)
 (скачиваются с `huggingface.co/ggerganov/whisper.cpp`).
 
 Ставятся из приложения («Настройки → Функции → Модель распознавания») или

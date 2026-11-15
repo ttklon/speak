@@ -116,6 +116,20 @@ export default function FeaturesSection() {
           />
         </div>
         <div className="setting-row">
+          <div className="setting-row__label">
+            Не тратить время на тишину
+            <div className="setting-row__desc">
+              Движок сам находит речь (Silero VAD) и не прогоняет через модель паузы и
+              «э-э». Ответ приходит раньше, а выдуманные фразы на пустом звуке не появляются.
+              Выключите, только если диктовка обрывается на тихом голосе.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.vadEnabled !== false}
+            onChange={(v) => updateSettings({ vadEnabled: v })}
+          />
+        </div>
+        <div className="setting-row">
           <div className="setting-row__label">Дополнительные варианты</div>
           <Button variant="ghost" size="sm" onClick={() => setShowLanguages((v) => !v)}>
             {showLanguages ? 'Скрыть' : 'Выбрать варианты'}

@@ -87,9 +87,97 @@ function findModel(preferred = 'small') {
   return null;
 }
 
+/**
+ * Модель VAD (Silero, ggml) — «гейт» перед распознаванием. Живёт рядом с
+ * моделями; весит меньше мегабайта. С ней whisper не тратит время на тишину
+ * и паузы, а на пустом звуке не выдумывает фразы.
+ */
+const VAD_NAMES = ['ggml-silero-v6.2.0.bin', 'ggml-silero-v5.1.2.bin', 'for-tests-silero-v6.2.0-ggml.bin'];
+
+function findVadModel() {
+  const dirs = candidates(
+    process.resourcesPath && path.join(process.resourcesPath, 'models'),
+    path.join(app.getPath('userData'), 'models'),
+    path.join(app.getAppPath(), 'models'),
+  );
+  for (const dir of dirs) {
+    for (const name of VAD_NAMES) {
+      const p = path.join(dir, name);
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch {
+        /* ignore */
+      }
+    }
+    // Имя может отличаться версией Silero: подходит любой *silero*.bin.
+    try {
+      const hit = fs
+        .readdirSync(dir)
+        .filter((f) => /silero/i.test(f) && /\.bin$/i.test(f))
+        .sort()
+        .pop();
+      if (hit) return path.join(dir, hit);
+    } catch {
+      /* папки может не быть */
+    }
+  }
+  return null;
+}
+
+/**
+ * Аргументы whisper-cli. Вынесены отдельно, чтобы их можно было проверить
+ * тестом: раньше набор флагов жил внутри transcribe() и нигде не проверялся.
+ *
+ * -mc 0 — не тянуть контекст предыдущего прохода: каждая диктовка независима,
+ *         иначе whisper «додумывает» продолжение прошлой фразы;
+ * -bs 1 — жадное декодирование: быстрее beam search, для диктовки разницы
+ *         в тексте практически нет;
+ * --vad — Silero отсекает тишину: 30 секунд записи с паузами не гоняют
+ *         модель на пустом звуке.
+ */
+function cliArgs({
+  modelPath,
+  wavPath,
+  lang = 'ru',
+  threads = 4,
+  prompt = '',
+  vadModel = '',
+  outBase = '',
+  noContext = true,
+  beamSize = 1,
+} = {}) {
+  const args = [
+    '-m', String(modelPath || ''),
+    '-f', String(wavPath || ''),
+    '-l', String(lang || 'auto'),
+    '-t', String(Math.max(1, Number(threads) || 4)),
+    '--no-timestamps',
+    '-nt',
+    '-np',
+    '-sns',
+    '-otxt',
+    '-of', String(outBase || `${wavPath}.out`),
+  ];
+  if (noContext) args.push('-mc', '0');
+  if (Number(beamSize) > 0) args.push('-bs', String(Number(beamSize)));
+  if (vadModel) {
+    args.push(
+      '--vad',
+      '-vm', String(vadModel),
+      // порог уверенности и минимальная тишина: пауза в полсекунды — уже граница
+      '-vt', '0.5',
+      '-vsd', '500',
+      '-vp', '100',
+    );
+  }
+  if (prompt) args.push('--prompt', String(prompt));
+  return args;
+}
+
 function status(preferredModel = 'small') {
   const bin = findBinary();
   const model = findModel(preferredModel);
+  const vadPath = findVadModel();
   return {
     available: Boolean(bin && model),
     bin,
@@ -98,6 +186,8 @@ function status(preferredModel = 'small') {
     missing: !bin ? 'bin' : !model ? 'model' : '',
     reason: !bin ? 'whisper.cpp не найден' : !model ? 'модель ggml не найдена' : '',
     modelName: model ? path.basename(model) : '',
+    // с VAD движок не тратит время на тишину: интерфейс может так и написать
+    vad: vadPath || '',
     server: serverStatus(),
   };
 }
@@ -164,25 +254,15 @@ function httpJson({ port, method = 'GET', urlPath, body, headers = {}, timeout =
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Поднять whisper-server на свободном порту и дождаться готовности. */
-async function ensureServer(modelPath, { threads = 4 } = {}) {
-  if (Date.now() < serverCooldownUntil) return null;
-  const bin = serverBinary();
-  if (!bin) return null;
-  if (serverState && serverState.modelPath === modelPath && serverState.proc?.exitCode === null) {
-    return serverState;
-  }
-  stopServer();
-  const port = 17800 + Math.floor(Math.random() * 400);
+/**
+ * Запустить whisper-server и дождаться готовности. Возвращает state или null;
+ * повторный вызов (без VAD-флагов) нужен, если сборка whisper.cpp не знает --vad.
+ */
+async function startServer(bin, args, { port, modelPath }) {
   let proc;
   try {
-    proc = spawn(
-      bin,
-      ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(threads), '-nt', '-sns'],
-      { windowsHide: true },
-    );
+    proc = spawn(bin, args, { windowsHide: true });
   } catch {
-    serverCooldownUntil = Date.now() + 5 * 60 * 1000;
     return null;
   }
   const state = { proc, port, modelPath };
@@ -197,8 +277,8 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
   });
 
   // Готовность: сервер начинает отвечать на GET /. Модель грузится секунды.
-  // 8 секунд: модель small грузится быстрее, а если сервер не поднялся,
-  // человек не должен ждать впустую — уходим в обычный whisper-cli.
+  // 8 секунд: если сервер не поднялся, человек не должен ждать впустую —
+  // уходим в обычный whisper-cli.
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     if (proc.exitCode !== null) break;
@@ -206,8 +286,31 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
     if (ping.status) return state;
     await sleep(250);
   }
-  // не поднялся: не блокируем диктовку на каждой попытке
   if (serverState === state) stopServer();
+  return null;
+}
+
+/** Поднять whisper-server на свободном порту и дождаться готовности. */
+async function ensureServer(modelPath, { threads = 4 } = {}) {
+  if (Date.now() < serverCooldownUntil) return null;
+  const bin = serverBinary();
+  if (!bin) return null;
+  if (serverState && serverState.modelPath === modelPath && serverState.proc?.exitCode === null) {
+    return serverState;
+  }
+  stopServer();
+  const port = 17800 + Math.floor(Math.random() * 400);
+  const baseArgs = ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(threads), '-nt', '-sns'];
+  // Тот же VAD-гейт, что и в CLI: сервер не тратит время на тишину.
+  const vadModel = findVadModel();
+  const vadArgs = vadModel ? ['--vad', '-vm', vadModel, '-vt', '0.5', '-vsd', '500', '-vp', '100'] : [];
+  const state = await startServer(bin, [...baseArgs, ...vadArgs], { port, modelPath });
+  if (state) return state;
+  // не поднялся: если виноват VAD-флаг (старая сборка), пробуем ещё раз без него
+  if (vadArgs.length) {
+    const retry = await startServer(bin, baseArgs, { port, modelPath });
+    if (retry) return retry;
+  }
   serverCooldownUntil = Date.now() + 5 * 60 * 1000;
   return null;
 }
@@ -321,7 +424,7 @@ function cancel(reason = 'распознавание отменено') {
  * Транскрипция wav-файла (16 kHz mono PCM).
  * Возвращает { ok, text, segments }.
  */
-function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeout = 120000, keepLoaded = false } = {}) {
+function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeout = 120000, keepLoaded = false, vad = '', useVad = true } = {}) {
   return new Promise((resolve) => {
     const bin = findBinary();
     const modelPath = findModel(model);
@@ -345,22 +448,18 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
 
     function runCli() {
 
-    // -t: все ядра, -np: без служебного вывода, -sns: подавляем токены
-    // «не речь» (музыка, [MUSIC], аплодисменты) — иначе на тишине whisper
-    // любит выдумывать «Спасибо за просмотр» и «Продолжение следует».
-    const args = [
-      '-m', modelPath,
-      '-f', wavPath,
-      '-l', lang || 'auto',
-      '-t', String(threads),
-      '--no-timestamps',
-      '-nt',
-      '-np',
-      '-sns',
-      '-otxt',
-      '-of', `${wavPath}.out`,
-    ];
-    if (prompt) args.push('--prompt', prompt);
+    // Набор флагов живёт в cliArgs(): его проверяют тесты, а не «на глаз».
+    // -np: без служебного вывода, -sns: подавляем токены «не речь».
+    const vadModel = useVad === false ? '' : vad || findVadModel() || '';
+    const args = cliArgs({
+      modelPath,
+      wavPath,
+      lang,
+      threads,
+      prompt,
+      vadModel,
+      outBase: `${wavPath}.out`,
+    });
 
     const child = spawn(bin, args, { windowsHide: true });
     let stderr = '';
@@ -384,6 +483,36 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
       }
       finish({ ok: false, text: '', code: 'timeout', reason: 'таймаут распознавания' });
     }, timeout);
+
+    // Один повтор без VAD: флаг поддержан не всеми сборками whisper.cpp.
+    function retryWithoutVad() {
+      clearTimeout(timer);
+      if (activeRun === run) activeRun = null;
+      const again = cliArgs({ modelPath, wavPath, lang, threads, prompt, vadModel: '', outBase: `${wavPath}.out` });
+      const child2 = spawn(bin, again, { windowsHide: true });
+      let err2 = '';
+      child2.stderr?.on('data', (d) => {
+        err2 += d.toString();
+        if (err2.length > 8000) err2 = err2.slice(-8000);
+      });
+      child2.on('error', (err) => finish({ ok: false, text: '', reason: err.message }));
+      child2.on('close', (code2) => {
+        try {
+          const txt = `${wavPath}.out.txt`;
+          if (fs.existsSync(txt)) {
+            const text = fs.readFileSync(txt, 'utf8').trim();
+            fs.unlinkSync(txt);
+            if (text) {
+              finish({ ok: true, text, code: code2 });
+              return;
+            }
+          }
+        } catch {
+          /* файл мог не появиться */
+        }
+        finish({ ok: false, text: '', code: 'empty', reason: err2.slice(-400) || `код ${code2}` });
+      });
+    }
 
     child.stderr.on('data', (d) => {
       stderr += d.toString();
@@ -423,7 +552,11 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
             (line) =>
               !/^(whisper_|ggml_|system_info|main:|output_|load_|mem_|init:)/i.test(line) &&
               !/^error:/i.test(line) &&
-              !/^\s*(warning|using|processing|auto-detected)/i.test(line),
+              !/^\s*(warning|using|processing|auto-detected)/i.test(line) &&
+              // служебные строки whisper-cli: read_audio_data: …, miniaudio, …
+              !/read_audio_data|miniaudio|trying to|failed to|audio data/i.test(line) &&
+              // общий признак лога «идентификатор_с_подчёркиванием: текст»
+              !/^[a-z0-9]*_[a-z0-9_]*\s*:/i.test(line),
           )
           .join(' ')
           .trim();
@@ -437,6 +570,17 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
         return;
       }
       const reason = (stderr || stdout).slice(-400).trim();
+      // Старая сборка whisper.cpp не знает про --vad: не оставляем человека
+      // без диктовки, повторяем проход без распознавания тишины.
+      // Флаги VAD могут быть незнакомы старой сборке, а формат VAD-модели —
+      // не совпасть с ней же. В обоих случаях повторяем проход без VAD.
+      const vadTrouble =
+        /unknown argument|invalid argument|unrecognized/i.test(reason) ||
+        (/vad/i.test(reason) && /(fail|wrong shape|invalid|error)/i.test(reason));
+      if (vadModel && !run.cancelled && vadTrouble) {
+        retryWithoutVad();
+        return;
+      }
       finish({
         ok: false,
         text: '',
@@ -585,6 +729,8 @@ function isPhantom(text) {
 module.exports = {
   status,
   transcribe,
+  cliArgs,
+  findVadModel,
   cancel,
   isBusy,
   findBinary,

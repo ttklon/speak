@@ -96,9 +96,17 @@ src/                          renderer (React 18 + Vite)
 
 ```
 renderer ──PCM 16 кГц──▶ main ──writeWav──▶ whisper-cli
-   -m ggml-large-v3-turbo.bin -f rec.wav -l ru -t <ядра> -nt -np -sns -otxt -of rec.wav.out
+   -m ggml-base.bin -f rec.wav -l ru -t <ядра> -nt -np -sns -mc 0 -bs 1
+   --vad -vm ggml-silero-v6.2.0.bin -vt 0.5 -vsd 500 -vp 100
+   -otxt -of rec.wav.out
         ◀──.out.txt / stdout─── main ◀──текст + ms + rms
 ```
+
+Флаги собирает `cliArgs()` в `electron/whisper.cjs` — отдельной функцией, потому что их проверяет
+тест: `-mc 0` не тащит контекст предыдущей диктовки, `-bs 1` — жадное декодирование (быстрее beam
+search, текст для диктовки тот же), `--vad` с Silero (`findVadModel`) — тишина не гоняется через
+модель. Если VAD-модели нет, VAD-флаги не передаются вовсе; если сборка whisper.cpp не знает
+`--vad` (старый бинарник), проход один раз повторяется без него — человек не остаётся без текста.
 
 Перед запуском main считает громкость записи (`analysePcm`): тишину и записи короче 0,3 с в
 whisper не отправляет, а отвечает `code: 'silent' | 'too-short'` — иначе на пустом звуке модель
@@ -107,7 +115,9 @@ whisper не отправляет, а отвечает `code: 'silent' | 'too-sh
 
 `whisper-cli.exe` и `whisper-server.exe` **лежат в установщике** (`resources/bin`): CI скачивает
 `whisper-bin-x64.zip` из релизов ggml-org/whisper.cpp и складывает exe+DLL в `build/bin`, а
-`extraResources` отдаёт их в `resources/bin`. Модель при первом запуске докачивается сама
+`extraResources` отдаёт их в `resources/bin`. Там же едет VAD-модель Silero (864 КБ): CI качает её
+с HuggingFace, а если тот недоступен — собирает из пакета `silero-vad` скриптом
+`scripts/make-vad-model.py`. Модель распознавания при первом запуске докачивается сама
 (`models:prepare`: движок при отсутствии → модель `base` 142 МБ) с прогрессом в тосте.
 
 Один проход распознавания за раз: `stt:transcribe-pcm` сериализован очередью, итоговый проход
@@ -178,9 +188,9 @@ desktopCapturer, Tray, session).
 
 ```
 npm test               # vitest: 134 теста в 17 файлах (движки, пресеты, буфер, пароли, рендер)
-npm run test:main      # смоук main: IPC, хоткеи, вставка, whisper, буфер, трей, SendInput (72)
+npm run test:main      # смоук main: IPC, хоткеи, вставка, whisper, буфер, трей, SendInput (78)
 npm run test:ui        # E2E «нажать всё» в Chromium: 70 сценариев / 225 проверок
-npm run test:whisper   # настоящий whisper-cli: разбор ответа, .out.txt, отмена (в CI — на скачанной сборке)
+npm run test:whisper   # настоящий whisper-cli: разбор ответа, .out.txt, отмена, VAD (в CI — на скачанной сборке)
 npm run check:ipc      # каждый канал рендерера имеет обработчик
 npm run check:settings # каждая настройка читается и находится поиском
 npm run settings:index:check  # индекс поиска по настройкам актуален

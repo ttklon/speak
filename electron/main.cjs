@@ -106,6 +106,18 @@ function createWindow() {
     // Первая установка: движок уже в комплекте, модель докачиваем сами.
     // Не блокирует запуск и не мешает работать, если сети нет.
     setTimeout(() => prepareRecognition?.(), 4000);
+    // Модель в памяти: поднимаем whisper-server заранее, чтобы первая
+    // диктовка не ждала загрузку весов (как в быстрых диктовочных приложениях).
+    setTimeout(() => {
+      const cfg = store?.get('zs:settings') || {};
+      if (cfg.keepModelLoaded !== true) return;
+      whisper
+        .warm(cfg.whisperModel || 'base')
+        .then((res) => {
+          if (res?.ok) logger.info('stt', 'Модель прогрета при запуске', { keep: true, port: res.port || 0 });
+        })
+        .catch(() => {});
+    }, 7000);
   });
 
   if (isDev && process.env.ZSPEAKLY_DEV_URL !== 'none') {
@@ -1018,7 +1030,10 @@ function registerIpc() {
     const prompt = mergePromptParts(context, dictionaryPrompt).slice(0, 500);
     try {
       const started = Date.now();
-      const keepLoaded = (store?.get('zs:settings') || {}).keepModelLoaded === true;
+      const sttSettings = store?.get('zs:settings') || {};
+      const keepLoaded = sttSettings.keepModelLoaded === true;
+      // VAD включён по умолчанию: тишина не должна занимать движок
+      const useVad = sttSettings.vadEnabled !== false;
       const sr = payload?.sampleRate || 16000;
       // Длинную диктовку режем по паузам: whisper на цельном файле хуже держит
       // конец и путает фразы через паузу в несколько секунд. Короткая запись
@@ -1055,7 +1070,13 @@ function registerIpc() {
             fs.writeFileSync(partWav, writeWav(chunks[i], sr));
             reportProgress(i + 1);
             // eslint-disable-next-line no-await-in-loop
-            const one = await whisper.transcribe(partWav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
+            const one = await whisper.transcribe(partWav, {
+              lang: payload?.lang || 'ru',
+              model,
+              prompt,
+              keepLoaded,
+              useVad,
+            });
             if (!one?.ok) {
               failed = one;
               break;
@@ -1085,7 +1106,7 @@ function registerIpc() {
         }
       } else {
         reportProgress(1);
-        res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
+        res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded, useVad });
       }
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
       const ms = Date.now() - started;
@@ -1543,6 +1564,8 @@ function registerIpc() {
     const active = whisper.findModel(preferred);
     return {
       ...base,
+      // движок нашёл VAD-модель сам (в комплекте или в профиле)
+      vadActive: Boolean(whisper.findVadModel?.()),
       preferred,
       active: active ? path.basename(active).replace(/^ggml-/, '').replace(/\.bin$/, '') : '',
     };
@@ -1579,6 +1602,16 @@ function registerIpc() {
           const res = await models.downloadEngine((percent) => push({ id: 'engine', percent }));
           push({ id: 'engine', percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
           if (!res.ok) return { ok: false, reason: res.reason };
+        }
+        // VAD весит меньше мегабайта — качаем сразу, чтобы тишина не попадала
+        // в движок с первой же диктовки
+        if (!models.modelStatus().vad) {
+          const vadRes = await models.downloadVad();
+          logger[vadRes.ok ? 'info' : 'warn'](
+            'stt',
+            vadRes.ok ? 'VAD-модель установлена' : 'VAD-модель не скачалась',
+            { keep: true, reason: vadRes.reason || '' },
+          );
         }
         st = models.modelStatus();
         const downloaded = Object.values(st.models).filter((m) => m.downloaded);

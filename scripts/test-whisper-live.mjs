@@ -90,6 +90,13 @@ fs.copyFileSync(bin, path.join(userData, 'bin', binName));
 // имя модели должно быть каноническим: приложение ищет ggml-<id>.bin
 const modelId = path.basename(model).replace(/^for-tests-/, '').replace(/^ggml-/, '').replace(/\.bin$/, '');
 fs.copyFileSync(model, path.join(userData, 'models', `ggml-${modelId}.bin`));
+// VAD-модель (Silero): если её дали, кладём туда, где её ищет приложение —
+// в userData/models. Тогда живой тест проверяет и путь «--vad» целиком.
+const vadEnv = process.env.ZS_WHISPER_VAD || '';
+if (vadEnv && fs.existsSync(vadEnv)) {
+  fs.copyFileSync(vadEnv, path.join(userData, 'models', 'ggml-silero-v6.2.0.bin'));
+}
+
 // Рядом с whisper-cli должны лежать библиотеки: в собранной вручную сборке они
 // в том же каталоге, в архиве релиза — в соседнем. Ищем в обоих местах и в
 // ZS_WHISPER_LIB_DIR, иначе процесс не запустится и тест покажет ложный провал.
@@ -119,6 +126,10 @@ writeSilenceWav(wav, 3);
 
 const status = whisper.status('tiny');
 check(status.available === true, 'движок и модель найдены', path.basename(status.model || ''));
+if (vadEnv && fs.existsSync(vadEnv)) {
+  check(Boolean(whisper.findVadModel?.()), 'VAD-модель подхватывается движком');
+  check(Boolean(status.vad), 'статус сообщает о VAD');
+}
 
 const started = Date.now();
 const res = await whisper.transcribe(wav, { lang: 'ru', model: modelId, timeout: 120000 });

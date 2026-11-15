@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.5.1',
+  version: '1.5.2',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -178,6 +178,9 @@ export const DEFAULT_SETTINGS = {
   // на каждый фрагмент и не на каждый живой проход. Иначе каждая диктовка
   // заново читала с диска сотни мегабайт.
   keepModelLoaded: true,
+  // VAD (Silero): тишина и паузы не отправляются в whisper. Включает «--vad»
+  // и заметно ускоряет ответ на обычной диктовке с паузами.
+  vadEnabled: true,
   audioDeviceId: 'default',
   // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
   // По умолчанию выключено — микрофон работал бы всё время.
@@ -226,9 +229,13 @@ export const LOG_ENDPOINT = '';
  * живёт ожиданием: модель, которая думает 20 секунд, ощущается как поломка.
  * Turbo — тот же large-v3 с 4 декодерными слоями вместо 32, качество выше, но
  * ≈2,5× realtime: его имеет смысл ставить на мощный CPU, а не «по умолчанию».
+ * Варианты q5_1/q8_0 — те же веса в 8 битах: файл в 2–3 раза меньше, разбор
+ * быстрее, текст для диктовки неотличим. Так и работают быстрые диктовочные
+ * приложения — им важна задержка, а не «сырой» fp16.
  */
 export const MODELS = [
   { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '≈300 МБ', speed: '≈8×', quality: 'черновая расшифровка' },
+  { id: 'tiny-q5_1', label: 'Whisper tiny (q5_1)', size: '32 МБ', ram: '≈200 МБ', speed: '≈10×', quality: 'черновая, но быстрее' },
   {
     id: 'base',
     label: 'Whisper base',
@@ -238,7 +245,23 @@ export const MODELS = [
     quality: 'базовая',
     recommended: true,
   },
+  {
+    id: 'base-q5_1',
+    label: 'Whisper base (q5_1)',
+    size: '60 МБ',
+    ram: '≈300 МБ',
+    speed: '≈8×',
+    quality: 'как base, в 2 раза меньше и быстрее',
+  },
   { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '≈700 МБ', speed: '≈3×', quality: 'хорошая' },
+  {
+    id: 'small-q5_1',
+    label: 'Whisper small (q5_1)',
+    size: '190 МБ',
+    ram: '≈500 МБ',
+    speed: '≈5×',
+    quality: 'почти как small, но заметно быстрее',
+  },
   {
     id: 'large-v3-turbo',
     label: 'Whisper large-v3 turbo',
@@ -254,6 +277,14 @@ export const MODELS = [
     ram: '≈900 МБ',
     speed: '≈3×',
     quality: 'почти large-v3, меньше памяти',
+  },
+  {
+    id: 'large-v3-turbo-q8_0',
+    label: 'Whisper large-v3 turbo (q8_0)',
+    size: '874 МБ',
+    ram: '≈1,3 ГБ',
+    speed: '≈2,8×',
+    quality: 'large-v3 почти без потерь',
   },
   { id: 'medium', label: 'Whisper medium', size: '1.5 ГБ', ram: '≈2 ГБ', speed: '≈1,2×', quality: 'высокая' },
 ];
