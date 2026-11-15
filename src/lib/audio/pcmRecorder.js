@@ -28,22 +28,6 @@ function resampleLinear(float32, inputRate, outputRate) {
   return out;
 }
 
-/** Простой ресемплер: линейная интерполяция к 16 кГц. */
-function resampleTo16k(float32, inputRate) {
-  if (inputRate === TARGET_RATE) return float32;
-  const ratio = inputRate / TARGET_RATE;
-  const length = Math.floor(float32.length / ratio);
-  const out = new Float32Array(length);
-  for (let i = 0; i < length; i += 1) {
-    const pos = i * ratio;
-    const i0 = Math.floor(pos);
-    const i1 = Math.min(float32.length - 1, i0 + 1);
-    const frac = pos - i0;
-    out[i] = float32[i0] * (1 - frac) + float32[i1] * frac;
-  }
-  return out;
-}
-
 function toInt16(float32) {
   const out = new Int16Array(float32.length);
   for (let i = 0; i < float32.length; i += 1) {
@@ -182,7 +166,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
       if (start >= from + count) break;
     }
     return {
-      pcm: toInt16(resampleTo16k(part, ctx.sampleRate)),
+      pcm: toInt16(resampleLinear(part, ctx.sampleRate, TARGET_RATE)),
       durationMs: Math.round((count / ctx.sampleRate) * 1000),
       truncated: from > 0,
     };
@@ -220,7 +204,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
         merged.set(c, offset);
         offset += c.length;
       }
-      const pcm = toInt16(resampleTo16k(merged, ctx.sampleRate));
+      const pcm = toInt16(resampleLinear(merged, ctx.sampleRate, TARGET_RATE));
       return { pcm, sampleRate: TARGET_RATE, durationMs: Math.round((frames / ctx.sampleRate) * 1000) };
     },
     abort() {

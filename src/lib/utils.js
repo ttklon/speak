@@ -16,6 +16,9 @@ export function pad2(n) {
 /** 18:14 — как в списке «Недавние» */
 export function timeHM(value) {
   const d = value instanceof Date ? value : new Date(value);
+  // Старые записи профиля могли прийти без времени: раньше на карточке
+  // появлялось «NaN:NaN» — выглядело как поломка, а не как «время неизвестно».
+  if (!d || Number.isNaN(d.getTime())) return '—';
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 

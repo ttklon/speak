@@ -8,6 +8,7 @@ import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
 import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
+import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -32,6 +33,9 @@ export default function DiagnosticsSection() {
   // черновик адреса приёмника: применяется по кнопке, чтобы не дёргать
   // сеть на каждом нажатии клавиши
   const [endpointDraft, setEndpointDraft] = useState('');
+  // «Проверить диктовку»: запись с микрофона и настоящий проход движка
+  const [selfTest, setSelfTest] = useState(null);
+  const [selfBusy, setSelfBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     const bridge = window.zspeakly?.native;
@@ -248,6 +252,35 @@ export default function DiagnosticsSection() {
 
   const errors = events.filter((e) => e.level === 'error').length;
 
+  // Проверка «здесь и сейчас»: 2 секунды с микрофона → движок → цифры и текст.
+  // Это единственный способ честно ответить на «работает или нет» на этом ПК.
+  const checkDictation = useCallback(async () => {
+    if (selfBusy) return;
+    setSelfBusy(true);
+    setSelfTest(null);
+    push({ title: 'Проверяю диктовку', description: 'Скажите любую фразу — идёт запись 2 секунды.', tone: 'info', ttl: 3000 });
+    try {
+      const res = await runDictationSelfTest({
+        seconds: 2,
+        lang: settings.language || 'ru',
+        model: settings.whisperModel || '',
+      });
+      setSelfTest(res);
+      push({
+        title: res.ok ? 'Диктовка работает' : 'Диктовка не сработала',
+        description: describeSelfTest(res),
+        tone: res.ok ? 'success' : 'warn',
+        ttl: 9000,
+      });
+    } catch (err) {
+      const res = { ok: false, reason: String(err?.message || err) };
+      setSelfTest(res);
+      push({ title: 'Проверка сорвалась', description: res.reason, tone: 'warn', ttl: 9000 });
+    } finally {
+      setSelfBusy(false);
+    }
+  }, [selfBusy, settings.language, settings.whisperModel, push]);
+
   return (
     <div>
       <h2 className="settings-section__title">Диагностика</h2>
@@ -298,6 +331,27 @@ export default function DiagnosticsSection() {
               ? 'SendInput без буфера обмена (только Windows)'
               : 'буфер обмена + Ctrl+V, прежний буфер возвращается'}
           </span>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Проверить диктовку сейчас</div>
+        <div className="settings-group__desc">
+          Две секунды записи с микрофона и настоящий проход движка — без вставки в другие окна и без
+          записи в историю. Так видно, работает ли диктовка на этом компьютере, и за сколько секунд.
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Самопроверка
+            <div className="setting-row__desc">
+              {selfTest
+                ? describeSelfTest(selfTest)
+                : 'Нажмите и скажите любую фразу — результат появится здесь.'}
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={checkDictation} disabled={selfBusy}>
+            {selfBusy ? 'Проверяю…' : 'Проверить диктовку'}
+          </Button>
         </div>
       </div>
 

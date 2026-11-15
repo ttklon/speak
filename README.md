@@ -226,8 +226,8 @@ npm run electron:dev
 
 ```powershell
 npm run dist:win
-# release\ZSpeakly-Setup-1.5.4.exe      — NSIS-установщик
-# release\ZSpeakly-1.5.4-portable.exe   — портативная версия
+# release\ZSpeakly-Setup-1.5.5.exe      — NSIS-установщик
+# release\ZSpeakly-1.5.5-portable.exe   — портативная версия
 ```
 
 Готовые сборки не нужно собирать самому: они лежат в

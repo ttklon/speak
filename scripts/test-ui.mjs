@@ -2119,6 +2119,69 @@ async function scenarioHardwareModel(browser) {
   await page.close();
 }
 
+// Браузерное превью: без движка микрофон «слушает» тишину, и раньше человек
+// решал, что приложение сломано. Теперь об этом сказано прямо на главной.
+async function scenarioBrowserPreviewNotice(browser) {
+  // отдельная страница без моста: так выглядит браузерное превью
+  const page = await browser.newPage();
+  page.__errors = [];
+  page.on('pageerror', (e) => page.__errors.push(String(e)));
+  await page.evaluateOnNewDocument(() => {
+    localStorage.setItem('zs.settings', JSON.stringify({ onboarded: true, userName: 'Максим', theme: 'dark', language: 'ru' }));
+  });
+  await page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-window', { timeout: 15000 });
+  await sleep(600);
+  const note = await page.evaluate(() => document.querySelector('.hero__note')?.innerText?.replace(/\n/g, ' ') || '');
+  record(
+    'сценарии',
+    'превью без движка: на главной сказано, почему диктовка молчит',
+    /Web Speech|нет движка распознавания/i.test(note) && /приложении/i.test(note),
+    note.slice(0, 120),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'превью без движка: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Самопроверка диктовки: человек хочет знать «работает или нет» без гаданий.
+// Проверяем живой путь: микрофон (фейковое устройство Chromium) → запись →
+// PCM в main → ответ движка → понятный итог на экране.
+async function scenarioSelfTest(browser) {
+  const page = await openPage(browser, '#/settings?section=diagnostics&from=home', { settle: 700 });
+  takeErrors(page);
+  await page.evaluate(() => window.__e2e.resetCalls());
+  const clicked = await clickIn(page, '', 'Проверить диктовку');
+  await sleep(3600);
+  const sent = await page.evaluate(() => {
+    const call = window.__e2e.last('stt:transcribe-pcm');
+    return call ? call.args?.[0] || null : null;
+  });
+  record(
+    'сценарии',
+    'самопроверка: запись уходит в движок с настоящим PCM',
+    clicked && sent && sent.keys?.includes('pcm') && Boolean(sent.lang),
+    sent ? `ключи: ${(sent.keys || []).join(',')}` : 'вызова не было',
+  );
+  const shown = await page.evaluate(() =>
+    [...document.querySelectorAll('.settings-group')]
+      .filter((g) => /Проверить диктовку сейчас/.test(g.innerText))
+      .map((g) => g.innerText.replace(/\n+/g, ' '))
+      .join(' '),
+  );
+  record(
+    'сценарии',
+    'самопроверка: на экране секунды записи и текст, а не «ничего не произошло»',
+    /Записано 2 с, распознано за \d+\.\d с: «/.test(shown),
+    shown.slice(0, 140),
+  );
+  const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '));
+  record('сценарии', 'самопроверка: тост говорит «Диктовка работает»', /Диктовка работает/i.test(toast), toast.slice(0, 120));
+  const errors = takeErrors(page);
+  record('сценарии', 'самопроверка: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Обновление: проверка → скачивание → перезапуск, без «зависшей» кнопки.
 async function scenarioUpdateFlow(browser) {
   const page = await openPage(browser, '#/settings?section=about&from=home', { settle: 600 });
@@ -3838,6 +3901,8 @@ async function main() {
       ['отмена скачивания модели', scenarioModelCancel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
+      ['самопроверка диктовки', scenarioSelfTest],
+      ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],
       ['очистка истории', scenarioClearDictations],

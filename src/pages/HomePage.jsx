@@ -6,6 +6,7 @@ import { writeClipboard } from '../lib/clipboard.js';
 import { typeOut } from '../lib/feedback.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
+import { engineName, hasNativeStt, hasWebSpeech } from '../lib/recognition/engine.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
 import { APP } from '../lib/config.js';
 import Icon from '../components/ui/Icon.jsx';
@@ -153,6 +154,16 @@ export default function HomePage() {
           <br />
           просто <span className="hero__badge">ZSpeakly</span>.
         </h1>
+        {/* Превью в браузере: диктовка идёт через Web Speech и без интернета
+            просто молчит. Раньше человек нажимал микрофон, «слушал» тишину и
+            решал, что приложение сломано. Говорим об этом сразу. */}
+        {!hasNativeStt() ? (
+          <p className="hero__note" role="note">
+            {hasWebSpeech
+              ? 'Это окно в браузере: распознавание идёт через Web Speech и требует интернета. Офлайн-диктовка работает в установленном приложении ZSpeakly.'
+              : 'Здесь нет движка распознавания: офлайн-диктовка работает в установленном приложении ZSpeakly.'}
+          </p>
+        ) : null}
         <p className="hero__sub">
           Для диктовки — <kbd className="inline-key">{keysLabel(dictationKey)}</kbd>. Панель буфера
           обмена открывается по{' '}
@@ -253,14 +264,13 @@ export default function HomePage() {
               className="recent__search"
               icon={<Search size={12} />}
             />
-            <button
-              type="button"
-              className="link-btn"
-              onClick={() => setShowAll((v) => !v)}
-              disabled={filtered.length <= 6}
-            >
-              {showAll ? 'СВЕРНУТЬ' : 'ПОКАЗАТЬ ВСЁ'}
-            </button>
+            {/* Кнопка есть только когда есть что показывать: неактивная
+                «ПОКАЗАТЬ ВСЁ» выглядела как сломанная — нажимаешь, ничего. */}
+            {filtered.length > 6 ? (
+              <button type="button" className="link-btn" onClick={() => setShowAll((v) => !v)}>
+                {showAll ? 'СВЕРНУТЬ' : 'ПОКАЗАТЬ ВСЁ'}
+              </button>
+            ) : null}
           </div>
         </div>
 

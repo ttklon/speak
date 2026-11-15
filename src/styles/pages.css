@@ -38,6 +38,18 @@
   max-width: 660px;
 }
 
+.hero__note {
+  margin: 14px 0 0;
+  padding: 8px 12px;
+  max-width: 660px;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3, var(--text-4));
+}
+
 .hero__stats {
   display: flex;
   align-items: flex-end;
