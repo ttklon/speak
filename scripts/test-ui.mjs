@@ -2086,6 +2086,39 @@ async function scenarioModelDelete(browser) {
   await page.close();
 }
 
+// Подбор модели под железо: main сам сообщает, что взял модель быстрее.
+// Человек не должен ни читать каталог моделей, ни угадывать «что тут быстрое».
+async function scenarioHardwareModel(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', { settle: 700 });
+  takeErrors(page);
+  await page.evaluate(() =>
+    window.__e2e.emit('stt:auto-tune', {
+      to: 'base-q5_1',
+      reason: 'hardware',
+      why: '2 ядра, 4 ГБ — квантованная base: качество base, но заметно быстрее',
+    }),
+  );
+  await sleep(700);
+  const toast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+  );
+  record(
+    'сценарии',
+    'подбор модели: тост объясняет выбор без цифр и без «пустой» модели',
+    /подобрана под этот компьютер/i.test(toast) && !/«»/.test(toast) && !/0\.0 с/.test(toast),
+    toast.slice(0, 140),
+  );
+  const saved = await page.evaluate(() => {
+    const raw = window.zspeakly?.store ? window.__e2e.read('zs.settings') : null;
+    const s = raw || (JSON.parse(localStorage.getItem('zs.settings') || '{}'));
+    return s?.whisperModel || '';
+  });
+  record('сценарии', 'подбор модели: настройка совпала с тем, что выбрал main', saved === 'base-q5_1', String(saved));
+  const errors = takeErrors(page);
+  record('сценарии', 'подбор модели: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Обновление: проверка → скачивание → перезапуск, без «зависшей» кнопки.
 async function scenarioUpdateFlow(browser) {
   const page = await openPage(browser, '#/settings?section=about&from=home', { settle: 600 });
@@ -3804,6 +3837,7 @@ async function main() {
       ['модель в памяти', scenarioWarmModel],
       ['отмена скачивания модели', scenarioModelCancel],
       ['удаление модели', scenarioModelDelete],
+      ['подбор модели под железо', scenarioHardwareModel],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],
       ['очистка истории', scenarioClearDictations],

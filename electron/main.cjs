@@ -26,6 +26,9 @@ const { JsonStore } = require('./store.cjs');
 const whisper = require('./whisper.cjs');
 const { createUpdater } = require('./updater.cjs');
 const models = require('./models.cjs');
+// Подбор модели под железо: одна и та же модель не может быть быстрой и на
+// старом ноутбуке, и на новом ПК.
+const hardware = require('./hardware.cjs');
 const { writeWav } = require('./wav.cjs');
 const { logger } = require('./logger.cjs');
 
@@ -36,6 +39,8 @@ const START_HIDDEN = process.argv.includes('--hidden');
 let mainWindow = null;
 // автоподготовка распознавания (заполняется при регистрации IPC)
 let prepareRecognition = null;
+// Подбор модели под железо живёт там же, где IPC, а вызывается при старте окна.
+let applyHardwareModel = null;
 let tray = null;
 let store = null;
 // Отдельное «плавающее» окно индикатора диктовки: видно поверх любых
@@ -108,6 +113,7 @@ function createWindow() {
     setTimeout(() => prepareRecognition?.(), 4000);
     // Модель в памяти: поднимаем whisper-server заранее, чтобы первая
     // диктовка не ждала загрузку весов (как в быстрых диктовочных приложениях).
+    setTimeout(() => applyHardwareModel?.(), 1200);
     setTimeout(() => {
       const cfg = store?.get('zs:settings') || {};
       if (cfg.keepModelLoaded !== true) return;
@@ -939,7 +945,21 @@ function registerIpc() {
   ipcMain.on('store:size', (event) => {
     event.returnValue = store.sizeSync();
   });
-  ipcMain.handle('store:set', (_e, key, value) => store.set(key, value));
+  // Ручной выбор модели в настройках закрепляем: дальше приложение не будет
+  // менять его само (иначе «оно передумало» выглядит как поломка).
+  ipcMain.handle('store:set', (_e, key, value) => {
+    try {
+      if (key === 'zs:settings' && value && typeof value === 'object') {
+        const prev = store.get('zs:settings') || {};
+        if (prev.whisperModel && value.whisperModel && prev.whisperModel !== value.whisperModel) {
+          store.set('zs:modelPinned', true);
+        }
+      }
+    } catch {
+      /* не мешаем самой записи */
+    }
+    return store.set(key, value);
+  });
   ipcMain.handle('store:remove', (_e, key) => store.remove(key));
 
   ipcMain.handle('win:minimize', () => mainWindow?.minimize());
@@ -997,6 +1017,45 @@ function registerIpc() {
       return '';
     }
   }
+
+  /**
+   * При старте: если на этой машине стоит заведомо тяжёлая модель (например,
+   * small на 2 ядрах), а подходящая уже скачана — переходим на неё сами.
+   * Человеческий выбор уважаем: после ручной смены модели в настройках стоит
+   * zs:modelPinned, и трогать её мы не будем.
+   */
+  applyHardwareModel = function applyHardwareModel() {
+    try {
+      const settings = store?.get('zs:settings') || {};
+      const current = settings.whisperModel || 'base';
+      const st = models.modelStatus();
+      const downloaded = Object.keys(st.models || {}).filter((id) => st.models[id]?.downloaded);
+      const decision = hardware.plan({
+        ...hardware.thisMachine(),
+        current,
+        downloaded,
+        pinned: store?.get('zs:modelPinned') === true,
+        autoOptimize: settings.autoOptimize !== false,
+      });
+      if (!decision.switchTo) return '';
+      const pick = decision.pick;
+      store.set('zs:settings', { ...settings, whisperModel: pick.id });
+      try {
+        mainWindow?.webContents.send('stt:auto-tune', {
+          from: current,
+          to: pick.id,
+          reason: 'hardware',
+          why: pick.why,
+        });
+      } catch {
+        /* окна может не быть */
+      }
+      logger.info('stt', 'Модель подобрана под железо', { keep: true, from: current, to: pick.id, why: pick.why });
+      return pick.id;
+    } catch {
+      return '';
+    }
+  };
 
   async function transcribePcm(payload) {
     const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
@@ -1706,9 +1765,21 @@ function registerIpc() {
         st = models.modelStatus();
         const downloaded = Object.values(st.models).filter((m) => m.downloaded);
         if (downloaded.length) return { ok: true, already: true };
-        const preferred = (store?.get('zs:settings') || {}).whisperModel || 'base';
+        // Модели нет вообще: берём ту, что подходит железу, а не «base для всех».
+        const settings0 = store?.get('zs:settings') || {};
+        const hw = hardware.thisMachine();
+        const pick = hardware.pickModel(hw);
+        const preferred = settings0.autoOptimize === false ? settings0.whisperModel || 'base' : pick.id;
         const id = models.MODELS[preferred] ? preferred : 'base';
-        logger.info('stt', 'Модель не скачана — качаю в фоне', { keep: true, model: id });
+        if (settings0.whisperModel !== id) {
+          try {
+            store.set('zs:settings', { ...settings0, whisperModel: id });
+            mainWindow?.webContents.send('stt:auto-tune', { from: '', to: id, reason: 'hardware', why: pick.why });
+          } catch {
+            /* окна может не быть */
+          }
+        }
+        logger.info('stt', 'Модель не скачана — качаю в фоне', { keep: true, model: id, tier: pick.tier, why: pick.why });
         push({ id, percent: 0 });
         const res = await models.downloadModel(id, (percent, received, total) =>
           push({ id, percent, received, total }),

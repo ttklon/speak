@@ -373,6 +373,7 @@ export function installMockBridge() {
     },
 
     onModelProgress: subscribe('model:progress'),
+    onAutoTune: subscribe('stt:auto-tune'),
     onUpdateStatus: subscribe('update:status'),
     onHotkeyConflict: subscribe('hotkey:conflict'),
     onHotkey: subscribe('hotkey'),

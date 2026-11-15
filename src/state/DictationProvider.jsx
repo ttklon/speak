@@ -754,11 +754,16 @@ export function DictationProvider({ children }) {
       if (!p?.to) return;
       updateSettings?.({ whisperModel: p.to });
       const secs = Number(p.seconds || 0);
+      // Два повода переключить модель: после долгого прохода (замер) и сразу
+      // при запуске, если на этой машине модель заведомо тяжёлая.
+      const byHardware = p.reason === 'hardware' || !p.from || !Number(p.ms || 0);
       pushToast({
-        title: `Модель «${p.to}» — быстрее`,
-        description: `«${p.from}» распознавала ${secs ? `${secs} с речи` : 'короткую фразу'} за ${(
-          Number(p.ms || 0) / 1000
-        ).toFixed(1)} с. Переключил автоматически, качество текста для диктовки то же.`,
+        title: byHardware ? `Модель «${p.to}» подобрана под этот компьютер` : `Модель «${p.to}» — быстрее`,
+        description: byHardware
+          ? p.why || 'Взял модель, которая успевает за вашей речью. Поменять можно в «Функциях».'
+          : `«${p.from}» распознавала ${secs ? `${secs} с речи` : 'короткую фразу'} за ${(
+              Number(p.ms || 0) / 1000
+            ).toFixed(1)} с. Переключил автоматически, качество текста для диктовки то же.`,
         tone: 'success',
         ttl: 12000,
       });

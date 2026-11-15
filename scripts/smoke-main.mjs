@@ -1646,6 +1646,70 @@ await check('вставка не забирает фокус у чужого о�
   }
 });
 
+await check('модель подбирается под железо: слабый ПК — квантованная base, мощный — small-q5_1', () => {
+  const hw = require(path.resolve('electron/hardware.cjs'));
+  const low = hw.pickModel({ cpus: 2, ramGb: 4 });
+  if (low.id !== 'base-q5_1') throw new Error(`слабый ПК получил «${low.id}»`);
+  const mid = hw.pickModel({ cpus: 6, ramGb: 16 });
+  if (mid.id !== 'base') throw new Error(`средний ПК получил «${mid.id}»`);
+  const high = hw.pickModel({ cpus: 12, ramGb: 32 });
+  if (high.id !== 'small-q5_1') throw new Error(`мощный ПК получил «${high.id}»`);
+  // мало памяти при многих ядрах — тоже «слабый»: модель живёт в RAM
+  if (hw.pickModel({ cpus: 16, ramGb: 6 }).id !== 'base-q5_1') throw new Error('не учли мало памяти');
+  // «слишком тяжёлая» — это про скорость счёта, а не про вкус
+  if (!hw.worthSwitching('small', 'base-q5_1')) throw new Error('small → base-q5_1 не считается выигрышем');
+  if (!hw.worthSwitching('medium', 'base')) throw new Error('medium → base не считается выигрышем');
+  // квант той же модели — это та же точность при меньшем весе, выигрыш честный
+  if (!hw.worthSwitching('base', 'base-q5_1')) throw new Error('base → base-q5_1 не считается выигрышем');
+  if (hw.worthSwitching('base', 'base')) throw new Error('одинаковые модели сравнивать незачем');
+  if (hw.worthSwitching('tiny', 'base')) throw new Error('более лёгкую модель нельзя считать «слишком тяжёлой»');
+  if (hw.worthSwitching('base', 'small-q5_1')) throw new Error('более качественную модель нельзя считать «слишком тяжёлой»');
+  const hwThis = hw.thisMachine();
+  if (!(hwThis.cpus >= 1) || !(hwThis.ramGb > 0)) throw new Error('не определили железо');
+});
+
+await check('переход на лёгкую модель: только когда она скачана и человек не выбрал свою', () => {
+  const hw = require(path.resolve('electron/hardware.cjs'));
+  // слабый ПК, стоит small, но base-q5_1 уже скачана → переходим
+  const weak = hw.plan({ cpus: 2, ramGb: 4, current: 'small', downloaded: ['small', 'base-q5_1'] });
+  if (weak.switchTo !== 'base-q5_1') throw new Error(`не переключился: «${weak.switchTo}»`);
+  if (!/квантованная base/.test(weak.why)) throw new Error(`не объяснил причину: ${weak.why}`);
+  // той же модели нет на диске — не обещаем то, чего не можем
+  if (hw.plan({ cpus: 2, ramGb: 4, current: 'small', downloaded: ['small'] }).switchTo !== '') {
+    throw new Error('переключился на нескачанную модель');
+  }
+  // человек выбрал модель сам — не трогаем
+  if (hw.plan({ cpus: 2, ramGb: 4, current: 'small', downloaded: ['small', 'base-q5_1'], pinned: true }).switchTo !== '') {
+    throw new Error('переключил модель вопреки ручному выбору');
+  }
+  // автооптимизация выключена — тоже не трогаем
+  if (hw.plan({ cpus: 2, ramGb: 4, current: 'small', downloaded: ['small', 'base-q5_1'], autoOptimize: false }).switchTo !== '') {
+    throw new Error('переключил при выключенном автоподборе');
+  }
+  // мощный ПК на base: качество можно поднять, но это не «слишком тяжёлая» — молчим
+  if (hw.plan({ cpus: 12, ramGb: 32, current: 'base', downloaded: ['base', 'small-q5_1'] }).switchTo !== '') {
+    throw new Error('поднял качество без спроса');
+  }
+});
+
+await check('ручной выбор модели закрепляется: приложение не передумывает само', async () => {
+  await handlers.get('store:remove')({}, 'zs:modelPinned');
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'base' });
+  if ((await handlers.get('store:get')({}, 'zs:modelPinned')) === true) {
+    throw new Error('закрепили первое же сохранение настроек');
+  }
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'tiny' });
+  if ((await handlers.get('store:get')({}, 'zs:modelPinned')) !== true) {
+    throw new Error('смена модели из настроек не закреплена');
+  }
+  // обычная правка других настроек не должна ничего закреплять заново
+  await handlers.get('store:remove')({}, 'zs:modelPinned');
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'tiny', language: 'en' });
+  if ((await handlers.get('store:get')({}, 'zs:modelPinned')) === true) {
+    throw new Error('флаг появился без смены модели');
+  }
+});
+
 console.log(`\nOK (${ok.length}):`);
 ok.forEach((n) => console.log('  ✓', n));
 if (fail.length) {

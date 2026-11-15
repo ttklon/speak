@@ -120,7 +120,7 @@ large-v3-turbo — тот же large-v3, но с 4 слоями декодера
 | Silero VAD | есть | `--vad` в `electron/whisper.cjs` (`cliArgs`, `findVadModel`), модель в `models/` или `resources/models`; энергетический VAD в `splitBySilence` остался для нарезки по паузам |
 | Без контекста между диктовками и жадное декодирование | есть | `-mc 0`, `-bs 1` в `cliArgs` |
 | Окно энкодера по длине записи (короткая фраза не считает 30 с) | есть | `computeAudioCtx()` → `-ac`; на замере 3 с речи — 2,5 с → 0,73 с |
-| Автоподбор модели под скорость машины | есть | `autoOptimize` в `electron/main.cjs` (`maybeAutoTune`) |
+| Автоподбор модели под скорость машины | есть | `autoOptimize` в `electron/main.cjs` (`maybeAutoTune`) + `electron/hardware.cjs` (`pickModel`/`plan`: модель по числу ядер и памяти, ручной выбор закрепляется) |
 | Удаление скачанных моделей | есть | `models:delete` → `deleteModel()`, корзинка в настройках |
 | Квантованные модели (q5_1/q8_0) | есть | `MODELS` в `src/lib/config.js`, `electron/models.cjs` |
 | Живая расшифровка во время речи | есть, опция (вкл. по умолчанию) | `engine.js` `streamIntervalMs` + `pcmRecorder.snapshot()`: раз в 2,5 с whisper спрашивают по накопленному звуку, плашка и черновик обновляются; итог считается отдельно по всей записи |
