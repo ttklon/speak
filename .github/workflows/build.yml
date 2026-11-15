@@ -117,7 +117,20 @@ jobs:
             exit 0
           fi
           libdir=$(dirname "$(find /tmp/wtest -name 'libwhisper.so*' | head -1)")
-          ZS_WHISPER_BIN="$bin" ZS_WHISPER_MODEL="$model" ZS_WHISPER_LIB_DIR="$libdir" \
+          # VAD-модель: если раннер достанет её с HuggingFace, живой тест проверит
+          # и `--vad` на релизной сборке whisper.cpp. Недоступность — не ошибка.
+          vad=""
+          if curl -fsSL --retry 2 --retry-delay 5 --max-time 120 \
+            'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin' -o /tmp/vad.bin; then
+            if [ "$(stat -c%s /tmp/vad.bin)" -gt 500000 ]; then
+              vad=/tmp/vad.bin
+              echo "::notice title=vad::модель Silero скачана, тест пойдёт с --vad"
+            fi
+          fi
+          if [ -z "$vad" ]; then
+            echo "::warning title=vad::HuggingFace недоступен — живой тест без VAD"
+          fi
+          ZS_WHISPER_BIN="$bin" ZS_WHISPER_MODEL="$model" ZS_WHISPER_LIB_DIR="$libdir" ZS_WHISPER_VAD="$vad" \
             LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" npm run test:whisper
 
   package:

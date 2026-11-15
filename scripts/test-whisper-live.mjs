@@ -16,6 +16,7 @@ import Module from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-whisper-'));
@@ -129,6 +130,25 @@ check(status.available === true, 'движок и модель найдены', 
 if (vadEnv && fs.existsSync(vadEnv)) {
   check(Boolean(whisper.findVadModel?.()), 'VAD-модель подхватывается движком');
   check(Boolean(status.vad), 'статус сообщает о VAD');
+
+  // Формат VAD-модели проверяем самим движком: если сборка whisper.cpp не
+  // понимает файл, она пишет об этом и проход с --vad не состоится.
+  const probe = spawnSync(bin, whisper.cliArgs({
+    modelPath: model,
+    wavPath: wav,
+    lang: 'ru',
+    threads: 2,
+    vadModel: vadEnv,
+    outBase: path.join(userData, 'vad-probe.out'),
+  }), { encoding: 'utf8', timeout: 120000 });
+  const vadLog = `${probe.stdout || ''}${probe.stderr || ''}`;
+  const vadBroken = /failed to init(ialize)? VAD|wrong shape in model file|failed to compute VAD|unknown argument/i.test(vadLog);
+  check(!vadBroken, 'движок принимает VAD-модель и флаг --vad');
+  try {
+    fs.rmSync(path.join(userData, 'vad-probe.out.txt'), { force: true });
+  } catch {
+    /* файла могло не быть */
+  }
 }
 
 const started = Date.now();
