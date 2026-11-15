@@ -130,8 +130,17 @@ jobs:
           if [ -z "$vad" ]; then
             echo "::warning title=vad::HuggingFace недоступен — живой тест без VAD"
           fi
+          set -o pipefail
+          # Логи упавших джобов GitHub иногда не отдаёт совсем (EOF), поэтому
+          # причину провала выносим в аннотацию — её видно в интерфейсе.
           ZS_WHISPER_BIN="$bin" ZS_WHISPER_MODEL="$model" ZS_WHISPER_LIB_DIR="$libdir" ZS_WHISPER_VAD="$vad" \
-            LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" npm run test:whisper
+            LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" npm run test:whisper 2>&1 | tee /tmp/wt.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            tail -c 900 /tmp/wt.log | tr '\n' ' ' | sed 's/%/%25/g' > /tmp/wt-msg.txt
+            echo "::warning title=whisper-live::$(cat /tmp/wt-msg.txt)"
+            exit "$code"
+          fi
 
   package:
     needs: check
