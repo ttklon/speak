@@ -3031,6 +3031,145 @@ async function scenarioGlobalHotkey(browser) {
   await page.close();
 }
 
+// Диктовка в поле самого приложения: текст должен попасть туда, где стоит
+// курсор, и НЕ уходить системной вставкой в предыдущее окно.
+async function scenarioDictationIntoOwnField(browser) {
+  // 1) Пока человек говорит, интерфейс говорит, КУДА попадёт текст.
+  const page = await openPage(browser, '#/home', { settle: 500 });
+  takeErrors(page);
+  await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: false });
+  await sleep(1100);
+  const hint = await page.evaluate(() => {
+    const el = document.querySelector('.live-draft__hint');
+    return el ? el.innerText : '';
+  });
+  await emit(page, 'hotkey', { type: 'up' });
+  await sleep(1500);
+  record(
+    'сценарии',
+    'диктовка: пока человек говорит, видно, куда попадёт текст',
+    /Вставим/.test(hint) && /Visual Studio Code/.test(hint),
+    hint || 'подсказки нет',
+  );
+
+  // 2) Курсор в поле самого приложения — текст должен попасть туда, а не в
+  //    предыдущее окно, и без системной вставки.
+  await page.evaluate(() => {
+    location.hash = '#/clipboard';
+  });
+  await sleep(600);
+  const input = await page.$('input[placeholder="Поиск по истории буфера"]');
+  const found = Boolean(input);
+  let typed = '';
+  if (found) {
+    await input.click();
+    const beforeCalls = (await bridgeCalls(page)).length;
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: false });
+    await sleep(1100);
+    await emit(page, 'hotkey', { type: 'up' });
+    await sleep(1600);
+    typed = await page.evaluate(
+      () => document.querySelector('input[placeholder="Поиск по истории буфера"]')?.value || '',
+    );
+    const calls = (await bridgeCalls(page)).slice(beforeCalls);
+    record(
+      'сценарии',
+      'диктовка: в поле приложения текст не уходит системной вставкой',
+      !calls.includes('text:insert'),
+      calls.includes('text:insert') ? 'был вызов text:insert' : 'только локальная вставка',
+    );
+    // Поле управляется React: если состояние не обновилось, поиск остался бы
+    // прежним. Пустой результат «Для «…» не найдено» — доказательство, что
+    // приложение увидело вставленный текст.
+    const searched = await page.evaluate(() => document.body.innerText);
+    record(
+      'сценарии',
+      'диктовка: приложение сразу видит вставленный текст, а не только поле',
+      /Для «/.test(searched) && /Проверка диктовки/.test(searched),
+      (searched.match(/Для «[^»]{0,60}»[^\n]{0,40}/) || [''])[0],
+    );
+  }
+  record(
+    'сценарии',
+    'диктовка: текст появляется в том поле, где стоит курсор',
+    found && /Проверка диктовки/.test(typed),
+    found ? `в поле: «${typed.slice(0, 40)}»` : 'не нашёл поле поиска',
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'диктовка в своё поле: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Обезьяний тест: детерминированный поток случайных нажатий, ввода и Escape.
+// Ловит падения рендера, которые не видны в аккуратных сценариях.
+async function scenarioMonkey(browser) {
+  const routes = ['#/home', '#/clipboard', '#/dictionary', '#/hotkeys', '#/instructions', '#/settings'];
+  // простой LCG: одинаковый «случайный» поток при каждом прогоне
+  let seed = 20261111;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  const page = await openPage(browser, routes[0], { settle: 400 });
+  takeErrors(page);
+  let actions = 0;
+  let dead = 0;
+  for (const route of routes) {
+    await page.evaluate((r) => {
+      location.hash = r;
+    }, route);
+    await sleep(450);
+    for (let i = 0; i < 18; i += 1) {
+      const kind = rnd();
+      if (kind < 0.62) {
+        // клик по случайной видимой кнопке
+        await page.evaluate((pick) => {
+          const nodes = [...document.querySelectorAll('button, .card, .recent__row, .clip-card')].filter(
+            (el) => el.offsetParent !== null && !el.disabled,
+          );
+          if (!nodes.length) return;
+          const el = nodes[Math.floor(pick * nodes.length) % nodes.length];
+          el.click();
+        }, rnd());
+      } else if (kind < 0.78) {
+        // ввод в случайное поле
+        await page.evaluate((pick) => {
+          const nodes = [...document.querySelectorAll('input, textarea')].filter(
+            (el) => el.offsetParent !== null && !el.disabled && !el.readOnly,
+          );
+          if (!nodes.length) return;
+          const el = nodes[Math.floor(pick * nodes.length) % nodes.length];
+          el.focus();
+        }, rnd());
+        await page.keyboard.type('тест');
+      } else if (kind < 0.9) {
+        await page.keyboard.press('Escape');
+      } else {
+        await page.keyboard.press('Tab');
+      }
+      actions += 1;
+      await sleep(35);
+      const alive = await page.evaluate(() => Boolean(document.querySelector('.app-window')));
+      if (!alive) dead += 1;
+    }
+    // закрываем возможные модалки, чтобы следующий маршрут был доступен
+    await page.keyboard.press('Escape');
+    await sleep(150);
+    await page.evaluate(() => {
+      location.hash = '#/home';
+    });
+    await sleep(200);
+  }
+  const errors = takeErrors(page).filter((e) => !/ResizeObserver|favicon/i.test(e));
+  record(
+    'сценарии',
+    'обезьяний тест: случайные нажатия не ломают экран',
+    dead === 0 && errors.length === 0,
+    `${actions} действий, ${dead} провалов рендера, ошибок консоли: ${errors.length}${errors[0] ? ` — ${errors[0]}` : ''}`,
+  );
+  await page.close();
+}
+
 async function scenarioClipboardEvent(browser) {
   const page = await openPage(browser, '#/clipboard');
   const before = await page.evaluate(() => (window.__e2e.read('zs.clipboard') || []).length);
@@ -3906,6 +4045,8 @@ async function main() {
       ['пропавший микрофон', scenarioMissingMic],
       ['вставка не удалась', scenarioInsertFailed],
       ['обещания плашки', scenarioHudPromise],
+      ['диктовка в своё поле', scenarioDictationIntoOwnField],
+      ['обезьяний тест', scenarioMonkey],
       ['предролл микрофона', scenarioMicPreroll],
       ['живая расшифровка', scenarioLiveWhisper],
       ['пауза и отмена распознавания', scenarioPauseAndCancel],

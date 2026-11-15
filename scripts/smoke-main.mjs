@@ -1135,9 +1135,11 @@ await check('старая сборка без --vad: проход повторя
   runWhisper('Текст после повтора');
   spawnCalls.length = 0;
   try {
+    // запись длиннее 3 секунд: только там включается VAD (на короткой фразе
+    // он пропускается — тишины в ней уже нет), и только там возможен повтор
     const res = await handlers.get('stt:transcribe-pcm')({}, {
-      pcm: speechPcm(600),
-      durationMs: 600,
+      pcm: speechPcm(5000),
+      durationMs: 5000,
       lang: 'ru',
       model: 'small',
       useDictionary: false,
@@ -1814,6 +1816,77 @@ await check('видно, есть ли сервер распознавания: 
     if (!after.bin) throw new Error('движок пропал из статуса');
   } finally {
     fs.rmSync(path.join(dirs().bin, 'whisper-server.exe'), { force: true });
+  }
+});
+
+await check('потоков движку — по физическим ядрам, а не по показаниям ОС', async () => {
+  const os = require('node:os');
+  const whisperLib = require(path.resolve('electron/whisper.cjs'));
+  const real = os.cpus;
+  const withCpus = (n) => {
+    os.cpus = () => new Array(n).fill({ model: 'test' });
+  };
+  try {
+    withCpus(2);
+    if (whisperLib.threadCount() !== 2) throw new Error(`2 ядра → ${whisperLib.threadCount()} потоков`);
+    withCpus(4);
+    if (whisperLib.threadCount() !== 4) throw new Error(`4 ядра → ${whisperLib.threadCount()} потоков`);
+    // 8 логических = 4 физических: с -t 8 whisper считает медленнее
+    withCpus(8);
+    if (whisperLib.threadCount() !== 4) throw new Error(`8 потоков → ${whisperLib.threadCount()}, ожидалось 4`);
+    withCpus(16);
+    if (whisperLib.threadCount() > 8) throw new Error('потоков больше восьми');
+    // параллельные запросы сервера — только на многопоточной машине
+    withCpus(4);
+    if (whisperLib.processorCount() !== 1) throw new Error('на 4 ядрах включили параллельность');
+    withCpus(16);
+    if (whisperLib.processorCount() !== 2) throw new Error('на 16 потоках параллельность не включилась');
+  } finally {
+    os.cpus = real;
+  }
+});
+
+await check('на короткой фразе VAD не включается — там уже нет тишины', async () => {
+  const vadPath = path.join(userData, 'models', 'ggml-silero-v6.2.0.bin');
+  fs.mkdirSync(path.dirname(vadPath), { recursive: true });
+  fs.writeFileSync(vadPath, 'fake');
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false, vadEnabled: true });
+  runWhisper('короткая фраза');
+  spawnCalls.length = 0;
+  try {
+    await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(1500), durationMs: 1500, lang: 'ru', model: 'small' });
+    const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+    if (!call) throw new Error('движок не запускался');
+    if (call.args.includes('--vad')) throw new Error('на 1,5-секундной записи включился VAD');
+    // а на длинной — должен включиться: там паузы реально есть
+    spawnCalls.length = 0;
+    await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(6000), durationMs: 6000, lang: 'ru', model: 'small' });
+    const long = spawnCalls.find((c) => String(c.file).includes('whisper'));
+    if (!long?.args.includes('--vad')) throw new Error('на длинной записи VAD потерялся');
+  } finally {
+    fs.rmSync(vadPath, { force: true });
+    spawnPlan.answer = null;
+  }
+});
+
+await check('text:target честно говорит, куда попадёт текст', async () => {
+  const target = handlers.get('text:target');
+  if (!target) throw new Error('нет канала text:target');
+  const mainWin = electronStub.BrowserWindow.instances?.[0];
+  const own = await target({});
+  if (!own || own.own !== true) throw new Error(`окно в фокусе, а ответ: ${JSON.stringify(own)}`);
+  if (mainWin) {
+    const restore = mainWin.isFocused;
+    mainWin.isFocused = () => false;
+    try {
+      const other = await target({});
+      // на не-Windows заголовок окна взять неоткуда — честный пустой ответ,
+      // а не выдуманное «куда-то вставим»
+      if (other?.own !== false) throw new Error(`не наше окно, а ответ: ${JSON.stringify(other)}`);
+      if (process.platform !== 'win32' && other.title) throw new Error('придумали заголовок окна');
+    } finally {
+      mainWin.isFocused = restore;
+    }
   }
 });
 

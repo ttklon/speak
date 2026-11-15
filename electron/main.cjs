@@ -423,7 +423,23 @@ function registerHudIpc() {
     dictationActive = state === 'listening';
     // Человек начал говорить — самое время поднять помощника ввода: пока идёт
     // запись, PowerShell успевает стартовать, и вставка не ждёт старта.
-    if (state === 'listening') warmInputHost();
+    if (state === 'listening') {
+      warmInputHost();
+      // И модель: пока человек говорит, веса успевают загрузиться, и итоговый
+      // проход идёт уже в прогретый сервер. Раньше прогрев начинался только
+      // после неудачной диктовки — то есть слишком поздно.
+      try {
+        const cfg = store?.get('zs:settings') || {};
+        const server = whisper.serverStatus?.() || {};
+        // Только если сервера нет вовсе: если он уже греется, второй прогрев
+        // отнял бы ядра у распознавания этой же фразы.
+        if (cfg.keepModelLoaded !== false && !server.ready && !server.running && !whisper.isBusy?.()) {
+          whisper.warm(cfg.whisperModel || 'base').catch(() => {});
+        }
+      } catch {
+        /* прогрев — не критичный путь */
+      }
+    }
     refreshTrayMenu();
   });
   ipcMain.on('mic:warm', (_e, open) => {
@@ -1139,8 +1155,10 @@ function registerIpc() {
       const started = Date.now();
       const sttSettings = store?.get('zs:settings') || {};
       const keepLoaded = sttSettings.keepModelLoaded === true;
-      // VAD включён по умолчанию: тишина не должна занимать движок
-      const useVad = sttSettings.vadEnabled !== false;
+      // VAD включён по умолчанию: тишина не должна занимать движок. Но на
+      // короткой фразе тишины по краям уже нет (её срезал trimSilence), а VAD
+      // всё равно стоит времени — на записи до 3 секунд он только мешает.
+      const useVad = sttSettings.vadEnabled !== false && (audio?.seconds || 0) > 3;
       const sr = payload?.sampleRate || 16000;
       // Длинную диктовку режем по паузам: whisper на цельном файле хуже держит
       // конец и путает фразы через паузу в несколько секунд.
@@ -1174,14 +1192,19 @@ function registerIpc() {
       };
       let res;
       if (chunks.length > 1) {
-        const texts = [];
+        // Части длинной записи считаем параллельно, если прогретый сервер сам
+        // умеет несколько запросов (на 8+ логических потоках). На слабой машине
+        // — строго по очереди: два whisper-процесса делят ядра и оба медленнее.
+        const server = whisper.serverStatus?.() || {};
+        const canParallel = server.ready === true && Number(server.processors) > 1;
+        const parallel = canParallel ? Math.min(chunks.length, Number(server.processors)) : 1;
+        const texts = new Array(chunks.length).fill('');
         let failed = null;
-        for (let i = 0; i < chunks.length; i += 1) {
-          const partWav = `${wav}.${i}.wav`;
+        let done = 0;
+        const runPart = async (index) => {
+          const partWav = `${wav}.${index}.wav`;
           try {
-            fs.writeFileSync(partWav, writeWav(chunks[i], sr));
-            reportProgress(i + 1);
-            // eslint-disable-next-line no-await-in-loop
+            fs.writeFileSync(partWav, writeWav(chunks[index], sr));
             const one = await whisper.transcribe(partWav, {
               lang: payload?.lang || 'ru',
               model,
@@ -1189,13 +1212,33 @@ function registerIpc() {
               keepLoaded,
               useVad,
             });
+            done += 1;
+            reportProgress(done);
             if (!one?.ok) {
-              failed = one;
-              break;
+              if (!failed) failed = one;
+              return;
             }
-            if (one.text) texts.push(String(one.text).trim());
+            if (one.text) texts[index] = String(one.text).trim();
           } finally {
             fs.rmSync(partWav, { force: true });
+          }
+        };
+        if (parallel > 1) {
+          let next = 0;
+          const workers = Array.from({ length: parallel }, async () => {
+            while (next < chunks.length && !failed) {
+              const index = next;
+              next += 1;
+              // eslint-disable-next-line no-await-in-loop
+              await runPart(index);
+            }
+          });
+          await Promise.all(workers);
+        } else {
+          for (let i = 0; i < chunks.length; i += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            await runPart(i);
+            if (failed) break;
           }
         }
         if (failed) {
@@ -1357,6 +1400,25 @@ function registerIpc() {
       }
     }, 500);
     return pasted;
+  });
+  // Куда уйдёт текст: наше окно (значит, вставляем прямо в поле) или чужое
+  // приложение с названием — это видно в интерфейсе ещё до вставки.
+  ipcMain.handle('text:target', async () => {
+    const own = Boolean(mainWindow?.isFocused?.());
+    if (own) return { own: true, app: '', title: '' };
+    if (process.platform !== 'win32') return { own: false, app: '', title: '' };
+    // Сначала резидентный помощник: заголовок окна он отдаёт без запуска новых
+    // процессов (иначе на каждую фразу поднимался бы отдельный PowerShell).
+    if (inputHost.available() && inputHost.status().ready) {
+      const fast = await inputHost.target();
+      if (fast?.ok && fast.title) return { own: false, app: '', title: fast.title };
+    }
+    try {
+      const win = await foregroundWindow();
+      return { own: false, app: win.app || '', title: win.title || '' };
+    } catch {
+      return { own: false, app: '', title: '' };
+    }
   });
   ipcMain.handle('text:paste', () => pasteToActiveWindow());
   ipcMain.handle('text:read-selection', () => readSelection());

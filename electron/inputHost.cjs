@@ -19,6 +19,7 @@
  *   PASTE           → {"ok":true}                  Ctrl+V в активное окно
  *   COPY            → {"ok":true}                  Ctrl+C в активном окне
  *   TYPE <base64>   → {"ok":true,"typed":N}        текст через SendInput
+ *   TARGET          → {"ok":true,"title64":"…"}    заголовок активного окна
  *
  * Если процесс не поднялся или умер, вызывающий код обязан честно откатиться
  * на прежний путь (одноразовый PowerShell) — молча «вставить ничего» нельзя.
@@ -56,6 +57,20 @@ public static class ZsInput {
 
   [DllImport("user32.dll", SetLastError = true)]
   static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+  [DllImport("user32.dll")]
+  static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
+
+  // Заголовок активного окна: нужен интерфейсу, чтобы показать, куда попадёт
+  // текст. Через уже запущенный процесс — без нового PowerShell на каждую фразу.
+  public static string Title() {
+    var buffer = new System.Text.StringBuilder(512);
+    GetWindowText(GetForegroundWindow(), buffer, 512);
+    return buffer.ToString();
+  }
 
   const uint INPUT_KEYBOARD = 1;
   const uint KEYEVENTF_KEYUP = 0x0002;
@@ -127,6 +142,11 @@ while ($true) {
       'COPY' {
         $ok = [ZsInput]::Chord(${VK_C})
         Reply ('{"ok":' + $ok.ToString().ToLowerInvariant() + '}')
+      }
+      'TARGET' {
+        $title = [ZsInput]::Title()
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($title))
+        Reply ('{"ok":true,"title64":"' + $b64 + '"}')
       }
       'TYPE' {
         $rest = ''
@@ -295,6 +315,20 @@ class InputHost {
   /** Ctrl+C в активном окне. */
   copy() {
     return this.request('COPY');
+  }
+
+  /** Заголовок активного окна (куда попадёт текст). */
+  target() {
+    return this.request('TARGET').then((res) => {
+      if (!res?.ok) return { ok: false, title: '' };
+      let title = '';
+      try {
+        title = Buffer.from(String(res.title64 || ''), 'base64').toString('utf8');
+      } catch {
+        title = '';
+      }
+      return { ok: true, title };
+    });
   }
 
   /** Напечатать текст через SendInput. */

@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     onSttProgress: (cb) => on('stt:progress', cb),
     onAutoTune: (cb) => on('stt:auto-tune', cb),
     insertText: (text) => ipcRenderer.invoke('text:insert', text),
+    // куда попадёт текст: { own, app, title } — видно человеку до вставки
+    insertTarget: () => ipcRenderer.invoke('text:target'),
     pasteToActive: () => ipcRenderer.invoke('text:paste'),
     readSelection: () => ipcRenderer.invoke('text:read-selection'),
     replaceSelection: (text) => ipcRenderer.invoke('text:replace-selection', text),

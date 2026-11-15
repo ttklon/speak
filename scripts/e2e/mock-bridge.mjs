@@ -170,6 +170,11 @@ export function installMockBridge() {
     },
 
     insertText: ok('text:insert'),
+    // куда попадёт текст: главное окно или чужое приложение
+    insertTarget: async () => {
+      record('text:target');
+      return { own: false, app: 'Code', title: 'Visual Studio Code' };
+    },
     pasteToActive: async () => {
       record('text:paste');
       return true;

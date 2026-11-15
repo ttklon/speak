@@ -132,6 +132,31 @@ function findVadModel() {
  * приходит в разы быстрее: на замере 3 секунды речи — 2,5 с → 0,73 с.
  * Для длинных записей окно не трогаем: там обрезка съела бы текст.
  */
+/**
+ * Сколько потоков отдать whisper.
+ *
+ * `os.cpus().length` — это логические потоки. На 4 ядрах с Hyper-Threading их
+ * восемь, и whisper с `-t 8` считает МЕДЛЕННЕЕ, чем с `-t 4`: потоки дерутся за
+ * одни и те же физические ядра. Поэтому на многоядерных машинах берём примерно
+ * половину логических (это и есть число физических ядер), но не меньше двух и
+ * не больше восьми.
+ */
+function threadCount() {
+  const logical = (require('node:os').cpus() || []).length || 4;
+  if (logical <= 4) return Math.max(1, logical);
+  return Math.max(2, Math.min(8, Math.round(logical / 2)));
+}
+
+/**
+ * Сколько запросов сервер может считать одновременно. whisper.cpp умеет
+ * несколько процессоров (`-p`), но на двух-четырёх ядрах это только драка за
+ * CPU, поэтому параллелим лишь на явно многопоточных машинах.
+ */
+function processorCount() {
+  const logical = (require('node:os').cpus() || []).length || 4;
+  return logical >= 8 ? 2 : 1;
+}
+
 function computeAudioCtx(wavPath) {
   try {
     const bytes = Math.max(0, fs.statSync(wavPath).size - 44); // 44 — заголовок RIFF
@@ -243,6 +268,7 @@ function serverStatus() {
     warming: Boolean(warming),
     port: serverState?.port || 0,
     model: serverState?.modelPath ? path.basename(serverState.modelPath) : '',
+    processors: serverState?.processors || 1,
     // последний проход: режим и время — видно в диагностике, а не «на глаз»
     last: lastRun ? { ...lastRun } : null,
   };
@@ -351,12 +377,15 @@ function modelLoadBudgetMs(modelPath) {
 }
 
 /** Аргументы whisper-server: те же по смыслу, что у CLI. */
-function serverArgs({ modelPath, port, threads, vadModel }) {
+function serverArgs({ modelPath, port, threads, vadModel, processors = 1 }) {
   const args = [
     '-m', modelPath,
     '--host', '127.0.0.1',
     '--port', String(port),
     '-t', String(threads),
+    // -p: сколько запросов сервер считает параллельно. Длинную диктовку
+    // режем на части — на многопоточной машине они считаются одновременно.
+    '-p', String(Math.max(1, Number(processors) || 1)),
     // -mc 0: не тащить контекст прошлых фраз — диктовки независимы, а лишний
     //        контекст ещё и замедляет декодер;
     // -bs 1 -bo 1: жадное декодирование вместо перебора вариантов — для
@@ -379,9 +408,10 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
   const bin = serverBinary();
   if (!bin) return null;
   if (serverState && serverState.modelPath === modelPath && serverState.proc?.exitCode === null) {
-    // уже поднимается — второй процесс не нужен
-    if (serverState.ready || warming) return serverState;
-    return null;
+    // Сервер уже есть. Готовый — отдаём как есть, а тот, что ещё грузит веса,
+    // не выдаём за готовый: иначе вызывающий сделает запрос в пустоту и решит,
+    // что модель прогрета.
+    return serverState.ready ? serverState : null;
   }
   stopServer();
   const port = 17800 + Math.floor(Math.random() * 400);
@@ -393,9 +423,11 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
     // потом без VAD, потом совсем простой (флаги декодирования могли не
     // появиться в старых версиях). Порядок важен: каждый следующий шаг теряет
     // скорость или точность, поэтому он только как крайняя мера.
+    const processors = processorCount();
     const attempts = [
-      serverArgs({ modelPath, port, threads, vadModel }),
-      serverArgs({ modelPath, port, threads, vadModel: '' }),
+      serverArgs({ modelPath, port, threads, vadModel, processors }),
+      serverArgs({ modelPath, port, threads, vadModel: '', processors }),
+      serverArgs({ modelPath, port, threads, vadModel: '', processors: 1 }),
       ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(threads), '-nt'],
     ];
     for (const args of attempts) {
@@ -403,6 +435,7 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
       const state = await startServer(bin, args, { port, modelPath, deadlineMs });
       if (state) {
         state.ready = true;
+        state.processors = processors;
         return state;
       }
     }
@@ -426,7 +459,7 @@ async function warm(model) {
   const modelPath = findModel(model);
   if (!modelPath) return { ok: false, reason: 'модель не найдена' };
   if (!serverBinary()) return { ok: false, reason: 'в комплекте нет whisper-server' };
-  const threads = Math.max(1, Math.min(8, require('node:os').cpus().length || 4));
+  const threads = threadCount();
   const server = await ensureServer(modelPath, { threads });
   if (!server) return { ok: false, reason: 'whisper-server не поднялся' };
   // Первый запрос к серверу всегда дольше: он строит вычислительные графы
@@ -619,7 +652,7 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
       resolve({ ok: false, text: '', reason: 'whisper.cpp недоступен' });
       return;
     }
-    const threads = Math.max(1, Math.min(8, require('node:os').cpus().length || 4));
+    const threads = threadCount();
 
     // Серверный режим: модель уже в памяти — текст приходит без холодного старта.
     if (keepLoaded) {
@@ -961,4 +994,6 @@ module.exports = {
   // декодированием и что слабому диску даётся больше времени на веса
   serverArgs,
   modelLoadBudgetMs,
+  threadCount,
+  processorCount,
 };

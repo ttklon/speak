@@ -177,6 +177,26 @@ describe('помощник ввода', () => {
     expect(await host.paste()).toEqual({ ok: false, reason: 'host-not-started' });
   });
 
+  it('отдаёт заголовок активного окна — без нового процесса на фразу', async () => {
+    const title = 'Документ — Word';
+    const proc = fakeProcess({
+      onCommand: (command) =>
+        command === 'TARGET'
+          ? { ok: true, title64: Buffer.from(title, 'utf8').toString('base64') }
+          : { ok: true },
+    });
+    const host = new InputHost({
+      launch: () => {
+        setTimeout(() => proc.reply({ ok: true, ready: true }), 0);
+        return proc;
+      },
+    });
+    const res = await host.target();
+    expect(res).toEqual({ ok: true, title });
+    expect(proc.written).toContain('TARGET');
+    host.stop();
+  });
+
   it('скрипт помощника действительно зовёт SendInput и живёт в цикле', () => {
     const script = buildHostScript();
     expect(script).toContain('SendInput');
@@ -184,6 +204,8 @@ describe('помощник ввода', () => {
     expect(script).toContain('while ($true)');
     expect(script).toContain("'PASTE'");
     expect(script).toContain("'TYPE'");
+    expect(script).toContain("'TARGET'");
+    expect(script).toContain('GetForegroundWindow');
     // PowerShell принимает скрипт в base64 от UTF-16LE
     const decoded = Buffer.from(encodeCommand(script), 'base64').toString('utf16le');
     expect(decoded).toContain('ZsInput');

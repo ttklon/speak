@@ -8,6 +8,9 @@ import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } fro
 import { formatLiveDraft } from '../lib/recognition/liveDraft.js';
 import { createMicWarm } from '../lib/audio/micWarm.js';
 import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
+// Вставка в поле самого приложения: если человек диктует, стоя курсором в
+// поиске или заметке, текст должен попасть туда, а не в предыдущее окно.
+import { insertIntoFocusedField } from '../lib/insertLocal.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS, llmRewrite, polishDictation } from '../lib/ai/textops.js';
 import { describeScreen } from '../lib/ai/vision.js';
@@ -15,9 +18,19 @@ import { playCue } from '../lib/feedback.js';
 import { diag } from '../lib/diagnostics.js';
 import { useToast } from './ToastProvider.jsx';
 
-/** Предпросмотр диктовки: читаем результат системным голосом Windows. */
-function speak(text, language = 'ru', voiceURI = '') {
-  if (!text || typeof speechSynthesis === 'undefined') return;
+/**
+ * Предпросмотр диктовки: читаем результат системным голосом Windows.
+ *
+ * Раньше сбой синтеза речи был неотличим от успеха: `speechSynthesis.speak()`
+ * ничего не обещает, а в системе может не оказаться ни одного голоса. Теперь
+ * вызывающий код узнаёт, что чтение не пошло, и может сказать об этом.
+ */
+function speak(text, language = 'ru', voiceURI = '', onFail = null) {
+  if (!text) return;
+  if (typeof speechSynthesis === 'undefined') {
+    onFail?.('в системе нет синтеза речи');
+    return;
+  }
   try {
     speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
@@ -27,6 +40,15 @@ function speak(text, language = 'ru', voiceURI = '') {
     };
     utter.lang = map[language] || language;
     utter.rate = 1.02;
+    let started = false;
+    utter.onstart = () => {
+      started = true;
+    };
+    utter.onerror = (event) => {
+      // «interrupted»/«canceled» — это мы сами отменили предыдущую фразу
+      const reason = String(event?.error || '');
+      if (!started && !/interrupt|cancel/i.test(reason)) onFail?.(reason || 'синтез речи не ответил');
+    };
     if (voiceURI) {
       const match = speechSynthesis.getVoices?.().find((v) => v.voiceURI === voiceURI);
       if (match) {
@@ -35,8 +57,18 @@ function speak(text, language = 'ru', voiceURI = '') {
       }
     }
     speechSynthesis.speak(utter);
-  } catch {
-    /* голоса нет — молча пропускаем */
+    // Голосов может не быть вовсе: тогда speak() просто ничего не делает.
+    setTimeout(() => {
+      if (started) return;
+      try {
+        if (speechSynthesis.speaking || speechSynthesis.pending) return;
+      } catch {
+        /* ignore */
+      }
+      onFail?.('голос не найден');
+    }, 1600);
+  } catch (err) {
+    onFail?.(String(err?.message || err));
   }
 }
 
@@ -94,6 +126,8 @@ export function DictationProvider({ children }) {
   const { push: pushToast } = useToast();
   // когда последний раз предупреждали, что модель не улучшила диктовку
   const rewriteWarnedAt = useRef(0);
+  // предупреждение о чтении вслух — не чаще раза в 5 минут
+  const readFailWarnedAt = useRef(0);
   // id последней записи в истории: нужен, чтобы поздний ответ модели
   // (после бюджета полировки) обновил именно эту запись, а не чужую
   const lastItemId = useRef('');
@@ -255,7 +289,16 @@ export function DictationProvider({ children }) {
         // и при остановке через кнопку или отпускание хоткея текст молча
         // оставался в истории — в приложении он не появлялся.
         const native = window.zspeakly?.native;
-        if (insert && sessionOpts.current.insert !== false && native?.insertText) {
+        // 1) Поле внутри приложения в фокусе — вставляем прямо в него.
+        //    Никакого буфера и никаких чужих окон: это то место, где человек пишет.
+        const local =
+          insert && sessionOpts.current.insert !== false
+            ? insertIntoFocusedField(cleaned)
+            : { inserted: false };
+        if (local.inserted) {
+          diag.info('stt', 'Диктовка вставлена в поле приложения', { chars: cleaned.length });
+        }
+        if (!local.inserted && insert && sessionOpts.current.insert !== false && native?.insertText) {
           // main отвечает false, если SendKeys не сработал (окно с правами
           // администратора, игра, защищённое поле). Текст уже в буфере —
           // говорим об этом, иначе диктовка выглядит «сломанной».
@@ -286,7 +329,19 @@ export function DictationProvider({ children }) {
             .catch(() => {});
         }
         if (settingsRef.current.readAloud) {
-          speak(cleaned, settingsRef.current.language, settingsRef.current.readAloudVoice || '');
+          const readOnce = Date.now() - readFailWarnedAt.current > 5 * 60 * 1000;
+          speak(cleaned, settingsRef.current.language, settingsRef.current.readAloudVoice || '', (reason) => {
+            diag.warn('stt', 'Чтение вслух не сработало', { reason });
+            if (!readOnce) return;
+            readFailWarnedAt.current = Date.now();
+            pushToast({
+              title: 'Чтение вслух не сработало',
+              description:
+                'В системе не нашлось голоса для русского языка. Windows: «Параметры → Время и язык → Речь → Добавить голоса».',
+              tone: 'warn',
+              ttl: 11000,
+            });
+          });
         }
         // нативное уведомление Windows: «готово, вставлено» — по настройке
         if (settingsRef.current.notifications && window.zspeakly?.native?.notify) {

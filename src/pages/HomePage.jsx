@@ -29,6 +29,22 @@ export default function HomePage() {
   const { dictations, voiceHotkeys, settings, deleteDictation, addDictation } = useAppData();
   const { state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress, cancelProcessing } = useDictation();
   const { push } = useToast();
+  useEffect(() => {
+    if (state !== 'listening') {
+      setTarget(null);
+      return undefined;
+    }
+    let alive = true;
+    const native = typeof window !== 'undefined' ? window.zspeakly?.native : null;
+    Promise.resolve(native?.insertTarget?.())
+      .then((t) => {
+        if (alive && t && typeof t === 'object') setTarget(t);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [state]);
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
   const [hoverId, setHoverId] = useState(null);
@@ -37,6 +53,9 @@ export default function HomePage() {
   // Готовность диктовки: «Всё готово» не должно быть обещанием на пустой
   // установке без модели whisper. В браузере опираемся на Web Speech.
   const [readiness, setReadiness] = useState(null); // null | 'ready' | 'no-model'
+  // Куда попадёт текст: наше поле (диктуем внутрь приложения) или другое окно.
+  // Человек видит это ДО вставки, а не догадывается по результату.
+  const [target, setTarget] = useState(null);
   // эффект печати: постепенно проявляем свежий результат
   const [typed, setTyped] = useState('');
   const [typedId, setTypedId] = useState(null);
@@ -237,6 +256,15 @@ export default function HomePage() {
                 </span>
               )}
             </p>
+            <div className="live-draft__hint">
+              {paused
+                ? 'Уже сказанное сохранено — продолжите, когда будете готовы.'
+                : target?.own
+                  ? 'Вставим в поле этого приложения — туда, где стоит курсор.'
+                  : target?.title
+                    ? `Вставим в «${target.title}».`
+                    : 'Вставим туда, где стоит курсор.'}
+            </div>
           </div>
         ) : null}
 
