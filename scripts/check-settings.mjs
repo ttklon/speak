@@ -14,6 +14,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { TUNED_KEYS } from '../src/lib/autotune.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
@@ -30,6 +31,10 @@ const SERVICE = new Set([
   'voiceHotkeys', // массивы живут отдельными ключами хранилища
   'textActions',
 ]);
+
+// 1.6.0: значения, которые приложение выбирает само (src/lib/autotune.js).
+// Их нет в интерфейсе намеренно — «настройка, которую нельзя испортить».
+for (const key of TUNED_KEYS) SERVICE.add(key);
 
 // Настройки, которые живут не в «Настройках», а на странице «Горячие клавиши»:
 // поиск по настройкам их и не должен находить.

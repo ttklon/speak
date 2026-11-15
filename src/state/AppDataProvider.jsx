@@ -16,6 +16,8 @@ import {
 import { uid } from '../lib/utils.js';
 import { pruneByAge } from '../lib/retention.js';
 import { migrateSettings } from '../lib/settingsMigration.js';
+import { tuneSettings } from '../lib/autotune.js';
+import { trimByBytes } from '../lib/clipboardBudget.js';
 import {
   asList,
   sanitizeClipboard,
@@ -83,8 +85,10 @@ export function AppDataProvider({ children }) {
   const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => [], {
     sanitize: sanitizeDictionary,
   });
+  // Чистим и по весу: история с картинками могла вырасти до десятков мегабайт,
+  // и её разбор при запуске был заметен как «приложение долго открывается».
   const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => [], {
-    sanitize: sanitizeClipboard,
+    sanitize: (stored, fallback) => trimByBytes(sanitizeClipboard(stored, fallback)),
   });
   const [voiceHotkeys, setVoiceHotkeys] = usePersistentState(
     STORAGE_KEYS.hotkeys,
@@ -127,7 +131,9 @@ export function AppDataProvider({ children }) {
     // 1.5.1: старые умолчания (small + живая расшифровка) превращали
     // 30-секундную диктовку в минуту ожидания. Миграция вынесена в
     // src/lib/settingsMigration.js и покрыта тестами — здесь только вызов.
-    setSettings((prev) => migrateSettings(prev, DEFAULT_SETTINGS));
+    // 1.6.0: значения, которые раньше были тумблерами (VAD, «держать модель в
+    // памяти», лимиты истории, способ вставки), приложение выбирает само.
+    setSettings((prev) => tuneSettings(migrateSettings(prev, DEFAULT_SETTINGS)));
     setMerged(true);
   }, [merged, setSettings]);
 
@@ -195,8 +201,11 @@ export function AppDataProvider({ children }) {
     [setStats],
   );
 
+  // Правка любой настройки проходит через tuneSettings: если интерфейс (или
+  // старая версия профиля) попытается выставить значение, которое приложение
+  // выбирает само, оно тут же вернётся к идеальному.
   const updateSettings = useCallback(
-    (patch) => setSettings((prev) => ({ ...prev, ...patch })),
+    (patch) => setSettings((prev) => tuneSettings({ ...prev, ...patch })),
     [setSettings],
   );
 
@@ -240,7 +249,7 @@ export function AppDataProvider({ children }) {
         for (const entry of next) {
           if (kept.length < limit || entry.pinned) kept.push(entry);
         }
-        return kept;
+        return trimByBytes(kept);
       });
     },
     [setClipboard, settings.clipboardMaxItems],

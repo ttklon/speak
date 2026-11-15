@@ -112,21 +112,19 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     if (!START_HIDDEN) mainWindow.show();
     // Первая установка: движок уже в комплекте, модель докачиваем сами.
-    // Не блокирует запуск и не мешает работать, если сети нет.
-    setTimeout(() => prepareRecognition?.(), 4000);
+    // Стартуем почти сразу после появления окна: пока человек читает первый
+    // экран, модель уже качается. Не блокирует запуск и не мешает, если сети нет.
+    setTimeout(() => prepareRecognition?.(), 800);
     // Модель в памяти: поднимаем whisper-server заранее, чтобы первая
     // диктовка не ждала загрузку весов (как в быстрых диктовочных приложениях).
-    setTimeout(() => applyHardwareModel?.(), 1200);
+    setTimeout(() => applyHardwareModel?.(), 600);
     setTimeout(() => {
       const cfg = store?.get('zs:settings') || {};
-      if (cfg.keepModelLoaded !== true) return;
-      whisper
-        .warm(cfg.whisperModel || 'base')
-        .then((res) => {
-          if (res?.ok) logger.info('stt', 'Модель прогрета при запуске', { keep: true, port: res.port || 0 });
-        })
-        .catch(() => {});
-    }, 2500);
+      // 1.6.0: «держать модель в памяти» больше не тумблер — приложение делает
+      // это всегда, если профиль явно не против.
+      if (cfg.keepModelLoaded === false) return;
+      warmRecognition(cfg.whisperModel || 'base');
+    }, 500);
   });
 
   if (isDev && process.env.ZSPEAKLY_DEV_URL !== 'none') {
@@ -434,7 +432,7 @@ function registerHudIpc() {
         // Только если сервера нет вовсе: если он уже греется, второй прогрев
         // отнял бы ядра у распознавания этой же фразы.
         if (cfg.keepModelLoaded !== false && !server.ready && !server.running && !whisper.isBusy?.()) {
-          whisper.warm(cfg.whisperModel || 'base').catch(() => {});
+          warmRecognition(cfg.whisperModel || 'base');
         }
       } catch {
         /* прогрев — не критичный путь */
@@ -2080,6 +2078,28 @@ function replaceSelection(text) {
  * начале записи: пока человек говорит, PowerShell успевает запуститься, и
  * вставка не платит за холодный старт.
  */
+// Прогрев движка один на всё приложение: и при запуске, и при начале записи.
+// whisper.cjs сам решает, нужен ли новый сервер (если модель уже в памяти —
+// второй не поднимается), поэтому повторный вызов безопасен и дешёвый.
+let warmPromise = null;
+function warmRecognition(model = 'base') {
+  if (warmPromise) return warmPromise;
+  warmPromise = whisper
+    .warm(model)
+    .then((res) => {
+      if (res?.ok) logger.info('stt', 'Модель в памяти', { keep: true, port: res.port || 0 });
+      return res;
+    })
+    .catch(() => null)
+    .finally(() => {
+      // через минуту разрешаем ещё раз: модель могли сменить в настройках
+      setTimeout(() => {
+        warmPromise = null;
+      }, 60_000);
+    });
+  return warmPromise;
+}
+
 function warmInputHost() {
   try {
     if (!inputHost.available()) return;
@@ -2308,10 +2328,8 @@ app.whenReady().then(() => {
   // первая диктовка должна быть такой же быстрой, как десятая.
   try {
     const booleans = store.get('zs:settings') || {};
-    if (booleans.keepModelLoaded && whisper.serverStatus().available) {
-      setTimeout(() => {
-        whisper.warm(booleans.whisperModel || 'small').catch(() => {});
-      }, 2500);
+    if (booleans.keepModelLoaded !== false && whisper.serverStatus().available) {
+      setTimeout(() => warmRecognition(booleans.whisperModel || 'base'), 900);
     }
   } catch {
     /* ignore */

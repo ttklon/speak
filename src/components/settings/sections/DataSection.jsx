@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
-import { Button, Select } from '../../ui/Controls.jsx';
+import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { plural } from '../../../lib/ai/style.js';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
@@ -8,12 +8,6 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
-function retentionLabel(value) {
-  return (
-    { '1': '24 часа', '7': '1 неделя', '30': '1 месяц', '90': '3 месяца', '0': 'Не хранить' }[String(value)] ||
-    `${value} дней`
-  );
-}
 
 export default function DataSection({ onOpenSection }) {
   const {
@@ -134,23 +128,13 @@ export default function DataSection({ onOpenSection }) {
         <div className="settings-group__title">Диктовки</div>
         <div className="setting-row">
           <div className="setting-row__label">
-            Хранить
+            Срок хранения
             <div className="setting-row__desc">
-              Старые расшифровки удаляются автоматически — сразу при смене срока и при запуске.
+              Месяц — и для диктовок, и для буфера. Старые записи удаляются при запуске и при
+              смене данных; закреплённое в буфере остаётся.
             </div>
           </div>
-          <Select
-            value={String(settings.dictationRetentionDays)}
-            onChange={(v) => updateSettings({ dictationRetentionDays: Number(v) })}
-            options={[
-              { value: '1', label: '24 часа' },
-              { value: '7', label: '1 неделя' },
-              { value: '30', label: '1 месяц' },
-              { value: '90', label: '3 месяца' },
-              { value: '3650', label: 'Бессрочно' },
-            ]}
-            width={130}
-          />
+          <span className="setting-row__value">30 дней</span>
         </div>
         <div className="setting-row">
           <div className="setting-row__label">Занято места</div>
@@ -226,7 +210,12 @@ export default function DataSection({ onOpenSection }) {
       <div className="settings-group">
         <div className="settings-group__title">Буфер обмена</div>
         <div className="setting-row">
-          <div className="setting-row__label">Элементов в истории</div>
+          <div className="setting-row__label">
+            Элементов в истории
+            <div className="setting-row__desc">
+              Сколько помнить — приложение решает само: последние 5000 записей или месяц.
+            </div>
+          </div>
           <span className="setting-row__value">{clipboard.length}</span>
           <Button
             variant="bare"
@@ -238,15 +227,6 @@ export default function DataSection({ onOpenSection }) {
           >
             Очистить
           </Button>
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Лимит хранения</div>
-          <Select
-            value={String(settings.clipboardRetentionDays)}
-            onChange={(v) => updateSettings({ clipboardRetentionDays: Number(v) })}
-            options={[1, 7, 30, 90].map((d) => ({ value: String(d), label: retentionLabel(d) }))}
-            width={130}
-          />
         </div>
       </div>
 
@@ -301,19 +281,6 @@ export default function DataSection({ onOpenSection }) {
           <Button variant="ghost" size="sm" onClick={() => onOpenSection('diagnostics')}>
             Открыть
           </Button>
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Уведомления
-            <div className="setting-row__desc">
-              Тост Windows после расшифровки — по клику открывается окно ZSpeakly. Тихий: звука
-              нет. В браузере системных уведомлений нет, там настройка ничего не меняет.
-            </div>
-          </div>
-          <Toggle
-            checked={settings.notifications}
-            onChange={(v) => updateSettings({ notifications: v })}
-          />
         </div>
       </div>
 

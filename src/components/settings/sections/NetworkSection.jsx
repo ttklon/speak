@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Button, Select } from '../../ui/Controls.jsx';
-import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { engineName } from '../../../lib/recognition/engine.js';
@@ -130,43 +129,6 @@ export default function NetworkSection() {
         </div>
       </div>
 
-      <div className="settings-group">
-        <div className="settings-group__title">Обновления</div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Проверять обновления на GitHub
-            <div className="setting-row__desc">Раз в сутки при наличии сети, без отправки телеметрии.</div>
-          </div>
-          <Toggle
-            checked={settings.checkUpdates !== false}
-            onChange={(v) => updateSettings({ checkUpdates: v })}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Канал</div>
-          <Select
-            value={settings.updateChannel || 'stable'}
-            onChange={(v) => {
-              updateSettings({ updateChannel: v });
-              // сообщаем апдейтеру: бета-канал включается сразу
-              window.zspeakly?.native?.setUpdateChannel?.(v);
-              push({
-                title: v === 'beta' ? 'Бета-канал включён' : 'Стабильный канал',
-                description:
-                  v === 'beta'
-                    ? 'Приложение будет видеть и предрелизные версии.'
-                    : 'Только проверенные релизы.',
-                tone: 'success',
-              });
-            }}
-            options={[
-              { value: 'stable', label: 'Стабильный' },
-              { value: 'beta', label: 'Бета' },
-            ]}
-            width={160}
-          />
-        </div>
-      </div>
     </div>
   );
 }

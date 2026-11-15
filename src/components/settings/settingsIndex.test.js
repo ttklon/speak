@@ -18,9 +18,9 @@ describe('индекс настроек', () => {
   it('находит настройки по частым запросам', () => {
     const find = (q) => SETTING_ENTRIES.filter((e) => e.title.toLowerCase().includes(q)).map((e) => e.title);
     expect(find('звук')).toContain('Звуковой отклик');
-    expect(find('уведомл')).toContain('Уведомления');
-    expect(find('пароли')).toContain('Скрывать пароли');
-    expect(find('обновлен')).toContain('Проверять обновления на GitHub');
+    expect(find('полировк')).toContain('Умная полировка');
+    expect(find('язык')).toContain('Язык диктовки');
+    expect(find('трей')).toContain('Свернуть в трей при закрытии');
     expect(find('ошибки')).toContain('Отправлять ошибки и логи');
   });
 
@@ -40,14 +40,15 @@ describe('индекс настроек', () => {
   it('находит строки, которые рисует отдельный компонент (микрофон)', () => {
     const find = (q) => SETTING_ENTRIES.filter((e) => e.title.toLowerCase().includes(q)).map((e) => e.title);
     expect(find('устройство микрофона')).toContain('Устройство микрофона');
-    expect(find('горячий микрофон')).toContain('Горячий микрофон (предролл)');
+    expect(find('тест микрофона')).toContain('Тест микрофона');
   });
 
   it('находит строки по словам из конца описания', () => {
     const byDesc = (q) => SETTING_ENTRIES.filter((e) => (e.desc || '').toLowerCase().includes(q));
     expect(byDesc('кнопки').map((e) => e.title)).toContain('Плавающий индикатор записи');
-    // описание поменялось вместе со смыслом: полировка больше не тормозит вставку
-    expect(byDesc('остаются правила').map((e) => e.title)).toContain('Переписывать диктовку моделью');
-    expect(byDesc('ждать полировку').map((e) => e.title)).toContain('Ждать модель');
+    // 1.6.0: в интерфейсе остались только настройки-вкусы, остальное выбирает
+    // autotune — поэтому проверяем именно то, что человек видит
+    expect(byDesc('офлайн-правил').map((e) => e.title)).toContain('Умная полировка');
+    expect(byDesc('одним json-файлом').map((e) => e.title)).toContain('Скачать копию');
   });
 });

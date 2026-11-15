@@ -121,6 +121,10 @@ const SEED_SETTINGS = {
   screenContext: false,
   // сценарий «модель в памяти» проверяет включение тумблера с нуля
   keepModelLoaded: false,
+  // полировка моделью по умолчанию включена; в E2E она переписала бы весь
+  // текст распознавания ответом мока, поэтому здесь выключена, а сценарий
+  // «модель» включает её намеренно
+  aiDictationRewrite: false,
   diagnostics: false,
   checkUpdates: true,
   soundFeedback: false,
@@ -608,7 +612,9 @@ async function scenarioOnboarding(browser) {
 }
 
 async function scenarioDictation(browser) {
-  const page = await openPage(browser, '#/home');
+  // полировка выключена: проверяем путь «речь → текст → вставка», а модель
+  // проверяется отдельным сценарием (иначе в историю попадает ответ модели)
+  const page = await openPage(browser, '#/home', { settings: { aiDictationRewrite: false } });
   takeErrors(page);
   const stored = () =>
     page.evaluate(() => {
@@ -821,8 +827,8 @@ async function scenarioFloatingHud(browser) {
   await page.close();
 }
 
-// Тумблер «Постобработка текста»: включён — паразиты и пунктуация чистятся,
-// выключен — в историю попадает ровно то, что вернул движок.
+// Постобработка — не тумблер с 1.6.0: правила чистят текст всегда, а профиль
+// со старым значением `aiProcessing: false` приложение исправляет само.
 async function scenarioCleanupToggle(browser) {
   const messy = 'э-э  ну , привет   как дела';
   const run = async (aiProcessing) => {
@@ -849,17 +855,29 @@ async function scenarioCleanupToggle(browser) {
   const off = await run(false);
   record(
     'сценарии',
-    'постобработка: включённая чистка убирает паразитов и ставит точку',
+    'постобработка: чистка убирает паразитов и ставит точку',
     on.stored !== messy && /Привет как дела/.test(on.stored) && !/э-э|ну/i.test(on.stored),
     on.stored,
   );
+  const forced = await page_evaluate_processing(browser);
   record(
     'сценарии',
-    'постобработка: выключенная оставляет текст движка как есть',
-    off.stored === messy.trim(),
-    off.stored,
+    'постобработка: старый профиль с «выключено» исправляется сам',
+    off.stored === on.stored && forced === true,
+    `${off.stored} · в профиле aiProcessing=${forced}`,
   );
   record('сценарии', 'постобработка: без ошибок консоли', [...on.errors, ...off.errors].length === 0, [...on.errors, ...off.errors][0] || '');
+}
+
+// Что реально лежит в профиле после запуска (autotune мог исправить значение).
+async function page_evaluate_processing(browser) {
+  const page = await openPage(browser, '#/home', { settings: { aiProcessing: false } });
+  const value = await page.evaluate(() => {
+    const raw = window.__e2e.read('zs.settings') || {};
+    return raw.aiProcessing;
+  });
+  await page.close();
+  return value;
 }
 
 // Вторая стадия чистки: включённая галочка «Переписывать диктовку моделью»
@@ -1271,7 +1289,8 @@ async function scenarioLiveWhisper(browser) {
   // текст в черновике обновляется. Без настройки — ни одного лишнего вызова.
   const run = async (liveWhisper) => {
     const page = await openPage(browser, '#/home', {
-      settings: { liveWhisper },
+      // полировка выключена: сценарий про проходы распознавания, а не про модель
+      settings: { liveWhisper, aiDictationRewrite: false },
       patchNative: () => {
         const native = window.zspeakly && window.zspeakly.native;
         if (!native) return;
@@ -1588,9 +1607,9 @@ async function scenarioSettingsSections(browser) {
     });
     if (!info.text || info.text < 40) empty.push(`${section} (${info.title || 'пусто'})`);
   }
-  // язык живёт в разделе «Приложение» — возвращаемся туда перед проверкой
+  // 1.6.0: язык живёт в разделе «Функции» (в «Приложении» остались вид и звук)
   await page.evaluate(() => {
-    window.location.hash = '#/settings?section=app&from=home';
+    window.location.hash = '#/settings?section=features&from=home';
   });
   await sleep(400);
   const labels = await page.evaluate(() => document.body.innerText);
@@ -1675,27 +1694,32 @@ async function scenarioSettingsSearch(browser) {
       titleRe,
     );
   };
-  const extra = await byDesc('предролл', 'Горячий микрофон');
+  const extra = await byDesc('устройство микрофона', 'Устройство микрофона');
   record(
     'сценарии',
     'поиск по настройкам: строки отдельного компонента тоже находятся',
     extra,
-    extra ? 'нашёл «Горячий микрофон»' : 'не нашёл',
+    extra ? 'нашёл «Устройство микрофона»' : 'не нашёл',
   );
-  const insertMethod = await byDesc('sendinput', 'Способ вставки');
+  // 1.6.0: «Способ вставки» и «Проверять обновления» выбираются автоматически,
+  // поэтому в поиске их быть не должно — зато должна находиться полировка.
+  const polish = await byDesc('полировк', 'Умная полировка');
+  const noStale = await page.evaluate(
+    () => !/Способ вставки|Проверять обновления на GitHub/.test(document.body.innerText),
+  );
   record(
     'сценарии',
-    'поиск по настройкам: находит способ вставки',
-    insertMethod,
-    insertMethod ? 'нашёл «Способ вставки»' : 'не нашёл',
+    'поиск по настройкам: находит то, что осталось у человека, и без убранных тумблеров',
+    polish && noStale,
+    `полировка ${polish ? 'да' : 'нет'} · лишних тумблеров ${noStale ? 'нет' : 'есть'}`,
   );
   const tailWord = await byDesc('кнопки', 'Плавающий индикатор');
-  const telemetry = await byDesc('телеметрии', 'Проверять обновления');
+  const byDescRules = await byDesc('офлайн-правил', 'Умная полировка');
   record(
     'сценарии',
     'поиск по настройкам: слова из конца описания тоже находятся',
-    tailWord && telemetry,
-    `кнопки ${tailWord ? 'да' : 'нет'} · телеметрии ${telemetry ? 'да' : 'нет'}`,
+    tailWord && byDescRules,
+    `кнопки ${tailWord ? 'да' : 'нет'} · правила ${byDescRules ? 'да' : 'нет'}`,
   );
   await page.close();
 }
@@ -1759,11 +1783,14 @@ async function scenarioAiInstruction(browser) {
   // офлайн-словарём и честно предупреждает о частичности.
   const offline = await openPage(browser, '#/hotkeys', {
     settle: 400,
-    settings: { aiProcessing: false },
     patchNative: () => {
       const native = window.zspeakly && window.zspeakly.native;
       if (!native) return;
       native.readSelection = async () => ({ text: 'спасибо за встречу и за помощь' });
+      // модель недоступна — как без запущенной Ollama: 1.6.0 держит постобработку
+      // включённой всегда, значит «без модели» проверяется отказом сервера
+      native.httpPost = async () => ({ ok: false, status: 0 });
+      native.httpGet = async () => ({ ok: false, status: 0 });
     },
   });
   takeErrors(offline);
@@ -2735,7 +2762,10 @@ async function scenarioBackup(browser) {
 // «Держать модель в памяти»: тумблер обязан реально просить main поднять
 // whisper-server, а не просто менять галочку.
 async function scenarioWarmModel(browser) {
-  const page = await openPage(browser, '#/settings?section=features&from=home', { settle: 700 });
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 700,
+    settings: { keepModelLoaded: false },
+  });
   takeErrors(page);
   const clicked = await page.evaluate(() => {
     const row = [...document.querySelectorAll('.setting-row')].find((r) => /Держать модель в памяти/i.test(r.innerText));
@@ -3791,7 +3821,18 @@ async function scenarioReadAloud(browser) {
 }
 
 async function scenarioAiOff(browser) {
-  const page = await openPage(browser, '#/hotkeys', { settle: 400, settings: { aiProcessing: false } });
+  // 1.6.0: постобработка включена всегда, поэтому «без модели» — это отказ
+  // сервера и выключенная полировка (её выбор остаётся у человека)
+  const page = await openPage(browser, '#/hotkeys', {
+    settle: 400,
+    settings: { aiDictationRewrite: false },
+    patchNative: () => {
+      const native = window.zspeakly && window.zspeakly.native;
+      if (!native) return;
+      native.httpPost = async () => ({ ok: false, status: 0 });
+      native.httpGet = async () => ({ ok: false, status: 0 });
+    },
+  });
   takeErrors(page);
   const presetId = await page.evaluate(() => (window.__e2e.read('zs.presets') || [])[0]?.id || null);
   await page.evaluate((id) => window.__e2e.emit('text-action', id), presetId);
@@ -3952,8 +3993,11 @@ async function scenarioMainSync(browser) {
 /* ── диктовка с учётом экрана ─────────────────────────────────────────── */
 
 async function scenarioScreenAware(browser) {
-  // 1. Модель не настроена: снимок всё равно снимается, диктовка идёт дальше
-  const page = await openPage(browser, '#/home', { settings: { aiProcessing: false } });
+  // 1. Модель не настроена (адреса нет) и полировка выключена: снимок всё равно
+  // снимается, диктовка идёт дальше и в сеть ничего не уходит
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, aiEndpoint: '' },
+  });
   await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
   await sleep(1400);
   const during = await bridgeCalls(page);

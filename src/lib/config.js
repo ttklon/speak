@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.5.9',
+  version: '1.6.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -162,9 +162,9 @@ export const DEFAULT_SETTINGS = {
   translateTarget: 'en',
   aiProcessing: true,
   aiEndpoint: 'http://localhost:11434', // Ollama, опционально
-  // вторая стадия чистки диктовки моделью: по умолчанию выключена, потому что
-  // добавляет 1–3 секунды к каждой вставке
-  aiDictationRewrite: false,
+  // вторая стадия чистки диктовки моделью: 1.6.0 — включена по умолчанию
+  // (ждём её не дольше aiPolishBudgetMs, дальше текст вставляется без неё)
+  aiDictationRewrite: true,
   // сколько ждать полировку моделью, прежде чем вставить текст после
   // офлайн-правил: диктовка не должна ждать локальную модель секундами
   aiPolishBudgetMs: 1500,
@@ -191,8 +191,9 @@ export const DEFAULT_SETTINGS = {
   autoOptimize: true,
   audioDeviceId: 'default',
   // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
-  // По умолчанию выключено — микрофон работал бы всё время.
-  micPreroll: false,
+  // 1.6.0: включён по умолчанию — скорость важнее, тумблер остался в «Функциях →
+  // Микрофон» для тех, кому мешает горящий индикатор микрофона.
+  micPreroll: true,
   // промежуточная расшифровка whisper. По умолчанию выключена: каждый
   // промежуточный проход — это ещё один запуск whisper, и на модели small
   // запись в 30 секунд превращалась в минуту ожидания без результата.

@@ -27,25 +27,11 @@ export default function AppSection() {
     <div>
       <h2 className="settings-section__title">Приложение</h2>
       <p className="settings-section__desc">
-        Внешний вид, запуск и поведение окна. Всё применяется сразу.
+        Внешний вид, звук, микрофон и поведение окна. Всё применяется сразу — кнопки «Сохранить» нет.
       </p>
 
       <div className="settings-group">
         <div className="settings-group__title">Интерфейс</div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Язык диктовки
-            <div className="setting-row__desc">
-              Язык распознавания речи. Сам интерфейс пока на русском — здесь выбор на него не влияет.
-            </div>
-          </div>
-          <Select
-            value={settings.language}
-            onChange={(v) => updateSettings({ language: v })}
-            options={LANGUAGES.map((l) => ({ value: l.id, label: l.native }))}
-            width={170}
-          />
-        </div>
         <div className="setting-row">
           <div className="setting-row__label">Тема</div>
           <Select
@@ -132,13 +118,6 @@ export default function AppSection() {
             <div className="setting-row__desc">Короткий сигнал при старте и остановке записи.</div>
           </div>
           <Toggle checked={settings.soundFeedback} onChange={(v) => updateSettings({ soundFeedback: v })} />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Эффект печати
-            <div className="setting-row__desc">Текст появляется по словам, а не целиком.</div>
-          </div>
-          <Toggle checked={settings.typingEffect} onChange={(v) => updateSettings({ typingEffect: v })} />
         </div>
       </div>
 

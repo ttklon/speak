@@ -1,108 +1,38 @@
-import { useState } from 'react';
-import { Check } from 'lucide-react';
-import { Button, Select } from '../../ui/Controls.jsx';
+import { Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { LANGUAGES } from '../../../lib/config.js';
-import { engineName } from '../../../lib/recognition/engine.js';
 import ModelManager from './ModelManager.jsx';
-import { useToast } from '../../../state/ToastProvider.jsx';
 
+/**
+ * Экран «Функции» — только то, что действительно зависит от вкуса.
+ *
+ * Раньше здесь было полтора десятка тумблеров: VAD, «подбирать модель»,
+ * «держать модель в памяти», лимиты истории буфера, срок хранения, способ
+ * вставки, бюджет ожидания модели, адрес и имя модели, «не тратить время на
+ * тишину». Каждый из них имел один правильный ответ, а неправильный делал
+ * диктовку медленнее или тише. Теперь эти значения задаёт `lib/autotune.js`,
+ * а человек выбирает язык, полировку и качество распознавания.
+ */
 export default function FeaturesSection() {
   const { settings, updateSettings, presets } = useAppData();
-  const { push } = useToast();
-
-  // сочетание показываем настоящее, из настроек, а не захардкоженное
-  const translateKeys = (() => {
-    const hit = (presets || []).find((p) => p.id === 'to-english' || /англ/i.test(p.prompt || ''));
-    return hit?.keys?.length ? hit.keys.join(' + ') : '';
-  })();
-  const [showLanguages, setShowLanguages] = useState(false);
 
   return (
     <div>
       <h2 className="settings-section__title">Функции</h2>
-      <p className="settings-section__desc">Выберите, как речь преобразуется в текст.</p>
+      <p className="settings-section__desc">
+        Остальное приложение настроило за вас: скорость важнее тумблеров.
+      </p>
 
       <div className="settings-group">
-        <div className="settings-group__title">Обработка ИИ</div>
+        <div className="settings-group__title">Диктовка</div>
         <div className="setting-row">
           <div className="setting-row__label">
-            Постобработка текста
+            Язык диктовки
             <div className="setting-row__desc">
-              Убирает слова-паразиты, расставляет пунктуацию и заглавные буквы. Работает офлайн-правилами.
+              На нём распознаётся речь. Интерфейс пока русский — на него выбор не влияет.
             </div>
           </div>
-          <Toggle checked={settings.aiProcessing} onChange={(v) => updateSettings({ aiProcessing: v })} />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Локальная модель (Ollama)
-            <div className="setting-row__desc">
-              Адрес Ollama: нужен для AI-инструкций, подсказок с экрана и переписывания
-              диктовки. Если недоступен — ZSpeakly тихо вернётся к офлайн-правилам.
-            </div>
-          </div>
-          <input
-            className="input settings-inline-input"
-            value={settings.aiEndpoint}
-            onChange={(e) => updateSettings({ aiEndpoint: e.target.value })}
-            placeholder="http://localhost:11434"
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Переписывать диктовку моделью
-            <div className="setting-row__desc">
-              Модель доводит формулировки после офлайн-правил. Ждём её не дольше бюджета ниже:
-              не успела — вставляется текст после правил, а ответ модели доходит в историю.
-              Без запущенной Ollama остаются правила.
-            </div>
-          </div>
-          <Toggle
-            checked={settings.aiDictationRewrite === true}
-            onChange={(v) => updateSettings({ aiDictationRewrite: v })}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Ждать модель
-            <div className="setting-row__desc">
-              Сколько миллисекунд ждать полировку, прежде чем вставить текст без неё. Меньше —
-              быстрее вставка, больше — чаще «доведённый» текст. 1500 по умолчанию.
-            </div>
-          </div>
-          <input
-            className="input settings-inline-input"
-            type="number"
-            min="300"
-            max="8000"
-            step="100"
-            value={settings.aiPolishBudgetMs}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              updateSettings({ aiPolishBudgetMs: Number.isFinite(n) ? Math.min(8000, Math.max(300, n)) : 1500 });
-            }}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Модель</div>
-          <input
-            className="input settings-inline-input"
-            value={settings.aiModel}
-            onChange={(e) => updateSettings({ aiModel: e.target.value })}
-            placeholder="qwen2.5:0.5b"
-          />
-        </div>
-      </div>
-
-      <div className="settings-group">
-        <div className="settings-group__title">Разговорные языки</div>
-        <div className="settings-group__desc">
-          Выберите языки, на которых вы можете говорить. Это повышает точность распознавания.
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Язык диктовки</div>
           <Select
             value={settings.language}
             onChange={(v) => updateSettings({ language: v })}
@@ -112,99 +42,42 @@ export default function FeaturesSection() {
         </div>
         <div className="setting-row">
           <div className="setting-row__label">
+            Умная полировка
+            <div className="setting-row__desc">
+              Локальная модель доводит формулировки после офлайн-правил: ждём её не дольше 0,9
+              секунды, а если её нет — работают правила, они включены всегда.
+            </div>
+          </div>
+          <Toggle
+            checked={Boolean(settings.aiDictationRewrite)}
+            onChange={(v) => updateSettings({ aiDictationRewrite: v })}
+          />
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
             Живая расшифровка
             <div className="setting-row__desc">
-              Пока вы говорите, приложение раз в 2,5 секунды просит whisper.cpp распознать уже
-              сказанное — текст в плашке появляется по ходу речи. Работает только с whisper.cpp:
-              в браузере текст и так приходит частями. На слабом компьютере это заметная нагрузка,
-              выключите — расшифровка будет одна, после остановки.
+              Текст появляется по ходу речи: раз в 2,5 секунды — отдельный проход движка. На
+              слабом компьютере это заметная нагрузка; по умолчанию выключено, чтобы вставка
+              была максимально быстрой.
             </div>
           </div>
           <Toggle
-            checked={settings.liveWhisper !== false}
-            onChange={(v) => {
-              updateSettings({ liveWhisper: v });
-              // Честное предупреждение: живой текст на большой модели — это
-              // несколько whisper-проходов за одну диктовку.
-              if (v && ['small', 'medium', 'large-v3', 'large-v3-turbo', 'large-v3-turbo-q5_0'].includes(settings.whisperModel)) {
-                push({
-                  title: 'Живая расшифровка на этой модели будет медленной',
-                  description: 'Каждые 2,5 секунды — новый проход whisper. С моделью base или tiny текст успевает, с small и больше — тормозит.',
-                  tone: 'warn',
-                  ttl: 12000,
-                });
-              }
-            }}
+            checked={settings.liveWhisper === true}
+            onChange={(v) => updateSettings({ liveWhisper: v })}
           />
         </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Не тратить время на тишину
-            <div className="setting-row__desc">
-              Движок сам находит речь (Silero VAD) и не прогоняет через модель паузы и
-              «э-э». Ответ приходит раньше, а выдуманные фразы на пустом звуке не появляются.
-              Выключите, только если диктовка обрывается на тихом голосе.
+        {presets?.length ? (
+          <div className="setting-row">
+            <div className="setting-row__label">
+              Инструкции по выделенному тексту
+              <div className="setting-row__desc">
+                «Перевести на английский», «Сделать формально» и остальные — в разделе «Горячие
+                клавиши». Там же их сочетания.
+              </div>
             </div>
-          </div>
-          <Toggle
-            checked={settings.vadEnabled !== false}
-            onChange={(v) => updateSettings({ vadEnabled: v })}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Подбирать модель автоматически
-            <div className="setting-row__desc">
-              Если короткая фраза распознаётся дольше четырёх секунд, приложение само
-              переключится на быструю модель (base-q5_1 или base) и скажет об этом.
-              Вам не нужно разбираться в каталоге моделей, чтобы диктовка перестала
-              тормозить. Выключите, если хотите выбрать модель сами.
-            </div>
-          </div>
-          <Toggle
-            checked={settings.autoOptimize !== false}
-            onChange={(v) => updateSettings({ autoOptimize: v })}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Дополнительные варианты</div>
-          <Button variant="ghost" size="sm" onClick={() => setShowLanguages((v) => !v)}>
-            {showLanguages ? 'Скрыть' : 'Выбрать варианты'}
-          </Button>
-        </div>
-        {showLanguages ? (
-          <div className="lang-list">
-            {LANGUAGES.map((l) => (
-              <button
-                key={l.id}
-                type="button"
-                className={`lang-item ${settings.language === l.id ? 'is-active' : ''}`}
-                onClick={() => updateSettings({ language: l.id })}
-              >
-                <span>{l.label}</span>
-                <span className="lang-item__native">{l.native}</span>
-                {settings.language === l.id ? <Check size={12} style={{ color: 'var(--green)' }} /> : null}
-              </button>
-            ))}
           </div>
         ) : null}
-      </div>
-
-      <div className="settings-group">
-        <div className="settings-group__title">Язык перевода для инструкций</div>
-        <div className="settings-group__desc">
-          Куда переводить выделенный текст, когда срабатывает инструкция «Перевести на английский»
-          {translateKeys ? ` (${translateKeys})` : ''}.
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Переводить на</div>
-          <Select
-            value={settings.translateTarget}
-            onChange={(v) => updateSettings({ translateTarget: v })}
-            options={LANGUAGES.map((l) => ({ value: l.id, label: l.native }))}
-            width={190}
-          />
-        </div>
       </div>
 
       <ModelManager />
@@ -213,68 +86,15 @@ export default function FeaturesSection() {
         <div className="settings-group__title">Буфер обмена</div>
         <div className="setting-row">
           <div className="setting-row__label">
-            Мониторить буфер обмена
+            Запоминать скопированное
             <div className="setting-row__desc">
-              Сохраняет всё, что вы копируете, и форматирует для быстрого поиска.
+              История текста, картинок и паролей хранится на этом компьютере; срок и лимит
+              подобраны автоматически — за месяц набирается несколько тысяч записей.
             </div>
           </div>
           <Toggle
-            checked={settings.clipboardMonitor}
+            checked={settings.clipboardMonitor !== false}
             onChange={(v) => updateSettings({ clipboardMonitor: v })}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Максимальный размер истории</div>
-          <Select
-            value={String(settings.clipboardMaxItems)}
-            onChange={(v) => updateSettings({ clipboardMaxItems: Number(v) })}
-            options={[1000, 5000, 10000, 50000].map((n) => ({ value: String(n), label: n.toLocaleString('ru-RU') }))}
-            width={130}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Хранить</div>
-          <Select
-            value={String(settings.clipboardRetentionDays)}
-            onChange={(v) => updateSettings({ clipboardRetentionDays: Number(v) })}
-            options={[
-              { value: '1', label: '24 часа' },
-              { value: '7', label: '1 неделя' },
-              { value: '30', label: '1 месяц' },
-              { value: '0', label: 'Не хранить' },
-            ]}
-            width={130}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Скрывать пароли</div>
-          <Toggle
-            checked={settings.hidePasswords}
-            onChange={(v) => updateSettings({ hidePasswords: v })}
-          />
-        </div>
-      </div>
-
-      <div className="settings-group">
-        <div className="settings-group__title">Вставка текста</div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Способ вставки
-            <div className="setting-row__desc">
-              «Буфер обмена» кладёт текст в буфер и жмёт Ctrl+V, прежнее содержимое возвращается через
-              полсекунды — это работает почти везде. «Без буфера (SendInput)» отправляет клавиатурные
-              события прямо в активное окно: чужой буфер не трогается вовсе, работает и там, где Ctrl+V
-              перехвачен. Только Windows; на длинном тексте ввод идёт по символу и заметно медленнее.
-            </div>
-          </div>
-          <Select
-            value={settings.insertMethod === 'sendinput' ? 'sendinput' : 'clipboard'}
-            onChange={(v) => updateSettings({ insertMethod: v })}
-            options={[
-              { value: 'clipboard', label: 'Буфер обмена' },
-              { value: 'sendinput', label: 'Без буфера' },
-            ]}
-            width={170}
           />
         </div>
       </div>
