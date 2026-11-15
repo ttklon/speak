@@ -244,34 +244,43 @@ jobs:
         shell: pwsh
         # 864 КБ, но именно она отсекает тишину: с ней диктовка отвечает
         # быстрее и не выдумывает фраз на пустом звуке. Файл кладём в models/,
-        # extraResources отдаёт его в resources/models. Если HuggingFace с
-        # раннера недоступен — не роняем сборку: приложение докачает модель
-        # само при первом запуске (models:prepare).
+        # extraResources отдаёт его в resources/models. Шаг намеренно не валит
+        # сборку: если модели нет, приложение докачает её само (models:prepare).
         run: |
+          $ErrorActionPreference = 'Continue'
           New-Item -ItemType Directory -Force -Path models | Out-Null
+          $dest = 'models/ggml-silero-v6.2.0.bin'
           $url = 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin'
           for ($i = 1; $i -le 3; $i++) {
+            if (Test-Path $dest) { break }
             try {
-              Invoke-WebRequest -Uri $url -OutFile models/ggml-silero-v6.2.0.bin
-              if ((Get-Item models/ggml-silero-v6.2.0.bin).Length -gt 500000) { break }
+              Invoke-WebRequest -Uri $url -OutFile $dest -TimeoutSec 120
+              if ((Get-Item $dest).Length -lt 500000) { Remove-Item $dest -Force }
             } catch {
-              Write-Host "::warning title=vad::попытка $i: $_"
-              Start-Sleep -Seconds 10
+              Write-Host "::warning title=vad::HuggingFace, попытка $i`: $($_.Exception.Message)"
+              if (Test-Path $dest) { Remove-Item $dest -Force }
+              Start-Sleep -Seconds 5
             }
           }
-          if (-not (Test-Path models/ggml-silero-v6.2.0.bin)) {
-            # HuggingFace с раннера бывает недоступен: те же веса Silero лежат в
-            # пакете silero-vad на PyPI, собираем ggml-файл сами (скрипт сверен
-            # с официальным форматом whisper.cpp).
+          if (-not (Test-Path $dest)) {
+            # Те же веса Silero лежат в пакете silero-vad на PyPI: собираем
+            # ggml-файл сами (формат сверен с официальным whisper.cpp).
             Write-Host '::notice title=vad::HuggingFace недоступен, собираем модель из пакета silero-vad'
-            python -m pip install --quiet --no-deps silero-vad numpy
-            python scripts/make-vad-model.py --out models/ggml-silero-v6.2.0.bin
+            $py = 'python'
+            try { & $py --version 2>&1 | Out-Null } catch { $py = 'py' }
+            try {
+              & $py -m pip install --no-deps silero-vad numpy 2>&1 | Out-Null
+              & $py scripts/make-vad-model.py --out $dest 2>&1 | ForEach-Object { Write-Host $_ }
+            } catch {
+              Write-Host "::warning title=vad::сборка из пакета не удалась: $($_.Exception.Message)"
+            }
           }
-          if (Test-Path models/ggml-silero-v6.2.0.bin) {
-            Get-Item models/ggml-silero-v6.2.0.bin | Select-Object Name, Length
+          if (Test-Path $dest) {
+            Get-Item $dest | Select-Object Name, Length
           } else {
-            Write-Host '::warning title=vad::модель не скачалась — приложение докачает её при первом запуске'
+            Write-Host '::warning title=vad::модель не попала в сборку — приложение докачает её при первом запуске'
           }
+          exit 0
 
       - name: Build + package (NSIS + portable)
         shell: pwsh
