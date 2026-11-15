@@ -125,6 +125,24 @@ function findVadModel() {
 }
 
 /**
+ * Размер окна энкодера для конкретного файла: 1500 кадров — это 30 секунд,
+ * и whisper считает их всегда, даже для фразы из двух слов. Для короткой
+ * записи окно можно урезать с запасом (75 кадров на секунду + 50), и ответ
+ * приходит в разы быстрее: на замере 3 секунды речи — 2,5 с → 0,73 с.
+ * Для длинных записей окно не трогаем: там обрезка съела бы текст.
+ */
+function computeAudioCtx(wavPath) {
+  try {
+    const bytes = Math.max(0, fs.statSync(wavPath).size - 44); // 44 — заголовок RIFF
+    const seconds = bytes / 2 / 16000;
+    if (!seconds || seconds > 20) return 0;
+    return Math.max(200, Math.min(1500, Math.round(seconds * 75) + 50));
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Аргументы whisper-cli. Вынесены отдельно, чтобы их можно было проверить
  * тестом: раньше набор флагов жил внутри transcribe() и нигде не проверялся.
  *
@@ -145,6 +163,7 @@ function cliArgs({
   outBase = '',
   noContext = true,
   beamSize = 1,
+  audioCtx = 0,
 } = {}) {
   const args = [
     '-m', String(modelPath || ''),
@@ -160,6 +179,11 @@ function cliArgs({
   ];
   if (noContext) args.push('-mc', '0');
   if (Number(beamSize) > 0) args.push('-bs', String(Number(beamSize)));
+  // -ac: сколько кадров энкодера считать. По умолчанию модель всегда считает
+  // 1500 кадров (30 секунд), даже если человек сказал три слова — именно
+  // поэтому короткая фраза «думала» секунды. Для короткой записи окно
+  // урезается с запасом, для длинной остаётся полным.
+  if (Number(audioCtx) > 0) args.push('-ac', String(Math.min(1500, Math.round(Number(audioCtx)))));
   if (vadModel) {
     args.push(
       '--vad',
@@ -216,7 +240,10 @@ function serverStatus() {
 }
 
 function stopServer() {
-  if (!serverState) return;
+  if (!serverState) {
+    warmScheduledFor = '';
+    return;
+  }
   const { proc } = serverState;
   serverState = null;
   try {
@@ -346,9 +373,50 @@ function multipart(fields, fileField) {
 }
 
 /** Один запрос к уже поднятому серверу. Возвращает текст или null. */
+/**
+ * Фоновый прогрев сервера. Ждём, пока закончится текущий проход: пока
+ * whisper-cli считает, второй процесс только отнимает ядра. Попытка одна
+ * за раз, с паузой: если сервер не поднимается, не молотим впустую.
+ */
+let warmTimer = null;
+let warmScheduledFor = '';
+function scheduleServerWarm(modelPath, threads) {
+  if (warmTimer || warmScheduledFor === modelPath) return;
+  warmScheduledFor = modelPath;
+  const tick = () => {
+    if (isBusy()) {
+      warmTimer = setTimeout(tick, 400);
+      return;
+    }
+    warmTimer = null;
+    if (Date.now() < serverCooldownUntil) {
+      warmScheduledFor = '';
+      return;
+    }
+    ensureServer(modelPath, { threads })
+      .catch(() => {})
+      .finally(() => {
+        warmScheduledFor = '';
+      });
+  };
+  warmTimer = setTimeout(tick, 300);
+}
+
 async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout = 120000, threads = 4, modelPath } = {}) {
-  const server = await ensureServer(modelPath, { threads });
-  if (!server) return null;
+  // ВАЖНО: в проходе распознавания сервер не ждём. Раньше здесь стоял
+  // ensureServer() с ожиданием до 8 секунд — и если сервер не поднимался,
+  // короткая фраза «думала» эти 8 секунд, а потом шла в обычный whisper-cli.
+  // Теперь берём уже прогретый сервер, а если его нет — сразу CLI, поднимая
+  // сервер в фоне для следующей диктовки.
+  const ready = serverStatus();
+  if (!ready.running || !serverState || serverState.modelPath !== modelPath) {
+    // Поднимаем сервер для СЛЕДУЮЩЕЙ диктовки, но не одновременно с текущим
+    // проходом: два процесса whisper делят ядра и оба становятся медленнее.
+    scheduleServerWarm(modelPath, threads);
+    return null;
+  }
+  const server = serverState;
+  const audioCtx = computeAudioCtx(wavPath);
   const audio = fs.readFileSync(wavPath);
   const { body, contentType } = multipart(
     {
@@ -357,6 +425,7 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
       temperature: '0.0',
       response_format: 'json',
       'no_timestamps': 'true',
+      ...(audioCtx > 0 ? { audio_ctx: String(audioCtx) } : {}),
     },
     { name: 'file', filename: path.basename(wavPath), buffer: audio },
   );
@@ -451,6 +520,7 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
     // Набор флагов живёт в cliArgs(): его проверяют тесты, а не «на глаз».
     // -np: без служебного вывода, -sns: подавляем токены «не речь».
     const vadModel = useVad === false ? '' : vad || findVadModel() || '';
+    const audioCtx = computeAudioCtx(wavPath);
     const args = cliArgs({
       modelPath,
       wavPath,
@@ -458,6 +528,7 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
       threads,
       prompt,
       vadModel,
+      audioCtx,
       outBase: `${wavPath}.out`,
     });
 
@@ -488,7 +559,16 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
     function retryWithoutVad() {
       clearTimeout(timer);
       if (activeRun === run) activeRun = null;
-      const again = cliArgs({ modelPath, wavPath, lang, threads, prompt, vadModel: '', outBase: `${wavPath}.out` });
+      const again = cliArgs({
+        modelPath,
+        wavPath,
+        lang,
+        threads,
+        prompt,
+        vadModel: '',
+        audioCtx: computeAudioCtx(wavPath),
+        outBase: `${wavPath}.out`,
+      });
       const child2 = spawn(bin, again, { windowsHide: true });
       let err2 = '';
       child2.stderr?.on('data', (d) => {
@@ -730,6 +810,7 @@ module.exports = {
   status,
   transcribe,
   cliArgs,
+  computeAudioCtx,
   findVadModel,
   cancel,
   isBusy,

@@ -181,6 +181,27 @@ async function downloadModel(id, onProgress) {
 }
 
 /**
+ * Удаление скачанной модели. Раньше «скачал несколько — старые не убрать»:
+ * файлы лежали в профиле навсегда (base 142 МБ, small 466 МБ, turbo 1,5 ГБ).
+ * Возвращаем освобождённые мегабайты, чтобы интерфейс сказал это словами.
+ */
+function deleteModel(id) {
+  const meta = MODELS[id];
+  if (!meta) return { ok: false, reason: `неизвестная модель ${id}` };
+  const d = ensureDirs();
+  const file = path.join(d.models, meta.file);
+  if (!fs.existsSync(file)) return { ok: false, reason: 'модель не скачана' };
+  let mb = meta.mb;
+  try {
+    mb = Math.round((fs.statSync(file).size / (1024 * 1024)) * 10) / 10;
+    fs.rmSync(file, { force: true });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+  return { ok: true, freedMb: mb, id };
+}
+
+/**
  * VAD-модель: маленькая (0,9 МБ), но именно она отсекает тишину. Качаем без
  * прогресса — файл настолько мал, что проценты только мешают.
  */
@@ -354,4 +375,4 @@ async function importModel(sourcePath, onProgress) {
   return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
 }
 
-module.exports = { modelStatus, downloadModel, downloadVad, downloadEngine, importModel, cancelDownload, MODELS, VAD };
+module.exports = { modelStatus, downloadModel, downloadVad, downloadEngine, deleteModel, importModel, cancelDownload, MODELS, VAD };

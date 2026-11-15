@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Download, Loader, TriangleAlert, X } from 'lucide-react';
+import { Check, Download, Loader, Trash2, TriangleAlert, X } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
+import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
@@ -31,6 +32,8 @@ export default function ModelManager() {
     push({ title, description, tone });
   };
   const cancelAsked = useRef(false);
+  // какую модель человек собрался удалить (подтверждение — ниже)
+  const [toDelete, setToDelete] = useState(null);
 
   const refresh = async ({ silent = true } = {}) => {
     if (!bridge?.modelsStatus) {
@@ -195,6 +198,46 @@ export default function ModelManager() {
     }
   };
 
+  /**
+   * Удаление скачанной модели. Раньше файлы копились навсегда: скачал base,
+   * потом small, потом turbo — и убрать старые было нечем, а это гигабайты.
+   */
+  const removeModel = async (id) => {
+    if (!bridge?.deleteModel) {
+      push({ title: 'Удаление — в установленном приложении', tone: 'warn' });
+      return;
+    }
+    let res;
+    try {
+      res = await bridge.deleteModel(id);
+    } catch (err) {
+      res = { ok: false, reason: String(err?.message || err) };
+    }
+    await refresh();
+    if (!res?.ok) {
+      push({ title: 'Модель не удалилась', description: res?.reason || 'файл занят', tone: 'warn' });
+      return;
+    }
+    if (res.switchedTo) {
+      // удалили ту, что была выбрана — переключаемся на оставшуюся, чтобы
+      // диктовка не осталась «в никуда»
+      updateSettings({ whisperModel: res.switchedTo });
+      push({
+        title: 'Модель удалена',
+        description: `Освободилось ${res.freedMb} МБ. Активной стала «${res.switchedTo}» — диктовка продолжит работать.`,
+        tone: 'success',
+      });
+      return;
+    }
+    push({
+      title: 'Модель удалена',
+      description: `Освободилось ${res.freedMb} МБ.`,
+      tone: 'success',
+    });
+  };
+
+  const downloaded = status?.models ? Object.values(status.models).filter((m) => m.downloaded).length : 0;
+
   return (
     <div className="settings-group">
       <div className="settings-group__title">Модель распознавания</div>
@@ -271,7 +314,22 @@ export default function ModelManager() {
               {active ? <Check size={13} style={{ color: 'var(--green)' }} /> : null}
             </button>
 
-            {info?.downloaded ? null : (
+            {info?.downloaded ? (
+              <Button
+                variant="bare"
+                // удалить последнюю модель нельзя: без весов диктовка не работает
+                disabled={Boolean(busy) || downloaded <= 1}
+                title={
+                  downloaded <= 1
+                    ? 'Это единственная модель — удалить её нельзя, иначе диктовка перестанет работать'
+                    : `Удалить ${m.label} с диска`
+                }
+                aria-label={`Удалить модель ${m.label}`}
+                onClick={() => setToDelete(m)}
+              >
+                <Trash2 size={13} />
+              </Button>
+            ) : (
               <Button
                 variant="ghost"
                 size="sm"
@@ -360,8 +418,21 @@ export default function ModelManager() {
       </div>
       <div className="settings-foot-hint" style={{ marginTop: 8 }}>
         Модели качаются с официальных адресов (Hugging Face, GitHub) и лежат в %APPDATA%\ZSpeakly\models.
-        В установщик они не входят — репозиторий остаётся лёгким.
+        В установщик они не входят — репозиторий остаётся лёгким. Ненужную модель можно удалить
+        корзинкой в её строке: файл стирается с диска, место освобождается сразу.
       </div>
+      <ConfirmDialog
+        open={Boolean(toDelete)}
+        onClose={() => setToDelete(null)}
+        onConfirm={() => toDelete && removeModel(toDelete.id)}
+        title="Удалить модель с диска?"
+        description={
+          toDelete
+            ? `${toDelete.label} · ${toDelete.size}. Файл будет удалён из профиля. Если понадобится снова — скачается заново.`
+            : ''
+        }
+        confirmLabel="Удалить модель"
+      />
     </div>
   );
 }

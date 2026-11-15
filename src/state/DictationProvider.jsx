@@ -43,7 +43,7 @@ function speak(text, language = 'ru', voiceURI = '') {
 const DictationContext = createContext(null);
 
 export function DictationProvider({ children }) {
-  const { settings, dictionary, addDictation, recordWords } = useAppData();
+  const { settings, dictionary, addDictation, recordWords, updateSettings } = useAppData();
   const [state, setState] = useState('idle'); // idle | listening | processing | done
   const [draft, setDraft] = useState(''); // живой текст
   const [level, setLevel] = useState(0);
@@ -743,6 +743,27 @@ export function DictationProvider({ children }) {
       announced = true;
     });
   }, [pushToast]);
+
+  // Автоподбор модели: main сам перешёл на быструю модель, если проход по
+  // короткой записи оказался долгим. Человеку остаётся только увидеть, что
+  // стало быстрее, — и настройка в окне должна совпасть с тем, что в main.
+  useEffect(() => {
+    const native = window.zspeakly?.native;
+    if (!native?.onAutoTune) return undefined;
+    return native.onAutoTune((p) => {
+      if (!p?.to) return;
+      updateSettings?.({ whisperModel: p.to });
+      const secs = Number(p.seconds || 0);
+      pushToast({
+        title: `Модель «${p.to}» — быстрее`,
+        description: `«${p.from}» распознавала ${secs ? `${secs} с речи` : 'короткую фразу'} за ${(
+          Number(p.ms || 0) / 1000
+        ).toFixed(1)} с. Переключил автоматически, качество текста для диктовки то же.`,
+        tone: 'success',
+        ttl: 12000,
+      });
+    });
+  }, [pushToast, updateSettings]);
 
   // Прогресс по фрагментам: «2 из 4» вместо безымянного ожидания
   useEffect(() => {

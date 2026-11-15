@@ -130,6 +130,21 @@ export default function FeaturesSection() {
           />
         </div>
         <div className="setting-row">
+          <div className="setting-row__label">
+            Подбирать модель автоматически
+            <div className="setting-row__desc">
+              Если короткая фраза распознаётся дольше четырёх секунд, приложение само
+              переключится на быструю модель (base-q5_1 или base) и скажет об этом.
+              Вам не нужно разбираться в каталоге моделей, чтобы диктовка перестала
+              тормозить. Выключите, если хотите выбрать модель сами.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.autoOptimize !== false}
+            onChange={(v) => updateSettings({ autoOptimize: v })}
+          />
+        </div>
+        <div className="setting-row">
           <div className="setting-row__label">Дополнительные варианты</div>
           <Button variant="ghost" size="sm" onClick={() => setShowLanguages((v) => !v)}>
             {showLanguages ? 'Скрыть' : 'Выбрать варианты'}

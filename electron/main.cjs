@@ -117,7 +117,7 @@ function createWindow() {
           if (res?.ok) logger.info('stt', 'Модель прогрета при запуске', { keep: true, port: res.port || 0 });
         })
         .catch(() => {});
-    }, 7000);
+    }, 2500);
   });
 
   if (isDev && process.env.ZSPEAKLY_DEV_URL !== 'none') {
@@ -956,6 +956,48 @@ function registerIpc() {
   });
 
   /** Распознавание PCM: одна запись — один проход whisper. */
+  // Одна автоматическая подстройка за сессию: подбираем модель по факту, а не
+  // по обещаниям каталога. Человек не обязан понимать, что small на его CPU
+  // думает 12 секунд, — приложение само перейдёт на быструю модель.
+  let autoTuned = false;
+  const FAST_MODELS = ['base-q5_1', 'base', 'tiny-q5_1', 'tiny'];
+  function maybeAutoTune(ms, seconds, model) {
+    try {
+      const settings = store?.get('zs:settings') || {};
+      if (settings.autoOptimize === false) return '';
+      if (autoTuned) return '';
+      if (!ms || ms < 4500) return '';
+      // длинная запись и так идёт долго — там смена модели качество испортит
+      if (!(seconds > 0) || seconds > 15) return '';
+      const target = FAST_MODELS.map((id) => ({
+        id,
+        file: path.join(app.getPath('userData'), 'models', `ggml-${id}.bin`),
+      })).find((m) => fs.existsSync(m.file));
+      if (!target || target.id === model) return '';
+      autoTuned = true;
+      store.set('zs:settings', { ...settings, whisperModel: target.id });
+      try {
+        mainWindow?.webContents.send('stt:auto-tune', {
+          from: model,
+          to: target.id,
+          ms,
+          seconds: Math.round(seconds * 10) / 10,
+        });
+      } catch {
+        /* окна может не быть */
+      }
+      logger.warn('stt', 'Модель переключена на быструю автоматически', {
+        keep: true,
+        from: model,
+        to: target.id,
+        ms,
+      });
+      return target.id;
+    } catch {
+      return '';
+    }
+  }
+
   async function transcribePcm(payload) {
     const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
     const status = whisper.status(model);
@@ -1133,9 +1175,11 @@ function registerIpc() {
           ms,
         };
       }
+      const autoTunedTo = res?.ok ? maybeAutoTune(ms, audio?.seconds || 0, model) : '';
       return {
         ...res,
         ms,
+        autoTunedTo: autoTunedTo || undefined,
         audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined,
         chunks: totalParts > 1 ? totalParts : undefined,
       };
@@ -1570,11 +1614,57 @@ function registerIpc() {
       active: active ? path.basename(active).replace(/^ggml-/, '').replace(/\.bin$/, '') : '',
     };
   });
+  /**
+   * Удаление модели из профиля. Отдаём и «сколько освободилось», и то,
+   * какая модель станет активной: интерфейс должен переключиться сам,
+   * а не оставить человека с выбранной, но удалённой моделью.
+   */
+  ipcMain.handle('models:delete', (_e, id) => {
+    const res = models.deleteModel(id);
+    if (!res.ok) return res;
+    const settings = store?.get('zs:settings') || {};
+    let switchedTo = '';
+    if (settings.whisperModel === id) {
+      // Выбранная модель удалена: берём ближайшую из оставшихся (findModel сам
+      // знает порядок замены), чтобы диктовка продолжала работать без ручных
+      // действий человека.
+      const left = whisper.findModel(id);
+      const name = left ? path.basename(left).replace(/^ggml-/, '').replace(/\.bin$/, '') : '';
+      if (name && name !== id) {
+        // настройку меняем и здесь (main — источник правды для распознавания),
+        // и в окне (ответ содержит switchedTo, рендерер обновит подпись)
+        switchedTo = name;
+        store.set('zs:settings', { ...settings, whisperModel: name });
+      }
+    }
+    // движок в памяти держал веса удалённой модели — освобождаем
+    try {
+      whisper.stopServer?.();
+    } catch {
+      /* сервера могло не быть */
+    }
+    logger.info('stt', 'Модель удалена', { keep: true, id, freedMb: res.freedMb, switchedTo });
+    return { ...res, switchedTo };
+  });
+
   ipcMain.handle('models:download', async (_e, id) => {
     const res = await models.downloadModel(id, (percent, received, total) => {
       mainWindow?.webContents.send('model:progress', { id, percent, received, total });
     });
     mainWindow?.webContents.send('model:progress', { id, percent: res.ok ? 100 : 0, done: true, ...res });
+    // Только что скачанную модель сразу держим в памяти: иначе первая
+    // диктовка после скачивания снова платит за загрузку весов.
+    if (res.ok) {
+      const cfg = store?.get('zs:settings') || {};
+      if (cfg.keepModelLoaded === true) {
+        whisper
+          .warm(id)
+          .then((warmRes) => {
+            if (warmRes?.ok) logger.info('stt', 'Модель прогрета после скачивания', { keep: true, id });
+          })
+          .catch(() => {});
+      }
+    }
     return res;
   });
   /**

@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     cancelTranscribe: () => ipcRenderer.invoke('stt:cancel'),
     // прогресс по фрагментам длинной диктовки: {done, total}
     onSttProgress: (cb) => on('stt:progress', cb),
+    onAutoTune: (cb) => on('stt:auto-tune', cb),
     insertText: (text) => ipcRenderer.invoke('text:insert', text),
     pasteToActive: () => ipcRenderer.invoke('text:paste'),
     readSelection: () => ipcRenderer.invoke('text:read-selection'),
@@ -79,6 +80,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     // «подготовь распознавание»: докачать движок и модель (повтор после сбоя)
     prepareModels: () => ipcRenderer.invoke('models:prepare'),
     importModel: (filePath) => ipcRenderer.invoke('models:import', filePath),
+    deleteModel: (id) => ipcRenderer.invoke('models:delete', id),
     onModelProgress: (cb) => on('model:progress', cb),
     // плавающий индикатор диктовки (отдельное окно поверх всех приложений)
     hudShow: () => ipcRenderer.invoke('hud:show'),

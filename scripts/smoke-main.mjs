@@ -308,7 +308,7 @@ await check('IPC-каналы зарегистрированы', () => {
   const need = [
     'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
-    'models:status', 'models:download', 'models:download-engine', 'models:cancel',
+    'models:status', 'models:download', 'models:download-engine', 'models:cancel', 'models:delete',
     'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',
   ];
   const missing = need.filter((ch) => !handlers.has(ch));
@@ -920,6 +920,64 @@ await check('models:status честно говорит, какая модель 
   const dl = st.models['large-v3-turbo'];
   if (!dl || dl.downloaded) throw new Error('турбо-модель будто скачана');
   if (dl.sizeMb < 1000) throw new Error(`размер turbo подозрительный: ${dl.sizeMb}`);
+});
+
+await check('окно энкодера: короткая запись считается быстрее, длинная — целиком', () => {
+  const whisperLib = require(path.resolve('electron/whisper.cjs'));
+  if (typeof whisperLib.computeAudioCtx !== 'function') throw new Error('нет computeAudioCtx');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-ctx-'));
+  const makeWav = (seconds) => {
+    const file = path.join(dir, `s${seconds}.wav`);
+    const data = Buffer.alloc(seconds * 16000 * 2);
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + data.length, 4);
+    header.write('WAVE', 8);
+    fs.writeFileSync(file, Buffer.concat([header, data]));
+    return file;
+  };
+  try {
+    const short = whisperLib.computeAudioCtx(makeWav(3));
+    if (short < 200 || short > 400) throw new Error(`для 3 с окно ${short} — ожидалось ~275`);
+    const mid = whisperLib.computeAudioCtx(makeWav(10));
+    if (mid < short || mid > 1500) throw new Error(`для 10 с окно ${mid}`);
+    // длинная запись: окно не урезаем, иначе потеряется текст в конце
+    if (whisperLib.computeAudioCtx(makeWav(25)) !== 0) throw new Error('для 25 с окно урезано');
+    const args = whisperLib.cliArgs({ modelPath: 'm.bin', wavPath: 'a.wav', audioCtx: short });
+    const at = args.indexOf('-ac');
+    if (at < 0 || args[at + 1] !== String(short)) throw new Error('cliArgs не передал -ac');
+    if (whisperLib.cliArgs({ modelPath: 'm.bin', wavPath: 'a.wav' }).includes('-ac')) {
+      throw new Error('без размера окна -ac не нужен');
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await check('удаление модели: файл стирается, активная переключается сама', async () => {
+  if (!handlers.has('models:delete')) throw new Error('нет models:delete');
+  // в смоуке на диске лежит ggml-small.bin и он же выбран активным
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small' });
+  const extra = path.join(userData, 'models', 'ggml-base.bin');
+  fs.writeFileSync(extra, Buffer.alloc(1024));
+  // модель small заменяем файлом нормального размера, чтобы проверить «сколько освободилось»
+  fs.writeFileSync(whisperModel, Buffer.alloc(2 * 1024 * 1024));
+  const st = await handlers.get('models:status')({});
+  if (!st.models.small.downloaded) throw new Error('модель small будто не скачана');
+  const res = await handlers.get('models:delete')({}, 'small');
+  if (!res.ok) throw new Error(`не удалилось: ${JSON.stringify(res)}`);
+  if (!(res.freedMb > 0)) throw new Error('не сообщил освобождённое место');
+  if (fs.existsSync(whisperModel)) throw new Error('файл модели остался на диске');
+  if (res.switchedTo !== 'base') throw new Error(`активной должна стать base, а стала «${res.switchedTo}»`);
+  const after = await handlers.get('store:get')({}, 'zs:settings');
+  if (after.whisperModel !== 'base') throw new Error(`настройка не переключилась: ${after.whisperModel}`);
+  // повторное удаление — честный отказ, а не «ok»
+  const again = await handlers.get('models:delete')({}, 'small');
+  if (again.ok) throw new Error('повторное удаление вернуло ok');
+  // вернуть состояние смоука: дальнейшие проверки ждут модель small
+  fs.writeFileSync(whisperModel, 'fake');
+  fs.rmSync(extra, { force: true });
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small' });
 });
 
 await check('старые временные wav убираются, свежие остаются', async () => {
