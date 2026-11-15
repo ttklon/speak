@@ -1,0 +1,103 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { read, write, remove, storageBytes, formatBytes, isElectron } from './storage.js';
+
+beforeEach(() => {
+  localStorage.clear();
+  delete window.zspeakly;
+});
+
+afterEach(() => {
+  delete window.zspeakly;
+});
+
+describe('хранилище в браузере', () => {
+  it('запись и чтение возвращают то же значение', () => {
+    expect(write('zs.settings', { theme: 'dark' })).toBe(true);
+    expect(read('zs.settings')).toEqual({ theme: 'dark' });
+    expect(localStorage.getItem('zs:zs.settings')).toBe('{"theme":"dark"}');
+  });
+
+  it('удаление убирает ключ', () => {
+    write('zs.stats', { wordsTotal: 5 });
+    expect(remove('zs.stats')).toBe(true);
+    expect(read('zs.stats')).toBeNull();
+  });
+
+  it('битый JSON не роняет приложение — читаем как пусто', () => {
+    localStorage.setItem('zs:zs.dictations', '{не json');
+    expect(read('zs.dictations')).toBeNull();
+  });
+
+  it('переполнение хранилища: запись честно возвращает false и сообщает наружу', () => {
+    const heard = [];
+    const onError = (e) => heard.push(e.detail);
+    window.addEventListener('zs:storage-error', onError);
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    expect(write('zs.clipboard', [1, 2, 3])).toBe(false);
+    spy.mockRestore();
+    window.removeEventListener('zs:storage-error', onError);
+    expect(heard).toHaveLength(1);
+    expect(heard[0]).toMatchObject({ key: 'zs.clipboard' });
+    expect(heard[0].reason).toMatch(/Quota/);
+  });
+
+  it('занятое место считает только свои ключи', () => {
+    write('zs.stats', { a: 1 });
+    localStorage.setItem('чужой-ключ', 'не считаем');
+    const bytes = storageBytes();
+    expect(bytes).toBeGreaterThan(0);
+    expect(bytes).toBeLessThan(2000);
+  });
+});
+
+describe('хранилище в Electron', () => {
+  it('ходит через мост, а не в localStorage', () => {
+    const store = {
+      getSync: vi.fn(() => ({ theme: 'light' })),
+      set: vi.fn(),
+      remove: vi.fn(),
+      sizeSync: vi.fn(() => 4096),
+    };
+    window.zspeakly = { isElectron: true, store };
+    expect(isElectron()).toBe(true);
+    expect(read('zs.settings')).toEqual({ theme: 'light' });
+    expect(write('zs.settings', { theme: 'dark' })).toBe(true);
+    expect(store.set).toHaveBeenCalledWith('zs.settings', { theme: 'dark' });
+    remove('zs.settings');
+    expect(store.remove).toHaveBeenCalledWith('zs.settings');
+    expect(storageBytes()).toBe(4096);
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('мост упал — приложение не падает', () => {
+    window.zspeakly = {
+      isElectron: true,
+      store: {
+        getSync: () => { throw new Error('мост закрыт'); },
+        set: () => { throw new Error('мост закрыт'); },
+        remove: () => { throw new Error('мост закрыт'); },
+        sizeSync: () => { throw new Error('мост закрыт'); },
+      },
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(read('zs.settings')).toBeNull();
+    expect(write('zs.settings', {})).toBe(false);
+    expect(remove('zs.settings')).toBe(false);
+    expect(storageBytes()).toBe(0);
+    vi.restoreAllMocks();
+  });
+});
+
+describe('человеческий размер', () => {
+  it('байты, килобайты, мегабайты', () => {
+    expect(formatBytes(0)).toBe('0 Б');
+    expect(formatBytes(-1)).toBe('0 Б');
+    expect(formatBytes(512)).toBe('512 Б');
+    expect(formatBytes(2048)).toBe('2 КБ');
+    expect(formatBytes(1536)).toBe('1.5 КБ');
+    expect(formatBytes(5 * 1024 * 1024)).toBe('5 МБ');
+    expect(formatBytes(1024 ** 4)).toBe('1 ТБ');
+  });
+});

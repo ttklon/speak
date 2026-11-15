@@ -16,10 +16,20 @@ import {
 import { uid } from '../lib/utils.js';
 import { pruneByAge } from '../lib/retention.js';
 import { migrateSettings } from '../lib/settingsMigration.js';
+import {
+  asList,
+  sanitizeClipboard,
+  sanitizeDictations,
+  sanitizeDictionary,
+  sanitizeHotkeys,
+  sanitizeInstructions,
+  sanitizePresets,
+  sanitizeStats,
+} from '../lib/sanitize.js';
 
 const AppDataContext = createContext(null);
 
-function usePersistentState(key, initialFactory, { merge } = {}) {
+function usePersistentState(key, initialFactory, { merge, sanitize } = {}) {
   // Сид-данные вычисляем один раз: иначе список пересоздавался бы на каждом рендере.
   const initialRef = useRef(null);
   if (initialRef.current === null) {
@@ -35,6 +45,7 @@ function usePersistentState(key, initialFactory, { merge } = {}) {
     if (merge && stored && typeof stored === 'object' && !Array.isArray(stored)) {
       return { ...merge, ...stored };
     }
+    if (sanitize) return sanitize(stored, initial);
     return stored;
   });
 
@@ -66,16 +77,31 @@ export function AppDataProvider({ children }) {
   // здесь подставлялись демонстрационные записи из видео, и приложение
   // выглядело так, будто за вас уже что-то надиктовали и накопировали.
   // Демо-наборы остались только для тестов и скриншотов (src/lib/seed.js).
-  const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => []);
-  const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => []);
-  const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => []);
-  const [voiceHotkeys, setVoiceHotkeys] = usePersistentState(STORAGE_KEYS.hotkeys, () => DEFAULT_VOICE_HOTKEYS);
-  const [presets, setPresets] = usePersistentState(STORAGE_KEYS.presets, () => DEFAULT_AI_PRESETS);
+  const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => [], {
+    sanitize: sanitizeDictations,
+  });
+  const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => [], {
+    sanitize: sanitizeDictionary,
+  });
+  const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => [], {
+    sanitize: sanitizeClipboard,
+  });
+  const [voiceHotkeys, setVoiceHotkeys] = usePersistentState(
+    STORAGE_KEYS.hotkeys,
+    () => DEFAULT_VOICE_HOTKEYS,
+    { sanitize: sanitizeHotkeys },
+  );
+  const [presets, setPresets] = usePersistentState(STORAGE_KEYS.presets, () => DEFAULT_AI_PRESETS, {
+    sanitize: sanitizePresets,
+  });
   const [instructions, setInstructions] = usePersistentState(
     STORAGE_KEYS.instructions,
     () => DEFAULT_CUSTOM_INSTRUCTIONS,
+    { sanitize: sanitizeInstructions },
   );
-  const [stats, setStats] = usePersistentState(STORAGE_KEYS.stats, () => DEFAULT_STATS);
+  const [stats, setStats] = usePersistentState(STORAGE_KEYS.stats, () => DEFAULT_STATS, {
+    sanitize: sanitizeStats,
+  });
   // профиль — только имя: почта, «подписка» и credits были выдуманными
   // полями из макета и нигде не использовались
   const [profile, setProfile] = usePersistentState(STORAGE_KEYS.profile, () => ({ name: '' }));

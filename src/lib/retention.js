@@ -24,7 +24,14 @@ export function pruneByAge(items, days, { keepPinned = false, now = Date.now() }
   if (!Array.isArray(items) || items.length === 0) return [];
   if (isForever(days)) return items;
   const limit = Number(days) <= 0 ? Infinity : now - Number(days) * 86400000;
-  const next = items.filter((it) => (keepPinned && it?.pinned) || Number(it?.createdAt || 0) >= limit);
+  const next = items.filter((it) => {
+    if (keepPinned && it?.pinned) return true;
+    const at = Number(it?.createdAt || 0);
+    // Запись без даты (например, из старой резервной копии) не удаляем:
+    // «срок неизвестен» — не повод стирать данные человека.
+    if (!Number.isFinite(at) || at <= 0) return true;
+    return at >= limit;
+  });
   // сохраняем ту же ссылку, если ничего не удалили — React не будет лишний раз рендерить
   return next.length === items.length ? items : next;
 }

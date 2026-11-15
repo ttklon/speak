@@ -89,9 +89,12 @@ export function storageBytes() {
 }
 
 export function formatBytes(bytes = 0) {
-  if (!bytes) return '0 Б';
-  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const value = bytes / 1024 ** i;
+  // Отрицательное или нечисловое значение (битый размер от моста) раньше
+  // превращалось в «NaN undefined» прямо в настройках.
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) return '0 Б';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(size) / Math.log(1024)));
+  const value = size / 1024 ** i;
   return `${value >= 10 || i === 0 ? Math.round(value) : value.toFixed(1).replace('.0', '')} ${units[i]}`;
 }

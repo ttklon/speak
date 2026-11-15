@@ -26,6 +26,17 @@ class JsonStore {
     } catch (err) {
       console.error('[store] load failed', err);
       this.cache = {};
+      // Профиль мог испортиться при аварийном выключении или ручной правке.
+      // Молча затирать его нельзя: человек потерял бы историю диктовок без
+      // единого шанса её достать. Откладываем копию рядом — она ещё пригодится.
+      try {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const backup = `${this.file}.broken-${stamp}`;
+        fs.copyFileSync(this.file, backup);
+        console.warn('[store] битый профиль сохранён как', backup);
+      } catch (copyErr) {
+        console.warn('[store] не удалось сохранить копию битого профиля', copyErr.message);
+      }
     }
   }
 

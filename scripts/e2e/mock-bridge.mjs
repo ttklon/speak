@@ -127,7 +127,7 @@ export function installMockBridge() {
     // что whisper ничего не распознал
     transcribe: async (payload) => {
       record('stt:transcribe', [payload]);
-      return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper' };
+      return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper', ms: 1400 };
     },
     cancelTranscribe: async () => {
       record('stt:cancel');
@@ -166,7 +166,8 @@ export function installMockBridge() {
           partial: payload?.partial === true,
         },
       ]);
-      return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper' };
+      // ms — как у настоящего main: интерфейс показывает «за сколько распознано»
+      return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper', ms: 1400 };
     },
 
     insertText: ok('text:insert'),

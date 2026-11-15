@@ -129,7 +129,17 @@ const SEED_SETTINGS = {
 async function openPage(browser, route = '#/home', opts = {}) {
   const page = await browser.newPage();
   const errors = [];
+  // Предупреждения React (ключи в списках, controlled/uncontrolled, act)
+  // ошибками не считаются, но это будущие ошибки — их тоже собираем.
+  const warnings = [];
   page.on('console', (msg) => {
+    if (msg.type() === 'warning') {
+      const text = `${msg.text()}`.slice(0, 300);
+      if (!/Download the React DevTools|ResizeObserver|autofill|Third-party cookie|preloaded using link preload/i.test(text)) {
+        warnings.push(text);
+      }
+      return;
+    }
     if (msg.type() !== 'error') return;
     const text = `${msg.text()}`.slice(0, 400);
     if (/favicon/i.test(text)) return;
@@ -187,6 +197,7 @@ async function openPage(browser, route = '#/home', opts = {}) {
   await page.waitForSelector('.app-window', { timeout: 15_000 });
   await sleep(opts.settle ?? 250);
   page.__errors = errors;
+  page.__warnings = warnings;
   // Страховка от вечных ожиданий: зависший getDisplayMedia или ушедший
   // документ раньше подвешивали весь прогон без единой строчки в логе.
   const rawEvaluate = page.evaluate.bind(page);
@@ -205,6 +216,12 @@ async function openPage(browser, route = '#/home', opts = {}) {
 const takeErrors = (page) => {
   const list = page.__errors.slice();
   page.__errors.length = 0;
+  return list;
+};
+
+const takeWarnings = (page) => {
+  const list = (page.__warnings || []).slice();
+  if (page.__warnings) page.__warnings.length = 0;
   return list;
 };
 
@@ -620,6 +637,17 @@ async function scenarioDictation(browser) {
   );
   record('сценарии', 'диктовка: старт и стоп добавляют запись', recording && after === before + 1, `${before} → ${after} в истории`);
   record('сценарии', 'диктовка: распознанный текст попадает в историю', /Проверка диктовки/i.test(added));
+  // Скорость видна человеку: «1,4 с» в строке истории и точное время в подсказке.
+  const speed = await page.evaluate(() => {
+    const el = document.querySelector('.recent__row .recent__speed');
+    return el ? { text: el.innerText.trim(), title: el.getAttribute('title') || '' } : null;
+  });
+  record(
+    'сценарии',
+    'диктовка: в истории видно, за сколько распознано',
+    Boolean(speed) && /1,4 с/.test(speed.text) && /Распознано за 1\.40 с/.test(speed.title),
+    speed ? `${speed.text} · ${speed.title}` : 'бейджа скорости нет',
+  );
   const inserts = await page.evaluate(() =>
     (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').map((c) => String(c.args?.[0] || '')),
   );
@@ -3100,6 +3128,142 @@ async function scenarioDictationIntoOwnField(browser) {
   await page.close();
 }
 
+// Предупреждения React по всем экранам и разделам настроек: «ключи в списках»,
+// controlled/uncontrolled, неизвестные пропсы. Это ещё не ошибки, но именно из
+// них вырастают баги, которые видит человек.
+async function scenarioConsoleWarnings(browser) {
+  const routes = ['#/home', '#/dictionary', '#/hotkeys', '#/clipboard'];
+  const sections = ['app', 'features', 'data', 'network', 'diagnostics', 'about'];
+  const page = await openPage(browser, routes[0], { settle: 500 });
+  takeErrors(page);
+  takeWarnings(page);
+  const seen = [];
+  for (const route of routes) {
+    await page.evaluate((r) => {
+      location.hash = r;
+    }, route);
+    await sleep(500);
+    seen.push(...takeWarnings(page));
+  }
+  for (const section of sections) {
+    await page.evaluate((sec) => {
+      location.hash = `#/settings?section=${sec}&from=home`;
+    }, section);
+    await sleep(600);
+    seen.push(...takeWarnings(page));
+  }
+  await page.keyboard.press('Escape');
+  await sleep(250);
+  const unique = [...new Set(seen)];
+  const visible = unique.filter((w) => !/DevTools|Download the React/i.test(w));
+  record(
+    'сценарии',
+    'предупреждений React нет ни на одном экране и разделе настроек',
+    visible.length === 0,
+    visible.length ? visible.slice(0, 2).join(' | ') : `${routes.length} экрана + ${sections.length} разделов`,
+  );
+  await page.close();
+}
+
+// Тяжёлые данные: история и буфер не должны «зависать» на прокрутке и поиске.
+async function scenarioHeavyData(browser) {
+  const many = Array.from({ length: 2000 }, (_, i) => ({
+    id: `heavy-${i}`,
+    text: `Запись номер ${i}: проверка прокрутки и поиска на большом объёме истории.`,
+    durationMs: 3000 + (i % 2000),
+    words: 9,
+    createdAt: Date.now() - i * 60_000,
+    language: 'ru',
+    source: 'dictation',
+  }));
+  const clips = Array.from({ length: 1200 }, (_, i) => ({
+    id: `clip-${i}`,
+    kind: 'text',
+    text: `Скопированный текст ${i}`,
+    source: 'Другая программа',
+    createdAt: Date.now() - i * 30_000,
+  }));
+  const started = Date.now();
+  const page = await openPage(browser, '#/home', {
+    settle: 200,
+    storeSeed: { 'zs.dictations': many, 'zs.clipboard': clips },
+  });
+  const homeReady = Date.now() - started;
+  takeErrors(page);
+  takeWarnings(page);
+  const rows = await page.evaluate(() => document.querySelectorAll('.recent__row').length);
+  // поиск по 2000 записям: реакция должна быть мгновенной
+  const searchStart = Date.now();
+  await page.type('input[placeholder*="Поиск"]', 'Запись номер 1500');
+  await sleep(250);
+  const searchMs = Date.now() - searchStart;
+  const found = await page.evaluate(() => document.querySelectorAll('.recent__row').length);
+  await page.evaluate(() => {
+    location.hash = '#/clipboard';
+  });
+  const clipStart = Date.now();
+  await page.waitForFunction(() => document.querySelectorAll('.clip-card, .clip-row').length > 0, { timeout: 15000 });
+  const clipReady = Date.now() - clipStart;
+  record(
+    'сценарии',
+    'большая история открывается и ищется быстро',
+    homeReady < 9000 && searchMs < 2500 && found > 0 && found < 50,
+    `главная ${homeReady} мс, поиск ${searchMs} мс, найдено ${found} из ${rows} на экране`,
+  );
+  record(
+    'сценарии',
+    'большой буфер открывается быстро и без ошибок',
+    clipReady < 8000 && takeErrors(page).length === 0,
+    `буфер ${clipReady} мс`,
+  );
+  const warnings = takeWarnings(page);
+  record('сценарии', 'большие данные не дают предупреждений React', warnings.length === 0, warnings[0] || '');
+  await page.close();
+}
+
+// Битые данные: профиль мог испортиться после аварийного выключения, старых
+// версий или ручной правки JSON. Приложение обязано открыться, а не умереть.
+async function scenarioBrokenData(browser) {
+  const page = await openPage(browser, '#/home', {
+    settle: 400,
+    storeSeed: {
+      'zs.dictations': [null, { id: null, text: null }, { text: 'целая запись' }, 'строка вместо записи', 42],
+      'zs.clipboard': 'не массив',
+      'zs.dictionary': [{ word: null }, 42, { word: 'Атлас' }],
+      // не «нет настроек», а испорченные: неизвестная тема, пустой язык,
+      // модель, которой нет в комплекте — интерфейс обязан это пережить
+      'zs.settings': { onboarded: true, theme: 'неизвестная', language: null, whisperModel: 'нет-такой', voiceHotkeys: 'мусор' },
+      'zs.stats': 'мусор',
+    },
+  });
+  takeErrors(page);
+  await sleep(400);
+  const alive = await page.evaluate(() => Boolean(document.querySelector('.app-window')));
+  const text = await page.evaluate(() => document.body.innerText.slice(0, 400));
+  record('сценарии', 'битые данные: приложение открывается, а не падает', alive, alive ? '' : text);
+  let pagesOk = 0;
+  for (const route of ['#/clipboard', '#/dictionary', '#/hotkeys']) {
+    await page.evaluate((r) => {
+      location.hash = r;
+    }, route);
+    await sleep(400);
+    const ok = await page.evaluate(() => Boolean(document.querySelector('.app-window')));
+    if (ok) pagesOk += 1;
+  }
+  record('сценарии', 'битые данные: остальные экраны тоже открываются', pagesOk === 3, `${pagesOk} из 3`);
+  // настройки не должны падать на «странной» теме и несуществующей модели
+  await page.evaluate(() => {
+    location.hash = '#/settings?section=about&from=home';
+  });
+  await sleep(500);
+  const settingsOk = await page.evaluate(() => Boolean(document.querySelector('.settings-modal, .settings-main')));
+  await page.keyboard.press('Escape');
+  record('сценарии', 'битые данные: настройки открываются', settingsOk);
+  const errors = takeErrors(page);
+  record('сценарии', 'битые данные: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Обезьяний тест: детерминированный поток случайных нажатий, ввода и Escape.
 // Ловит падения рендера, которые не видны в аккуратных сценариях.
 async function scenarioMonkey(browser) {
@@ -4047,6 +4211,9 @@ async function main() {
       ['обещания плашки', scenarioHudPromise],
       ['диктовка в своё поле', scenarioDictationIntoOwnField],
       ['обезьяний тест', scenarioMonkey],
+      ['предупреждения React', scenarioConsoleWarnings],
+      ['битые данные', scenarioBrokenData],
+      ['большие данные', scenarioHeavyData],
       ['предролл микрофона', scenarioMicPreroll],
       ['живая расшифровка', scenarioLiveWhisper],
       ['пауза и отмена распознавания', scenarioPauseAndCancel],

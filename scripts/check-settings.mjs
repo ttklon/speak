@@ -26,7 +26,6 @@ const SERVICE = new Set([
   'lastUpdateCheck',
   'seenWhatsNew',
   'channel',
-  'lastSettingsVisit', // время последнего захода в настройки
   'seenClipboard', // гаснет ли плашка «НОВОЕ» у буфера
   'voiceHotkeys', // массивы живут отдельными ключами хранилища
   'textActions',

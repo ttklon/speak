@@ -323,6 +323,16 @@ export default function HomePage() {
             >
               <span className="recent__time">{timeHM(item.createdAt)}</span>
               <span className="recent__text">{truncate(item.text, 108)}</span>
+              {/* Сколько заняло распознавание: видно, что движок работал, и
+                  сразу понятно, если на этой машине он медленный. */}
+              {item.sttMs ? (
+                <span
+                  className="recent__speed"
+                  title={`Распознано за ${(item.sttMs / 1000).toFixed(2)} с`}
+                >
+                  {(item.sttMs / 1000).toFixed(1).replace('.', ',')} с
+                </span>
+              ) : null}
               {hoverId === item.id ? (
                 <button
                   type="button"

@@ -237,10 +237,11 @@ export default function App() {
     setSettingsSection(section);
     setSettingsOpen(true);
   }, []);
+  // Раньше здесь писалась «дата последнего захода в настройки», которую никто
+  // не читал: каждая правка настроек сохраняла профиль на диск без пользы.
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    updateSettings({ lastSettingsVisit: Date.now() });
-  }, [updateSettings]);
+  }, []);
 
   const content = useMemo(() => {
     if (page(route) === 'home') return <HomePage onOpenSettings={openSettings} />;
