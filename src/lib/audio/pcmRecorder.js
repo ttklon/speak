@@ -99,6 +99,9 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
   const chunks = [];
   let frames = 0;
   let aborted = false;
+  // Пауза: микрофон остаётся открытым, но звук не копится. Так человек может
+  // собраться с мыслью, не начиная диктовку заново.
+  let paused = false;
   let smoothLevel = 0;
 
   // Предролл: первые сотни миллисекунд уже записаны до старта — кладём их
@@ -113,6 +116,13 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
 
   processor.onaudioprocess = (event) => {
     if (aborted) return;
+    if (paused) {
+      if (smoothLevel !== 0) {
+        smoothLevel = 0;
+        onLevel?.(0);
+      }
+      return;
+    }
     const input = event.inputBuffer.getChannelData(0);
     const copy = new Float32Array(input.length);
     copy.set(input);
@@ -188,6 +198,19 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     },
     get frames() {
       return frames;
+    },
+    get paused() {
+      return paused;
+    },
+    /** Приостановить накопление звука (микрофон не закрывается). */
+    pause() {
+      paused = true;
+      smoothLevel = 0;
+      onLevel?.(0);
+    },
+    /** Продолжить запись после паузы. */
+    resume() {
+      paused = false;
     },
     stop() {
       cleanup();

@@ -11,3 +11,16 @@ publish:
   releaseType: release
 
 electronDist: dist-electron
+
+# Движок распознавания и (если положили рядом) веса — в ресурсы приложения.
+# Дублирует package.json: build — electron-builder читает этот файл в CI, и
+# конфигурации должны совпадать, чтобы установщик всегда содержал whisper-cli.
+extraResources:
+  - from: build/bin
+    to: bin
+    filter:
+      - "**/*"
+  - from: models
+    to: models
+    filter:
+      - "**/*.bin"

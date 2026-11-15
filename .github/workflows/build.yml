@@ -72,6 +72,27 @@ jobs:
           retention-days: 2
 
   # 2. Сборка установщика для Windows
+      - name: Тест настоящего движка распознавания (whisper.cpp)
+        shell: bash
+        # Проверяем не заглушку, а настоящий whisper-cli: аргументы, разбор
+        # результата, удаление .out.txt и отмену прохода. Без движка шаг
+        # пропускается (тест сам так решает), но с движком он обязателен.
+        run: |
+          set -e
+          mkdir -p /tmp/wtest && cd /tmp/wtest
+          url=$(curl -s https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30 \
+            | grep -o '"browser_download_url": *"[^"]*whisper-bin-ubuntu-x64.tar.gz"' \
+            | head -1 | sed 's/.*"\(https[^"]*\)"/\1/')
+          if [ -z "$url" ]; then echo "::warning title=whisper.cpp::сборка для Linux не найдена"; exit 0; fi
+          curl -sL "$url" -o w.tar.gz && tar xzf w.tar.gz
+          bin=$(find . -name 'whisper-cli' -type f | head -1)
+          cd "$GITHUB_WORKSPACE"
+          git clone --depth 1 -q --filter=blob:none --sparse https://github.com/ggml-org/whisper.cpp /tmp/wmodels
+          git -C /tmp/wmodels sparse-checkout set models
+          ZS_WHISPER_BIN="/tmp/wtest/$bin" \
+          ZS_WHISPER_MODEL="/tmp/wmodels/models/for-tests-ggml-tiny.bin" \
+          npm run test:whisper
+
   package:
     needs: check
     # На каждый коммит в рабочую ветку установщик не собираем: 170 МБ артефактов
@@ -156,6 +177,41 @@ jobs:
             sleep 25
           done
           echo "::warning title=electron-builder::бинарники не скачались заранее, пробуем в самой упаковке"
+
+      - name: Движок распознавания whisper.cpp в установщик
+        shell: pwsh
+        # Без whisper-cli.exe офлайн-диктовка не работает вовсе: человек
+        # скачивал модель и получал «движок не установлен». Кладём бинарник
+        # в build/bin, package.json отдаёт его в resources/bin.
+        run: |
+          New-Item -ItemType Directory -Force -Path build/bin | Out-Null
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            try {
+              $rel = Invoke-RestMethod -Headers @{ 'User-Agent' = 'ZSpeakly-CI' } `
+                'https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30'
+              $asset = $null
+              foreach ($r in $rel) {
+                $a = $r.assets | Where-Object { $_.name -eq 'whisper-bin-x64.zip' } | Select-Object -First 1
+                if ($a) { $asset = $a; break }
+              }
+              if (-not $asset) { throw 'whisper-bin-x64.zip нет в релизах ggml-org/whisper.cpp' }
+              Write-Host "::notice title=whisper.cpp::качаем $($asset.name) из $($r.tag_name)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile build/whisper.zip
+              Expand-Archive build/whisper.zip -DestinationPath build/whisper -Force
+              Get-ChildItem -Path build/whisper -Recurse -Include *.exe, *.dll |
+                Where-Object { $_.Name -match '^(whisper-cli|whisper-server)\.exe$' -or $_.Extension -eq '.dll' } |
+                ForEach-Object { Copy-Item $_.FullName build/bin -Force }
+              if (Test-Path build/bin/whisper-cli.exe) { $ok = $true }
+            } catch {
+              Write-Host "::warning title=whisper.cpp::попытка $i не удалась: $_"
+              Start-Sleep -Seconds 15
+            }
+          }
+          if (-not $ok) {
+            Write-Host '::warning title=whisper.cpp::бинарник не попал в сборку — приложение докачает его при первом запуске'
+          }
+          Get-ChildItem build/bin | Select-Object Name, Length
 
       - name: Build + package (NSIS + portable)
         shell: pwsh

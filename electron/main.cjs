@@ -34,6 +34,8 @@ const DEV_URL = process.env.ZSPEAKLY_DEV_URL || 'http://localhost:5173';
 const START_HIDDEN = process.argv.includes('--hidden');
 
 let mainWindow = null;
+// автоподготовка распознавания (заполняется при регистрации IPC)
+let prepareRecognition = null;
 let tray = null;
 let store = null;
 // Отдельное «плавающее» окно индикатора диктовки: видно поверх любых
@@ -101,6 +103,9 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     if (!START_HIDDEN) mainWindow.show();
+    // Первая установка: движок уже в комплекте, модель докачиваем сами.
+    // Не блокирует запуск и не мешает работать, если сети нет.
+    setTimeout(() => prepareRecognition?.(), 4000);
   });
 
   if (isDev && process.env.ZSPEAKLY_DEV_URL !== 'none') {
@@ -414,6 +419,21 @@ function registerHudIpc() {
   });
   // Кнопки на плавающем индикаторе: стоп просим у окна диктовки,
   // закрытие прячет только индикатор — запись продолжается.
+  ipcMain.handle('hud:pause', () => {
+    mainWindow?.webContents.send('dictation:pause', { paused: true, from: 'hud' });
+    return true;
+  });
+
+  ipcMain.handle('hud:resume', () => {
+    mainWindow?.webContents.send('dictation:pause', { paused: false, from: 'hud' });
+    return true;
+  });
+
+  ipcMain.handle('hud:cancel', () => {
+    mainWindow?.webContents.send('dictation:cancel', { from: 'hud' });
+    return true;
+  });
+
   ipcMain.handle('hud:stop', () => {
     mainWindow?.webContents.send('dictation:stop', { from: 'hud' });
     return true;
@@ -923,7 +943,8 @@ function registerIpc() {
     updateTrayTooltip();
   });
 
-  ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {
+  /** Распознавание PCM: одна запись — один проход whisper. */
+  async function transcribePcm(payload) {
     const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
     const status = whisper.status(model);
     if (!status.available) {
@@ -1003,14 +1024,36 @@ function registerIpc() {
       // конец и путает фразы через паузу в несколько секунд. Короткая запись
       // (одна речевая фраза) идёт одним куском, как раньше.
       const parts = whisper.splitBySilence?.(trimmed, sr) || [trimmed];
+      // Не больше 4 фрагментов. Каждый фрагмент для whisper-cli — это ещё одна
+      // загрузка модели (секунды на слабом CPU), и запись с десятком пауз
+      // превращалась в минуту ожидания без единого признака работы.
+      const MAX_PARTS = 4;
+      let chunks = parts;
+      if (parts.length > MAX_PARTS) {
+        chunks = [];
+        const per = Math.ceil(parts.length / MAX_PARTS);
+        for (let i = 0; i < parts.length; i += per) {
+          chunks.push(Buffer.concat(parts.slice(i, i + per)));
+        }
+      }
+      const totalParts = chunks.length;
+      const reportProgress = (done) => {
+        if (totalParts < 2) return;
+        try {
+          mainWindow?.webContents.send('stt:progress', { done, total: totalParts });
+        } catch {
+          /* окно уже закрыто */
+        }
+      };
       let res;
-      if (parts.length > 1 && parts.length <= 40) {
+      if (chunks.length > 1) {
         const texts = [];
         let failed = null;
-        for (let i = 0; i < parts.length; i += 1) {
+        for (let i = 0; i < chunks.length; i += 1) {
           const partWav = `${wav}.${i}.wav`;
           try {
-            fs.writeFileSync(partWav, writeWav(parts[i], sr));
+            fs.writeFileSync(partWav, writeWav(chunks[i], sr));
+            reportProgress(i + 1);
             // eslint-disable-next-line no-await-in-loop
             const one = await whisper.transcribe(partWav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
             if (!one?.ok) {
@@ -1041,6 +1084,7 @@ function registerIpc() {
           });
         }
       } else {
+        reportProgress(1);
         res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded });
       }
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
@@ -1056,11 +1100,23 @@ function registerIpc() {
         chars: String(res?.text || '').length,
         reason: res?.reason || '',
       });
+      if (!res?.ok && res?.code === 'empty') {
+        // whisper-cli отработал, но текста не дал. Показывать человеку его
+        // служебный stderr («read_audio_data: reading audio data…») бессмысленно.
+        logger.warn('stt', 'Движок не расслышал речь', { keep: true, ms });
+        return {
+          ok: false,
+          text: '',
+          code: 'unheard',
+          reason: 'движок не расслышал речь — говорите ближе к микрофону',
+          ms,
+        };
+      }
       return {
         ...res,
         ms,
         audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined,
-        chunks: parts.length > 1 ? parts.length : undefined,
+        chunks: totalParts > 1 ? totalParts : undefined,
       };
     } catch (err) {
       logger.error('stt', 'Исключение в распознавании', { stack: String(err?.stack || err) });
@@ -1068,7 +1124,42 @@ function registerIpc() {
     } finally {
       fs.rmSync(wav, { force: true });
     }
+  }
+
+  // Очередь распознавания. Раньше живая расшифровка и итоговый проход шли
+  // одновременно: два whisper-процесса, каждый с моделью в памяти — на слабой
+  // машине это «съело всю оперативку» и не дало текста. Теперь:
+  //  - одновременно выполняется ровно один проход;
+  //  - итоговый проход отменяет живой, а не ждёт его;
+  //  - новый живой проход не встаёт в очередь за итоговым.
+  let sttLock = Promise.resolve();
+  let sttMode = null; // 'partial' | 'final'
+
+  ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {
+    const isPartial = payload?.partial === true;
+    if (isPartial && sttMode === 'final') {
+      return { ok: false, text: '', code: 'superseded', reason: '' };
+    }
+    if (!isPartial && sttMode === 'partial') {
+      whisper.cancel?.('вытеснено итоговым проходом');
+    }
+    const prev = sttLock;
+    let release = () => {};
+    sttLock = new Promise((resolve) => {
+      release = resolve;
+    });
+    sttMode = isPartial ? 'partial' : 'final';
+    try {
+      await prev;
+      return await transcribePcm(payload);
+    } finally {
+      if (sttMode === (isPartial ? 'partial' : 'final')) sttMode = null;
+      release();
+    }
   });
+
+  // «Отменить распознавание»: человек не обязан ждать большую модель.
+  ipcMain.handle('stt:cancel', () => (whisper.cancel ? whisper.cancel('отменено пользователем') : false));
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));
 
@@ -1463,6 +1554,61 @@ function registerIpc() {
     mainWindow?.webContents.send('model:progress', { id, percent: res.ok ? 100 : 0, done: true, ...res });
     return res;
   });
+  /**
+   * Первый запуск: в установщике есть движок, но нет модели. Раньше человек
+   * узнавал об этом, наговорив минуту в пустоту. Теперь модель (и движок,
+   * если он почему-то не попал в сборку) докачивается в фоне, прогресс
+   * уходит в окно, а диктовка честно говорит, что ждёт загрузку.
+   */
+  let autoPrep = null;
+  const autoPrepareRecognition = () => {
+    if (autoPrep) return autoPrep;
+    const push = (payload) => {
+      try {
+        mainWindow?.webContents.send('model:progress', { auto: true, ...payload });
+      } catch {
+        /* окна ещё нет */
+      }
+    };
+    autoPrep = (async () => {
+      try {
+        let st = models.modelStatus();
+        if (!st.bin) {
+          logger.warn('stt', 'Движка нет в комплекте — скачиваю', { keep: true });
+          push({ id: 'engine', percent: 0 });
+          const res = await models.downloadEngine((percent) => push({ id: 'engine', percent }));
+          push({ id: 'engine', percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
+          if (!res.ok) return { ok: false, reason: res.reason };
+        }
+        st = models.modelStatus();
+        const downloaded = Object.values(st.models).filter((m) => m.downloaded);
+        if (downloaded.length) return { ok: true, already: true };
+        const preferred = (store?.get('zs:settings') || {}).whisperModel || 'base';
+        const id = models.MODELS[preferred] ? preferred : 'base';
+        logger.info('stt', 'Модель не скачана — качаю в фоне', { keep: true, model: id });
+        push({ id, percent: 0 });
+        const res = await models.downloadModel(id, (percent, received, total) =>
+          push({ id, percent, received, total }),
+        );
+        push({ id, percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
+        logger[res.ok ? 'info' : 'warn']('stt', res.ok ? 'Модель скачана' : 'Модель не скачалась', {
+          keep: true,
+          model: id,
+          reason: res.reason || '',
+        });
+        return res;
+      } catch (err) {
+        logger.error('stt', 'Автоподготовка распознавания не удалась', { reason: String(err?.message || err) });
+        return { ok: false, reason: String(err?.message || err) };
+      }
+    })();
+    return autoPrep;
+  };
+
+  // интерфейс может попросить «подготовь ещё раз» (после сбоя сети)
+  prepareRecognition = autoPrepareRecognition;
+  ipcMain.handle('models:prepare', () => autoPrepareRecognition());
+
   ipcMain.handle('models:cancel', () => models.cancelDownload());
   ipcMain.handle('models:import', async (_e, sourcePath) => models.importModel(sourcePath));
   ipcMain.handle('models:download-engine', async () => {

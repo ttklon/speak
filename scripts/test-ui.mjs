@@ -103,6 +103,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SEED_SETTINGS = {
   onboarded: true,
   userName: 'Тест',
+  // профиль «после миграции 1.5.1»: иначе миграция умолчаний перезапишет
+  // whisperModel/liveWhisper, которые сценарий задаёт намеренно
+  speedFix151: true,
   theme: 'dark',
   language: 'ru',
   whisperModel: 'small',
@@ -110,6 +113,8 @@ const SEED_SETTINGS = {
   aiModel: 'qwen2.5:0.5b',
   aiEnabled: true,
   screenContext: false,
+  // сценарий «модель в памяти» проверяет включение тумблера с нуля
+  keepModelLoaded: false,
   diagnostics: false,
   checkUpdates: true,
   soundFeedback: false,
@@ -1151,6 +1156,82 @@ async function scenarioMissingMic(browser) {
 }
 
 // Лимит истории буфера не должен выбрасывать закреплённое.
+/**
+ * Пауза и отмена распознавания — ровно то, чего не хватало в реальной работе:
+ * нельзя было приостановить запись, а во время долгого распознавания на экране
+ * не было ни секунд, ни способа прервать проход.
+ */
+async function scenarioPauseAndCancel(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { liveWhisper: false },
+    patchNative: () => {
+      const native = window.zspeakly && window.zspeakly.native;
+      if (!native) return;
+      native.transcribePcm = async (payload) => {
+        window.__sttCalls = window.__sttCalls || [];
+        window.__sttCalls.push({ partial: payload?.partial === true });
+        await new Promise((r) => setTimeout(r, payload?.partial ? 1200 : 2500));
+        return { ok: true, text: 'Текст после паузы и отмены', engine: 'whisper' };
+      };
+    },
+  });
+  takeErrors(page);
+  const text = () => page.evaluate(() => document.body.innerText.replace(/\n+/g, ' | '));
+
+  await clickText(page, 'Начать диктовку');
+  await sleep(1400);
+  const hasPause = await page.evaluate(() => Boolean(document.querySelector('.hero__pause')));
+  record('сценарии', 'пауза: кнопка есть во время записи', hasPause);
+
+  await page.evaluate(() => document.querySelector('.hero__pause')?.click());
+  await sleep(500);
+  const pausedUi = await page.evaluate(() => ({
+    text: document.body.innerText,
+    elapsed: document.body.innerText.match(/(\d+\.\d) с/)?.[1] || '0',
+  }));
+  const pausedOk = /Пауза/i.test(pausedUi.text) && /Продолжить/i.test(await text());
+  await sleep(1500);
+  const afterWait = await page.evaluate(() => document.body.innerText.match(/(\d+\.\d) с/)?.[1] || '0');
+  record('сценарии', 'пауза: запись останавливается, время не идёт', pausedOk && Math.abs(Number(afterWait) - Number(pausedUi.elapsed)) < 0.6,
+    `${pausedUi.elapsed} → ${afterWait}`);
+
+  await page.evaluate(() => document.querySelector('.hero__pause')?.click());
+  await sleep(600);
+  const resumed = await page.evaluate(() => document.querySelector('.hero__pause')?.innerText.trim() || '');
+  record('сценарии', 'пауза: «Продолжить» возвращает запись', /Пауза/i.test(resumed), resumed);
+
+  await page.click('.hero__mic');
+  await sleep(700);
+  const processing = await page.evaluate(() => ({
+    text: document.body.innerText,
+    cancel: Boolean([...document.querySelectorAll('button')].find((b) => /отменить/i.test(b.innerText))),
+    cancelCalls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:cancel').length,
+    progress: Boolean(document.querySelector('.live-draft--processing')),
+  }));
+  record('сценарии', 'распознавание: видно плашку с секундами', processing.progress && /ТРАНСКРИПЦИЯ/i.test(processing.text));
+  record('сценарии', 'распознавание: есть кнопка «Отменить»', processing.cancel);
+  record('сценарии', 'распознавание: живой проход отменяется перед итоговым', processing.cancelCalls >= 1, `stt:cancel ×${processing.cancelCalls}`);
+
+  await clickText(page, 'ОТМЕНИТЬ');
+  await sleep(600);
+  const idle = await text();
+  record('сценарии', 'отмена распознавания возвращает готовность', /Начать диктовку/i.test(idle) && !/ТРАНСКРИПЦИЯ/i.test(idle));
+
+  // обычный проход до конца — отмена не должна ломать следующие диктовки
+  await page.evaluate(() => window.__sttCalls = []);
+  await clickText(page, 'Начать диктовку');
+  await sleep(900);
+  await page.click('.hero__mic');
+  await sleep(3200);
+  const inserted = await page.evaluate(() =>
+    (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').map((c) => String(c.args?.[0] || '')),
+  );
+  record('сценарии', 'после отмены следующая диктовка распознаётся', inserted.some((t) => /после паузы и отмены/i.test(t)), `вставок: ${inserted.length}`);
+  const errors = takeErrors(page).filter((e) => !/AudioContext|NotAllowedError|microphone/i.test(e));
+  record('сценарии', 'пауза и отмена без ошибок в консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioLiveWhisper(browser) {
   // Живая расшифровка: пока человек говорит, whisper спрашивают повторно и
   // текст в черновике обновляется. Без настройки — ни одного лишнего вызова.
@@ -3658,6 +3739,7 @@ async function main() {
       ['обещания плашки', scenarioHudPromise],
       ['предролл микрофона', scenarioMicPreroll],
       ['живая расшифровка', scenarioLiveWhisper],
+      ['пауза и отмена распознавания', scenarioPauseAndCancel],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['пароли', scenarioPasswordVault],
       ['словарь', scenarioDictionary],

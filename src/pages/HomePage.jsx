@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Copy, Mic, Pencil, Search, Square, Trash2, X } from 'lucide-react';
+import { Copy, Mic, Pause, Pencil, Play, Search, Square, Trash2, X } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useDictation } from '../state/DictationProvider.jsx';
 import { writeClipboard } from '../lib/clipboard.js';
@@ -26,7 +26,7 @@ function HeroStat({ value, unit, label }) {
 
 export default function HomePage() {
   const { dictations, voiceHotkeys, settings, deleteDictation, addDictation } = useAppData();
-  const { state, draft, start, stop, last, elapsed } = useDictation();
+  const { state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress, cancelProcessing } = useDictation();
   const { push } = useToast();
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -169,18 +169,62 @@ export default function HomePage() {
             onClick={() => (listening ? stop() : start({ mode: 'hold' }))}
           >
             {listening ? <Square size={13} fill="currentColor" /> : <Mic size={15} />}
-            <span>{listening ? `Слушаю… ${(elapsed / 1000).toFixed(1)} с` : 'Начать диктовку'}</span>
+            <span>
+              {listening
+                ? `${paused ? 'Пауза' : 'Слушаю…'} ${(elapsed / 1000).toFixed(1)} с`
+                : 'Начать диктовку'}
+            </span>
           </button>
+          {/* Пауза: раньше её не было вообще — можно было только остановить
+              запись целиком и начать заново */}
+          {listening ? (
+            <button
+              type="button"
+              className="hero__pause"
+              onClick={() => (paused ? resume() : pause())}
+              title={paused ? 'Продолжить запись' : 'Приостановить запись'}
+            >
+              {paused ? <Play size={12} fill="currentColor" /> : <Pause size={12} fill="currentColor" />}
+              <span>{paused ? 'Продолжить' : 'Пауза'}</span>
+            </button>
+          ) : null}
         </div>
 
-        {listening || state === 'processing' ? (
+        {state === 'processing' ? (
+          <div className="live-draft live-draft--processing">
+            <div className="live-draft__head">
+              <span className="dot-live" />
+              Транскрипция… {(processingMs / 1000).toFixed(1)} с
+              {sttProgress ? ` · фрагмент ${sttProgress.done} из ${sttProgress.total}` : ''}
+            </div>
+            <p className="live-draft__text">
+              {draft || <span className="muted">Движок распознаёт запись — текст появится сразу после.</span>}
+            </p>
+            <div className="live-draft__actions">
+              <button type="button" className="link-btn" onClick={cancelProcessing}>
+                ОТМЕНИТЬ
+              </button>
+              {processingMs > 15000 ? (
+                <span className="live-draft__hint">
+                  Долго? Модель <b>base</b> распознаёт в разы быстрее — «Настройки → Распознавание».
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {listening ? (
           <div className="live-draft">
             <div className="live-draft__head">
               <span className="dot-live" />
-              {state === 'processing' ? 'Транскрипция…' : 'Живая диктовка'}
+              {paused ? 'Пауза' : 'Живая диктовка'}
             </div>
             <p className="live-draft__text">
-              {draft || <span className="muted">Говорите — текст появится здесь…</span>}
+              {draft || (
+                <span className="muted">
+                  {paused ? 'Запись на паузе — нажмите «Продолжить».' : 'Говорите — текст появится здесь…'}
+                </span>
+              )}
             </p>
           </div>
         ) : null}

@@ -9,6 +9,7 @@ models/*
 !models/README.md
 bin/*
 !bin/README.md
+!build/bin/README.md
 obj/
 .vs/
 *.user

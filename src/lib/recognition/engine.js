@@ -146,6 +146,11 @@ export function createRecognizer(opts = {}) {
     const runStreamTick = async () => {
       streamTimer = null;
       if (stopped || !recorder) return;
+      // на паузе не тратим процессор: живой текст всё равно не изменится
+      if (recorder.paused) {
+        scheduleStream();
+        return;
+      }
       const gen = streamGen;
       let snap = null;
       try {
@@ -229,8 +234,15 @@ export function createRecognizer(opts = {}) {
         if (!recorder || stopped) return { text };
         stopped = true;
         // недоработанный промежуточный запрос больше не нужен: финальный
-        // проход по всей записи всё равно точнее
+        // проход по всей записи всё равно точнее. Раньше он не отменялся и
+        // работал параллельно с итоговым — два whisper-процесса, двойная
+        // память и вдвое дольше ожидание.
         stopStream();
+        try {
+          await native.cancelTranscribe?.();
+        } catch {
+          /* отмена — не ошибка */
+        }
         const { pcm, durationMs } = recorder.stop();
         if (!pcm?.length) {
           onError?.({ code: 'no-audio', title: 'Запись пустая', hint: 'Микрофон ничего не передал. Проверьте устройство в настройках.' });
@@ -298,11 +310,36 @@ export function createRecognizer(opts = {}) {
         }
         return { text };
       },
+      /** Пауза посреди диктовки: микрофон открыт, звук не копится. */
+      pause() {
+        try {
+          recorder?.pause?.();
+        } catch {
+          /* ignore */
+        }
+      },
+      /** Продолжить запись после паузы. */
+      resume() {
+        try {
+          recorder?.resume?.();
+        } catch {
+          /* ignore */
+        }
+      },
+      get paused() {
+        return Boolean(recorder?.paused);
+      },
       abort() {
         stopped = true;
         stopStream();
         recorder?.abort?.();
         recorder = null;
+        // отменяем и незавершённый проход распознавания
+        try {
+          native.cancelTranscribe?.();
+        } catch {
+          /* ignore */
+        }
       },
       get text() {
         return text;

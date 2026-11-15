@@ -2,7 +2,7 @@
 
 Документ для тех, кто открывает репозиторий с нуля: из чего состоит ZSpeakly,
 как связаны слои, какие каналы IPC существуют и где что хранится. Полностью
-соответствует коду на момент версии 1.5.0 (что именно появилось — в [CHANGELOG.md](../CHANGELOG.md)).
+соответствует коду на момент версии 1.5.1 (что именно появилось — в [CHANGELOG.md](../CHANGELOG.md)).
 
 Оглавление:
 
@@ -56,11 +56,11 @@
 | Файл | Что делает |
 | --- | --- |
 | `main.cjs` | Всё ядро: окно 1020×680 без рамки, отдельное окно индикатора диктовки (`createHudWindow` — 268×92, `frame:false`, `transparent`, `alwaysOnTop: 'screen-saver'`, `focusable:false`, `showInactive`, низ экрана по центру) и каналы `hud:show/hide/update/stop/close/status`, трей и меню, `globalShortcut`, мониторинг буфера (900 мс), активное окно через PowerShell+C# (`GetForegroundWindow` + `GetWindowThreadProcessId`), вставка `^v` через `SendKeys`, чтение и замена выделения, скриншоты `desktopCapturer`, `setDisplayMediaRequestHandler` с loopback-звуком, регистрация всех IPC с учётом занятых сочетаний (`registerAccel` + `hotkey:conflict`), различение одиночного и двойного нажатия диктовки для «агента», инициализация журнала, тихая проверка обновлений |
-| `hud.html` | Само окно индикатора: пульс уровня (`--level`), «Слушаю… / Транскрибирую… / Запись остановлена», таймер, живой текст, кнопки «Остановить запись» и «Скрыть индикатор» (крестик). Своих скриптов вне файла нет, стили внутри |
+| `hud.html` | Само окно индикатора: пульс уровня (`--level`), «Слушаю… / Транскрибирую… / Запись остановлена», таймер, живой текст, кнопки «Пауза/Продолжить», «Остановить запись», «Скрыть индикатор» и «Отменить распознавание» (во время обработки). Своих скриптов вне файла нет, стили внутри |
 | `hud-preload.cjs` | Мост окна индикатора: `window.hudBridge = { stop, close, onState }` — ничего больше |
 | `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native` (включая `hudShow/hudHide/hudUpdate/hudStatus`, `onDictationStop`, `onHudClosed`), `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
 | `store.cjs` | `JsonStore`: `%APPDATA%\ZSpeakly\profile.json`, кэш в памяти, `scheduleFlush` 180 мс, атомарная запись `.tmp` → `rename`, `sizeSync()` |
-| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; запуск с `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -otxt -of`, `--prompt`, таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `trimSilence()` (тишина по краям), `splitBySilence()` (VAD по громкости: паузы длиннее 700 мс режут запись на фрагменты, длиннее 25 с — дробятся), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк. Серверный режим: `ensureServer`/`transcribeViaServer` (whisper-server на 127.0.0.1, `POST /inference` multipart), `stopServer` на `before-quit`, откат на CLI при любой ошибке |
+| `whisper.cjs` | Поиск `whisper-cli.exe` / `whisper.exe` / `main.exe` в `resources/bin` → `userData\bin` → `appPath\bin` → `PATH`; модели `ggml-*.bin` с порядком замены turbo → q5_0 → small → base → tiny → medium; запуск с `-m -f -l -t <ядра> --no-timestamps -nt -np -sns -otxt -of`, `--prompt`, таймаут 120 с; `analysePcm()` (RMS/пик/секунды — тишину не гоняем), `trimSilence()` (тишина по краям), `splitBySilence()` (VAD по громкости: паузы длиннее 700 мс режут запись на фрагменты, длиннее 25 с — дробятся), `isPhantom()` (фразы-галлюцинации), разбор `.out.txt`, затем stdout/stderr с фильтром служебных строк. Серверный режим: `ensureServer`/`transcribeViaServer` (whisper-server на 127.0.0.1, `POST /inference` multipart, ожидание готовности 8 с), `stopServer` на `before-quit`, откат на CLI при любой ошибке. `cancel()` убивает активный процесс и завершает проход с `code: 'cancelled'`; `isBusy()` — для очереди в main |
 | `models.cjs` | `modelStatus()` (что уже на диске), `downloadModel()` с Hugging Face и прогрессом, `downloadEngine()` — последний релиз `ggml-org/whisper.cpp` с `whisper-bin-x64.zip`, распаковка через `Expand-Archive`, `importModel()` — подхват файла и угадывание типа по размеру |
 | `wav.cjs` | PCM Int16 16 кГц → RIFF/WAVE без зависимостей |
 | `logger.cjs` | Журнал: буфер 400 событий, файл `logs/zspeakly.log` с обрезкой на 512 КБ, `redact()` (почта, `C:\Users\…`, `/home/…`, токены), `scrub()` (выбрасывает `text/transcript/pcm/audio/clipboard/word/prompt/selection`), отправка пачками по 40, `report()`, `ping()`, `sendNow()`, `installId` |
@@ -98,6 +98,7 @@
 | `lib/clipboard.js` | Запись/чтение буфера: нативный мост → `window.zspeakly.clipboard` → `navigator.clipboard` → `execCommand` |
 | `lib/storage.js` | Один API чтения/записи: Electron-мост или `localStorage` (`zs:` префикс) + размер данных |
 | `lib/retention.js` | Срок хранения: `pruneByAge`, «бессрочно» = 3650 |
+| `lib/settingsMigration.js` | `migrateSettings`: 1.5.1 переводит старые умолчания (small + живая расшифровка) на быстрые, осознанный выбор не трогает; маркер `speedFix151` |
 | `lib/seed.js` | Фикстура для тестов и скриншотов (тексты, «снимки», словарь): в продукте не используется |
 | `lib/media/recorder.js` | Запись экрана в WebM + постер из первого кадра |
 | `lib/feedback.js` | WebAudio-бипы и эффект печати |
@@ -111,10 +112,11 @@
 | Путь | Назначение |
 | --- | --- |
 | `scripts/check-ipc.mjs` | Сверяет `invoke/send` из preload с `ipcMain.handle/on` |
-| `scripts/smoke-main.mjs` | Грузит `main.cjs` с заглушкой Electron: 31 проверка — IPC, хоткеи, подсказка whisper (словарь + контекст экрана, ≤500), HTTP к локальной модели, снимок экрана, мониторинг буфера (новое копирование, своя вставка не дублируется, выключенный мониторинг молчит), двойное нажатие для «агента», сообщение о занятом сочетании, переключатель для своих сочетаний диктовки и screen-aware в E2E |
-| `scripts/test-ui.mjs` + `scripts/e2e/mock-bridge.mjs` | E2E в Chromium: мок моста `window.zspeakly` с журналом вызовов, обход всех кнопок/полей на каждом экране, 45 сценариев / 111 проверок: обход, режимы диктовки (кнопка, хоткей, свободные руки, агент, диктовка с учётом экрана), вставка текста в активное окно, настройки и их связь с main, контраст и переполнение в обеих темах и в узком окне (1024/900 px), доступные имена кнопок и видимый фокус |
+| `scripts/smoke-main.mjs` | Грузит `main.cjs` с заглушкой Electron: 76 проверок — IPC, хоткеи, подсказка whisper (словарь + контекст экрана, ≤500), HTTP к локальной модели, снимок экрана, мониторинг буфера (новое копирование, своя вставка не дублируется, выключенный мониторинг молчит), двойное нажатие для «агента», сообщение о занятом сочетании, переключатель для своих сочетаний диктовки и screen-aware в E2E |
+| `scripts/test-ui.mjs` + `scripts/e2e/mock-bridge.mjs` | E2E в Chromium: мок моста `window.zspeakly` с журналом вызовов, обход всех кнопок/полей на каждом экране, 70 сценариев / 225 проверок: обход, режимы диктовки (кнопка, хоткей, свободные руки, агент, диктовка с учётом экрана), вставка текста в активное окно, настройки и их связь с main, контраст и переполнение в обеих темах и в узком окне (1024/900 px), доступные имена кнопок и видимый фокус |
 | `scripts/capture-screenshots.mjs` | 14 кадров интерфейса (тёмная и светлая темы) прямо из работающего Vite |
 | `scripts/capture-hud.mjs` | снимок плавающего индикатора из `electron/hud.html` (`docs/screenshots/16-dictation-hud.png`) |
+| `scripts/test-whisper-live.mjs` | Настоящий `whisper-cli` на WAV: разбор ответа, `code: 'empty'`, удаление `.out.txt`, отмена прохода (в CI — на скачанной сборке whisper.cpp) |
 | `scripts/smoke-updater.mjs` | Канал stable/beta реально применяется |
 | `scripts/build-settings-index.mjs` | Генерирует индекс строк настроек для поиска (`--check` для CI) |
 | `scripts/dev-electron.mjs` | Vite + Electron с горячей перезагрузкой |
@@ -181,7 +183,7 @@ Ctrl+Alt+E (или своя инструкция)
 
 ## 5. IPC: полный контракт
 
-Проверяется `npm run check:ipc` (сейчас 52 invoke-канала, 57 обработчиков, 2 send);
+Проверяется `npm run check:ipc` (сейчас 54 invoke-канала, 62 обработчика, 2 send);
 настройки — `npm run check:settings` (36 значений: каждое читается и находится поиском).
 
 | Группа | Каналы |
@@ -281,7 +283,7 @@ Ctrl+Alt+E (или своя инструкция)
 | tiny | 75 МБ | ≈300 МБ | ≈8× | черновая расшифровка |
 | base | 142 МБ | ≈400 МБ | ≈6× | базовая |
 | small | 466 МБ | ≈700 МБ | ≈3× | хорошая |
-| large-v3-turbo | 1.5 ГБ | ≈2 ГБ | ≈2,5× | почти large-v3 (рекомендуем) |
+| base (рекомендуем) | 142 МБ | ≈400 МБ | ≈6× | базовая, успевает в диктовке |
 | large-v3-turbo-q5_0 | 547 МБ | ≈900 МБ | ≈3× | почти large-v3, меньше памяти |
 | medium | 1.5 ГБ | ≈2 ГБ | ≈1,2× | высокая |
 
@@ -315,9 +317,9 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ## 12. Проверки перед коммитом
 
 ```bash
-npm test                  # 130 тестов (vitest + jsdom)
-npm run test:main         # 72 смоук-проверки main-процесса
-npm run test:ui           # E2E: обход кнопок, 69 сценариев (216 проверок), контраст/вёрстка
+npm test                  # 134 теста (vitest + jsdom)
+npm run test:main         # 76 смоук-проверок main-процесса
+npm run test:ui           # E2E: обход кнопок, 70 сценариев (225 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений

@@ -100,7 +100,19 @@ export default function FeaturesSection() {
           </div>
           <Toggle
             checked={settings.liveWhisper !== false}
-            onChange={(v) => updateSettings({ liveWhisper: v })}
+            onChange={(v) => {
+              updateSettings({ liveWhisper: v });
+              // Честное предупреждение: живой текст на большой модели — это
+              // несколько whisper-проходов за одну диктовку.
+              if (v && ['small', 'medium', 'large-v3', 'large-v3-turbo', 'large-v3-turbo-q5_0'].includes(settings.whisperModel)) {
+                push({
+                  title: 'Живая расшифровка на этой модели будет медленной',
+                  description: 'Каждые 2,5 секунды — новый проход whisper. С моделью base или tiny текст успевает, с small и больше — тормозит.',
+                  tone: 'warn',
+                  ttl: 12000,
+                });
+              }
+            }}
           />
         </div>
         <div className="setting-row">

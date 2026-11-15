@@ -11,6 +11,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('hudBridge', {
   stop: () => ipcRenderer.invoke('hud:stop'),
   close: () => ipcRenderer.invoke('hud:close'),
+  // пауза и отмена распознавания прямо из плавающей плашки
+  pause: () => ipcRenderer.invoke('hud:pause'),
+  resume: () => ipcRenderer.invoke('hud:resume'),
+  cancel: () => ipcRenderer.invoke('hud:cancel'),
   onState: (cb) => {
     const listener = (_e, payload) => cb(payload);
     ipcRenderer.on('hud:state', listener);

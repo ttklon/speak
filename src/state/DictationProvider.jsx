@@ -52,6 +52,13 @@ export function DictationProvider({ children }) {
   const [mode, setMode] = useState('hold');
   const [elapsed, setElapsed] = useState(0);
   const [hudOpen, setHudOpen] = useState(false);
+  // пауза посреди диктовки: микрофон открыт, звук не копится
+  const [paused, setPaused] = useState(false);
+  // сколько уже идёт распознавание — человек должен видеть, что приложение
+  // работает, а не зависло на 40 секунд
+  const [processingMs, setProcessingMs] = useState(0);
+  // прогресс по фрагментам длинной записи: { done, total }
+  const [sttProgress, setSttProgress] = useState(null);
   // живая расшифровка возможна только с whisper.cpp: браузерный движок сам
   // отдаёт промежуточный текст, а whisper нужно спрашивать повторно
   const liveText = settings.liveWhisper !== false && hasNativeStt();
@@ -61,6 +68,9 @@ export function DictationProvider({ children }) {
 
   const recRef = useRef(null);
   const startedAt = useRef(0);
+  // пауза: сколько времени запись стояла и когда встала
+  const pausedTotal = useRef(0);
+  const pausedAt = useRef(0);
   const draftRef = useRef('');
   const finalRef = useRef('');
   const settingsRef = useRef(settings);
@@ -96,13 +106,6 @@ export function DictationProvider({ children }) {
     return () => clearTimeout(t);
   }, [error]);
 
-  // Обработка «затянулась»: плашка не должна показывать 0.0 с и «Транскрибирую…»
-  // без движения — сообщаем, сколько уже ждём.
-  useEffect(() => {
-    if (state !== 'processing') return undefined;
-    const t = setInterval(() => setElapsed(Date.now() - startedAt.current), 500);
-    return () => clearInterval(t);
-  }, [state]);
 
   const finish = useCallback(
     async (text, { insert = true, sttMs = 0 } = {}) => {
@@ -300,6 +303,8 @@ export function DictationProvider({ children }) {
       draftRef.current = '';
       finalRef.current = '';
       startedAt.current = Date.now();
+      pausedTotal.current = 0;
+      pausedAt.current = 0;
       setElapsed(0);
       setState('listening');
       if (opts.mode) setMode(opts.mode);
@@ -438,6 +443,7 @@ export function DictationProvider({ children }) {
         },
       });
       recRef.current = recognizer;
+      setPaused(false);
       // start() у нативного движка асинхронный (нужно разрешение на микрофон)
       const failStart = (err) => {
         console.warn('[dictation] start failed', err);
@@ -469,6 +475,9 @@ export function DictationProvider({ children }) {
     }
     const fallbackText = rec.text || draftRef.current;
     recRef.current = null;
+    setPaused(false);
+    // запись завершена — пауз больше нет, длительность дальше считать нечего
+    if (pausedAt.current) pausedAt.current = 0;
     clearTimeout(stopFallback.current);
 
     // Нативный whisper.cpp останавливается АСИНХРОННО: сначала закрывается
@@ -550,6 +559,48 @@ export function DictationProvider({ children }) {
     else start({ mode: 'toggle' });
   }, [start, stop]);
 
+  /**
+   * Пауза диктовки. Раньше её не было вовсе: остановить запись можно было
+   * только целиком, а потом начинать заново. Теперь звук просто перестаёт
+   * копиться — уже сказанное остаётся, микрофон не переоткрывается.
+   */
+  const pause = useCallback(() => {
+    const rec = recRef.current;
+    if (!rec?.pause) return;
+    rec.pause();
+    pausedAt.current = Date.now();
+    setPaused(true);
+    setLevel(0);
+  }, []);
+
+  const resume = useCallback(() => {
+    const rec = recRef.current;
+    if (!rec?.resume) return;
+    rec.resume();
+    if (pausedAt.current) {
+      pausedTotal.current += Date.now() - pausedAt.current;
+      pausedAt.current = 0;
+    }
+    setPaused(false);
+  }, []);
+
+  /**
+   * «Отменить распознавание»: убить текущий проход whisper, не дожидаясь
+   * минуты. Текст не вставляется — человек сам решил прервать.
+   */
+  const cancelProcessing = useCallback(() => {
+    try {
+      window.zspeakly?.native?.cancelTranscribe?.();
+    } catch {
+      /* ignore */
+    }
+    diag.info('stt', 'Распознавание отменено пользователем');
+    recRef.current = null;
+    setPaused(false);
+    setState('idle');
+    setLevel(0);
+  }, []);
+
   // Страховка: если движок замолчал и не прислал ни конца, ни ошибки,
   // «обрабатываю…» не должно висеть бесконечно — через 90 секунд сдаёмся
   // и честно показываем ошибку вместо вечной плашки.
@@ -568,10 +619,15 @@ export function DictationProvider({ children }) {
     return () => clearTimeout(t);
   }, [state]);
 
-  // Таймер длительности
+  // Таймер длительности. Время на паузе не должно «идти»: иначе человек
+  // видит, что запись продолжается, хотя звук уже не пишется.
   useEffect(() => {
     if (state !== 'listening') return undefined;
-    const t = setInterval(() => setElapsed(Date.now() - startedAt.current), 100);
+    const t = setInterval(() => {
+      const now = Date.now();
+      const hold = pausedAt.current ? now - pausedAt.current : 0;
+      setElapsed(Math.max(0, now - startedAt.current - pausedTotal.current - hold));
+    }, 100);
     return () => clearInterval(t);
   }, [state]);
 
@@ -633,6 +689,70 @@ export function DictationProvider({ children }) {
     if (state === 'listening') setHudOpen(true);
   }, [state]);
 
+  // Секундомер распознавания: без него «Транскрипция…» выглядела зависанием.
+  useEffect(() => {
+    if (state !== 'processing') {
+      setProcessingMs(0);
+      setSttProgress(null);
+      return undefined;
+    }
+    const started = Date.now();
+    setProcessingMs(0);
+    const t = setInterval(() => setProcessingMs(Date.now() - started), 200);
+    return () => clearInterval(t);
+  }, [state]);
+
+  // Автозагрузка модели на первой установке: человек должен видеть, что
+  // приложение не «висит», а качает 142 МБ, и что диктовка заработает сама.
+  useEffect(() => {
+    const native = window.zspeakly?.native;
+    if (!native?.onModelProgress) return undefined;
+    let lastAt = 0;
+    let announced = false;
+    return native.onModelProgress((p) => {
+      if (!p?.auto) return;
+      if (p.done) {
+        if (p.ok) {
+          pushToast({
+            title: 'Модель распознавания готова',
+            description: 'Диктовка работает офлайн. Можно говорить.',
+            tone: 'success',
+            ttl: 8000,
+          });
+        } else if (p.reason) {
+          pushToast({
+            title: 'Модель не скачалась',
+            description: String(p.reason).slice(0, 160),
+            tone: 'warn',
+            ttl: 12000,
+          });
+        }
+        return;
+      }
+      const now = Date.now();
+      if (now - lastAt < 2000) return;
+      lastAt = now;
+      const percent = Number(p.percent || 0);
+      const what = p.id === 'engine' ? 'движок распознавания' : `модель ${p.id || 'base'}`;
+      pushToast({
+        title: `Скачиваю ${what} — ${percent}%`,
+        description: announced ? '' : 'Это один раз: дальше ZSpeakly работает офлайн.',
+        tone: 'info',
+        ttl: 2600,
+      });
+      announced = true;
+    });
+  }, [pushToast]);
+
+  // Прогресс по фрагментам: «2 из 4» вместо безымянного ожидания
+  useEffect(() => {
+    const native = window.zspeakly?.native;
+    if (!native?.onSttProgress) return undefined;
+    return native.onSttProgress((p) => {
+      if (p && p.total > 1) setSttProgress({ done: p.done, total: p.total });
+    });
+  }, []);
+
   // ── Плавающий индикатор в отдельном окне (только Electron) ────────────────
   // Внутри главного окна индикатор виден лишь когда окно на экране: свернул
   // приложение — и запись «потерялась». Отдельное окно поверх всех приложений
@@ -681,6 +801,8 @@ export function DictationProvider({ children }) {
       state,
       level,
       elapsed,
+      paused,
+      processingMs,
       draft,
       // движок нужен плашке, чтобы не обещать живой текст там, где его нет
       engine,
@@ -690,7 +812,7 @@ export function DictationProvider({ children }) {
       hint: hintFull,
       hintFull,
     });
-  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText]);
+  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, paused, processingMs]);
 
   // Сообщаем main, что реально происходит: от этого зависят пункт
   // «Остановить диктовку» в трее и поведение глобального сочетания.
@@ -725,6 +847,26 @@ export function DictationProvider({ children }) {
     });
   }, [stop]);
 
+  // Пауза и отмена из плавающей плашки: человек смотрит в чужое окно,
+  // и ему не нужно возвращаться в ZSpeakly.
+  useEffect(() => {
+    const native = window.zspeakly?.native;
+    if (!native?.onDictationPause) return undefined;
+    return native.onDictationPause((p) => {
+      if (!recRef.current) return;
+      if (p?.paused) pause();
+      else resume();
+    });
+  }, [pause, resume]);
+
+  useEffect(() => {
+    const native = window.zspeakly?.native;
+    if (!native?.onDictationCancel) return undefined;
+    return native.onDictationCancel(() => {
+      if (state === 'processing') cancelProcessing();
+    });
+  }, [state, cancelProcessing]);
+
   const value = useMemo(
     () => ({
       state,
@@ -735,6 +877,9 @@ export function DictationProvider({ children }) {
       mode,
       elapsed,
       hudOpen,
+      paused,
+      processingMs,
+      sttProgress,
       nativeHud: hudAllowed && hudNativeOn,
       engine,
       // видно в настройках: держим ли микрофон открытым прямо сейчас
@@ -743,13 +888,19 @@ export function DictationProvider({ children }) {
       start,
       stop,
       toggle,
+      pause,
+      resume,
+      cancelProcessing,
       finish,
       clearError: () => setError(null),
       setHudOpen,
       formatK,
       askAgent,
     }),
-    [state, draft, level, error, last, mode, elapsed, hudOpen, hudAllowed, hudNativeOn, engine, micWarmState, start, stop, toggle, finish, askAgent],
+    [
+      state, draft, level, error, last, mode, elapsed, hudOpen, paused, processingMs, sttProgress,
+      hudAllowed, hudNativeOn, engine, micWarmState, start, stop, toggle, pause, resume, cancelProcessing, finish, askAgent,
+    ],
   );
 
   return <DictationContext.Provider value={value}>{children}</DictationContext.Provider>;

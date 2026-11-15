@@ -2622,3 +2622,50 @@ button.plan-card--action:hover .plan-card__title {
   color: var(--text-4);
   font-size: 9.5px;
 }
+
+/* Пауза диктовки: отдельная кнопка рядом с основной */
+.hero__pause {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(var(--overlay-rgb), 0.05);
+  border: 1px solid rgba(var(--overlay-rgb), 0.09);
+  color: var(--text-2);
+  font-size: 11px;
+  transition: background 0.13s, color 0.13s;
+}
+
+.hero__pause:hover {
+  background: rgba(var(--overlay-rgb), 0.11);
+  color: var(--text);
+}
+
+/* Распознавание: секунды, прогресс по фрагментам и кнопка отмены */
+.live-draft--processing {
+  border-color: rgba(120, 170, 255, 0.28);
+}
+
+.live-draft--processing .live-draft__head {
+  color: #93b8ff;
+}
+
+.live-draft--processing .dot-live {
+  background: #6f9dff;
+  box-shadow: 0 0 8px rgba(111, 157, 255, 0.9);
+}
+
+.live-draft__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.live-draft__hint {
+  font-size: 10.5px;
+  color: var(--text-4);
+}

@@ -1326,6 +1326,58 @@ await check('серверный режим: без whisper-server честно �
   if (!spawnCalls.some((c) => String(c.file).includes('whisper'))) throw new Error('cli не запускался');
 });
 
+await check('отмена распознавания: канал есть и без активного прохода не врёт', async () => {
+  if (!handlers.has('stt:cancel')) throw new Error('канал stt:cancel не зарегистрирован');
+  const res = await handlers.get('stt:cancel')({});
+  if (res !== false) throw new Error(`без активного прохода ожидалось false, получено ${res}`);
+});
+
+await check('одновременно работает один проход: живой не мешает итоговому', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  let release = () => {};
+  const gate = new Promise((r) => {
+    release = r;
+  });
+  const realTranscribe = whisper.transcribe;
+  let started = 0;
+  whisper.transcribe = async () => {
+    started += 1;
+    await gate;
+    return { ok: true, text: 'итог', ms: 1 };
+  };
+  try {
+    const partial = handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(600), lang: 'ru', partial: true });
+    await new Promise((r) => setTimeout(r, 150));
+    const fin = handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(600), lang: 'ru' });
+    await new Promise((r) => setTimeout(r, 150));
+    release();
+    const [a, b] = await Promise.all([partial, fin]);
+    if (!a || !b) throw new Error('проходы не завершились');
+    if (b.text !== 'итог') throw new Error(`итоговый проход не дал текст: ${JSON.stringify(b)}`);
+    if (started < 1) throw new Error('движок не запускался');
+  } finally {
+    whisper.transcribe = realTranscribe;
+  }
+});
+
+await check('подготовка распознавания: канал models:prepare есть', async () => {
+  if (!handlers.has('models:prepare')) throw new Error('нет models:prepare');
+  const res = await handlers.get('models:prepare')({});
+  if (!res || typeof res.ok !== 'boolean') throw new Error(`странный ответ: ${JSON.stringify(res)}`);
+});
+
+await check('пауза и отмена из плавающей плашки доходят до окна', async () => {
+  sentEvents.length = 0;
+  await handlers.get('hud:pause')({});
+  await handlers.get('hud:resume')({});
+  await handlers.get('hud:cancel')({});
+  const channels = sentEvents.map((e) => e.ch);
+  if (!channels.includes('dictation:pause')) throw new Error('нет dictation:pause');
+  if (!channels.includes('dictation:cancel')) throw new Error('нет dictation:cancel');
+  const paused = sentEvents.filter((e) => e.ch === 'dictation:pause').map((e) => Boolean(e.payload?.paused));
+  if (!paused.includes(true) || !paused.includes(false)) throw new Error(`пауза/продолжить: ${paused}`);
+});
+
 await check('тишина не уходит в whisper и объясняет причину', async () => {
   runWhisper('спасибо за просмотр');
   spawnCalls.length = 0;

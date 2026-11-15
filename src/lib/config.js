@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.5.0',
+  version: '1.5.1',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -170,15 +170,23 @@ export const DEFAULT_SETTINGS = {
   clipboardMaxItems: 10000,
   clipboardRetentionDays: 30,
   dictationRetentionDays: 30,
-  whisperModel: 'small',
-  // Держать модель в памяти (whisper-server): первая диктовка без холодного старта.
-  keepModelLoaded: false,
+  // base — разумный компромисс для диктовки на обычном ноутбуке: small на
+  // CPU распознаёт 30-секундную фразу десятки секунд, и это выглядит как
+  // «ничего не работает». Кто хочет точнее — выберет small в настройках.
+  whisperModel: 'base',
+  // Держать модель в памяти (whisper-server): модель грузится один раз, а не
+  // на каждый фрагмент и не на каждый живой проход. Иначе каждая диктовка
+  // заново читала с диска сотни мегабайт.
+  keepModelLoaded: true,
   audioDeviceId: 'default',
   // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
   // По умолчанию выключено — микрофон работал бы всё время.
   micPreroll: false,
-  // промежуточная расшифровка whisper: текст в плашке обновляется по ходу речи
-  liveWhisper: true,
+  // промежуточная расшифровка whisper. По умолчанию выключена: каждый
+  // промежуточный проход — это ещё один запуск whisper, и на модели small
+  // запись в 30 секунд превращалась в минуту ожидания без результата.
+  // Включать есть смысл с tiny/base.
+  liveWhisper: false,
   // способ вставки: 'clipboard' — буфер + Ctrl+V, 'sendinput' — без буфера
   insertMethod: 'clipboard',
   autoLaunch: false,
@@ -213,13 +221,23 @@ export const LOG_ENDPOINT = '';
  * как «во сколько раз быстрее реального времени» на обычном ноутбучном CPU,
  * без GPU-ускорения.
  *
- * Turbo — тот же large-v3, но с 4 декодерными слоями вместо 32: почти такое же
- * качество при втрое большей скорости. Для диктовки это лучший выбор, ему и
- * отдаём пометку «рекомендуем». Квант q5_0 — тот же turbo, но втрое меньше.
+ * Пометка «рекомендуем» — у base: 142 МБ, ≈6× быстрее реального времени на
+ * обычном ноутбуке, то есть 30 секунд речи распознаются за ~5 секунд. Диктовка
+ * живёт ожиданием: модель, которая думает 20 секунд, ощущается как поломка.
+ * Turbo — тот же large-v3 с 4 декодерными слоями вместо 32, качество выше, но
+ * ≈2,5× realtime: его имеет смысл ставить на мощный CPU, а не «по умолчанию».
  */
 export const MODELS = [
   { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '≈300 МБ', speed: '≈8×', quality: 'черновая расшифровка' },
-  { id: 'base', label: 'Whisper base', size: '142 МБ', ram: '≈400 МБ', speed: '≈6×', quality: 'базовая' },
+  {
+    id: 'base',
+    label: 'Whisper base',
+    size: '142 МБ',
+    ram: '≈400 МБ',
+    speed: '≈6×',
+    quality: 'базовая',
+    recommended: true,
+  },
   { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '≈700 МБ', speed: '≈3×', quality: 'хорошая' },
   {
     id: 'large-v3-turbo',
@@ -227,8 +245,7 @@ export const MODELS = [
     size: '1.5 ГБ',
     ram: '≈2 ГБ',
     speed: '≈2,5×',
-    quality: 'почти large-v3',
-    recommended: true,
+    quality: 'почти large-v3, для мощного CPU',
   },
   {
     id: 'large-v3-turbo-q5_0',

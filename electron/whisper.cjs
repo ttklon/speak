@@ -197,7 +197,9 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
   });
 
   // Готовность: сервер начинает отвечать на GET /. Модель грузится секунды.
-  const deadline = Date.now() + 20000;
+  // 8 секунд: модель small грузится быстрее, а если сервер не поднялся,
+  // человек не должен ждать впустую — уходим в обычный whisper-cli.
+  const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     if (proc.exitCode !== null) break;
     const ping = await httpJson({ port, urlPath: '/', timeout: 1500 });
@@ -276,6 +278,46 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
 }
 
 /**
+ * Текущий проход распознавания. Нужен, чтобы:
+ *  - отменить долгий проход по кнопке «Отменить»;
+ *  - не держать два whisper-процесса одновременно: каждый ест сотни
+ *    мегабайт под модель, и на слабой машине это выглядело как «зажрал
+ *    оперативку и ничего не распознал».
+ */
+let activeRun = null;
+
+function isBusy() {
+  return Boolean(activeRun);
+}
+
+/**
+ * Отменить активный проход. Возвращает true, если что-то действительно
+ * прервали. Ожидающий промис transcribe() завершится с code:'cancelled'.
+ */
+function cancel(reason = 'распознавание отменено') {
+  const run = activeRun;
+  if (!run) return false;
+  activeRun = null;
+  run.cancelled = true;
+  try {
+    run.child?.kill();
+  } catch {
+    /* ignore */
+  }
+  try {
+    run.req?.destroy();
+  } catch {
+    /* ignore */
+  }
+  try {
+    run.finish({ ok: false, text: '', code: 'cancelled', reason });
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
+
+/**
  * Транскрипция wav-файла (16 kHz mono PCM).
  * Возвращает { ok, text, segments }.
  */
@@ -292,7 +334,9 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
     // Серверный режим: модель уже в памяти — текст приходит без холодного старта.
     if (keepLoaded) {
       transcribeViaServer(wavPath, { lang, prompt, timeout, threads, modelPath }).then((fast) => {
-        if (fast && fast.text) resolve({ ok: true, text: fast.text, mode: 'server' });
+        // Пустой ответ сервера — это тоже ответ: повторять тот же проход через
+        // whisper-cli значило бы ждать вдвое дольше и грузить модель второй раз.
+        if (fast) resolve({ ok: Boolean(fast.text), text: fast.text || '', mode: 'server', code: fast.text ? undefined : 'empty' });
         else runCli();
       });
       return;
@@ -322,15 +366,23 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
     let stderr = '';
     let stdout = '';
     let settled = false;
+    const run = { child, finish: null, cancelled: false };
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (activeRun === run) activeRun = null;
       resolve(value);
     };
+    run.finish = finish;
+    activeRun = run;
     const timer = setTimeout(() => {
-      child.kill();
-      finish({ ok: false, text: '', reason: 'таймаут распознавания' });
+      try {
+        child.kill();
+      } catch {
+        /* ignore */
+      }
+      finish({ ok: false, text: '', code: 'timeout', reason: 'таймаут распознавания' });
     }, timeout);
 
     child.stderr.on('data', (d) => {
@@ -380,10 +432,15 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
         finish({ ok: true, text, code });
         return;
       }
+      if (run.cancelled) {
+        finish({ ok: false, text: '', code: 'cancelled', reason: 'распознавание отменено' });
+        return;
+      }
       const reason = (stderr || stdout).slice(-400).trim();
       finish({
         ok: false,
         text: '',
+        code: 'empty',
         reason: reason || `whisper.cpp завершился с кодом ${code}`,
       });
     });
@@ -528,6 +585,8 @@ function isPhantom(text) {
 module.exports = {
   status,
   transcribe,
+  cancel,
+  isBusy,
   findBinary,
   findModel,
   analysePcm,

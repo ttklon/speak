@@ -15,6 +15,7 @@ import {
 } from '../lib/config.js';
 import { uid } from '../lib/utils.js';
 import { pruneByAge } from '../lib/retention.js';
+import { migrateSettings } from '../lib/settingsMigration.js';
 
 const AppDataContext = createContext(null);
 
@@ -97,7 +98,10 @@ export function AppDataProvider({ children }) {
   // Слияние настроек по умолчанию (после добавления новых полей) — один раз
   useEffect(() => {
     if (merged) return;
-    setSettings((prev) => ({ ...DEFAULT_SETTINGS, ...prev }));
+    // 1.5.1: старые умолчания (small + живая расшифровка) превращали
+    // 30-секундную диктовку в минуту ожидания. Миграция вынесена в
+    // src/lib/settingsMigration.js и покрыта тестами — здесь только вызов.
+    setSettings((prev) => migrateSettings(prev, DEFAULT_SETTINGS));
     setMerged(true);
   }, [merged, setSettings]);
 

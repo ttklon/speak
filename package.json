@@ -1,7 +1,7 @@
 {
   "name": "zspeakly",
   "productName": "ZSpeakly",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "description": "ZSpeakly — офлайн голосовой ввод для Windows 11: диктовка в любое поле, словарь, AI-инструкции и буфер обмена.",
   "author": {
@@ -28,7 +28,8 @@
     "settings:index:check": "node scripts/build-settings-index.mjs --check",
     "check:ipc": "node scripts/check-ipc.mjs",
     "test:updater": "node scripts/smoke-updater.mjs",
-    "check:settings": "node scripts/check-settings.mjs"
+    "check:settings": "node scripts/check-settings.mjs",
+    "test:whisper": "node scripts/test-whisper-live.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -97,6 +98,22 @@
         "owner": "ttklon",
         "repo": "speak",
         "releaseType": "release"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "build/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "models",
+        "to": "models",
+        "filter": [
+          "**/*.bin"
+        ]
       }
     ]
   },

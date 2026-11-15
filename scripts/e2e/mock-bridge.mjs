@@ -28,6 +28,9 @@ export function installMockBridge() {
 
   // флажок отмены скачивания модели (см. downloadModel/modelsCancel)
   let modelCancel = false;
+  // подписчики событий паузы/отмены из плавающей плашки
+  const pauseCbs = [];
+  const cancelCbs = [];
 
   const readStore = (key) => {
     const raw = localStorage.getItem(PREFIX + key);
@@ -125,6 +128,29 @@ export function installMockBridge() {
     transcribe: async (payload) => {
       record('stt:transcribe', [payload]);
       return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper' };
+    },
+    cancelTranscribe: async () => {
+      record('stt:cancel');
+      return true;
+    },
+    onSttProgress: () => () => {},
+    onDictationPause: (cb) => {
+      pauseCbs.push(cb);
+      return () => {
+        const i = pauseCbs.indexOf(cb);
+        if (i >= 0) pauseCbs.splice(i, 1);
+      };
+    },
+    onDictationCancel: (cb) => {
+      cancelCbs.push(cb);
+      return () => {
+        const i = cancelCbs.indexOf(cb);
+        if (i >= 0) cancelCbs.splice(i, 1);
+      };
+    },
+    prepareModels: async () => {
+      record('models:prepare');
+      return { ok: true };
     },
     transcribePcm: async (payload) => {
       // pcm целиком в журнал не кладём, но всё, что влияет на распознавание,
@@ -399,5 +425,8 @@ export function installMockBridge() {
     read: (key) => readStore(key),
     emit,
     emitCount: () => (subscriptions.get('x') || []).length,
+    // события из плавающей плашки (hud:pause / hud:cancel)
+    hudPause: (paused) => pauseCbs.slice().forEach((cb) => cb({ paused: Boolean(paused), from: 'hud' })),
+    hudCancel: () => cancelCbs.slice().forEach((cb) => cb({ from: 'hud' })),
   };
 }

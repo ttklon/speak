@@ -38,6 +38,10 @@ contextBridge.exposeInMainWorld('zspeakly', {
     platform: process.platform,
     sttStatus: (model) => ipcRenderer.invoke('stt:status', model),
     transcribePcm: (payload) => ipcRenderer.invoke('stt:transcribe-pcm', payload),
+    // отменить долгий проход (кнопка «Отменить» в плашке распознавания)
+    cancelTranscribe: () => ipcRenderer.invoke('stt:cancel'),
+    // прогресс по фрагментам длинной диктовки: {done, total}
+    onSttProgress: (cb) => on('stt:progress', cb),
     insertText: (text) => ipcRenderer.invoke('text:insert', text),
     pasteToActive: () => ipcRenderer.invoke('text:paste'),
     readSelection: () => ipcRenderer.invoke('text:read-selection'),
@@ -72,6 +76,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     downloadModel: (id) => ipcRenderer.invoke('models:download', id),
     saveBackup: (json) => ipcRenderer.invoke('data:save-backup', json),
     downloadEngine: () => ipcRenderer.invoke('models:download-engine'),
+    // «подготовь распознавание»: докачать движок и модель (повтор после сбоя)
+    prepareModels: () => ipcRenderer.invoke('models:prepare'),
     importModel: (filePath) => ipcRenderer.invoke('models:import', filePath),
     onModelProgress: (cb) => on('model:progress', cb),
     // плавающий индикатор диктовки (отдельное окно поверх всех приложений)
@@ -80,6 +86,9 @@ contextBridge.exposeInMainWorld('zspeakly', {
     hudUpdate: (state) => ipcRenderer.invoke('hud:update', state),
     hudStatus: () => ipcRenderer.invoke('hud:status'),
     onDictationStop: (cb) => on('dictation:stop', cb),
+    // пауза/продолжить и отмена распознавания из плавающей плашки
+    onDictationPause: (cb) => on('dictation:pause', cb),
+    onDictationCancel: (cb) => on('dictation:cancel', cb),
     onHudClosed: (cb) => on('hud:closed', cb),
     dictationState: (state) => ipcRenderer.send('dictation:state', state),
     // трей показывает, что микрофон держится открытым заранее
