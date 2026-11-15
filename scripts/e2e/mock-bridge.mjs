@@ -247,6 +247,23 @@ export function installMockBridge() {
         installId: 'e2e-install',
         entries: 3,
         pending: 0,
+        // то же, что присылает main после проверки системы
+        system: {
+          platform: 'win32',
+          version: '1.5.5',
+          cpus: 8,
+          ramGb: 16,
+          engine: 'есть',
+          vad: true,
+          model: 'base',
+          modelDownloaded: true,
+          hotkeys: ['Control+Alt+Space', 'Control+Shift+V'],
+          insertMethod: 'clipboard',
+          insertSupported: true,
+          clipboardWatch: true,
+          micPreroll: false,
+          autoLaunch: true,
+        },
       };
     },
     diagRecent: async (limit) => {

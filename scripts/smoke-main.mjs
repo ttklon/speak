@@ -850,6 +850,12 @@ await check('отчёт диагностики сохраняется файло
   const text = fs.readFileSync(res.path, 'utf8');
   if (!text.includes('отчёт диагностики')) throw new Error('в файле нет заголовка отчёта');
   if (!text.includes('система:')) throw new Error('в отчёте нет окружения');
+  // и что реально работает на этой машине: сочетания, движок, вставка, буфер
+  if (!text.includes('система и железо')) throw new Error('в отчёте нет блока «система и железо»');
+  if (!/процессор: \d+ ядер · память: [\d.]+ ГБ/.test(text)) throw new Error('в отчёте нет ядер и памяти');
+  if (!/движок на диске: /.test(text)) throw new Error('в отчёте нет сведений о движке');
+  if (!/сочетания: (Control|ни одного)/.test(text)) throw new Error('в отчёте нет зарегистрированных сочетаний');
+  if (!/вставка: (буфер обмена|SendInput)/.test(text)) throw new Error('в отчёте нет способа вставки');
   // по отчёту должно быть видно, как была настроена диктовка
   const st = handlers.get('store:get')({}, 'zs:settings') || {};
   handlers.get('store:set')({}, 'zs:settings', { ...st, insertMethod: 'sendinput', micPreroll: true });
@@ -863,6 +869,20 @@ await check('отчёт диагностики сохраняется файло
   fs.rmSync(res2.path, { force: true });
   handlers.get('store:set')({}, 'zs:settings', { ...st, insertMethod: 'clipboard', micPreroll: false });
   fs.rmSync(res.path, { force: true });
+});
+
+await check('диагностика показывает проверенные факты о системе, а не настройки', async () => {
+  const st = await handlers.get('diag:status')({});
+  const sys = st?.system;
+  if (!sys || typeof sys !== 'object') throw new Error('нет блока system');
+  if (!(sys.cpus >= 1)) throw new Error('не указано число ядер');
+  if (!(sys.ramGb > 0)) throw new Error('не указан объём памяти');
+  if (!('engine' in sys) || !('vad' in sys)) throw new Error('нет сведений о движке');
+  if (!('modelDownloaded' in sys)) throw new Error('не сказано, есть ли модель на диске');
+  if (!Array.isArray(sys.hotkeys)) throw new Error('список сочетаний — не массив');
+  if (!['clipboard', 'sendinput'].includes(sys.insertMethod)) throw new Error(`непонятный способ вставки: ${sys.insertMethod}`);
+  if (typeof sys.clipboardWatch !== 'boolean') throw new Error('не сказано, работает ли мониторинг буфера');
+  if (sys.platform !== process.platform) throw new Error('платформа не совпадает');
 });
 
 await check('по умолчанию наружу ничего не отправляется', async () => {

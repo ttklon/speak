@@ -115,7 +115,7 @@
 | --- | --- |
 | `scripts/check-ipc.mjs` | Сверяет `invoke/send` из preload с `ipcMain.handle/on` |
 | `scripts/smoke-main.mjs` | Грузит `main.cjs` с заглушкой Electron: 80 проверок — IPC, хоткеи, подсказка whisper (словарь + контекст экрана, ≤500), HTTP к локальной модели, снимок экрана, мониторинг буфера (новое копирование, своя вставка не дублируется, выключенный мониторинг молчит), двойное нажатие для «агента», сообщение о занятом сочетании, переключатель для своих сочетаний диктовки и screen-aware в E2E |
-| `scripts/test-ui.mjs` + `scripts/e2e/mock-bridge.mjs` | E2E в Chromium: мок моста `window.zspeakly` с журналом вызовов, фейковый микрофон Chromium (`--use-fake-device-for-media-stream`), обход всех кнопок/полей на каждом экране, 74 сценария / 238 проверок: обход, режимы диктовки (кнопка, хоткей, свободные руки, агент, диктовка с учётом экрана), вставка текста в активное окно, настройки и их связь с main, контраст и переполнение в обеих темах и в узком окне (1024/900 px), доступные имена кнопок и видимый фокус |
+| `scripts/test-ui.mjs` + `scripts/e2e/mock-bridge.mjs` | E2E в Chromium: мок моста `window.zspeakly` с журналом вызовов, фейковый микрофон Chromium (`--use-fake-device-for-media-stream`), обход всех кнопок/полей на каждом экране, 74 сценария / 239 проверок: обход, режимы диктовки (кнопка, хоткей, свободные руки, агент, диктовка с учётом экрана), вставка текста в активное окно, настройки и их связь с main, контраст и переполнение в обеих темах и в узком окне (1024/900 px), доступные имена кнопок и видимый фокус |
 | `scripts/capture-screenshots.mjs` | 14 кадров интерфейса (тёмная и светлая темы) прямо из работающего Vite |
 | `scripts/capture-hud.mjs` | снимок плавающего индикатора из `electron/hud.html` (`docs/screenshots/16-dictation-hud.png`) |
 | `scripts/test-whisper-live.mjs` | Настоящий `whisper-cli` на WAV: разбор ответа, `code: 'empty'`, удаление `.out.txt`, отмена прохода, подхват VAD-модели (`ZS_WHISPER_VAD`) — 9 проверок (в CI — на скачанной сборке whisper.cpp) |
@@ -199,7 +199,7 @@ Ctrl+Alt+E (или своя инструкция)
 | Буфер | `clipboard:read`, `clipboard:write`, `clipboard:screenshot`, `screen:capture` |
 | Хоткеи | `hotkey:set` (строка-акселератор или `{dictationKey, textActions, voiceHotkeys}`) |
 | Сеть (только локально) | `http:get`, `http:post` — allowlist: localhost, `*.local`, 10/8, 192.168/16, 172.16/12 |
-| Диагностика | `diag:log`, `diag:status`, `diag:recent`, `diag:set-enabled`, `diag:set-endpoint`, `diag:save-report`, `diag:send-now`, `diag:ping`, `diag:clear` |
+| Диагностика | `diag:log`, `diag:status` (логи + проверенные факты `system`: сочетания, движок, VAD, модель на диске, способ вставки, мониторинг буфера, железо), `diag:recent`, `diag:set-enabled`, `diag:set-endpoint`, `diag:save-report`, `diag:send-now`, `diag:ping`, `diag:clear` |
 | Файлы и система | `app:open-data-folder`, `app:open-external` (белый список GitHub), `app:auto-launch`, `app:open-logs`, `app:save-file`, `app:notify` |
 | Модели | `models:status`, `models:download`, `models:download-engine`, `models:import` |
 | Обновления | `update:check`, `update:channel`, `update:download`, `update:install` |
@@ -326,7 +326,7 @@ Windows (с ретраями, кэшем Electron, фолбэком в ZIP, ес
 ```bash
 npm test                  # 134 теста (vitest + jsdom)
 npm run test:main         # 76 смоук-проверок main-процесса
-npm run test:ui           # E2E: обход кнопок, 74 сценария (238 проверок), контраст/вёрстка
+npm run test:ui           # E2E: обход кнопок, 74 сценария (239 проверок), контраст/вёрстка
 ZS_ONLY='диктовка' npm run test:ui   # один сценарий, пока чинишь именно его
 npm run check:ipc         # ни одного канала без обработчика
 npm run test:updater      # каналы обновлений

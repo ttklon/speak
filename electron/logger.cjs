@@ -340,7 +340,7 @@ const logger = {
    * Готовый текстовый отчёт для файла или буфера: журнал + окружение.
    * Именно это человек прикладывает, когда что-то «не работает».
    */
-  report({ limit = 200, settings = null } = {}) {
+  report({ limit = 200, settings = null, system = null } = {}) {
     const lines = [];
     const c = context || {};
     lines.push('ZSpeakly — отчёт диагностики');
@@ -364,6 +364,29 @@ const logger = {
       lines.push(`вставка: ${st.insertMethod === 'sendinput' ? 'SendInput без буфера' : 'буфер обмена + Ctrl+V'}`);
       lines.push(`микрофон: ${st.customMic ? 'выбран пользователем' : 'системный'}`);
       lines.push(`слов в словаре: ${Number(st.dictionaryWords) || 0}`);
+    }
+    // Проверенные факты о машине: по отчёту видно, работает ли сочетание,
+    // есть ли движок и модель, каким способом вставляется текст.
+    const sys = system && typeof system === 'object' ? system : null;
+    if (sys) {
+      lines.push('');
+      lines.push('── система и железо ──');
+      lines.push(`процессор: ${sys.cpus || '?'} ядер · память: ${sys.ramGb || '?'} ГБ`);
+      lines.push(`движок на диске: ${sys.engine || '?'} · VAD: ${sys.vad ? 'есть' : 'нет'}`);
+      lines.push(
+        `модель: ${sys.model || '?'}${sys.modelDownloaded ? ' (скачана)' : ' (нет на диске)'}`,
+      );
+      lines.push(
+        `сочетания: ${Array.isArray(sys.hotkeys) && sys.hotkeys.length ? sys.hotkeys.join(', ') : 'ни одного'}`,
+      );
+      lines.push(
+        `вставка: ${sys.insertMethod === 'sendinput' ? 'SendInput без буфера' : 'буфер обмена + Ctrl+V'}${
+          sys.insertSupported ? '' : ' (системой не поддержано)'
+        }`,
+      );
+      lines.push(`мониторинг буфера: ${sys.clipboardWatch ? 'включён' : 'выключен'}`);
+      lines.push(`горячий микрофон: ${sys.micPreroll ? 'включён' : 'выключен'}`);
+      lines.push(`автозапуск: ${sys.autoLaunch ? 'включён' : 'выключен'}`);
     }
     lines.push('');
     lines.push(`── последние события (${Math.min(limit, buffered.length)}) ──`);

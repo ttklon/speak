@@ -1514,7 +1514,45 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('diag:status', () => logger.status());
+  /**
+   * Снимок «что на этой машине работает»: его видно в интерфейсе и он же
+   * попадает в отчёт. Раньше человек мог лишь догадываться, зарегистрировались
+   * ли глобальные сочетания и включён ли мониторинг буфера.
+   */
+  function systemReport() {
+    try {
+      const os = require('node:os');
+      const st = models.modelStatus();
+      const s = store?.get('zs:settings') || {};
+      const model = s.whisperModel || 'base';
+      let autoLaunch = null;
+      try {
+        autoLaunch = app.getLoginItemSettings?.()?.openAtLogin ?? null;
+      } catch {
+        autoLaunch = null;
+      }
+      return {
+        platform: process.platform,
+        version: app.getVersion?.() || '',
+        cpus: (os.cpus() || []).length,
+        ramGb: Math.round(((os.totalmem() || 0) / 1024 ** 3) * 10) / 10,
+        engine: st.bin ? 'есть' : 'нет',
+        vad: Boolean(st.vad),
+        model,
+        modelDownloaded: Boolean(st.models?.[model]?.downloaded),
+        hotkeys: [...usedAccels],
+        insertMethod: s.insertMethod === 'sendinput' ? 'sendinput' : 'clipboard',
+        insertSupported: process.platform === 'win32',
+        clipboardWatch: Boolean(clipboardTimer),
+        micPreroll: s.micPreroll === true,
+        autoLaunch,
+      };
+    } catch (err) {
+      return { error: String(err?.message || err) };
+    }
+  }
+
+  ipcMain.handle('diag:status', () => ({ ...logger.status(), system: systemReport() }));
   ipcMain.handle('diag:recent', (_e, limit) => logger.recent(limit));
   ipcMain.handle('diag:set-enabled', (_e, enabled) => {
     logger.setEnabled(Boolean(enabled));
@@ -1551,6 +1589,7 @@ function registerIpc() {
           customMic: Boolean(s.audioDeviceId && s.audioDeviceId !== 'default'),
           dictionaryWords: (store?.get('zs:dictionary') || []).length,
         },
+        system: systemReport(),
       });
       const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
       const dir = app.getPath('desktop') || app.getPath('documents');

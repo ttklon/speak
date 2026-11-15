@@ -22,13 +22,19 @@
 import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { installMockBridge } from './e2e/mock-bridge.mjs';
 // демо-наборы больше не подставляются приложением — тесты кладут их сами
 import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../src/lib/seed.js';
 
 const BASE = (process.env.ZS_BASE_URL || 'http://127.0.0.1:5173').replace(/\/$/, '');
+// Индикатор диктовки — не часть сборки Vite: Electron открывает electron/hud.html
+// прямо с диска (loadFile → file://). Тест делает то же, иначе против preview
+// адрес отдаёт index.html приложения и проверка падает не по делу.
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const HUD_FILE = `file://${join(ROOT, 'electron', 'hud.html')}`;
 const HEADLESS = process.env.HEADED !== '1';
 
 const C = {
@@ -971,7 +977,7 @@ async function scenarioHudPromise(browser) {
       close: () => {},
     };
   });
-  await page.goto(`${BASE}/electron/hud.html`, { waitUntil: 'domcontentloaded' });
+  await page.goto(HUD_FILE, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#text', { timeout: 10_000 });
   const textFor = async (engine, live = false) => {
     await page.evaluate(
@@ -2504,6 +2510,19 @@ async function scenarioDiagnostics(browser) {
     'диагностика: виден снимок настроек диктовки',
     snapshotRows,
     snapshotRows ? 'движок, модель, живой текст, предролл, вставка' : 'строк не нашлось',
+  );
+  // «Система и железо»: проверенные факты, а не настройки
+  const facts = await page.evaluate(() =>
+    [...document.querySelectorAll('.settings-group')]
+      .filter((g) => /Система и железо/.test(g.innerText))
+      .map((g) => g.innerText.replace(/\n+/g, ' '))
+      .join(' '),
+  );
+  record(
+    'сценарии',
+    'диагностика: «Система и железо» показывает сочетания, движок, буфер и память',
+    /Control\+Alt\+Space/.test(facts) && /есть/.test(facts) && /включён/.test(facts) && /8 ядер, 16 ГБ/.test(facts),
+    facts.slice(0, 160),
   );
   const errors = takeErrors(page);
   record('сценарии', 'диагностика: без ошибок консоли', errors.length === 0, errors[0] || '');

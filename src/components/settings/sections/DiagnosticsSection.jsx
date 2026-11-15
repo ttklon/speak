@@ -28,6 +28,8 @@ export default function DiagnosticsSection() {
   const { settings, updateSettings } = useAppData();
   const { push } = useToast();
   const [status, setStatus] = useState(null);
+  // «Система и железо» — то, что main реально проверил на этой машине
+  const system = status?.system || null;
   const [events, setEvents] = useState([]);
   const [busy, setBusy] = useState('');
   // черновик адреса приёмника: применяется по кнопке, чтобы не дёргать
@@ -330,6 +332,54 @@ export default function DiagnosticsSection() {
             {settings.insertMethod === 'sendinput'
               ? 'SendInput без буфера обмена (только Windows)'
               : 'буфер обмена + Ctrl+V, прежний буфер возвращается'}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Система и железо</div>
+        <div className="settings-group__desc">
+          Проверенные факты, а не настройки: зарегистрировались ли глобальные сочетания, включён ли
+          мониторинг буфера, есть ли движок и модель на диске.
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Глобальные сочетания</span>
+          <span className="kv-row__value">
+            {system?.hotkeys?.length ? system.hotkeys.join(', ') : 'нет доступа к системе (превью в браузере)'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Вставка текста</span>
+          <span className="kv-row__value">
+            {system?.insertMethod === 'sendinput'
+              ? system?.insertSupported
+                ? 'SendInput, без буфера обмена'
+                : 'SendInput выбран, но работает только в Windows — сейчас буфер'
+              : 'буфер обмена + Ctrl+V'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Мониторинг буфера</span>
+          <span className="kv-row__value">
+            {system ? (system.clipboardWatch ? 'включён' : 'выключен') : '—'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Движок whisper.cpp</span>
+          <span className="kv-row__value">
+            {system ? `${system.engine}${system.vad ? ', VAD-модель на месте' : ', без VAD-модели'}` : '—'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Модель на диске</span>
+          <span className="kv-row__value">
+            {system ? `${system.model} — ${system.modelDownloaded ? 'скачана' : 'нет файла'}` : '—'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Компьютер</span>
+          <span className="kv-row__value">
+            {system ? `${system.cpus} ядер, ${system.ramGb} ГБ памяти, версия ${system.version}` : '—'}
           </span>
         </div>
       </div>
