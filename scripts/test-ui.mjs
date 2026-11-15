@@ -2045,6 +2045,47 @@ async function scenarioModelCancel(browser) {
   await page.close();
 }
 
+// Удалению модели раньше не было кнопки вовсе: скачал несколько — старые
+// лежали гигабайтами и убрать их было нечем.
+async function scenarioModelDelete(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', { settle: 600 });
+  takeErrors(page);
+  const trash = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button[aria-label^="Удалить модель"]')].find((b) =>
+      /small/.test(b.getAttribute('aria-label')),
+    );
+    if (!btn) return { found: false };
+    btn.scrollIntoView({ block: 'center' });
+    btn.click();
+    return { found: true };
+  });
+  record('сценарии', 'модели: у скачанной модели есть корзинка', trash.found);
+  await sleep(500);
+  const dialog = await page.evaluate(() => /Удалить модель с диска/i.test(document.body.innerText));
+  record('сценарии', 'модели: удаление спрашивает подтверждение', dialog);
+  // именно кнопка подтверждения (текст целиком), а не корзинка с похожей подписью
+  const confirmed = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find(
+      (b) => (b.innerText || '').replace(/\s+/g, ' ').trim() === 'Удалить модель',
+    );
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(900);
+  const calls = await bridgeCalls(page);
+  const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+  record(
+    'сценарии',
+    'модели: удаление уходит в main и объясняет, сколько освободилось',
+    confirmed && calls.includes('models:delete') && /466\s*МБ/.test(toast),
+    `${calls.filter((c) => c.startsWith('models')).join(',')} | ${toast}`.slice(0, 160),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'модели: удаление без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Обновление: проверка → скачивание → перезапуск, без «зависшей» кнопки.
 async function scenarioUpdateFlow(browser) {
   const page = await openPage(browser, '#/settings?section=about&from=home', { settle: 600 });
@@ -3762,6 +3803,7 @@ async function main() {
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['модель в памяти', scenarioWarmModel],
       ['отмена скачивания модели', scenarioModelCancel],
+      ['удаление модели', scenarioModelDelete],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],
       ['очистка истории', scenarioClearDictations],

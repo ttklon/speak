@@ -319,7 +319,7 @@ export function installMockBridge() {
       return {
         bin: true,
         models: {
-          tiny: { id: 'tiny', downloaded: false, size: 78_000_000 },
+          tiny: { id: 'tiny', downloaded: true, size: 78_000_000 },
           small: { id: 'small', downloaded: true, size: 488_000_000 },
           medium: { id: 'medium', downloaded: false, size: 1_500_000_000 },
         },
@@ -341,6 +341,10 @@ export function installMockBridge() {
       record('models:cancel');
       modelCancel = true;
       return { ok: true };
+    },
+    deleteModel: async (id) => {
+      record('models:delete', [id]);
+      return { ok: true, freedMb: 466, switchedTo: id === 'small' ? 'tiny' : '' };
     },
     downloadEngine: async () => {
       record('models:download-engine');

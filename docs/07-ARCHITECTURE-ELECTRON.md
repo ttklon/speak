@@ -191,7 +191,7 @@ desktopCapturer, Tray, session).
 ```
 npm test               # vitest: 134 теста в 17 файлах (движки, пресеты, буфер, пароли, рендер)
 npm run test:main      # смоук main: IPC, хоткеи, вставка, whisper, буфер, трей, SendInput (78)
-npm run test:ui        # E2E «нажать всё» в Chromium: 70 сценариев / 225 проверок
+npm run test:ui        # E2E «нажать всё» в Chromium: 71 сценарий / 229 проверок
 npm run test:whisper   # настоящий whisper-cli: разбор ответа, .out.txt, отмена, VAD (в CI — на скачанной сборке)
 npm run check:ipc      # каждый канал рендерера имеет обработчик
 npm run check:settings # каждая настройка читается и находится поиском

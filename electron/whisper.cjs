@@ -16,6 +16,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { app } = require('electron');
+const { writeWav } = require('./wav.cjs');
 
 const BIN_NAMES = ['whisper-cli.exe', 'whisper.exe', 'main.exe', 'whisper-cli', 'whisper'];
 const SERVER_NAMES = ['whisper-server.exe', 'whisper-server'];
@@ -352,7 +353,39 @@ async function warm(model) {
   if (!serverBinary()) return { ok: false, reason: 'в комплекте нет whisper-server' };
   const threads = Math.max(1, Math.min(8, require('node:os').cpus().length || 4));
   const server = await ensureServer(modelPath, { threads });
-  return server ? { ok: true, port: server.port } : { ok: false, reason: 'whisper-server не поднялся' };
+  if (!server) return { ok: false, reason: 'whisper-server не поднялся' };
+  // Первый запрос к серверу всегда дольше: он строит вычислительные графы
+  // (на замере — 2,5 с против 0,7 с у следующих). Поэтому «прогрев» — это не
+  // только запуск процесса: делаем пустой проход на тишине, чтобы человек не
+  // платил эти секунды своей первой фразой.
+  await warmupInference(server).catch(() => {});
+  return { ok: true, port: server.port, warmed: true };
+}
+
+/** Пустой проход по тишине: строит графы сервера заранее. */
+async function warmupInference(server) {
+  const samples = 16000; // 1 секунда
+  const pcm = Buffer.alloc(samples * 2);
+  const wav = writeWav(pcm, 16000);
+  const { body, contentType } = multipart(
+    {
+      language: 'ru',
+      prompt: '',
+      temperature: '0.0',
+      response_format: 'json',
+      no_timestamps: 'true',
+      audio_ctx: '200',
+    },
+    { name: 'file', filename: 'warmup.wav', buffer: wav },
+  );
+  await httpJson({
+    port: server.port,
+    method: 'POST',
+    urlPath: '/inference',
+    body,
+    headers: { 'Content-Type': contentType, 'Content-Length': body.length },
+    timeout: 30000,
+  });
 }
 
 function multipart(fields, fileField) {
