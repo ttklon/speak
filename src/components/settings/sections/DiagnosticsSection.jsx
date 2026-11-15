@@ -377,6 +377,42 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="kv-row">
+          <span className="kv-row__key">Скорость: модель в памяти</span>
+          <span className="kv-row__value">
+            {!system
+              ? '—'
+              : system.engineWarm
+                ? 'прогрета — распознавание без загрузки весов'
+                : system.engineWarming
+                  ? 'греется: первая фраза может быть медленнее'
+                  : 'не прогрета — каждая фраза начинается с загрузки весов'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Помощник ввода</span>
+          <span className="kv-row__value">
+            {!system?.inputHost
+              ? '—'
+              : !system.inputHost.available
+                ? 'системой не поддержан — вставка через буфер'
+                : system.inputHost.ready
+                  ? 'готов — вставка без запуска программ'
+                  : system.inputHost.running
+                    ? 'запускается'
+                    : 'не запущен — первая вставка будет медленнее'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Последняя диктовка</span>
+          <span className="kv-row__value">
+            {system?.lastSttMs
+              ? `${(Math.round(system.lastSttMs / 100) / 10).toLocaleString('ru-RU')} с распознавания (${
+                  system.engineMode === 'server' ? 'модель в памяти' : 'с загрузкой весов'
+                })`
+              : 'ещё не было'}
+          </span>
+        </div>
+        <div className="kv-row">
           <span className="kv-row__key">Компьютер</span>
           <span className="kv-row__value">
             {system ? `${system.cpus} ядер, ${system.ramGb} ГБ памяти, версия ${system.version}` : '—'}

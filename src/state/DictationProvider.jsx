@@ -43,7 +43,7 @@ function speak(text, language = 'ru', voiceURI = '') {
 const DictationContext = createContext(null);
 
 export function DictationProvider({ children }) {
-  const { settings, dictionary, addDictation, recordWords, updateSettings } = useAppData();
+  const { settings, dictionary, addDictation, recordWords, updateSettings, updateDictation } = useAppData();
   const [state, setState] = useState('idle'); // idle | listening | processing | done
   const [draft, setDraft] = useState(''); // живой текст
   const [level, setLevel] = useState(0);
@@ -94,6 +94,9 @@ export function DictationProvider({ children }) {
   const { push: pushToast } = useToast();
   // когда последний раз предупреждали, что модель не улучшила диктовку
   const rewriteWarnedAt = useRef(0);
+  // id последней записи в истории: нужен, чтобы поздний ответ модели
+  // (после бюджета полировки) обновил именно эту запись, а не чужую
+  const lastItemId = useRef('');
   // «горячий микрофон»: поток открыт заранее, последние 600 мс лежат в буфере
   const micWarm = useRef(null);
   // достаточный ли статус, чтобы интерфейс не врал про открытый микрофон
@@ -143,7 +146,43 @@ export function DictationProvider({ children }) {
       if (polishing && cleaned && settingsRef.current.aiDictationRewrite === true) {
         setState('processing');
         const before = cleaned.length;
-        const better = await polishDictation(cleaned, settingsRef.current, { timeout: 6000 });
+        // Бюджет полировки. Раньше здесь стояло «ждём до 6 секунд» — и человек
+        // получал текст через шесть секунд после того, как замолчал, хотя
+        // распознавание заняло доли секунды. Теперь ждём не дольше бюджета
+        // (по умолчанию 1,5 с): если модель не успела — вставляем текст после
+        // офлайн-правил и честно говорим об этом, а ответ модели доходит в
+        // историю, когда будет готов.
+        const budget = Math.max(300, Number(settingsRef.current.aiPolishBudgetMs) || 1500);
+        const polishPromise = polishDictation(cleaned, settingsRef.current, { timeout: 6000 });
+        let timedOut = false;
+        const better = await Promise.race([
+          polishPromise,
+          new Promise((resolve) => {
+            setTimeout(() => {
+              timedOut = true;
+              resolve(null);
+            }, budget);
+          }),
+        ]);
+        if (timedOut) {
+          // Не блокируем вставку: текст уже готов и правильный. Когда модель
+          // всё-таки ответит — обновим запись в истории, чтобы человек видел
+          // «как надо», но в чужое окно второй раз ничего не печатаем.
+          polishPromise
+            .then((late) => {
+              if (!late) return;
+              const improved = OPS.clean(late);
+              if (!improved || improved === cleaned) return;
+              const id = lastItemId.current;
+              if (id && updateDictation) updateDictation(id, { text: improved, words: words(improved) });
+              diag.info('stt', 'Модель улучшила диктовку после вставки', {
+                before: cleaned.length,
+                after: improved.length,
+              });
+            })
+            .catch(() => {});
+          diag.warn('stt', 'Модель не успела за бюджет — вставлены офлайн-правила', { budget });
+        }
         if (better) {
           cleaned = OPS.clean(better);
           diag.info('stt', 'Диктовку довела локальная модель', {
@@ -151,7 +190,7 @@ export function DictationProvider({ children }) {
             after: cleaned.length,
             model: settingsRef.current.aiModel || '',
           });
-        } else {
+        } else if (!timedOut) {
           // Галочка включена, а модель ничего не дала. Молчать нельзя: человек
           // думает, что текст «улучшается», хотя работает офлайн-правила.
           diag.warn('stt', 'Модель не улучшила диктовку — оставлены правила', {
@@ -209,6 +248,7 @@ export function DictationProvider({ children }) {
       }
       if (cleaned) {
         setLast(item);
+        lastItemId.current = item.id;
         addDictation(item);
         recordWords(item.words, durationMs);
         // Вставка в активное окно. Раньше она жила только в onEnd движка,

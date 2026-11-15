@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.5.6',
+  version: '1.5.7',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -165,6 +165,9 @@ export const DEFAULT_SETTINGS = {
   // вторая стадия чистки диктовки моделью: по умолчанию выключена, потому что
   // добавляет 1–3 секунды к каждой вставке
   aiDictationRewrite: false,
+  // сколько ждать полировку моделью, прежде чем вставить текст после
+  // офлайн-правил: диктовка не должна ждать локальную модель секундами
+  aiPolishBudgetMs: 1500,
   aiModel: 'qwen2.5:0.5b',
   clipboardMonitor: true,
   clipboardMaxItems: 10000,

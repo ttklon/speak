@@ -2524,6 +2524,19 @@ async function scenarioDiagnostics(browser) {
     /Control\+Alt\+Space/.test(facts) && /есть/.test(facts) && /включён/.test(facts) && /8 ядер, 16 ГБ/.test(facts),
     facts.slice(0, 160),
   );
+  // Быстрый путь: видно, прогрета ли модель и готов ли помощник ввода
+  const speedRows = await page.evaluate(() =>
+    [...document.querySelectorAll('.kv-row')]
+      .filter((r) => /Скорость: модель в памяти|Помощник ввода|Последняя диктовка/.test(r.innerText))
+      .map((r) => r.innerText.replace(/\n+/g, ': '))
+      .join(' | '),
+  );
+  record(
+    'сценарии',
+    'диагностика: видно, прогрета ли модель, готов ли помощник ввода и сколько заняла последняя диктовка',
+    /прогрета/.test(speedRows) && /готов — вставка без запуска программ/.test(speedRows) && /0,8 с распознавания/.test(speedRows),
+    speedRows.slice(0, 200),
+  );
   const errors = takeErrors(page);
   record('сценарии', 'диагностика: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();

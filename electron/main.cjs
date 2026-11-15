@@ -15,6 +15,9 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 const { sendUnicodeText } = require('./sendInput.cjs');
+// Резидентный помощник ввода: PowerShell поднимается один раз, а не на каждую
+// вставку — иначе диктовка ждёт компиляцию C# дважды подряд.
+const { host: inputHost } = require('./inputHost.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
 const {
@@ -418,6 +421,9 @@ function registerHudIpc() {
     if (state === recordingState) return;
     recordingState = state;
     dictationActive = state === 'listening';
+    // Человек начал говорить — самое время поднять помощника ввода: пока идёт
+    // запись, PowerShell успевает стартовать, и вставка не ждёт старта.
+    if (state === 'listening') warmInputHost();
     refreshTrayMenu();
   });
   ipcMain.on('mic:warm', (_e, open) => {
@@ -1137,13 +1143,18 @@ function registerIpc() {
       const useVad = sttSettings.vadEnabled !== false;
       const sr = payload?.sampleRate || 16000;
       // Длинную диктовку режем по паузам: whisper на цельном файле хуже держит
-      // конец и путает фразы через паузу в несколько секунд. Короткая запись
-      // (одна речевая фраза) идёт одним куском, как раньше.
-      const parts = whisper.splitBySilence?.(trimmed, sr) || [trimmed];
-      // Не больше 4 фрагментов. Каждый фрагмент для whisper-cli — это ещё одна
-      // загрузка модели (секунды на слабом CPU), и запись с десятком пауз
-      // превращалась в минуту ожидания без единого признака работы.
-      const MAX_PARTS = 4;
+      // конец и путает фразы через паузу в несколько секунд.
+      //
+      // Короткую запись НЕ режем вообще, даже если в ней есть пауза. Каждый
+      // фрагмент — это отдельный проход движка: в серверном режиме лишний
+      // запрос, а без прогретого сервера ещё и повторная загрузка весов
+      // (секунды). Фраза на пять секунд превращалась в два-три «холодных
+      // старта» — именно так и получались десятки секунд ожидания.
+      const spokenSeconds = audio?.seconds || 0;
+      const shortTake = spokenSeconds > 0 && spokenSeconds <= 15;
+      const parts = shortTake ? [trimmed] : whisper.splitBySilence?.(trimmed, sr) || [trimmed];
+      // Не больше 3 фрагментов: каждый — отдельный проход движка.
+      const MAX_PARTS = shortTake ? 1 : 3;
       let chunks = parts;
       if (parts.length > MAX_PARTS) {
         chunks = [];
@@ -1219,6 +1230,10 @@ function registerIpc() {
       logger[res?.ok ? 'info' : 'error']('stt', res?.ok ? 'Распознавание завершено' : 'Распознавание не удалось', {
         keep: true,
         ms,
+        // режим и число фрагментов: по ним видно, платил ли человек за
+        // холодную загрузку модели (cli) или считал прогретый сервер (server)
+        mode: res?.mode || 'cli',
+        parts: totalParts,
         chars: String(res?.text || '').length,
         reason: res?.reason || '',
       });
@@ -1238,6 +1253,10 @@ function registerIpc() {
       return {
         ...res,
         ms,
+        // sttMs — то же число для интерфейса: «распознано за 0,8 с» вместо
+        // «обработка» без объяснений
+        sttMs: ms,
+        mode: res?.mode || 'cli',
         autoTunedTo: autoTunedTo || undefined,
         audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined,
         chunks: totalParts > 1 ? totalParts : undefined,
@@ -1546,6 +1565,14 @@ function registerIpc() {
         clipboardWatch: Boolean(clipboardTimer),
         micPreroll: s.micPreroll === true,
         autoLaunch,
+        // Готовность быстрого пути: прогрета ли модель в памяти и поднят ли
+        // резидентный помощник ввода. Именно эти две вещи решают, будет
+        // вставка мгновенной или «через полминуты».
+        engineWarm: whisper.serverStatus?.().ready === true,
+        engineWarming: whisper.serverStatus?.().warming === true,
+        engineMode: whisper.serverStatus?.().last?.mode || '',
+        lastSttMs: whisper.serverStatus?.().last?.ms || 0,
+        inputHost: inputHost.status(),
       };
     } catch (err) {
       return { error: String(err?.message || err) };
@@ -1791,6 +1818,22 @@ function registerIpc() {
           push({ id: 'engine', percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
           if (!res.ok) return { ok: false, reason: res.reason };
         }
+        // Движок есть, а сервера распознавания нет (так было в старых
+        // сборках): без него каждая диктовка платит за загрузку весов.
+        // Перекачиваем архив один раз — дальше модель живёт в памяти.
+        if (models.modelStatus().bin && !models.modelStatus().server) {
+          logger.warn('stt', 'В комплекте нет сервера распознавания — докачиваю движок', { keep: true });
+          push({ id: 'engine', percent: 0 });
+          const res = await models.downloadEngine((percent) => push({ id: 'engine', percent }), {
+            force: true,
+          });
+          push({ id: 'engine', percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
+          logger[res.ok ? 'info' : 'warn'](
+            'stt',
+            res.ok ? 'Сервер распознавания установлен' : 'Сервер распознавания не скачался',
+            { keep: true, reason: res.reason || '' },
+          );
+        }
         // VAD весит меньше мегабайта — качаем сразу, чтобы тишина не попадала
         // в движок с первой же диктовки
         if (!models.modelStatus().vad) {
@@ -1932,6 +1975,19 @@ function readSelection() {
     }
     const previous = clipboard.readText();
     mainWindow?.blur();
+    // С помощником не нужно ждать запуск PowerShell: Ctrl+C уходит сразу,
+    // остаётся только дать приложению положить текст в буфер.
+    if (inputHost.available()) {
+      setTimeout(() => {
+        inputHost.copy().then(() => {
+          setTimeout(() => {
+            const text = clipboard.readText();
+            resolve(text && text !== previous ? text : text || '');
+          }, 160);
+        });
+      }, 60);
+      return;
+    }
     setTimeout(() => {
       sendKeys('^c');
       setTimeout(() => {
@@ -1955,6 +2011,25 @@ function replaceSelection(text) {
       setTimeout(() => resolve(ok), 180);
     }, 60);
   });
+}
+
+/**
+ * Поднять помощника ввода заранее. Вызывается при старте приложения и при
+ * начале записи: пока человек говорит, PowerShell успевает запуститься, и
+ * вставка не платит за холодный старт.
+ */
+function warmInputHost() {
+  try {
+    if (!inputHost.available()) return;
+    if (inputHost.start()) {
+      // PING заодно проверяет, что процесс действительно отвечает
+      inputHost.request('PING').then((res) => {
+        if (!res?.ok) logger.warn('input', 'Помощник ввода не ответил', { reason: res?.reason || '' });
+      });
+    }
+  } catch (err) {
+    logger.warn('input', 'Помощник ввода не поднялся', { reason: String(err?.message || err) });
+  }
 }
 
 /**
@@ -1989,7 +2064,21 @@ function hideWindowForInsert() {
  */
 async function insertViaSendInput(value) {
   hideWindowForInsert();
-  const res = await sendUnicodeText({ text: value, execFile });
+  // Сначала резидентный помощник: С# уже скомпилирован, ввод идёт сразу.
+  // Одноразовый PowerShell остаётся запасным путём, если помощника нет.
+  let res = null;
+  if (inputHost.available()) {
+    const fast = await inputHost.type(value);
+    if (fast?.ok) {
+      restoreWindowAfterInsert();
+      return true;
+    }
+    if (fast?.typed > 0) {
+      restoreWindowAfterInsert();
+      return { ok: false, partial: fast.typed, total: fast.total, reason: fast.reason || '' };
+    }
+  }
+  res = await sendUnicodeText({ text: value, execFile });
   restoreWindowAfterInsert();
   if (res.ok) return true;
   if (res.sent > 0) {
@@ -2005,6 +2094,26 @@ function pasteToActiveWindow() {
   if (process.platform !== 'win32') return Promise.resolve(false);
 
   hideWindowForInsert();
+
+  // Резидентный помощник: Ctrl+V уходит из уже работающего процесса. Раньше
+  // здесь на каждую вставку запускался powershell.exe — на слабом ПК это
+  // заметная доля паузы между «замолчал» и «текст появился».
+  if (inputHost.available()) {
+    return inputHost.paste().then((res) => {
+      if (res?.ok) {
+        restoreWindowAfterInsert();
+        return true;
+      }
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          sendKeys('^v', (ok) => {
+            restoreWindowAfterInsert();
+            resolve(ok);
+          });
+        }, 60);
+      });
+    });
+  }
 
   return new Promise((resolve) => {
     const helper = process.env.ZSPEAKLY_INPUT;
@@ -2057,10 +2166,21 @@ function restoreWindowAfterInsert() {
 app.on('before-quit', () => {
   app.isQuitting = true;
   store?.flush?.();
+  // Помощник ввода — отдельный процесс: закрываем его вместе с приложением,
+  // иначе он останется висеть у человека в диспетчере задач.
+  try {
+    inputHost.stop();
+  } catch {
+    /* ignore */
+  }
 });
 
 app.whenReady().then(() => {
   store = new JsonStore();
+
+  // Помощник ввода (PowerShell + SendInput) поднимаем один раз на всё
+  // приложение: дальше вставка и ввод текста идут без холодного старта.
+  setTimeout(() => warmInputHost(), 1500);
 
   // После аварийного закрытия во временной папке остаются wav: живая
   // расшифровка пишет их каждые пару секунд. Свежие не трогаем — они могут

@@ -263,6 +263,11 @@ export function installMockBridge() {
           clipboardWatch: true,
           micPreroll: false,
           autoLaunch: true,
+          engineWarm: true,
+          engineWarming: false,
+          engineMode: 'server',
+          lastSttMs: 780,
+          inputHost: { available: true, running: true, ready: true, spawned: 1, requests: 3, failed: 0 },
         },
       };
     },

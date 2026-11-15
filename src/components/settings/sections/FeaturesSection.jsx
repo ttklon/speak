@@ -54,13 +54,35 @@ export default function FeaturesSection() {
           <div className="setting-row__label">
             Переписывать диктовку моделью
             <div className="setting-row__desc">
-              Модель доводит формулировки после офлайн-правил: вставка позже на 1–3 секунды,
-              без запущенной Ollama остаются правила.
+              Модель доводит формулировки после офлайн-правил. Ждём её не дольше бюджета ниже:
+              не успела — вставляется текст после правил, а ответ модели доходит в историю.
+              Без запущенной Ollama остаются правила.
             </div>
           </div>
           <Toggle
             checked={settings.aiDictationRewrite === true}
             onChange={(v) => updateSettings({ aiDictationRewrite: v })}
+          />
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Ждать модель
+            <div className="setting-row__desc">
+              Сколько миллисекунд ждать полировку, прежде чем вставить текст без неё. Меньше —
+              быстрее вставка, больше — чаще «доведённый» текст. 1500 по умолчанию.
+            </div>
+          </div>
+          <input
+            className="input settings-inline-input"
+            type="number"
+            min="300"
+            max="8000"
+            step="100"
+            value={settings.aiPolishBudgetMs}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              updateSettings({ aiPolishBudgetMs: Number.isFinite(n) ? Math.min(8000, Math.max(300, n)) : 1500 });
+            }}
           />
         </div>
         <div className="setting-row">

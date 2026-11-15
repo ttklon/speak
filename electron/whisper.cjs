@@ -233,12 +233,28 @@ function serverBinary() {
 }
 
 function serverStatus() {
+  const running = Boolean(serverState && serverState.proc && serverState.proc.exitCode === null);
   return {
     available: Boolean(serverBinary()),
-    running: Boolean(serverState && serverState.proc && serverState.proc.exitCode === null),
+    running,
+    // ready — сервер уже ответил на запрос, значит модель в памяти и можно
+    // считать без холодного старта. running без ready = ещё грузит веса.
+    ready: Boolean(running && serverState.ready === true),
+    warming: Boolean(warming),
     port: serverState?.port || 0,
+    model: serverState?.modelPath ? path.basename(serverState.modelPath) : '',
+    // последний проход: режим и время — видно в диагностике, а не «на глаз»
+    last: lastRun ? { ...lastRun } : null,
   };
 }
+
+// Последний проход распознавания: режим (server/cli), время и число фрагментов.
+let lastRun = null;
+function rememberRun(mode, ms, parts) {
+  lastRun = { mode, ms: Math.round(ms), parts: parts || 1, at: Date.now() };
+}
+
+let warming = false;
 
 function stopServer() {
   if (!serverState) {
@@ -247,6 +263,7 @@ function stopServer() {
   }
   const { proc } = serverState;
   serverState = null;
+  warming = false;
   try {
     proc?.kill();
   } catch {
@@ -286,7 +303,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Запустить whisper-server и дождаться готовности. Возвращает state или null;
  * повторный вызов (без VAD-флагов) нужен, если сборка whisper.cpp не знает --vad.
  */
-async function startServer(bin, args, { port, modelPath }) {
+async function startServer(bin, args, { port, modelPath, deadlineMs = 20000 }) {
   let proc;
   try {
     proc = spawn(bin, args, { windowsHide: true });
@@ -304,10 +321,14 @@ async function startServer(bin, args, { port, modelPath }) {
     if (serverState === state) serverState = null;
   });
 
-  // Готовность: сервер начинает отвечать на GET /. Модель грузится секунды.
-  // 8 секунд: если сервер не поднялся, человек не должен ждать впустую —
-  // уходим в обычный whisper-cli.
-  const deadline = Date.now() + 8000;
+  // Готовность: сервер начинает отвечать на GET /. Модель грузится секунды —
+  // и на слабом ПК с медленным диском это легко больше восьми. Раньше здесь
+  // стоял жёсткий лимит 8 с, после которого сервер считался «не поднялся» и
+  // на пять минут запрещался: в итоге КАЖДАЯ диктовка шла через whisper-cli с
+  // холодной загрузкой весов — то самое «полминуты на одну фразу». Ждём
+  // столько, сколько нужно модели, и ждём в фоне: диктовка идёт через CLI,
+  // никто не блокируется.
+  const deadline = Date.now() + Math.max(4000, Number(deadlineMs) || 20000);
   while (Date.now() < deadline) {
     if (proc.exitCode !== null) break;
     const ping = await httpJson({ port, urlPath: '/', timeout: 1500 });
@@ -318,29 +339,80 @@ async function startServer(bin, args, { port, modelPath }) {
   return null;
 }
 
+/**
+ * Сколько ждать загрузку весов: большие модели на слабом диске грузятся
+ * заметно дольше. Ждём в фоне, поэтому лишнее ожидание ничего не стоит.
+ */
+function modelLoadBudgetMs(modelPath) {
+  const name = String(modelPath || '').toLowerCase();
+  if (/(large|turbo)/.test(name)) return 90000;
+  if (/(medium|small)/.test(name)) return 45000;
+  return 20000; // tiny/base
+}
+
+/** Аргументы whisper-server: те же по смыслу, что у CLI. */
+function serverArgs({ modelPath, port, threads, vadModel }) {
+  const args = [
+    '-m', modelPath,
+    '--host', '127.0.0.1',
+    '--port', String(port),
+    '-t', String(threads),
+    // -mc 0: не тащить контекст прошлых фраз — диктовки независимы, а лишний
+    //        контекст ещё и замедляет декодер;
+    // -bs 1 -bo 1: жадное декодирование вместо перебора вариантов — для
+    //        диктовки разницы в тексте нет, а скорость заметно выше.
+    '-mc', '0',
+    '-bs', '1',
+    '-bo', '1',
+    '-nt',
+    '-sns',
+  ];
+  if (vadModel) {
+    args.push('--vad', '-vm', vadModel, '-vt', '0.5', '-vsd', '500', '-vp', '100');
+  }
+  return args;
+}
+
 /** Поднять whisper-server на свободном порту и дождаться готовности. */
 async function ensureServer(modelPath, { threads = 4 } = {}) {
   if (Date.now() < serverCooldownUntil) return null;
   const bin = serverBinary();
   if (!bin) return null;
   if (serverState && serverState.modelPath === modelPath && serverState.proc?.exitCode === null) {
-    return serverState;
+    // уже поднимается — второй процесс не нужен
+    if (serverState.ready || warming) return serverState;
+    return null;
   }
   stopServer();
   const port = 17800 + Math.floor(Math.random() * 400);
-  const baseArgs = ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(threads), '-nt', '-sns'];
-  // Тот же VAD-гейт, что и в CLI: сервер не тратит время на тишину.
   const vadModel = findVadModel();
-  const vadArgs = vadModel ? ['--vad', '-vm', vadModel, '-vt', '0.5', '-vsd', '500', '-vp', '100'] : [];
-  const state = await startServer(bin, [...baseArgs, ...vadArgs], { port, modelPath });
-  if (state) return state;
-  // не поднялся: если виноват VAD-флаг (старая сборка), пробуем ещё раз без него
-  if (vadArgs.length) {
-    const retry = await startServer(bin, baseArgs, { port, modelPath });
-    if (retry) return retry;
+  const deadlineMs = modelLoadBudgetMs(modelPath);
+  warming = true;
+  try {
+    // Цепочка фолбэков для старых сборок whisper.cpp: сначала полный набор,
+    // потом без VAD, потом совсем простой (флаги декодирования могли не
+    // появиться в старых версиях). Порядок важен: каждый следующий шаг теряет
+    // скорость или точность, поэтому он только как крайняя мера.
+    const attempts = [
+      serverArgs({ modelPath, port, threads, vadModel }),
+      serverArgs({ modelPath, port, threads, vadModel: '' }),
+      ['-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(threads), '-nt'],
+    ];
+    for (const args of attempts) {
+      // eslint-disable-next-line no-await-in-loop
+      const state = await startServer(bin, args, { port, modelPath, deadlineMs });
+      if (state) {
+        state.ready = true;
+        return state;
+      }
+    }
+    // Не поднялся. Пауза короткая: раньше 5 минут запрета означали, что после
+    // одного неудачного старта ВСЕ диктовки шли с холодной загрузкой модели.
+    serverCooldownUntil = Date.now() + 20000;
+    return null;
+  } finally {
+    warming = false;
   }
-  serverCooldownUntil = Date.now() + 5 * 60 * 1000;
-  return null;
 }
 
 /**
@@ -348,6 +420,9 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
  * после запуска приложения не платила за загрузку модели.
  */
 async function warm(model) {
+  // Явный прогрев (кнопка или старт приложения) не должен упираться в паузу
+  // после прошлой неудачи: человек нажал — значит, надо попробовать снова.
+  serverCooldownUntil = 0;
   const modelPath = findModel(model);
   if (!modelPath) return { ok: false, reason: 'модель не найдена' };
   if (!serverBinary()) return { ok: false, reason: 'в комплекте нет whisper-server' };
@@ -449,6 +524,7 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
     return null;
   }
   const server = serverState;
+  const startedAt = Date.now();
   const audioCtx = computeAudioCtx(wavPath);
   const audio = fs.readFileSync(wavPath);
   const { body, contentType } = multipart(
@@ -458,6 +534,14 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
       temperature: '0.0',
       response_format: 'json',
       'no_timestamps': 'true',
+      // Параметры декодирования на каждый запрос: сервер их принимает
+      // (examples/server/server.cpp) и без них берёт свои значения по
+      // умолчанию — с перебором вариантов и контекстом прошлых фраз.
+      max_context: '0',
+      beam_size: '1',
+      best_of: '1',
+      // -ac: для короткой фразы считаем меньше кадров энкодера — это и есть
+      // та самая разница «0,7 с против 2,5 с» на замерах с whisper-cli.
       ...(audioCtx > 0 ? { audio_ctx: String(audioCtx) } : {}),
     },
     { name: 'file', filename: path.basename(wavPath), buffer: audio },
@@ -479,7 +563,7 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
     return null;
   }
   const text = String(res.data?.text || res.text || '').trim();
-  return { text };
+  return { text, ms: Date.now() - startedAt };
 }
 
 /**
@@ -528,6 +612,7 @@ function cancel(reason = 'распознавание отменено') {
  */
 function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeout = 120000, keepLoaded = false, vad = '', useVad = true } = {}) {
   return new Promise((resolve) => {
+    const callStarted = Date.now();
     const bin = findBinary();
     const modelPath = findModel(model);
     if (!bin || !modelPath) {
@@ -541,8 +626,18 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
       transcribeViaServer(wavPath, { lang, prompt, timeout, threads, modelPath }).then((fast) => {
         // Пустой ответ сервера — это тоже ответ: повторять тот же проход через
         // whisper-cli значило бы ждать вдвое дольше и грузить модель второй раз.
-        if (fast) resolve({ ok: Boolean(fast.text), text: fast.text || '', mode: 'server', code: fast.text ? undefined : 'empty' });
-        else runCli();
+        if (fast) {
+          rememberRun('server', fast.ms || 0, 1);
+          resolve({
+            ok: Boolean(fast.text),
+            text: fast.text || '',
+            mode: 'server',
+            ms: fast.ms || 0,
+            code: fast.text ? undefined : 'empty',
+          });
+        } else {
+          runCli();
+        }
       });
       return;
     }
@@ -575,7 +670,11 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
       settled = true;
       clearTimeout(timer);
       if (activeRun === run) activeRun = null;
-      resolve(value);
+      // Сколько занял именно этот проход: цифру видно в диагностике и HUD,
+      // иначе «медленно» остаётся разговором без доказательств.
+      const ms = Date.now() - callStarted;
+      if (value && value.ok !== undefined) rememberRun(value.mode || 'cli', ms, 1);
+      resolve(value && typeof value === 'object' ? { ms, mode: value.mode || 'cli', ...value } : value);
     };
     run.finish = finish;
     activeRun = run;
@@ -858,4 +957,8 @@ module.exports = {
   warm,
   multipart,
   transcribeViaServer,
+  // проверяются тестами: по ним видно, что сервер поднимается с жадным
+  // декодированием и что слабому диску даётся больше времени на веса
+  serverArgs,
+  modelLoadBudgetMs,
 };

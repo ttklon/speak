@@ -1155,7 +1155,10 @@ await check('старая сборка без --vad: проход повторя
   }
 });
 
-await check('диктовка с паузой распознаётся по фрагментам', async () => {
+// Контракт поменялся осознанно: короткая фраза — один проход движка.
+// Раньше пауза в середине фразы делила запись на два прохода, и каждый заново
+// грузил веса модели — именно это давало «полминуты на пятисекундную запись».
+await check('короткая диктовка с паузой не режется на проходы', async () => {
   runWhisper('первая фраза');
   spawnCalls.length = 0;
   const pcm = Buffer.concat([
@@ -1170,9 +1173,9 @@ await check('диктовка с паузой распознаётся по фр
     model: 'small',
   });
   const whisperRuns = spawnCalls.filter((c) => String(c.file).includes('whisper')).length;
-  if (whisperRuns !== 2) throw new Error(`whisper запускался ${whisperRuns} раз вместо 2`);
-  if (res?.chunks !== 2) throw new Error(`фрагментов в ответе: ${res?.chunks}`);
-  if (res?.text !== 'первая фраза. первая фраза.') throw new Error(`текст: ${JSON.stringify(res?.text)}`);
+  if (whisperRuns !== 1) throw new Error(`whisper запускался ${whisperRuns} раз вместо одного`);
+  if (res?.chunks) throw new Error(`короткая запись разрезана на ${res.chunks} части`);
+  if (res?.text !== 'первая фраза') throw new Error(`текст: ${JSON.stringify(res?.text)}`);
 });
 
 await check('тумблер словаря работает целиком: без словаря и без подсказки', async () => {
@@ -1727,6 +1730,90 @@ await check('ручной выбор модели закрепляется: пр
   await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'tiny', language: 'en' });
   if ((await handlers.get('store:get')({}, 'zs:modelPinned')) === true) {
     throw new Error('флаг появился без смены модели');
+  }
+});
+
+// ── Скорость: один проход на короткую фразу, жадное декодирование ────────────
+// Фраза из двух кусков речи с паузой в секунду: раньше такая запись резалась
+// по паузе на два прохода движка, и каждый заново грузил веса модели.
+const pcmWithPause = (parts = [2000, 1000, 2000]) => {
+  const chunks = [];
+  parts.forEach((ms, i) => {
+    const samples = Math.round((16000 * ms) / 1000);
+    const arr = new Int16Array(samples);
+    for (let k = 0; k < samples; k += 1) {
+      // чётные куски — «речь» (тон), нечётные — тишина
+      arr[k] = i % 2 === 0 ? Math.round(6000 * Math.sin((2 * Math.PI * 220 * k) / 16000)) : 0;
+    }
+    chunks.push(Buffer.from(arr.buffer));
+  });
+  const all = Buffer.concat(chunks);
+  return new Uint8Array(all.buffer, all.byteOffset, all.byteLength);
+};
+
+await check('короткая фраза с паузой — один проход движка, а не два', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false });
+  spawnCalls.length = 0;
+  spawnPlan.answer = 'короткая фраза целиком';
+  const res = await handlers.get('stt:transcribe-pcm')({}, { pcm: pcmWithPause(), durationMs: 5000, lang: 'ru' });
+  spawnPlan.answer = null;
+  const runs = spawnCalls.filter((c) => String(c.file).includes('whisper'));
+  if (runs.length !== 1) throw new Error(`движок запускался ${runs.length} раз вместо одного`);
+  if (!res?.ok) throw new Error(`нет текста: ${res?.reason || res?.code || '?'}`);
+  // режим и время прохода должны доезжать до интерфейса
+  if (res.mode !== 'cli') throw new Error(`режим не тот: ${res.mode}`);
+  if (!(res.sttMs >= 0)) throw new Error('в ответе нет времени распознавания');
+});
+
+await check('длинная диктовка по-прежнему режется по паузам, но не больше трёх частей', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false });
+  spawnCalls.length = 0;
+  spawnPlan.answer = 'часть длинной диктовки';
+  // 40 секунд: пять речевых кусков по 6 с с паузами по секунде
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: pcmWithPause([6000, 1000, 6000, 1000, 6000, 1000, 6000, 1000, 6000]),
+    durationMs: 40000,
+    lang: 'ru',
+  });
+  spawnPlan.answer = null;
+  const runs = spawnCalls.filter((c) => String(c.file).includes('whisper'));
+  if (runs.length < 2) throw new Error('длинную запись не разрезали — конец фразы потеряется');
+  if (runs.length > 3) throw new Error(`слишком много проходов: ${runs.length} — каждый грузит веса`);
+});
+
+await check('сервер распознавания поднимается с жадным декодированием и без контекста', async () => {
+  const whisperLib = require(path.resolve('electron/whisper.cjs'));
+  const args = whisperLib.serverArgs({ modelPath: 'ggml-base.bin', port: 17801, threads: 2, vadModel: 'vad.bin' });
+  const joined = args.join(' ');
+  for (const flag of ['-mc 0', '-bs 1', '-bo 1', '-nt', '-sns']) {
+    if (!joined.includes(flag)) throw new Error(`нет флага ${flag}: ${joined}`);
+  }
+  if (!joined.includes('--vad')) throw new Error('VAD-гейт потерялся');
+  const noVad = whisperLib.serverArgs({ modelPath: 'm.bin', port: 1, threads: 1, vadModel: '' }).join(' ');
+  if (noVad.includes('--vad')) throw new Error('VAD приклеился, хотя модели нет');
+});
+
+await check('большой модели дают больше времени на загрузку весов', async () => {
+  const whisperLib = require(path.resolve('electron/whisper.cjs'));
+  const base = whisperLib.modelLoadBudgetMs('ggml-base.bin');
+  const small = whisperLib.modelLoadBudgetMs('ggml-small.bin');
+  const large = whisperLib.modelLoadBudgetMs('ggml-large-v3-turbo.bin');
+  if (!(base < small && small < large)) throw new Error(`бюджеты не растут: ${base}/${small}/${large}`);
+  if (base < 8000) throw new Error('базовой модели дают меньше восьми секунд — на слабом диске не успеет');
+});
+
+await check('видно, есть ли сервер распознавания: без него каждая фраза грузит веса', async () => {
+  const modelsLib = require(path.resolve('electron/models.cjs'));
+  const before = modelsLib.modelStatus();
+  if (before.server !== false) throw new Error('сервер нашёлся там, где его нет');
+  const { dirs } = { dirs: () => ({ bin: path.join(userData, 'bin'), models: path.join(userData, 'models') }) };
+  fs.writeFileSync(path.join(dirs().bin, 'whisper-server.exe'), 'fake');
+  try {
+    const after = modelsLib.modelStatus();
+    if (after.server !== true) throw new Error('сервер не увидели после установки');
+    if (!after.bin) throw new Error('движок пропал из статуса');
+  } finally {
+    fs.rmSync(path.join(dirs().bin, 'whisper-server.exe'), { force: true });
   }
 });
 

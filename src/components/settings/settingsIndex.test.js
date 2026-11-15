@@ -46,6 +46,8 @@ describe('индекс настроек', () => {
   it('находит строки по словам из конца описания', () => {
     const byDesc = (q) => SETTING_ENTRIES.filter((e) => (e.desc || '').toLowerCase().includes(q));
     expect(byDesc('кнопки').map((e) => e.title)).toContain('Плавающий индикатор записи');
-    expect(byDesc('на 1–3 секунды').map((e) => e.title)).toContain('Переписывать диктовку моделью');
+    // описание поменялось вместе со смыслом: полировка больше не тормозит вставку
+    expect(byDesc('остаются правила').map((e) => e.title)).toContain('Переписывать диктовку моделью');
+    expect(byDesc('ждать полировку').map((e) => e.title)).toContain('Ждать модель');
   });
 });

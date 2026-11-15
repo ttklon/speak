@@ -387,6 +387,24 @@ const logger = {
       lines.push(`мониторинг буфера: ${sys.clipboardWatch ? 'включён' : 'выключен'}`);
       lines.push(`горячий микрофон: ${sys.micPreroll ? 'включён' : 'выключен'}`);
       lines.push(`автозапуск: ${sys.autoLaunch ? 'включён' : 'выключен'}`);
+      lines.push(
+        `быстрый путь: модель ${sys.engineWarm ? 'прогрета' : sys.engineWarming ? 'греется' : 'не прогрета'}${
+          sys.lastSttMs ? ` · последняя диктовка ${Math.round(sys.lastSttMs / 100) / 10} с (${sys.engineMode || '?'})` : ''
+        }`,
+      );
+      if (sys.inputHost) {
+        lines.push(
+          `помощник ввода: ${
+            !sys.inputHost.available
+              ? 'не поддерживается системой'
+              : sys.inputHost.ready
+                ? 'готов'
+                : sys.inputHost.running
+                  ? 'запускается'
+                  : 'не запущен'
+          }`,
+        );
+      }
     }
     lines.push('');
     lines.push(`── последние события (${Math.min(limit, buffered.length)}) ──`);

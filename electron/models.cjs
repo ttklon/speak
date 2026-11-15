@@ -73,9 +73,15 @@ function modelStatus() {
   const bin = ['whisper-cli.exe', 'whisper.exe', 'main.exe', 'whisper-cli'].some((n) =>
     fs.existsSync(path.join(d.bin, n)),
   );
+  // Сервер распознавания держит модель в памяти между диктовками: без него
+  // каждая фраза начинается с холодной загрузки весов. Старые сборки клали
+  // в комплект только whisper-cli — такой случай надо видеть и лечить.
+  const server = ['whisper-server.exe', 'whisper-server'].some((n) =>
+    fs.existsSync(path.join(d.bin, n)),
+  );
   const vadPath = path.join(d.models, VAD.file);
   const vad = fs.existsSync(vadPath);
-  return { models: out, bin, vad, vadPath: vad ? vadPath : '', vadSizeMb: VAD.mb };
+  return { models: out, bin, server, vad, vadPath: vad ? vadPath : '', vadSizeMb: VAD.mb };
 }
 
 /**
@@ -252,9 +258,11 @@ async function findEngineAsset() {
   return null;
 }
 
-async function downloadEngine(onProgress) {
+async function downloadEngine(onProgress, { force = false } = {}) {
   const d = ensureDirs();
-  if (modelStatus().bin) return { ok: true, already: true, path: d.bin };
+  // force — «движок есть, но сервера распознавания в нём нет»: без нового
+  // архива быстрый путь не появится никогда.
+  if (modelStatus().bin && !force) return { ok: true, already: true, path: d.bin };
 
   let found;
   try {
@@ -306,7 +314,8 @@ async function downloadEngine(onProgress) {
   fs.rmSync(out, { recursive: true, force: true });
   fs.rmSync(zip, { force: true });
   onProgress?.(100);
-  return { ok: true, path: d.bin, bin: modelStatus().bin };
+  const after = modelStatus();
+  return { ok: true, path: d.bin, bin: after.bin, server: after.server };
 }
 
 /**
