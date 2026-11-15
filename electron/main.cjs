@@ -84,6 +84,12 @@ app.setAppUserModelId('app.zspeakly.desktop');
 app.commandLine.appendSwitch('enable-features', 'MediaFoundationWidevineCdm');
 
 // ── Окно ───────────────────────────────────────────────────────────────────
+// Сколько занял путь «процесс запущен → окно на экране» и «прогрев модели»:
+// это первые два числа, которые объясняют «почему приложение открывается долго».
+const BOOT_AT = Date.now();
+let startupMs = 0;
+let warmMs = 0;
+
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -111,6 +117,8 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     if (!START_HIDDEN) mainWindow.show();
+    startupMs = Date.now() - BOOT_AT;
+    logger.info('app', 'Окно на экране', { keep: true, ms: startupMs });
     // Первая установка: движок уже в комплекте, модель докачиваем сами.
     // Стартуем почти сразу после появления окна: пока человек читает первый
     // экран, модель уже качается. Не блокирует запуск и не мешает, если сети нет.
@@ -1628,6 +1636,9 @@ function registerIpc() {
         // Готовность быстрого пути: прогрета ли модель в памяти и поднят ли
         // резидентный помощник ввода. Именно эти две вещи решают, будет
         // вставка мгновенной или «через полминуты».
+        // время запуска окна и загрузки весов — «почему долго» без гаданий
+        startupMs,
+        warmMs,
         engineWarm: whisper.serverStatus?.().ready === true,
         engineWarming: whisper.serverStatus?.().warming === true,
         engineMode: whisper.serverStatus?.().last?.mode || '',
@@ -2084,10 +2095,14 @@ function replaceSelection(text) {
 let warmPromise = null;
 function warmRecognition(model = 'base') {
   if (warmPromise) return warmPromise;
+  const startedAt = Date.now();
   warmPromise = whisper
     .warm(model)
     .then((res) => {
-      if (res?.ok) logger.info('stt', 'Модель в памяти', { keep: true, port: res.port || 0 });
+      if (res?.ok) {
+        warmMs = Date.now() - startedAt;
+        logger.info('stt', 'Модель в памяти', { keep: true, port: res.port || 0, ms: warmMs });
+      }
       return res;
     })
     .catch(() => null)

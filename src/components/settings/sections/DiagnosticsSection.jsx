@@ -403,6 +403,28 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="kv-row">
+          <span className="kv-row__key">Запуск окна</span>
+          <span className="kv-row__value">
+            {!system
+              ? '—'
+              : system.startupMs
+                ? `${(Math.round(system.startupMs / 100) / 10).toLocaleString('ru-RU')} с от запуска приложения до окна`
+                : '—'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Прогрев модели</span>
+          <span className="kv-row__value">
+            {!system
+              ? '—'
+              : system.warmMs
+                ? `${(Math.round(system.warmMs / 100) / 10).toLocaleString('ru-RU')} с на загрузку весов — один раз за запуск`
+                : system.engineWarm
+                  ? 'модель уже в памяти'
+                  : 'ещё не грелась'}
+          </span>
+        </div>
+        <div className="kv-row">
           <span className="kv-row__key">Последняя диктовка</span>
           <span className="kv-row__value">
             {system?.lastSttMs

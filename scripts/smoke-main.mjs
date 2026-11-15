@@ -885,6 +885,15 @@ await check('диагностика показывает проверенные 
   if (sys.platform !== process.platform) throw new Error('платформа не совпадает');
 });
 
+await check('видно, за сколько открылось окно и сколько грузились веса', async () => {
+  const st = await handlers.get('diag:status')({});
+  const sys = st?.system;
+  if (!sys || typeof sys !== 'object') throw new Error('нет блока system');
+  if (typeof sys.startupMs !== 'number') throw new Error('нет времени запуска окна');
+  if (typeof sys.warmMs !== 'number') throw new Error('нет времени прогрева модели');
+  if (sys.startupMs < 0 || sys.warmMs < 0) throw new Error('отрицательное время');
+});
+
 await check('по умолчанию наружу ничего не отправляется', async () => {
   const status = await handlers.get('diag:status')({});
   if (status.endpointConfigured) throw new Error('адрес приёмника задан по умолчанию');

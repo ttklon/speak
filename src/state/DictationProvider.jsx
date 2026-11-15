@@ -13,6 +13,7 @@ import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
 import { insertIntoFocusedField } from '../lib/insertLocal.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS, llmRewrite, polishDictation } from '../lib/ai/textops.js';
+import { createPolishGate } from '../lib/ai/polishGate.js';
 import { describeScreen } from '../lib/ai/vision.js';
 import { playCue } from '../lib/feedback.js';
 import { diag } from '../lib/diagnostics.js';
@@ -108,6 +109,16 @@ export function DictationProvider({ children }) {
   const settingsRef = useRef(settings);
   const dictRef = useRef(dictionary);
   const stopFallback = useRef(null);
+  // «Ворота» полировки: помнят, успевает ли модель, и режут лишнее ожидание.
+  const gateRef = useRef(null);
+  if (!gateRef.current) {
+    gateRef.current = createPolishGate({ budgetMs: Number(settings.aiPolishBudgetMs) || 900 });
+  }
+  // смена бюджета или модели — начинаем с чистого листа: новая модель может
+  // быть быстрее прежней, и «не ждём вовсе» было бы несправедливо
+  useEffect(() => {
+    gateRef.current = createPolishGate({ budgetMs: Number(settings.aiPolishBudgetMs) || 900 });
+  }, [settings.aiPolishBudgetMs, settings.aiModel, settings.aiEndpoint]);
   const finishing = useRef(false);
   // опции текущей диктовки (нужны при остановке: вставлять текст или нет)
   const sessionOpts = useRef({});
@@ -186,18 +197,31 @@ export function DictationProvider({ children }) {
         // (по умолчанию 1,5 с): если модель не успела — вставляем текст после
         // офлайн-правил и честно говорим об этом, а ответ модели доходит в
         // историю, когда будет готов.
-        const budget = Math.max(300, Number(settingsRef.current.aiPolishBudgetMs) || 1500);
+        // Сколько ждать — решает «ворота» полировки: если модель уже дважды
+        // не успела, ждать не будем вовсе (текст вставляется сразу, доведённый
+        // вариант придёт в историю). Так слабая модель не тормозит диктовку.
+        const gate = gateRef.current;
+        const budget = gate.budget;
+        const polishStarted = Date.now();
         const polishPromise = polishDictation(cleaned, settingsRef.current, { timeout: 6000 });
         let timedOut = false;
-        const better = await Promise.race([
-          polishPromise,
-          new Promise((resolve) => {
-            setTimeout(() => {
-              timedOut = true;
-              resolve(null);
-            }, budget);
-          }),
-        ]);
+        let better = null;
+        if (budget > 0) {
+          better = await Promise.race([
+            polishPromise,
+            new Promise((resolve) => {
+              setTimeout(() => {
+                timedOut = true;
+                resolve(null);
+              }, budget);
+            }),
+          ]);
+          gate.record({ timedOut, ms: Date.now() - polishStarted });
+        } else {
+          // не ждём: модель медленная, вставка не должна страдать
+          timedOut = true;
+          gate.record({ timedOut: true, ms: 0 });
+        }
         if (timedOut) {
           // Не блокируем вставку: текст уже готов и правильный. Когда модель
           // всё-таки ответит — обновим запись в истории, чтобы человек видел

@@ -265,8 +265,8 @@ npm run electron:dev
 
 ```powershell
 npm run dist:win
-# release\ZSpeakly-Setup-1.6.0.exe      — NSIS-установщик
-# release\ZSpeakly-1.6.0-portable.exe   — портативная версия
+# release\ZSpeakly-Setup-1.6.1.exe      — NSIS-установщик
+# release\ZSpeakly-1.6.1-portable.exe   — портативная версия
 ```
 
 Готовые сборки не нужно собирать самому: они лежат в
@@ -367,8 +367,8 @@ powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
 ```bash
 npm run dev        # только UI
 npm run electron:dev
-npm test                    # vitest: 270 тестов в 36 файлах
-npm run test:main           # смоук IPC, whisper --prompt, HTTP к Ollama, снимок экрана, мониторинг буфера, шифрование паролей, трей, SendInput, уборка temp (92 проверки)
+npm test                    # vitest: 277 тестов в 37 файлах
+npm run test:main           # смоук IPC, whisper --prompt, HTTP к Ollama, снимок экрана, мониторинг буфера, шифрование паролей, трей, SendInput, уборка temp (93 проверки)
 npm run test:whisper        # настоящий whisper-cli: разбор ответа, удаление .out.txt, отмена прохода
 npm run test:ui             # E2E «нажать всё» в Chromium: кнопки, поля, сценарии, контраст, доступные имена
 npm run audit:ui            # аудит: каждая кнопка/тумблер/поле/селект даёт видимую реакцию, подписи у всех
