@@ -7,7 +7,7 @@
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.6.1',
+  version: '1.6.2',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',

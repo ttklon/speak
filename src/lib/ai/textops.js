@@ -81,6 +81,58 @@ function stripFillers(text) {
   return out.trim();
 }
 
+/**
+ * Слова, повтор которых — почти всегда заминка, а не смысл.
+ *
+ * «Я я думаю», «это это не так», «и и вот» — типичный артефакт распознавания:
+ * человек запнулся, движок записал оба раза. При этом «очень очень», «да да»,
+ * «ну ну» повторяют намеренно, поэтому список короткий и только служебные
+ * слова: лучше оставить повтор, чем выбросить смысл.
+ */
+const STUTTER_WORDS = new Set([
+  'я', 'ты', 'он', 'она', 'оно', 'мы', 'вы', 'они', 'и', 'а', 'но', 'в',
+  'во', 'на', 'с', 'со', 'к', 'по', 'из', 'от', 'до', 'не', 'ни', 'что',
+  'это', 'этот', 'эта', 'эти', 'так', 'там', 'тут', 'вот', 'же', 'ли', 'бы',
+  'у', 'о', 'об', 'за', 'под', 'над', 'при', 'про', 'без', 'через', 'если',
+  'когда', 'как', 'потому', 'чтобы', 'есть', 'был', 'была', 'было', 'были',
+  'будет', 'меня', 'мне', 'тебя', 'его', 'её', 'ее', 'нас', 'вас', 'их',
+]);
+
+/**
+ * Убрать заикание: одинаковые служебные слова подряд без знаков между ними.
+ * Границы слов проверяются по кириллице — `\b` в JS работает только с ASCII.
+ */
+export function dropStutter(text) {
+  const source = String(text || '');
+  if (!source) return source;
+  const re = /[\p{L}]+/gu;
+  const out = [];
+  let lastKept = null;
+  let lastEnd = -1;
+  let copiedTo = 0;
+  let m = re.exec(source);
+  while (m) {
+    const word = m[0];
+    const low = word.toLowerCase();
+    const gap = source.slice(lastEnd < 0 ? m.index : lastEnd, m.index);
+    const sameAsPrev =
+      lastKept !== null && low === lastKept && /^\s*$/u.test(gap) && STUTTER_WORDS.has(low);
+    if (sameAsPrev) {
+      // слово выбрасываем, но копирование продолжаем уже за ним
+      copiedTo = m.index + word.length;
+      lastEnd = copiedTo;
+    } else {
+      out.push(source.slice(copiedTo, m.index), word);
+      copiedTo = m.index + word.length;
+      lastKept = low;
+      lastEnd = copiedTo;
+    }
+    m = re.exec(source);
+  }
+  out.push(source.slice(copiedTo));
+  return out.join('');
+}
+
 function capitalizeSentences(text) {
   return text.replace(/(^|[.!?]\s+)([а-яёa-z])/gu, (m, pre, ch) => `${pre}${ch.toUpperCase()}`);
 }
@@ -102,7 +154,7 @@ export const OPS = {
   /** Диктовка по умолчанию: убрать паразитов, расставить точки, заглавные. */
   clean(text) {
     if (!text) return '';
-    let out = stripFillers(text);
+    let out = stripFillers(dropStutter(text));
     // типографика: дефис, окружённый пробелами, — это тире (whisper так и пишет
     // «я пришёл - увидел», а в тексте должно быть «—»)
     out = out.replace(/\s+-\s+/g, ' — ');
@@ -234,6 +286,20 @@ export const OPS = {
       .map((s) => ({ text: s.replace(/^[-•]\s*/, ''), done: false }));
   },
 };
+
+/**
+ * Чистка многострочного текста.
+ *
+ * OPS.clean рассчитан на одну фразу: он схлопывает двойные пробелы и добавит
+ * точку в конце. Если человек сказал «с новой строки», переносы — часть
+ * текста, поэтому каждую строку чистим отдельно, а переносы сохраняем.
+ */
+export function cleanLines(text) {
+  const lines = String(text || '')
+    .split('\n')
+    .map((line) => (line.trim() ? OPS.clean(line) : ''));
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 
 /**
  * «Модель не отвечает» запоминаем на минуту.

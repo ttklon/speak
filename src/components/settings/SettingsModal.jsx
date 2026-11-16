@@ -12,16 +12,20 @@ import NetworkSection from './sections/NetworkSection.jsx';
 import AboutSection from './sections/AboutSection.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { SETTING_ENTRIES } from './settingsIndex.js';
+import { SETTINGS_SECTIONS } from '../../lib/settingsSections.js';
 
-const SECTIONS = [
-  { id: 'account', label: 'Аккаунт', icon: CircleUser },
-  { id: 'app', label: 'Приложение', icon: LayoutGrid },
-  { id: 'features', label: 'Функции', icon: SlidersHorizontal },
-  { id: 'data', label: 'Данные и разрешения', icon: ShieldCheck },
-  { id: 'diagnostics', label: 'Диагностика', icon: Bug },
-  { id: 'network', label: 'Сеть', icon: Wifi },
-  { id: 'about', label: 'О программе', icon: Info },
-];
+// Названия разделов живут в lib/settingsSections.js: по ним же проверяются
+// подсказки «Настройки → Раздел» в ошибках и тостах.
+const SECTION_ICONS = {
+  account: CircleUser,
+  app: LayoutGrid,
+  features: SlidersHorizontal,
+  data: ShieldCheck,
+  diagnostics: Bug,
+  network: Wifi,
+  about: Info,
+};
+const SECTIONS = SETTINGS_SECTIONS.map((section) => ({ ...section, icon: SECTION_ICONS[section.id] }));
 
 export default function SettingsModal({ open, section, onSectionChange, onClose }) {
   const { settings } = useAppData();

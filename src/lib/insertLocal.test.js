@@ -114,3 +114,23 @@ describe('вставка в поле, где человек пишет', () => {
     expect(area.value).toBe('x');
   });
 });
+
+describe('переносы при вставке', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('в textarea переносы сохраняются', () => {
+    const area = mount('<textarea></textarea>');
+    area.focus();
+    insertIntoFocusedField('первая\nвторая', { doc: document, el: area });
+    expect(area.value).toBe('первая\nвторая');
+  });
+
+  it('в однострочном input перенос становится пробелом', () => {
+    const input = mount('<input type="text" />');
+    input.focus();
+    insertIntoFocusedField('первая\n\nвторая', { doc: document, el: input });
+    expect(input.value).toBe('первая вторая');
+  });
+});

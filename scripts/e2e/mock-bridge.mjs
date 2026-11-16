@@ -153,6 +153,20 @@ export function installMockBridge() {
       return { ok: true };
     },
     transcribePcm: async (payload) => {
+      // Что «услышал» движок. По умолчанию — проверочная фраза, но сценарий
+      // может подставить свою (голосовые команды, длинные тексты): иначе
+      // такие пути проверялись бы только юнит-тестами.
+      // null — сценарий ничего не подставлял; '' — намеренно пустой ответ
+      const custom = (() => {
+        const raw = localStorage.getItem('mockstore:zs.mockSttText');
+        if (raw === null) return null;
+        try {
+          const parsed = JSON.parse(raw);
+          return parsed === null || parsed === undefined ? '' : String(parsed);
+        } catch {
+          return String(raw);
+        }
+      })();
       // pcm целиком в журнал не кладём, но всё, что влияет на распознавание,
       // сохраняем — иначе подсказку с экрана невозможно проверить
       record('stt:transcribe-pcm', [
@@ -167,7 +181,12 @@ export function installMockBridge() {
         },
       ]);
       // ms — как у настоящего main: интерфейс показывает «за сколько распознано»
-      return { ok: true, text: 'Проверка диктовки: раз, два, три.', engine: 'whisper', ms: 1400 };
+      return {
+        ok: true,
+        text: custom === null ? 'Проверка диктовки: раз, два, три.' : custom,
+        engine: 'whisper',
+        ms: 1400,
+      };
     },
 
     insertText: ok('text:insert'),

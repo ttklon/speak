@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   OPS,
+  cleanLines,
+  dropStutter,
   llmIsDown,
   llmRewrite,
   polishDictation,
@@ -178,5 +180,44 @@ describe('вторая стадия чистки диктовки моделью
     });
     expect(out).toBeNull();
     fetchSpy.mockRestore();
+  });
+});
+
+describe('многострочная чистка (голосовые переносы)', () => {
+  it('чистит каждую строку и сохраняет переносы', () => {
+    expect(cleanLines('ну привет\nкак бы дела')).toBe('Привет.\nДела.');
+  });
+
+  it('не оставляет пустых строк больше одной', () => {
+    expect(cleanLines('первое\n\n\n\nвторое')).toBe('Первое.\n\nВторое.');
+  });
+
+  it('одна строка — прежнее поведение', () => {
+    expect(cleanLines('ну привет как дела')).toBe(OPS.clean('ну привет как дела'));
+  });
+});
+
+describe('заикание в распознанном тексте', () => {
+  it('повтор служебного слова убирается', () => {
+    expect(dropStutter('я я думаю это это не так')).toBe('я думаю это не так');
+  });
+
+  it('знаки между словами — это уже не заикание', () => {
+    expect(dropStutter('да, да, конечно')).toBe('да, да, конечно');
+  });
+
+  it('намеренные повторы не трогаются', () => {
+    expect(dropStutter('очень очень хорошо')).toBe('очень очень хорошо');
+    expect(dropStutter('ну ну')).toBe('ну ну');
+    expect(dropStutter('да да')).toBe('да да');
+  });
+
+  it('диктовка целиком: и заикание, и паразиты, и знаки', () => {
+    expect(OPS.clean('ну я я думаю что это это не так')).toBe('Я думаю что это не так.');
+  });
+
+  it('пустой текст', () => {
+    expect(dropStutter('')).toBe('');
+    expect(dropStutter(null)).toBe('');
   });
 });

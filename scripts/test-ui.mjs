@@ -662,6 +662,96 @@ async function scenarioDictation(browser) {
   await page.close();
 }
 
+// Голосовая пунктуация: сказанное «запятая» или «с новой строки» — это знаки,
+// а не слова. Раньше они попадали в текст как есть, и человек правил руками.
+async function scenarioVoiceCommands(browser) {
+  const spoken =
+    'привет запятая как дела точка с новой строки купить хлеб и молоко удалить последнее слово';
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': spoken },
+  });
+  takeErrors(page);
+  await clickText(page, 'Начать диктовку');
+  await sleep(1100);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2200);
+  const saved = await page.evaluate(() => {
+    const list = window.__e2e.read('zs.dictations');
+    return Array.isArray(list) && list[0] ? String(list[0].text || '') : '';
+  });
+  record(
+    'сценарии',
+    'голос: «запятая», «точка» и «с новой строки» становятся знаками',
+    saved === 'Привет, как дела.\nКупить хлеб.',
+    JSON.stringify(saved),
+  );
+  const inserts = await page.evaluate(() =>
+    (window.__bridgeCalls || [])
+      .filter((c) => c.channel === 'text:insert')
+      .map((c) => String(c.args?.[0] || '')),
+  );
+  record(
+    'сценарии',
+    'голос: в чужое окно уходит текст с переносом строки, без слов-команд',
+    inserts.length === 1 &&
+      inserts[0].includes('\n') &&
+      !/запятая|новой строки|удалить последнее/i.test(inserts[0]),
+    inserts[0] ? JSON.stringify(inserts[0]) : 'вставок нет',
+  );
+  const tip = await page.evaluate(() => /Скажите «запятая»/i.test(document.body.innerText));
+  record('сценарии', 'голос: на главной есть подсказка о командах', tip);
+  const errors = takeErrors(page);
+  record('сценарии', 'голос: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Пустой результат распознавания — самое непонятное состояние: человек
+// говорил, а в поле ничего и ни слова объяснения. Теперь приложение говорит,
+// что именно случилось: молчал микрофон или движок не разобрал слова.
+async function scenarioEmptyResult(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': '' },
+  });
+  takeErrors(page);
+  await clickText(page, 'Начать диктовку');
+  await sleep(1500);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2200);
+  const toast = await page.evaluate(() => document.querySelector('.toast')?.innerText || '');
+  const count = await page.evaluate(() => {
+    const list = window.__e2e.read('zs.dictations');
+    return Array.isArray(list) ? list.length : -1;
+  });
+  // Подсказка должна называть раздел, который правда есть в настройках:
+  // «проверьте в настройках» человек выполнить не может.
+  const sections = await page.evaluate(() => {
+    const raw = window.__e2e.read('zs.settings') || {};
+    return { hasSettings: Boolean(raw && typeof raw === 'object') };
+  });
+  record(
+    'сценарии',
+    'пустой результат: сказано, что именно проверить',
+    /не распознал|нет речи|не было речи/i.test(toast) &&
+      /Настройки → Функции|Данные и разрешения|Тест микрофона/i.test(toast) &&
+      sections.hasSettings,
+    JSON.stringify(toast.slice(0, 120)),
+  );
+  record('сценарии', 'пустой результат: в историю ничего не попадает', count === 0, String(count));
+  const errors = takeErrors(page);
+  record('сценарии', 'пустой результат: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Плавающий индикатор диктовки: в Electron это отдельное окно поверх всех
 // приложений, поэтому рендерер обязан просить main показать его, обновлять
 // состояние и слушать кнопку «стоп» оттуда.
@@ -4247,6 +4337,8 @@ async function main() {
     const scenarios = [
       ['онбординг', scenarioOnboarding],
       ['диктовка', scenarioDictation],
+      ['голосовые команды', scenarioVoiceCommands],
+      ['пустой результат', scenarioEmptyResult],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],
       ['переписывание моделью', scenarioModelRewrite],

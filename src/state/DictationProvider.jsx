@@ -7,12 +7,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
 import { formatLiveDraft } from '../lib/recognition/liveDraft.js';
 import { createMicWarm } from '../lib/audio/micWarm.js';
-import { applyDictionary, formatK, postProcess, words } from '../lib/utils.js';
+import { applyDictionary, formatK, words } from '../lib/utils.js';
 // Вставка в поле самого приложения: если человек диктует, стоя курсором в
 // поиске или заметке, текст должен попасть туда, а не в предыдущее окно.
 import { insertIntoFocusedField } from '../lib/insertLocal.js';
 import { useAppData } from './AppDataProvider.jsx';
-import { OPS, llmRewrite, polishDictation } from '../lib/ai/textops.js';
+import { OPS, cleanLines, llmRewrite, polishDictation } from '../lib/ai/textops.js';
+import { applyVoiceCommands } from '../lib/voiceCommands.js';
 import { createPolishGate } from '../lib/ai/polishGate.js';
 import { describeScreen } from '../lib/ai/vision.js';
 import { playCue } from '../lib/feedback.js';
@@ -156,7 +157,7 @@ export function DictationProvider({ children }) {
 
 
   const finish = useCallback(
-    async (text, { insert = true, sttMs = 0 } = {}) => {
+    async (text, { insert = true, sttMs = 0, spoken = true } = {}) => {
       // защита от двойного завершения (web-движок + фолбэк); держим до конца
       // второй стадии, иначе модель успевала запуститься дважды
       if (finishing.current) return null;
@@ -184,7 +185,16 @@ export function DictationProvider({ children }) {
       // чистка шла всегда. Теперь выключенный тумблер оставляет текст как есть,
       // а включённый убирает паразитов и расставляет пунктуацию.
       const polishing = settingsRef.current.aiProcessing !== false;
-      let cleaned = polishing ? OPS.clean(postProcess(corrected, {})) : corrected.trim();
+      // Голосовые знаки и команды: «запятая», «с новой строки», «удалить
+      // последнее слово». Раньше они попадали в текст словами — человеку
+      // приходилось бросать диктовку и править руками.
+      // Только для сказанного: ответ агента — это написанный моделью текст,
+      // и превращать в нём «запятую» в знак было бы ошибкой.
+      const commanded = spoken
+        ? applyVoiceCommands(corrected, { language: settingsRef.current.language })
+        : corrected;
+      // Чистка — построчно: иначе схлопнулись бы переносы, сказанные голосом.
+      let cleaned = polishing ? cleanLines(commanded) : commanded.trim();
       // Вторая стадия («Переписывать диктовку моделью»): офлайн-правила уже
       // дали текст, локальная модель доводит формулировки. Модель может
       // не ответить — тогда остаётся результат правил, диктовка не ломается.
@@ -229,7 +239,7 @@ export function DictationProvider({ children }) {
           polishPromise
             .then((late) => {
               if (!late) return;
-              const improved = OPS.clean(late);
+              const improved = cleanLines(late);
               if (!improved || improved === cleaned) return;
               const id = lastItemId.current;
               if (id && updateDictation) updateDictation(id, { text: improved, words: words(improved) });
@@ -242,7 +252,7 @@ export function DictationProvider({ children }) {
           diag.warn('stt', 'Модель не успела за бюджет — вставлены офлайн-правила', { budget });
         }
         if (better) {
-          cleaned = OPS.clean(better);
+          cleaned = cleanLines(better);
           diag.info('stt', 'Диктовку довела локальная модель', {
             before,
             after: cleaned.length,
@@ -664,7 +674,7 @@ export function DictationProvider({ children }) {
         setState('idle');
         return;
       }
-      const item = await finish(answer, { insert: false });
+      const item = await finish(answer, { insert: false, spoken: false });
       if (item) pushToast({ title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' });
     } catch (err) {
       diag.error('agent', 'Ошибка агента', { reason: String(err?.message || err) });

@@ -18,6 +18,7 @@ import { pruneByAge } from '../lib/retention.js';
 import { migrateSettings } from '../lib/settingsMigration.js';
 import { tuneSettings } from '../lib/autotune.js';
 import { trimByBytes } from '../lib/clipboardBudget.js';
+import { trimDictations } from '../lib/dictationBudget.js';
 import {
   asList,
   sanitizeClipboard,
@@ -79,8 +80,10 @@ export function AppDataProvider({ children }) {
   // здесь подставлялись демонстрационные записи из видео, и приложение
   // выглядело так, будто за вас уже что-то надиктовали и накопировали.
   // Демо-наборы остались только для тестов и скриншотов (src/lib/seed.js).
+  // История ограничена и по числу записей, и по весу: длинные расшифровки
+  // («встреча на час») весят как сотни коротких, а профиль пишется целиком.
   const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => [], {
-    sanitize: sanitizeDictations,
+    sanitize: (stored, fallback) => trimDictations(sanitizeDictations(stored, fallback)),
   });
   const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => [], {
     sanitize: sanitizeDictionary,
@@ -169,7 +172,7 @@ export function AppDataProvider({ children }) {
 
   const addDictation = useCallback(
     (item) => {
-      setDictations((prev) => [item, ...prev].slice(0, 3000));
+      setDictations((prev) => trimDictations([item, ...prev]));
     },
     [setDictations],
   );

@@ -27,6 +27,32 @@ const isElectronShell = () =>
 export const hasNativeStt = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribePcm);
 
+/**
+ * Почему запись не дала текста — и что с этим делать.
+ *
+ * Вынесено из кода движка, чтобы тест мог проверить каждую подсказку: она
+ * обязана называть раздел, который в настройках действительно есть.
+ */
+export const EMPTY_RESULT_MESSAGES = {
+  silent: {
+    title: 'В записи нет речи',
+    hint: 'Микрофон не слышит голос: выберите устройство в «Настройки → Данные и разрешения», а уровень проверьте в «Настройки → Приложение → Тест микрофона».',
+  },
+  phantom: {
+    title: 'В записи не было речи',
+    hint: 'Похоже, микрофон записал тишину или шум. Попробуйте ещё раз ближе к микрофону.',
+  },
+  'too-short': {
+    title: 'Слишком короткая запись',
+    hint: 'Говорите сразу после нажатия сочетания клавиш.',
+  },
+  default: {
+    title: 'whisper.cpp не распознал',
+    // «проверьте в настройках» человек выполнить не может: называем точные разделы
+    hint: 'Скажите ещё раз ближе к микрофону. Если повторяется — проверьте модель в «Настройки → Функции», а устройство — в «Настройки → Данные и разрешения».',
+  },
+};
+
 export function engineName() {
   if (hasNativeStt()) return 'whisper.cpp (офлайн)';
   // Web Speech в Chrome отправляет звук на серверы Google — это не офлайн,
@@ -285,25 +311,11 @@ export function createRecognizer(opts = {}) {
           onEnd?.({ text: res.text, ms: res.ms });
         } else {
           const code = res?.code || 'stt-empty';
-          const byCode = {
-            silent: {
-              title: 'В записи нет речи',
-              hint: 'Микрофон не слышит голос: проверьте устройство и уровень в «Настройки → Данные и разрешения».',
-            },
-            phantom: {
-              title: 'В записи не было речи',
-              hint: 'Похоже, микрофон записал тишину или шум. Попробуйте ещё раз ближе к микрофону.',
-            },
-            'too-short': {
-              title: 'Слишком короткая запись',
-              hint: 'Говорите сразу после нажатия сочетания клавиш.',
-            },
-          };
           onError?.(
-            byCode[code] || {
+            EMPTY_RESULT_MESSAGES[code] || {
               code: 'stt-empty',
-              title: 'whisper.cpp не распознал',
-              hint: res?.reason || 'Проверьте модель и микрофон в настройках',
+              ...EMPTY_RESULT_MESSAGES.default,
+              hint: res?.reason || EMPTY_RESULT_MESSAGES.default.hint,
             },
           );
           onEnd?.({ text: '' });

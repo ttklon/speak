@@ -38,6 +38,14 @@
   max-width: 660px;
 }
 
+.hero__hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3, var(--text-4));
+  max-width: 660px;
+}
+
 .hero__note {
   margin: 14px 0 0;
   padding: 8px 12px;

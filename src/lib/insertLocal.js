@@ -91,15 +91,19 @@ export function insertIntoFocusedField(text, { doc, el } = {}) {
     return { inserted: false };
   }
 
+  // Однострочное поле не умеет переносов: текст с «с новой строки» иначе
+  // потерял бы границу слов и слипся. В textarea переносы — часть текста.
+  const singleLine = String(field.tagName || '').toLowerCase() === 'input';
+  const fieldValue = singleLine ? value.replace(/\s*\n+\s*/g, ' ') : value;
   const start = Number.isFinite(field.selectionStart) ? field.selectionStart : field.value.length;
   const end = Number.isFinite(field.selectionEnd) ? field.selectionEnd : field.value.length;
   const before = field.value.slice(0, start);
   const after = field.value.slice(end);
   // Пробел перед текстом, если человек писал вплотную: иначе слова слипнутся.
   const glue = before && !/\s$/.test(before) ? ' ' : '';
-  const next = `${before}${glue}${value}${after}`;
+  const next = `${before}${glue}${fieldValue}${after}`;
   setNativeValue(field, next);
-  const caret = before.length + glue.length + value.length;
+  const caret = before.length + glue.length + fieldValue.length;
   try {
     field.setSelectionRange(caret, caret);
   } catch {

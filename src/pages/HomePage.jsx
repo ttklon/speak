@@ -7,6 +7,7 @@ import { typeOut } from '../lib/feedback.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
 import { engineName, hasNativeStt, hasWebSpeech } from '../lib/recognition/engine.js';
+import { VOICE_COMMAND_TIP } from '../lib/voiceCommands.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
 import { APP } from '../lib/config.js';
 import Icon from '../components/ui/Icon.jsx';
@@ -189,6 +190,9 @@ export default function HomePage() {
           <kbd className="inline-key">{keysLabel(clipboardKey)}</kbd>, настройки — по{' '}
           <kbd className="inline-key">Ctrl + ,</kbd>.
         </p>
+        {/* Голосовая пунктуация: о ней нельзя догадаться, а без неё человек
+            диктует «запятая» словами и правит текст руками. */}
+        <p className="hero__hint">{VOICE_COMMAND_TIP}</p>
 
         <div className="hero__stats">
           <HeroStat value={formatK(totalWords)} unit="" label="слов в истории" />
