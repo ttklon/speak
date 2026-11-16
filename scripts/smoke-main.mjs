@@ -287,6 +287,16 @@ Module._load = function patched(request, parent, isMain) {
 
 // main.cjs живёт в CommonJS — грузим через require
 const main = require(path.resolve('electron/main.cjs'));
+// Подмена прогрева сразу после загрузки main: до первого «hud:show» и до
+// таймера прогрева при старте. Нужна, чтобы увидеть, что прогрев вообще
+// запускается, не поднимая настоящий whisper-server.
+const whisperForWarm = require(path.resolve('electron/whisper.cjs'));
+const warmSeen = [];
+const realWarm = whisperForWarm.warm;
+whisperForWarm.warm = async (m) => {
+  warmSeen.push(String(m || ''));
+  return { ok: false, reason: 'смоук: без server' };
+};
 const ok = [];
 const fail = [];
 
@@ -314,6 +324,52 @@ await check('IPC-каналы зарегистрированы', () => {
   const missing = need.filter((ch) => !handlers.has(ch));
   if (missing.length) throw new Error(`нет каналов: ${missing.join(', ')}`);
 });
+await check('автоподбор: две медленные диктовки подряд — и модель на ступень легче', () => {
+  const tune = require(path.resolve('electron/speedTune.cjs'));
+  const base = {
+    model: 'small-q5_1',
+    downloaded: ['base-q5_1', 'small-q5_1'],
+    autoOptimize: true,
+    pinned: false,
+  };
+  // 20 секунд речи за 9 секунд счёта — в 2,2 раза быстрее реального времени, мало
+  const first = tune.decide({ ...base, ms: 9000, seconds: 20, strikes: 0 });
+  if (first.switchTo) throw new Error('переключился после одной медленной фразы');
+  if (first.reason !== 'slow-once' || first.strikes !== 1) throw new Error(JSON.stringify(first));
+  const second = tune.decide({ ...base, ms: 9000, seconds: 20, strikes: 1 });
+  if (second.switchTo !== 'base-q5_1') throw new Error(`не переключился: ${JSON.stringify(second)}`);
+  if (second.reason !== 'slow' || second.strikes !== 0) throw new Error(JSON.stringify(second));
+  // быстрая фраза — счётчик сбрасывается, копить «долги» незачем
+  const fast = tune.decide({ ...base, ms: 3000, seconds: 20, strikes: 1 });
+  if (fast.switchTo || fast.strikes !== 0) throw new Error(JSON.stringify(fast));
+  // 20 секунд за 3 секунды — это 6,6×, порог пройден
+  if (fast.reason !== 'fast') throw new Error(`20 с за 3 с не считается быстрым: ${fast.reason}`);
+  // а 20 секунд за 6 секунд уже не «быстро»: порог — вчетверо (20 / 4 = 5 с),
+  // это и есть обещание «фраза на двадцать секунд распознаётся за пять»
+  const borderline = tune.decide({ ...base, ms: 6000, seconds: 20, strikes: 1 });
+  if (borderline.switchTo !== 'base-q5_1') throw new Error(`20 с за 6 с не признано медленным: ${JSON.stringify(borderline)}`);
+});
+
+await check('автоподбор: уважает ручной выбор, выключенный тумблер и крайние ступени', () => {
+  const tune = require(path.resolve('electron/speedTune.cjs'));
+  const slow = { ms: 12000, seconds: 20, model: 'small-q5_1', downloaded: ['base-q5_1', 'small-q5_1'], strikes: 1 };
+  if (tune.decide({ ...slow, pinned: true }).switchTo) throw new Error('переключил модель вопреки ручному выбору');
+  if (tune.decide({ ...slow, autoOptimize: false }).switchTo) throw new Error('переключил при выключенном автоподборе');
+  // модель не скачана — обещать нечего
+  const missing = tune.decide({ ...slow, downloaded: ['small-q5_1'] });
+  if (missing.switchTo || missing.reason !== 'missing') throw new Error(JSON.stringify(missing));
+  // уже самая лёгкая — ниже некуда
+  const floor = tune.decide({ ...slow, model: 'base-q5_1', strikes: 5 });
+  if (floor.switchTo || floor.reason !== 'floor') throw new Error(JSON.stringify(floor));
+  // за сессию не больше двух переключений
+  const cap = tune.decide({ ...slow, model: 'large-v3-turbo-q5_0', downloaded: ['small-q5_1', 'large-v3-turbo-q5_0'] });
+  if (cap.switchTo !== 'small-q5_1') throw new Error(`не спустился с максимума: ${JSON.stringify(cap)}`);
+  const capped = tune.decide({ ...slow, switches: 2 });
+  if (capped.switchTo || capped.reason !== 'cap') throw new Error(JSON.stringify(capped));
+  // без измерений не гадаем
+  if (tune.decide({ ...slow, ms: 0 }).reason !== 'unknown') throw new Error('считает по нулевым замерам');
+});
+
 await check('отмена скачивания модели отвечает без зависаний', async () => {
   const res = await handlers.get('models:cancel')({});
   if (!res || typeof res.ok !== 'boolean') throw new Error(`странный ответ: ${JSON.stringify(res)}`);
@@ -1106,6 +1162,8 @@ await check('аргументы whisper: без контекста, жадное
   };
   if (pair('-mc') !== '0') throw new Error('нет -mc 0 (контекст прошлой диктовки)');
   if (pair('-bs') !== '1') throw new Error('нет -bs 1 (beám search вместо greedy)');
+  // -nf: без повторного прохода с другой температурой (он удваивал ожидание)
+  if (!args.includes('-nf')) throw new Error('нет -nf: движок может считать ту же фразу дважды');
   if (!args.includes('--vad')) throw new Error('нет --vad');
   if (pair('-vm') !== 'vad.bin') throw new Error('VAD-модель не передана');
   if (pair('-vt') !== '0.5') throw new Error('нет порога VAD');
@@ -1452,10 +1510,34 @@ await check('трей: во время записи появляется «Ос�
   if (withoutStop.some((i) => i.label === 'Остановить диктовку')) throw new Error('стоп остался в меню после записи');
 });
 
+await check('прогрев запускается сам — по началу записи, а не по первой диктовке', async () => {
+  const startedAt = Date.now();
+  const shown = await handlers.get('hud:show')({});
+  const took = Date.now() - startedAt;
+  // плашка обязана появиться сразу: прогрев — фон, а не «подождите, я греюсь»
+  if (!shown) throw new Error('hud:show не ответил');
+  if (took > 300) throw new Error(`показ плашки ждал прогрев: ${took} мс`);
+  if (!warmSeen.length) throw new Error('модель ни разу не прогревалась');
+  const settings = (handlers.get('store:get')({}, 'zs:settings')) || {};
+  const wanted = String(settings.whisperModel || 'base');
+  if (!warmSeen.includes(wanted)) throw new Error(`прогревали «${warmSeen.join(',')}», а выбрана «${wanted}»`);
+  whisperForWarm.warm = realWarm;
+});
+
 await check('models:warm честно отказывает без whisper-server', async () => {
   const res = await handlers.get('models:warm')({}, { model: 'small', force: true });
   if (res?.ok) throw new Error('будто модель загружена');
   if (!/whisper-server/.test(String(res?.reason))) throw new Error(`причина непонятная: ${res?.reason}`);
+});
+
+await check('повторный прогрев безопасен: второй вызов не ломается и не дублирует проход', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const first = await whisper.warm('small-q5_1');
+  const second = await whisper.warm('small-q5_1');
+  if (typeof first?.ok !== 'boolean' || typeof second?.ok !== 'boolean') {
+    throw new Error(`странный ответ: ${JSON.stringify([first, second])}`);
+  }
+  if (first.ok !== second.ok) throw new Error('повторный прогрев ответил иначе');
 });
 
 await check('models:warm не работает при выключенной настройке', async () => {
@@ -1680,14 +1762,21 @@ await check('вставка не забирает фокус у чужого о�
   }
 });
 
-await check('модель подбирается под железо: слабый ПК — квантованная base, мощный — small-q5_1', () => {
+await check('модель подбирается под железо: три режима — быстро, сбалансированно, максимум', () => {
   const hw = require(path.resolve('electron/hardware.cjs'));
   const low = hw.pickModel({ cpus: 2, ramGb: 4 });
   if (low.id !== 'base-q5_1') throw new Error(`слабый ПК получил «${low.id}»`);
+  if (low.tier !== 'fast') throw new Error(`слабый ПК попал не в режим «Быстро»: ${low.tier}`);
   const mid = hw.pickModel({ cpus: 6, ramGb: 16 });
-  if (mid.id !== 'base') throw new Error(`средний ПК получил «${mid.id}»`);
+  if (mid.id !== 'small-q5_1') throw new Error(`средний ПК получил «${mid.id}»`);
+  if (mid.tier !== 'balanced') throw new Error(`средний ПК попал не в «Сбалансированно»: ${mid.tier}`);
   const high = hw.pickModel({ cpus: 12, ramGb: 32 });
-  if (high.id !== 'small-q5_1') throw new Error(`мощный ПК получил «${high.id}»`);
+  if (high.id !== 'large-v3-turbo-q5_0') throw new Error(`мощный ПК получил «${high.id}»`);
+  if (high.tier !== 'max') throw new Error(`мощный ПК попал не в «Максимум»: ${high.tier}`);
+  // ступень легче — ровно на один режим и только по цепочке
+  if (hw.lighterModel('large-v3-turbo-q5_0') !== 'small-q5_1') throw new Error('нет шага вниз с максимума');
+  if (hw.lighterModel('small-q5_1') !== 'base-q5_1') throw new Error('нет шага вниз со среднего');
+  if (hw.lighterModel('base-q5_1') !== '') throw new Error('придумали модель легче самой лёгкой');
   // мало памяти при многих ядрах — тоже «слабый»: модель живёт в RAM
   if (hw.pickModel({ cpus: 16, ramGb: 6 }).id !== 'base-q5_1') throw new Error('не учли мало памяти');
   // «слишком тяжёлая» — это про скорость счёта, а не про вкус
@@ -1707,7 +1796,7 @@ await check('переход на лёгкую модель: только ког�
   // слабый ПК, стоит small, но base-q5_1 уже скачана → переходим
   const weak = hw.plan({ cpus: 2, ramGb: 4, current: 'small', downloaded: ['small', 'base-q5_1'] });
   if (weak.switchTo !== 'base-q5_1') throw new Error(`не переключился: «${weak.switchTo}»`);
-  if (!/квантованная base/.test(weak.why)) throw new Error(`не объяснил причину: ${weak.why}`);
+  if (!/Быстро/.test(weak.why)) throw new Error(`не объяснил причину: ${weak.why}`);
   // той же модели нет на диске — не обещаем то, чего не можем
   if (hw.plan({ cpus: 2, ramGb: 4, current: 'small', downloaded: ['small'] }).switchTo !== '') {
     throw new Error('переключился на нескачанную модель');
@@ -1776,10 +1865,30 @@ await check('короткая фраза с паузой — один прохо
   if (!(res.sttMs >= 0)) throw new Error('в ответе нет времени распознавания');
 });
 
-await check('длинная диктовка по-прежнему режется по паузам, но не больше трёх частей', async () => {
+await check('двадцать секунд речи — один проход движка, а не три', async () => {
+  // Жалоба человека: диктовка на двадцать секунд распознавалась двадцать
+  // секунд. Причина — запись длиннее 15 с резалась по паузам на три прохода,
+  // и каждый заново грузил веса модели. Всё, что короче окна whisper (30 с),
+  // должно считаться за один проход.
   await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false });
   spawnCalls.length = 0;
-  spawnPlan.answer = 'часть длинной диктовки';
+  spawnPlan.answer = 'диктовка на двадцать секунд';
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: pcmWithPause([5000, 1000, 5000, 1000, 5000, 1000, 5000]),
+    durationMs: 20000,
+    lang: 'ru',
+  });
+  spawnPlan.answer = null;
+  const runs = spawnCalls.filter((c) => String(c.file).includes('whisper'));
+  if (runs.length !== 1) throw new Error(`движок запускался ${runs.length} раз вместо одного`);
+});
+
+await check('длинная диктовка без прогретого сервера — тоже один проход', async () => {
+  // Без сервера каждый фрагмент — это повторная загрузка весов с диска.
+  // whisper-cli сам режет файл на 30-секундные окна внутри одного процесса.
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false });
+  spawnCalls.length = 0;
+  spawnPlan.answer = 'длинная диктовка целиком';
   // 40 секунд: пять речевых кусков по 6 с с паузами по секунде
   await handlers.get('stt:transcribe-pcm')({}, {
     pcm: pcmWithPause([6000, 1000, 6000, 1000, 6000, 1000, 6000, 1000, 6000]),
@@ -1788,8 +1897,7 @@ await check('длинная диктовка по-прежнему режетс�
   });
   spawnPlan.answer = null;
   const runs = spawnCalls.filter((c) => String(c.file).includes('whisper'));
-  if (runs.length < 2) throw new Error('длинную запись не разрезали — конец фразы потеряется');
-  if (runs.length > 3) throw new Error(`слишком много проходов: ${runs.length} — каждый грузит веса`);
+  if (runs.length !== 1) throw new Error(`движок запускался ${runs.length} раз — веса грузятся повторно`);
 });
 
 await check('сервер распознавания поднимается с жадным декодированием и без контекста', async () => {

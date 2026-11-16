@@ -1533,6 +1533,32 @@
   color: var(--text-5);
 }
 
+/* Три режима: у каждого короткое объяснение «кому это подходит» — без него
+   человек снова выбирает между строчками наугад. */
+.model-card__desc {
+  margin-top: 3px;
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: var(--text-4);
+}
+
+/* Замер на этом компьютере: «20,4 с речи → 3,1 с счёта». Обещания каталога
+   проверяются фактом, а не наоборот. */
+.model-measure--warn {
+  border-color: rgba(255, 176, 32, 0.35);
+  color: var(--text-3);
+}
+
+.model-measure {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(var(--overlay-rgb), 0.08);
+  background: rgba(var(--overlay-rgb), 0.03);
+  font-size: 10px;
+  color: var(--text-4);
+}
+
 /* ── Misc page grids ──────────────────────────────────────── */
 .two-col {
   display: grid;

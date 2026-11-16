@@ -11,6 +11,7 @@ import { applyDictionary, formatK, words } from '../lib/utils.js';
 // Вставка в поле самого приложения: если человек диктует, стоя курсором в
 // поиске или заметке, текст должен попасть туда, а не в предыдущее окно.
 import { insertIntoFocusedField } from '../lib/insertLocal.js';
+import { tierForModel } from '../lib/modelTiers.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS, cleanLines, llmRewrite, polishDictation } from '../lib/ai/textops.js';
 import { applyVoiceCommands } from '../lib/voiceCommands.js';
@@ -157,7 +158,7 @@ export function DictationProvider({ children }) {
 
 
   const finish = useCallback(
-    async (text, { insert = true, sttMs = 0, spoken = true } = {}) => {
+    async (text, { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0 } = {}) => {
       // защита от двойного завершения (web-движок + фолбэк); держим до конца
       // второй стадии, иначе модель успевала запуститься дважды
       if (finishing.current) return null;
@@ -297,6 +298,9 @@ export function DictationProvider({ children }) {
         source: 'dictation',
         // сколько заняло распознавание (только для whisper.cpp) — видно в диагностике
         sttMs: sttMs || undefined,
+        // сколько секунд человек говорил: вместе с sttMs это и есть «успевает ли
+        // модель», по этим числам выбирается режим и это же видно в настройках
+        spokenMs: spokenSeconds > 0 ? Math.round(spokenSeconds * 1000) : undefined,
       };
       // событие в журнал: видно, что движок реально вернул текст, а не «тишину»
       diag.info('stt', cleaned ? 'Диктовка распознана' : 'Пустой результат распознавания', {
@@ -560,19 +564,28 @@ export function DictationProvider({ children }) {
             setLevel(0);
           }
         },
-        onEnd: async ({ text, ms }) => {
+        onEnd: async ({ text, ms, spoken }) => {
           recRef.current = null;
           setState('processing');
           setLevel(0);
           // Текст вставляем сразу: искусственная пауза «как в видео» только
           // задерживала вставку (диктовка должна появляться в окне мгновенно).
           // Исключение — включённая вторая стадия чистки моделью: тогда ждём её.
-          const item = await finish(text, { sttMs: ms });
+          const item = await finish(text, { sttMs: ms, spokenSeconds: spoken || 0 });
           if (opts.onResult) opts.onResult(item);
         },
       });
       recRef.current = recognizer;
       setPaused(false);
+      // Пока человек говорит, модель должна быть в памяти. В main прогрев уже
+      // стартует по показу плашки, но плашку можно выключить в настройках —
+      // тогда прогрева не было бы вовсе, и первая фраза платила бы за загрузку
+      // весов. Повторный прогрев в main дешёвый: сервер тот же.
+      if (settingsRef.current.keepModelLoaded !== false) {
+        Promise.resolve(
+          window.zspeakly?.native?.modelsWarm?.({ model: settingsRef.current.whisperModel }),
+        ).catch(() => {});
+      }
       // start() у нативного движка асинхронный (нужно разрешение на микрофон)
       const failStart = (err) => {
         console.warn('[dictation] start failed', err);
@@ -881,18 +894,24 @@ export function DictationProvider({ children }) {
     if (!native?.onAutoTune) return undefined;
     return native.onAutoTune((p) => {
       if (!p?.to) return;
+      // main уже сохранил выбор сам; окну остаётся показать его. Запись того
+      // же значения обратно ничего не закрепляет: main ставит «выбрано
+      // вручную» только когда модель действительно поменялась.
       updateSettings?.({ whisperModel: p.to });
       const secs = Number(p.seconds || 0);
+      const label = tierForModel(p.to).label.toLowerCase();
       // Два повода переключить модель: после долгого прохода (замер) и сразу
       // при запуске, если на этой машине модель заведомо тяжёлая.
       const byHardware = p.reason === 'hardware' || !p.from || !Number(p.ms || 0);
       pushToast({
-        title: byHardware ? `Модель «${p.to}» подобрана под этот компьютер` : `Модель «${p.to}» — быстрее`,
+        title: byHardware
+          ? `Режим распознавания «${label}» — под этот компьютер`
+          : `Режим распознавания: «${label}»`,
         description: byHardware
-          ? p.why || 'Взял модель, которая успевает за вашей речью. Поменять можно в «Функциях».'
-          : `«${p.from}» распознавала ${secs ? `${secs} с речи` : 'короткую фразу'} за ${(
+          ? p.why || 'Взял режим, который успевает за вашей речью. Поменять можно в «Настройки → Функции».'
+          : `Прошлый режим распознавал ${secs ? `${secs} с речи` : 'короткую фразу'} за ${(
               Number(p.ms || 0) / 1000
-            ).toFixed(1)} с. Переключил автоматически, качество текста для диктовки то же.`,
+            ).toFixed(1)} с — долго. Переключил сам, качество текста для диктовки то же. Вернуть: «Настройки → Функции».`,
         tone: 'success',
         ttl: 12000,
       });

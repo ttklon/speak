@@ -4,10 +4,12 @@
  * кроме "платных" ограничений: ZSpeakly — бесплатный офлайн-клон, лимитов нет.
  */
 
+import { MODEL_TIERS } from './modelTiers.js';
+
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.6.2',
+  version: '1.6.3',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -173,10 +175,10 @@ export const DEFAULT_SETTINGS = {
   clipboardMaxItems: 10000,
   clipboardRetentionDays: 30,
   dictationRetentionDays: 30,
-  // base — разумный компромисс для диктовки на обычном ноутбуке: small на
-  // CPU распознаёт 30-секундную фразу десятки секунд, и это выглядит как
-  // «ничего не работает». Кто хочет точнее — выберет small в настройках.
-  whisperModel: 'base',
+  // Сбалансированный режим: small-q5_1 — качество small при скорости base.
+  // Приложение ставит его само и переключается на более лёгкий, если замеры
+  // показывают, что этот не успевает (см. main.cjs → maybeAutoTune).
+  whisperModel: 'small-q5_1',
   // Держать модель в памяти (whisper-server): модель грузится один раз, а не
   // на каждый фрагмент и не на каждый живой проход. Иначе каждая диктовка
   // заново читала с диска сотни мегабайт.
@@ -228,75 +230,25 @@ export const DEFAULT_SETTINGS = {
 export const LOG_ENDPOINT = '';
 
 /**
- * Каталог моделей whisper.cpp (ggml). Размеры и скорость — как в официальном
- * репозитории ggml-org/whisper.cpp и в замерах сообщества: скорость указана
- * как «во сколько раз быстрее реального времени» на обычном ноутбучном CPU,
- * без GPU-ускорения.
+ * Модели распознавания — ровно три режима (см. lib/modelTiers.js).
  *
- * Пометка «рекомендуем» — у base: 142 МБ, ≈6× быстрее реального времени на
- * обычном ноутбуке, то есть 30 секунд речи распознаются за ~5 секунд. Диктовка
- * живёт ожиданием: модель, которая думает 20 секунд, ощущается как поломка.
- * Turbo — тот же large-v3 с 4 декодерными слоями вместо 32, качество выше, но
- * ≈2,5× realtime: его имеет смысл ставить на мощный CPU, а не «по умолчанию».
- * Варианты q5_1/q8_0 — те же веса в 8 битах: файл в 2–3 раза меньше, разбор
- * быстрее, текст для диктовки неотличим. Так и работают быстрые диктовочные
- * приложения — им важна задержка, а не «сырой» fp16.
+ * Раньше здесь лежал каталог из десяти моделей: tiny/base/small/medium/turbo
+ * в трёх квантованиях. Человеку этот выбор ничего не давал — он не знает, чем
+ * q5_1 отличается от q8_0, и не может сравнить скорость, не скачав всё.
+ * Теперь три варианта по расходам на железо: «Быстро», «Сбалансированно»
+ * (ставится само) и «Максимум качества».
  */
-export const MODELS = [
-  { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '≈300 МБ', speed: '≈8×', quality: 'черновая расшифровка' },
-  { id: 'tiny-q5_1', label: 'Whisper tiny (q5_1)', size: '32 МБ', ram: '≈200 МБ', speed: '≈10×', quality: 'черновая, но быстрее' },
-  {
-    id: 'base',
-    label: 'Whisper base',
-    size: '142 МБ',
-    ram: '≈400 МБ',
-    speed: '≈6×',
-    quality: 'базовая',
-    recommended: true,
-  },
-  {
-    id: 'base-q5_1',
-    label: 'Whisper base (q5_1)',
-    size: '60 МБ',
-    ram: '≈300 МБ',
-    speed: '≈8×',
-    quality: 'как base, в 2 раза меньше и быстрее',
-  },
-  { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '≈700 МБ', speed: '≈3×', quality: 'хорошая' },
-  {
-    id: 'small-q5_1',
-    label: 'Whisper small (q5_1)',
-    size: '190 МБ',
-    ram: '≈500 МБ',
-    speed: '≈5×',
-    quality: 'почти как small, но заметно быстрее',
-  },
-  {
-    id: 'large-v3-turbo',
-    label: 'Whisper large-v3 turbo',
-    size: '1.5 ГБ',
-    ram: '≈2 ГБ',
-    speed: '≈2,5×',
-    quality: 'почти large-v3, для мощного CPU',
-  },
-  {
-    id: 'large-v3-turbo-q5_0',
-    label: 'Whisper large-v3 turbo (q5_0)',
-    size: '547 МБ',
-    ram: '≈900 МБ',
-    speed: '≈3×',
-    quality: 'почти large-v3, меньше памяти',
-  },
-  {
-    id: 'large-v3-turbo-q8_0',
-    label: 'Whisper large-v3 turbo (q8_0)',
-    size: '874 МБ',
-    ram: '≈1,3 ГБ',
-    speed: '≈2,8×',
-    quality: 'large-v3 почти без потерь',
-  },
-  { id: 'medium', label: 'Whisper medium', size: '1.5 ГБ', ram: '≈2 ГБ', speed: '≈1,2×', quality: 'высокая' },
-];
+export const MODELS = MODEL_TIERS.map((tier) => ({
+  id: tier.model,
+  tier: tier.id,
+  label: `Whisper ${tier.label.toLowerCase()}`,
+  size: tier.size,
+  ram: tier.ram,
+  speed: tier.speed,
+  quality: tier.quality,
+  desc: tier.desc,
+  recommended: tier.recommended === true,
+}));
 
 export const STORAGE_KEYS = {
   dictations: 'zs.dictations',

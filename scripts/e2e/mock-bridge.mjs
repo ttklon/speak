@@ -365,10 +365,12 @@ export function installMockBridge() {
       record('models:status');
       return {
         bin: true,
+        // три режима из интерфейса: «Быстро» и «Сбалансированно» уже на диске,
+        // «Максимум» — нет (его и предлагаем скачать)
         models: {
-          tiny: { id: 'tiny', downloaded: true, size: 78_000_000 },
-          small: { id: 'small', downloaded: true, size: 488_000_000 },
-          medium: { id: 'medium', downloaded: false, size: 1_500_000_000 },
+          'base-q5_1': { id: 'base-q5_1', downloaded: true, size: 62_000_000, actualMb: 59 },
+          'small-q5_1': { id: 'small-q5_1', downloaded: true, size: 199_000_000, actualMb: 191 },
+          'large-v3-turbo-q5_0': { id: 'large-v3-turbo-q5_0', downloaded: false, size: 547_000_000 },
         },
       };
     },
@@ -391,7 +393,8 @@ export function installMockBridge() {
     },
     deleteModel: async (id) => {
       record('models:delete', [id]);
-      return { ok: true, freedMb: 466, switchedTo: id === 'small' ? 'tiny' : '' };
+      // удалили активный сбалансированный режим — работаем на быстром
+      return { ok: true, freedMb: 199, switchedTo: id === 'small-q5_1' ? 'base-q5_1' : '' };
     },
     downloadEngine: async () => {
       record('models:download-engine');

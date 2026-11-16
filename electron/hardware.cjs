@@ -28,11 +28,32 @@ const WEIGHT_MB = {
   medium: 1530,
 };
 
-/** Модели, которые на слабой машине заведомо «думают» дольше, чем говорят. */
+/**
+ * Три режима из интерфейса (см. src/lib/modelTiers.js) — те же модели, чтобы
+ * «Быстро / Сбалансированно / Максимум» и автоподбор говорили об одном и том
+ * же. Порядок от лёгкой к тяжёлой: fast → balanced → max.
+ */
+const FAST_TIER = 'base-q5_1';
+const BALANCED_TIER = 'small-q5_1';
+const MAX_TIER = 'large-v3-turbo-q5_0';
 const FASTEST = 'tiny-q5_1';
-const BALANCED = 'base-q5_1';
-const QUALITY = 'small-q5_1';
-const QUALITY_PLAIN = 'base';
+// Старые профили: на ступень легче. Только соседние режимы — «прыжок через
+// две ступени» менял бы качество слишком резко.
+const LIGHTER = {
+  'large-v3-turbo-q5_0': BALANCED_TIER,
+  'large-v3-turbo-q8_0': BALANCED_TIER,
+  'large-v3-turbo': BALANCED_TIER,
+  medium: BALANCED_TIER,
+  small: FAST_TIER,
+  'small-q5_1': FAST_TIER,
+  base: '',
+  'base-q5_1': '',
+};
+
+/** Модель на ступень легче (для авто-переключения по факту замеров). */
+function lighterModel(id) {
+  return LIGHTER[id] || '';
+}
 
 /**
  * Какую модель качать и ставить по умолчанию на этой машине.
@@ -44,22 +65,22 @@ function pickModel(hw = {}) {
   const ramGb = Math.max(1, Number(hw.ramGb) || 8);
   if (cpus <= 3 || ramGb < 8) {
     return {
-      id: BALANCED,
-      tier: 'low',
-      why: `${cpus} ядра, ${ramGb} ГБ — квантованная base: качество base, но заметно быстрее`,
+      id: FAST_TIER,
+      tier: 'fast',
+      why: `${cpus} ядра, ${ramGb} ГБ — режим «Быстро»: base-q5_1 считает в разы быстрее реального времени`,
     };
   }
-  if (cpus >= 8 && ramGb >= 16) {
+  if (cpus >= 12 && ramGb >= 32) {
     return {
-      id: QUALITY,
-      tier: 'high',
-      why: `${cpus} ядер, ${ramGb} ГБ — small-q5_1: качество small при скорости base`,
+      id: MAX_TIER,
+      tier: 'max',
+      why: `${cpus} ядер, ${ramGb} ГБ — режим «Максимум качества»: large-v3-turbo-q5_0 помещается и успевает`,
     };
   }
   return {
-    id: QUALITY_PLAIN,
-    tier: 'mid',
-    why: `${cpus} ядер, ${ramGb} ГБ — обычная base: лучший баланс`,
+    id: BALANCED_TIER,
+    tier: 'balanced',
+    why: `${cpus} ядер, ${ramGb} ГБ — режим «Сбалансированно»: small-q5_1, точнее base при той же скорости`,
   };
 }
 
@@ -110,4 +131,14 @@ function thisMachine() {
   };
 }
 
-module.exports = { pickModel, plan, worthSwitching, weightOf, thisMachine, FASTEST, WEIGHTS: WEIGHT_MB };
+module.exports = {
+  pickModel,
+  plan,
+  worthSwitching,
+  weightOf,
+  thisMachine,
+  lighterModel,
+  FASTEST,
+  TIERS: { fast: FAST_TIER, balanced: BALANCED_TIER, max: MAX_TIER },
+  WEIGHTS: WEIGHT_MB,
+};

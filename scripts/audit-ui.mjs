@@ -44,7 +44,7 @@ const SEED_SETTINGS = {
   speedFix151: true,
   theme: 'dark',
   language: 'ru',
-  whisperModel: 'small',
+  whisperModel: 'small-q5_1',
   aiEndpoint: 'http://localhost:11434',
   aiModel: 'qwen2.5:0.5b',
   diagnostics: false,

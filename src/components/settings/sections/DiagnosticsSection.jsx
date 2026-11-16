@@ -304,7 +304,7 @@ export default function DiagnosticsSection() {
         <div className="kv-row">
           <span className="kv-row__key">Модель</span>
           <span className="kv-row__value">
-            {settings.whisperModel || 'small'}
+            {settings.whisperModel || 'small-q5_1'}
             {settings.keepModelLoaded === true ? ' (держится в памяти)' : ''}
           </span>
         </div>

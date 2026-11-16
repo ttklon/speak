@@ -260,6 +260,13 @@ jobs:
           if (-not $ok) {
             Write-Host '::warning title=whisper.cpp::бинарник не попал в сборку — приложение докачает его при первом запуске'
           }
+          if (Test-Path build/bin/whisper-server.exe) {
+            # Именно он держит веса в памяти и прогревается в начале записи:
+            # без него каждая диктовка начинается с загрузки модели.
+            Write-Host '::notice title=whisper.cpp::whisper-server.exe в сборке — прогрев и быстрая диктовка работают'
+          } else {
+            Write-Host '::warning title=whisper.cpp::в архиве нет whisper-server.exe — прогрев недоступен, диктовка пойдёт холодным whisper-cli'
+          }
           Get-ChildItem build/bin | Select-Object Name, Length
 
       - name: VAD-модель (Silero) в установщик

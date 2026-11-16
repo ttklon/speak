@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Download, Loader, Trash2, TriangleAlert, X } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
@@ -6,15 +6,24 @@ import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { MODELS } from '../../../lib/config.js';
+import { MODEL_TIERS, TIER_MODELS, tierForModel } from '../../../lib/modelTiers.js';
 import { engineName } from '../../../lib/recognition/engine.js';
 
 /**
- * Модели распознавания: скачивание прямо из приложения (HTTPS с GitHub/HF),
- * прогресс в процентах, отметка «скачано». Кнопка «Скачать движок» ставит
- * whisper-cli.exe, если его ещё нет.
+ * Модель распознавания: три режима вместо каталога из десяти моделей.
+ *
+ * Раньше здесь лежали tiny/base/small/medium/turbo в трёх квантованиях, с
+ * подписями «q5_1», «q8_0» и скоростями вида «≈5×». Человек, который просто
+ * хочет говорить и получать текст, не мог этим воспользоваться: непонятно,
+ * какая строка «лучше», а скачивать все десять, чтобы сравнить, — абсурд.
+ *
+ * Теперь ровно три понятных варианта по расходам на железо. Один из них
+ * приложение уже выбрало само (и переключает, если замеры показывают, что
+ * выбранный не успевает). Здесь же видно честное измерение на этом компьютере:
+ * сколько секунд речи и сколько секунд счёта.
  */
 export default function ModelManager() {
-  const { settings, updateSettings } = useAppData();
+  const { settings, updateSettings, dictations } = useAppData();
   const { push } = useToast();
   const bridge = typeof window !== 'undefined' ? window.zspeakly?.native : null;
 
@@ -88,7 +97,7 @@ export default function ModelManager() {
         if (p.ok) {
           push({
             title: p.id === 'engine' ? 'Движок установлен' : 'Модель скачана',
-            description: p.id === 'engine' ? 'whisper.cpp готов к работе' : `${p.id} · перезапустите диктовку`,
+            description: p.id === 'engine' ? 'whisper.cpp готов к работе' : 'Скачано, диктовка работает на новом режиме',
             tone: 'success',
           });
         } else {
@@ -224,7 +233,7 @@ export default function ModelManager() {
       updateSettings({ whisperModel: res.switchedTo });
       push({
         title: 'Модель удалена',
-        description: `Освободилось ${res.freedMb} МБ. Активной стала «${res.switchedTo}» — диктовка продолжит работать.`,
+        description: `Освободилось ${res.freedMb} МБ. Активным стал режим «${tierForModel(res.switchedTo).label.toLowerCase()}» — диктовка продолжит работать.`,
         tone: 'success',
       });
       return;
@@ -237,6 +246,32 @@ export default function ModelManager() {
   };
 
   const downloaded = status?.models ? Object.values(status.models).filter((m) => m.downloaded).length : 0;
+  const activeTier = tierForModel(settings.whisperModel);
+  // Модель из старого каталога (q8_0, medium, fp16 small): она ещё работает, но
+  // тяжелее любого из трёх режимов. Не переключаем молча — предлагаем одной
+  // кнопкой, потому что «приложение само поменяло модель» выглядит как поломка.
+  const legacyModel = Boolean(settings.whisperModel) && !TIER_MODELS.includes(settings.whisperModel);
+  const tierEntry = MODELS.find((m) => m.tier === activeTier.id);
+
+  /**
+   * Честное измерение на этом компьютере: последняя диктовка, где известны и
+   * секунды речи, и секунды счёта. Обещания каталога («≈5×») проверяются
+   * фактом — именно за это человек и ругался, когда ждал двадцать секунд.
+   */
+  const measured = useMemo(() => {
+    const list = Array.isArray(dictations) ? dictations : [];
+    const last = list.find((d) => Number(d?.sttMs) > 0 && Number(d?.spokenMs) >= 1500);
+    if (!last) return null;
+    const spoken = Number(last.spokenMs) / 1000;
+    const count = Number(last.sttMs) / 1000;
+    const factor = count > 0 ? spoken / count : 0;
+    if (!(factor > 0)) return null;
+    return {
+      spoken: Math.round(spoken * 10) / 10,
+      count: Math.round(count * 10) / 10,
+      factor: Math.round(factor * 10) / 10,
+    };
+  }, [dictations]);
 
   return (
     <div className="settings-group">
@@ -245,71 +280,109 @@ export default function ModelManager() {
         {/* на свежей установке движка и модели нет — говорим об этом прямо */}
         {status && (!status.bin || !Object.values(status.models || {}).some((m) => m.downloaded)) ? (
           <span className="model-setup-note">
-            Для офлайн-диктовки нужны две вещи: движок whisper.cpp (≈20 МБ) и модель (от 75 МБ).
+            Для офлайн-диктовки нужны две вещи: движок whisper.cpp (≈20 МБ) и модель (60–550 МБ).
             Скачиваются сюда же, один раз — дальше всё работает без интернета.
           </span>
         ) : null}
-        Движок сейчас: {engineName()}.
-        {status?.active ? (
+        Сейчас работает режим <strong>«{activeTier.label.toLowerCase()}»</strong>. Менять его обычно не
+        нужно: приложение выбрало его под этот компьютер и само переключится, если диктовка окажется
+        медленной. Движок: {engineName()}.
+        {status?.bin ? (
           <>
             {' '}
-            {status.active === status.preferred ? null : (
-              <span className="model-state model-state--warn">
-                <TriangleAlert size={11} /> выбранная «{status.preferred}» не скачана — работает «{status.active}»
-              </span>
-            )}
+            <span className="model-state model-state--ok">
+              <Check size={11} /> whisper.cpp установлен
+            </span>
+          </>
+        ) : status ? (
+          <>
+            {' '}
+            <span className="model-state model-state--warn">
+              <TriangleAlert size={11} /> whisper.cpp не найден
+            </span>
           </>
         ) : null}
-        {status ? (
+        {status?.active && status?.preferred && status.active !== status.preferred ? (
           <>
             {' '}
-            {status.bin ? (
-              <span className="model-state model-state--ok">
-                <Check size={11} /> whisper.cpp установлен
-              </span>
-            ) : (
-              <span className="model-state model-state--warn">
-                <TriangleAlert size={11} /> whisper.cpp не найден
-              </span>
-            )}
+            <span className="model-state model-state--warn">
+              <TriangleAlert size={11} /> выбранный режим не скачан — работает «
+              {tierForModel(status.active).label.toLowerCase()}»
+            </span>
           </>
         ) : null}
       </div>
 
+      {legacyModel && tierEntry ? (
+        <div className="model-measure model-measure--warn">
+          Сейчас выбрана старая модель «{settings.whisperModel}» — она тяжелее любого из трёх режимов.
+          <Button
+            variant="ghost"
+            size="sm"
+            style={{ marginLeft: 8 }}
+            onClick={() => {
+              if (status?.models?.[tierEntry.id]?.downloaded) {
+                updateSettings({ whisperModel: tierEntry.id });
+                push({
+                  title: `Режим «${activeTier.label.toLowerCase()}»`,
+                  description: `${tierEntry.size} · столько же точности, но быстрее`,
+                  tone: 'success',
+                });
+                return;
+              }
+              download(tierEntry.id);
+            }}
+          >
+            Переключить на «{activeTier.label.toLowerCase()}»
+          </Button>
+        </div>
+      ) : null}
+
+      {measured ? (
+        <div className="model-measure">
+          На этом компьютере: {measured.spoken.toFixed(1)} с речи → {measured.count.toFixed(1)} с счёта
+          {measured.factor >= 2 ? ` (в ${measured.factor.toFixed(1)} раза быстрее реального времени)` : ''}
+        </div>
+      ) : null}
+
       {MODELS.map((m) => {
         const info = status?.models?.[m.id];
         const pct = progress[m.id];
-        const active = settings.whisperModel === m.id;
+        const active = activeTier.id === m.tier;
+        const tier = MODEL_TIERS.find((t) => t.id === m.tier);
         return (
           <div key={m.id} className={`model-card ${active ? 'is-active' : ''}`}>
             <button
               type="button"
               className="model-card__pick"
               onClick={() => {
-                // выбор модели раньше менял только галочку: без скачанного
-                // файла диктовка молча не работала, и было непонятно почему
-                updateSettings({ whisperModel: m.id });
-                push(
-                  info?.downloaded
-                    ? { title: 'Модель выбрана', description: `${m.label} · ${m.size}`, tone: 'success' }
-                    : {
-                        title: 'Модель выбрана, но не скачана',
-                        description: `${m.label} — нажмите «Скачать», иначе диктовка не заработает.`,
-                        tone: 'warn',
-                      },
-                );
+                // выбор режима без скачанного файла оставил бы диктовку без
+                // движка, поэтому «не скачано» = «скачать и включить»
+                if (info?.downloaded) {
+                  updateSettings({ whisperModel: m.id });
+                  push({
+                    title: `Режим «${tier?.label.toLowerCase() || m.label}»`,
+                    description: `${m.size} · ${m.quality} точность · ${m.speed} быстрее реального времени`,
+                    tone: 'success',
+                  });
+                  return;
+                }
+                download(m.id);
               }}
-              title="Использовать эту модель"
+              title={info?.downloaded ? 'Работать в этом режиме' : 'Скачать и включить этот режим'}
             >
               <div className="grow" style={{ textAlign: 'left' }}>
                 <div className="model-card__name">
-                  {m.label}
-                  {m.recommended ? <span className="model-badge model-badge--pick">рекомендуем для диктовки</span> : null}
-                  {info?.downloaded ? <span className="model-badge">скачано · {info.actualMb} МБ</span> : null}
+                  {tier?.label || m.label}
+                  {tier?.recommended ? <span className="model-badge model-badge--pick">ставится само</span> : null}
+                  {info?.downloaded ? (
+                    <span className="model-badge">скачано · {info.actualMb ? `${info.actualMb} МБ` : m.size}</span>
+                  ) : null}
                 </div>
                 <div className="model-card__meta">
-                  {m.size} · RAM {m.ram} · {m.speed} realtime · {m.quality}
+                  {m.size} · RAM {m.ram} · {m.speed} realtime · точность {m.quality}
                 </div>
+                <div className="model-card__desc">{tier?.desc || m.desc}</div>
               </div>
               {active ? <Check size={13} style={{ color: 'var(--green)' }} /> : null}
             </button>
@@ -322,7 +395,7 @@ export default function ModelManager() {
                 title={
                   downloaded <= 1
                     ? 'Это единственная модель — удалить её нельзя, иначе диктовка перестанет работать'
-                    : `Удалить ${m.label} с диска`
+                    : `Удалить файл модели с диска (${m.size})`
                 }
                 aria-label={`Удалить модель ${m.label}`}
                 onClick={() => setToDelete(m)}
@@ -349,8 +422,8 @@ export default function ModelManager() {
           Держать модель в памяти
           <div className="setting-row__desc">
             Диктовка начинается без холодного старта: whisper-server загружает модель один раз и
-            отвечает сразу. Занимает столько же памяти, сколько модель (≈2 ГБ для turbo), и
-            работает только если в комплекте есть whisper-server.
+            отвечает сразу. Занимает столько же памяти, сколько модель (≈0,5 ГБ), и работает, только
+            если в комплекте есть whisper-server.
           </div>
         </div>
         <Toggle
@@ -418,8 +491,8 @@ export default function ModelManager() {
       </div>
       <div className="settings-foot-hint" style={{ marginTop: 8 }}>
         Модели качаются с официальных адресов (Hugging Face, GitHub) и лежат в %APPDATA%\ZSpeakly\models.
-        В установщик они не входят — репозиторий остаётся лёгким. Ненужную модель можно удалить
-        корзинкой в её строке: файл стирается с диска, место освобождается сразу.
+        В установщик они не входят — репозиторий остаётся лёгким. Ненужный режим можно удалить
+        корзинкой в его строке: файл стирается с диска, место освобождается сразу.
       </div>
       <ConfirmDialog
         open={Boolean(toDelete)}

@@ -114,7 +114,7 @@ const SEED_SETTINGS = {
   speedFix151: true,
   theme: 'dark',
   language: 'ru',
-  whisperModel: 'small',
+  whisperModel: 'small-q5_1',
   aiEndpoint: 'http://localhost:11434',
   aiModel: 'qwen2.5:0.5b',
   aiEnabled: true,
@@ -2203,7 +2203,7 @@ async function scenarioModelDelete(browser) {
   takeErrors(page);
   const trash = await page.evaluate(() => {
     const btn = [...document.querySelectorAll('button[aria-label^="Удалить модель"]')].find((b) =>
-      /small/.test(b.getAttribute('aria-label')),
+      /сбалансированно/.test(b.getAttribute('aria-label')),
     );
     if (!btn) return { found: false };
     btn.scrollIntoView({ block: 'center' });
@@ -2229,7 +2229,7 @@ async function scenarioModelDelete(browser) {
   record(
     'сценарии',
     'модели: удаление уходит в main и объясняет, сколько освободилось',
-    confirmed && calls.includes('models:delete') && /466\s*МБ/.test(toast),
+    confirmed && calls.includes('models:delete') && /199\s*МБ/.test(toast) && /быстр/.test(toast),
     `${calls.filter((c) => c.startsWith('models')).join(',')} | ${toast}`.slice(0, 160),
   );
   const errors = takeErrors(page);
@@ -2256,7 +2256,7 @@ async function scenarioHardwareModel(browser) {
   record(
     'сценарии',
     'подбор модели: тост объясняет выбор без цифр и без «пустой» модели',
-    /подобрана под этот компьютер/i.test(toast) && !/«»/.test(toast) && !/0\.0 с/.test(toast),
+    /под этот компьютер/i.test(toast) && !/«»/.test(toast) && !/0\.0 с/.test(toast) && /быстр/i.test(toast),
     toast.slice(0, 140),
   );
   const saved = await page.evaluate(() => {
@@ -2267,6 +2267,45 @@ async function scenarioHardwareModel(browser) {
   record('сценарии', 'подбор модели: настройка совпала с тем, что выбрал main', saved === 'base-q5_1', String(saved));
   const errors = takeErrors(page);
   record('сценарии', 'подбор модели: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Модель из старого каталога (десять моделей) больше не прячется: приложение
+// говорит, что она тяжелее трёх режимов, и предлагает перейти одной кнопкой.
+async function scenarioLegacyModel(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 700,
+    // fp16 small (466 МБ) — модель из старого каталога, которой больше нет в списке
+    settings: { whisperModel: 'small' },
+  });
+  takeErrors(page);
+  const body = await page.evaluate(() => document.body.innerText);
+  record(
+    'сценарии',
+    'старая модель: видно, что она тяжелее трёх режимов, и есть кнопка перехода',
+    /старая модель «small»/i.test(body) && /Переключить на «сбалансированно»/i.test(body),
+    body.match(/Сейчас выбрана старая модель[^\n]*/)?.[0] || '',
+  );
+  const tierCards = await page.evaluate(
+    () => [...document.querySelectorAll('.model-card')].length,
+  );
+  record('сценарии', 'старая модель: в списке по-прежнему ровно три режима', tierCards === 3, `карточек: ${tierCards}`);
+  const switched = await clickIn(page, '', 'Переключить на «сбалансированно»');
+  await sleep(700);
+  const saved = await page.evaluate(() => {
+    const raw = window.zspeakly?.store ? window.__e2e.read('zs.settings') : null;
+    const s = raw || (JSON.parse(localStorage.getItem('zs.settings') || '{}'));
+    return s?.whisperModel || '';
+  });
+  // сбалансированный режим уже скачан в моке — значит переключение, а не загрузка
+  record(
+    'сценарии',
+    'старая модель: кнопка переводит на выбранный режим',
+    switched && saved === 'small-q5_1',
+    String(saved),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'старая модель: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
@@ -4377,6 +4416,7 @@ async function main() {
       ['отмена скачивания модели', scenarioModelCancel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
+      ['старая модель', scenarioLegacyModel],
       ['самопроверка диктовки', scenarioSelfTest],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],

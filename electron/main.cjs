@@ -32,6 +32,7 @@ const models = require('./models.cjs');
 // Подбор модели под железо: одна и та же модель не может быть быстрой и на
 // старом ноутбуке, и на новом ПК.
 const hardware = require('./hardware.cjs');
+const speedTune = require('./speedTune.cjs');
 const { writeWav } = require('./wav.cjs');
 const { logger } = require('./logger.cjs');
 
@@ -455,7 +456,19 @@ function registerHudIpc() {
     updateTrayTooltip();
     refreshTrayMenu();
   });
-  ipcMain.handle('hud:show', () => showHudWindow());
+  ipcMain.handle('hud:show', () => {
+    // Началась запись — начинаем прогрев. Пока человек говорит, whisper-server
+    // успевает загрузить модель, и итоговый проход считается уже в памяти, а не
+    // холодным whisper-cli. Именно это отличает «фраза на двадцать секунд
+    // распознана за три» от «за двадцать»: прогрев по хоткею, а не по факту.
+    try {
+      const cfg = store.get('zs:settings') || {};
+      if (cfg.keepModelLoaded !== false) warmRecognition(cfg.whisperModel || 'base');
+    } catch {
+      /* прогрев — не повод ломать показ плашки */
+    }
+    return showHudWindow();
+  });
   ipcMain.handle('hud:hide', () => hideHudWindow());
   ipcMain.handle('hud:update', (_e, state) => {
     // Ошибку показываем двумя строками — для этого плашка становится выше.
@@ -1003,44 +1016,79 @@ function registerIpc() {
     updateTrayTooltip();
   });
 
-  /** Распознавание PCM: одна запись — один проход whisper. */
-  // Одна автоматическая подстройка за сессию: подбираем модель по факту, а не
-  // по обещаниям каталога. Человек не обязан понимать, что small на его CPU
-  // думает 12 секунд, — приложение само перейдёт на быструю модель.
-  let autoTuned = false;
-  const FAST_MODELS = ['base-q5_1', 'base', 'tiny-q5_1', 'tiny'];
+  /**
+   * Подстройка по фактическим замерам, а не по обещаниям каталога.
+   *
+   * Человек жалуется не на «модель small», а на «двадцать секунд речи — двадцать
+   * секунд ожидания». Поэтому меряем реальность: сколько секунд речи и сколько
+   * секунд счёта. Если движок считает медленнее, чем вчетверо быстрее реального
+   * времени (двадцать секунд речи дольше пяти), — после двух таких диктовок
+   * переходим на ступень легче и говорим об этом словами.
+   *
+   * Ручной выбор уважаем: если модель выбрана в настройках, стоит zs:modelPinned
+   * и мы её не трогаем. За сессию не больше двух переключений, чтобы приложение
+   * не «передумывало» каждую минуту.
+   */
+  let slowStrikes = 0;
+  let autoSwitches = 0;
+
+  function downloadedModels() {
+    const st = models.modelStatus();
+    return Object.keys(st.models || {}).filter((id) => st.models[id]?.downloaded);
+  }
+
   function maybeAutoTune(ms, seconds, model) {
     try {
       const settings = store?.get('zs:settings') || {};
-      if (settings.autoOptimize === false) return '';
-      if (autoTuned) return '';
-      if (!ms || ms < 4500) return '';
-      // длинная запись и так идёт долго — там смена модели качество испортит
-      if (!(seconds > 0) || seconds > 15) return '';
-      const target = FAST_MODELS.map((id) => ({
-        id,
-        file: path.join(app.getPath('userData'), 'models', `ggml-${id}.bin`),
-      })).find((m) => fs.existsSync(m.file));
-      if (!target || target.id === model) return '';
-      autoTuned = true;
-      store.set('zs:settings', { ...settings, whisperModel: target.id });
-      try {
-        mainWindow?.webContents.send('stt:auto-tune', {
-          from: model,
-          to: target.id,
+      // само правило — в electron/speedTune.cjs: его проверяет смоук, а не
+      // «надеемся, что в бою сработает». Порог там же: вчетверо быстрее
+      // реального времени — это и есть обещанные пять секунд на двадцать.
+      const verdict = speedTune.decide({
+        ms,
+        seconds,
+        model,
+        autoOptimize: settings.autoOptimize !== false,
+        pinned: store?.get('zs:modelPinned') === true,
+        downloaded: downloadedModels(),
+        strikes: slowStrikes,
+        switches: autoSwitches,
+      });
+      slowStrikes = verdict.strikes;
+      if (verdict.reason === 'slow-once' || verdict.reason === 'cap') {
+        logger.info('stt', 'Движок не успевает — ждём подтверждения', {
+          model,
           ms,
           seconds: Math.round(seconds * 10) / 10,
+          realtime: Math.round(verdict.realtime * 10) / 10,
+          reason: verdict.reason,
         });
+      }
+      if (!verdict.switchTo) return '';
+      const lighter = verdict.switchTo;
+      autoSwitches += 1;
+      store.set('zs:settings', { ...settings, whisperModel: lighter });
+      const payload = {
+        from: model,
+        to: lighter,
+        reason: 'slow',
+        ms,
+        seconds: Math.round(seconds * 10) / 10,
+        realtime: Math.round(verdict.realtime * 10) / 10,
+      };
+      try {
+        mainWindow?.webContents.send('stt:auto-tune', payload);
       } catch {
         /* окна может не быть */
       }
-      logger.warn('stt', 'Модель переключена на быструю автоматически', {
+      logger.warn('stt', 'Модель переключена на ступень легче: не успевала', {
         keep: true,
         from: model,
-        to: target.id,
+        to: lighter,
         ms,
+        seconds: Math.round(seconds * 10) / 10,
+        realtime: Math.round(verdict.realtime * 10) / 10,
       });
-      return target.id;
+      return lighter;
     } catch {
       return '';
     }
@@ -1085,6 +1133,7 @@ function registerIpc() {
     }
   };
 
+  /** Распознавание PCM: одна запись — один проход whisper (см. `canSplit` ниже). */
   async function transcribePcm(payload) {
     const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
     const status = whisper.status(model);
@@ -1166,19 +1215,24 @@ function registerIpc() {
       // всё равно стоит времени — на записи до 3 секунд он только мешает.
       const useVad = sttSettings.vadEnabled !== false && (audio?.seconds || 0) > 3;
       const sr = payload?.sampleRate || 16000;
-      // Длинную диктовку режем по паузам: whisper на цельном файле хуже держит
-      // конец и путает фразы через паузу в несколько секунд.
+      // Сколько проходов движка делает одна диктовка.
       //
-      // Короткую запись НЕ режем вообще, даже если в ней есть пауза. Каждый
-      // фрагмент — это отдельный проход движка: в серверном режиме лишний
-      // запрос, а без прогретого сервера ещё и повторная загрузка весов
-      // (секунды). Фраза на пять секунд превращалась в два-три «холодных
-      // старта» — именно так и получались десятки секунд ожидания.
+      // Раньше запись длиннее 15 секунд резалась по паузам на 2–3 фрагмента —
+      // «чтобы whisper не путал фразы через паузу». На деле каждый фрагмент
+      // это отдельный проход: без прогретого сервера ещё и повторная загрузка
+      // весов с диска. Двадцать секунд речи превращались в три прохода и
+      // двадцать секунд ожидания — ровно та жалоба, что пришла от человека.
+      //
+      // Теперь: окно whisper — 30 секунд, поэтому всё, что короче 28 с, идёт
+      // одним проходом. Длиннее — дробим, но только когда есть прогретый
+      // сервер (он считает части без повторной загрузки весов) и частей не
+      // больше трёх. Без сервера whisper-cli сам режет файл на 30-секундные
+      // окна внутри одного процесса: один холодный старт вместо трёх.
       const spokenSeconds = audio?.seconds || 0;
-      const shortTake = spokenSeconds > 0 && spokenSeconds <= 15;
-      const parts = shortTake ? [trimmed] : whisper.splitBySilence?.(trimmed, sr) || [trimmed];
-      // Не больше 3 фрагментов: каждый — отдельный проход движка.
-      const MAX_PARTS = shortTake ? 1 : 3;
+      const serverNow = whisper.serverStatus?.() || {};
+      const canSplit = spokenSeconds > 28 && serverNow.ready === true;
+      const parts = canSplit ? whisper.splitBySilence?.(trimmed, sr) || [trimmed] : [trimmed];
+      const MAX_PARTS = 3;
       let chunks = parts;
       if (parts.length > MAX_PARTS) {
         chunks = [];
@@ -1943,6 +1997,28 @@ function registerIpc() {
           model: id,
           reason: res.reason || '',
         });
+        // Страховка для автоподбора: лёгкая модель должна уже лежать на диске.
+        // Иначе, когда замеры покажут «не успевает», переключаться будет не на
+        // что — именно так автоподбор раньше и не срабатывал. Качаем в фоне
+        // через полминуты после основной: это десятки мегабайт, диктовку оно
+        // не задерживает.
+        if (res.ok) {
+          const lighter = hardware.lighterModel(id);
+          if (lighter && !models.modelStatus().models?.[lighter]?.downloaded) {
+            setTimeout(() => {
+              models
+                .downloadModel(lighter, (percent) => push({ id: lighter, percent }))
+                .then((extra) => {
+                  push({ id: lighter, percent: extra.ok ? 100 : 0, done: true, ok: extra.ok, reason: extra.reason || '' });
+                  logger[extra.ok ? 'info' : 'warn'](
+                    extra.ok ? 'Страховочная модель скачана в фоне' : 'Страховочная модель не скачалась',
+                    { keep: true, model: lighter, reason: extra.reason || '' },
+                  );
+                })
+                .catch(() => {});
+            }, 30000);
+          }
+        }
         return res;
       } catch (err) {
         logger.error('stt', 'Автоподготовка распознавания не удалась', { reason: String(err?.message || err) });

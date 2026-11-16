@@ -308,7 +308,13 @@ export function createRecognizer(opts = {}) {
           onFinal?.({ text: res.text, last: res.text });
           // ms — сколько заняло распознавание: показываем человеку, что движок
           // действительно работал, а не «проглотил» запись
-          onEnd?.({ text: res.text, ms: res.ms });
+          // spoken — сколько секунд человек реально говорил: по нему видно
+          // «20 секунд речи за 3 секунды счёта», а не «обработка…»
+          onEnd?.({
+            text: res.text,
+            ms: res.ms,
+            spoken: Number(res.audio?.seconds) || Math.round(durationMs / 100) / 10,
+          });
         } else {
           const code = res?.code || 'stt-empty';
           onError?.(
