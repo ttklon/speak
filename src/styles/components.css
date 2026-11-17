@@ -1238,3 +1238,20 @@
   gap: 8px;
   flex: none;
 }
+
+/* Пояснение «это приложение решает само»: не настройка, а справка на месте */
+.settings-note {
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  border-radius: 9px;
+  border: 1px solid var(--border-soft);
+  background: rgba(var(--overlay-rgb), 0.035);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-4);
+}
+
+.settings-note strong {
+  color: var(--text-2);
+  font-weight: 600;
+}

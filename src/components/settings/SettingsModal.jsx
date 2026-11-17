@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CircleUser, Info, LayoutGrid, ShieldCheck, SlidersHorizontal, Wifi, Bug } from 'lucide-react';
+import { Bug, LayoutGrid, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import { Button, Select } from '../ui/Controls.jsx';
 import { Toggle } from '../ui/Toggle.jsx';
@@ -12,18 +12,15 @@ import NetworkSection from './sections/NetworkSection.jsx';
 import AboutSection from './sections/AboutSection.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { SETTING_ENTRIES } from './settingsIndex.js';
-import { SETTINGS_SECTIONS } from '../../lib/settingsSections.js';
+import { SETTINGS_SECTIONS, resolveSection } from '../../lib/settingsSections.js';
 
 // Названия разделов живут в lib/settingsSections.js: по ним же проверяются
 // подсказки «Настройки → Раздел» в ошибках и тостах.
 const SECTION_ICONS = {
-  account: CircleUser,
+  dictation: SlidersHorizontal,
   app: LayoutGrid,
-  features: SlidersHorizontal,
   data: ShieldCheck,
   diagnostics: Bug,
-  network: Wifi,
-  about: Info,
 };
 const SECTIONS = SETTINGS_SECTIONS.map((section) => ({ ...section, icon: SECTION_ICONS[section.id] }));
 
@@ -78,16 +75,27 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
     }, 120);
   };
 
-  const active = SECTIONS.find((s) => s.id === section) || SECTIONS[0];
+  const active = SECTIONS.find((s) => s.id === resolveSection(section)) || SECTIONS[0];
 
+  // Четыре раздела вместо семи: смежное стоит рядом, а не за отдельной вкладкой.
+  // «Сеть» — это настройки локальной модели, значит место ей в «Диктовке»;
+  // имя и «О программе» — в «Приложении».
   const body = {
-    account: <AccountSection />,
-    app: <AppSection />,
-    features: <FeaturesSection />,
+    dictation: (
+      <>
+        <FeaturesSection />
+        <NetworkSection />
+      </>
+    ),
+    app: (
+      <>
+        <AccountSection />
+        <AppSection />
+        <AboutSection />
+      </>
+    ),
     data: <DataSection onOpenSection={onSectionChange} />,
     diagnostics: <DiagnosticsSection />,
-    network: <NetworkSection />,
-    about: <AboutSection />,
   }[active.id];
 
   return (
@@ -141,7 +149,15 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
             })}
           </nav>
         </div>
-        <div className="settings-main">{body}</div>
+        <div className="settings-main">
+          {/* Один заголовок на вкладку: раньше внутри «Приложения» стояли три
+              одинаковых по весу заголовка, и было непонятно, где что. */}
+          <header className="settings-main__head">
+            <h2 className="settings-section__title">{active.label}</h2>
+            <p className="settings-section__desc">{active.desc}</p>
+          </header>
+          {body}
+        </div>
       </div>
       <div className="settings-footer">
         <span className="settings-foot__hint">

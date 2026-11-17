@@ -38,7 +38,7 @@ export default function OnboardingModal() {
     const clean = name.trim().slice(0, 40);
     updateSettings({ onboarded: true, userName: clean });
     if (clean) setProfile({ ...profile, name: clean });
-    navigate('settings', { section: 'features' });
+    navigate('settings', { section: 'dictation' });
   };
 
   const done = () => {

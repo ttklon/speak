@@ -29,39 +29,37 @@ export default function AccountSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">Профиль</h2>
-      <p className="settings-section__desc">
-        ZSpeakly не создаёт учётную запись в облаке: имя и данные хранятся только на этом компьютере.
-      </p>
-
-      <div className="setting-row">
-        <div className="setting-row__label">Как вас называть</div>
-        <input
-          className="input settings-inline-input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') save();
-          }}
-          placeholder="Ваше имя"
-        />
-      </div>
+      <div className="settings-group">
+        <div className="settings-group__title">Имя и итоги</div>
+        <div className="setting-row">
+          <div className="setting-row__label">Как вас называть</div>
+          <input
+            className="input settings-inline-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={save}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save();
+            }}
+            placeholder="Ваше имя"
+          />
+        </div>
       {/* числа считаем по истории: раньше здесь была приписка «+ 9000 слов»
           и «143 секунды», то есть демонстрационные цифры вместо реальных */}
-      <div className="setting-row">
-        <div className="setting-row__label">Слов в истории</div>
-        <span className="setting-row__value">
-          {dictations.reduce((sum, d) => sum + (d.words || 0), 0).toLocaleString('ru-RU')}
-        </span>
-      </div>
-      <div className="setting-row">
-        <div className="setting-row__label">Секунд речи</div>
-        <span className="setting-row__value">
-          {Math.round(
-            dictations.reduce((sum, d) => sum + (d.durationMs || 0), 0) / 1000,
-          ).toLocaleString('ru-RU')}
-        </span>
+        <div className="setting-row">
+          <div className="setting-row__label">Слов в истории</div>
+          <span className="setting-row__value">
+            {dictations.reduce((sum, d) => sum + (d.words || 0), 0).toLocaleString('ru-RU')}
+          </span>
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">Секунд речи</div>
+          <span className="setting-row__value">
+            {Math.round(
+              dictations.reduce((sum, d) => sum + (d.durationMs || 0), 0) / 1000,
+            ).toLocaleString('ru-RU')}
+          </span>
+        </div>
       </div>
 
       <div className="settings-group">

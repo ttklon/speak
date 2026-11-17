@@ -117,11 +117,6 @@ export default function DataSection({ onOpenSection }) {
 
   return (
     <div>
-      <h2 className="settings-section__title">Данные и разрешения</h2>
-      <p className="settings-section__desc">
-        Сколько хранить продиктованный текст и буфер. Всё лежит на этом компьютере.
-      </p>
-
       <div className="settings-group">
         <div className="settings-group__title">Диктовки</div>
         <div className="setting-row">
@@ -134,8 +129,11 @@ export default function DataSection({ onOpenSection }) {
           <span className="setting-row__value">30 дней</span>
         </div>
         <div className="setting-row">
-          <div className="setting-row__label">Занято места</div>
-          <span className="setting-row__value">{formatBytes(dictationBytes)}</span>
+          <div className="setting-row__label">
+            Занято места
+            <div className="setting-row__desc">Диктовки и буфер вместе: {formatBytes(dictationBytes)} текста.</div>
+          </div>
+          <span className="setting-row__value">{formatBytes(storageSize)}</span>
           <Button
             variant="bare"
             size="sm"
@@ -187,7 +185,9 @@ export default function DataSection({ onOpenSection }) {
               {clipboard.length} {plural(clipboard.length, 'элемент', 'элемента', 'элементов')} буфера
             </div>
           </div>
-          <span className="setting-row__value">{formatBytes(storageSize)}</span>
+          <span className="setting-row__value">
+            {dictations.length + clipboard.length}
+          </span>
         </div>
         <div className="settings-foot-hint" style={{ marginTop: 6 }}>
           Звук никуда не пишется: распознавание идёт на лету, остаётся только текст.
@@ -197,6 +197,18 @@ export default function DataSection({ onOpenSection }) {
 
       <div className="settings-group">
         <div className="settings-group__title">Буфер обмена</div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Запоминать скопированное
+            <div className="setting-row__desc">
+              Текст, картинки и пароли — только на этом компьютере.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.clipboardMonitor !== false}
+            onChange={(v) => updateSettings({ clipboardMonitor: v })}
+          />
+        </div>
         <div className="setting-row">
           <div className="setting-row__label">
             Элементов в истории
@@ -308,7 +320,7 @@ export default function DataSection({ onOpenSection }) {
       </div>
 
       <div className="row-8" style={{ marginTop: 10 }}>
-        <Button variant="bare" size="sm" onClick={() => onOpenSection?.('about')}>
+        <Button variant="bare" size="sm" onClick={() => onOpenSection?.('app')}>
           Что хранится на диске
         </Button>
       </div>

@@ -27,9 +27,6 @@ export default function AboutSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">О программе</h2>
-      <p className="settings-section__desc">ZSpeakly — бесплатный офлайн-голосовой ввод, собранный по мотивам видео-обзора.</p>
-
       <div className="about-hero">
         <div className="about-logo">Z</div>
         <div>
@@ -95,7 +92,20 @@ export default function AboutSection() {
             Открыть репозиторий
           </Button>
         </div>
-        <UpdateRow />
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Обновления</div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Версия и обновления
+            <div className="setting-row__desc">
+              Проверяются сами раз в сутки, канал стабильный. Установка — по кнопке, без перезапуска
+              вручную.
+            </div>
+          </div>
+          <UpdateRow />
+        </div>
       </div>
 
       <div className="settings-group">

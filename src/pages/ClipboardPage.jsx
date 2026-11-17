@@ -444,7 +444,7 @@ export default function ClipboardPage() {
           <button
             type="button"
             className="icon-btn"
-            onClick={() => navigate('settings', { section: 'features', from: 'clipboard' })}
+            onClick={() => navigate('settings', { section: 'dictation', from: 'clipboard' })}
             aria-label="Настройки буфера"
           >
             <Settings2 size={14} />

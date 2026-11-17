@@ -15,7 +15,7 @@ const ctx = {
     { id: 'clipboard', label: 'Буфер обмена' },
   ],
   settingsSections: [
-    { id: 'features', label: 'Функции' },
+    { id: 'dictation', label: 'Диктовка' },
     { id: 'diagnostics', label: 'Диагностика' },
   ],
   actions: [
@@ -30,12 +30,12 @@ describe('сборка команд', () => {
     const commands = buildCommands(ctx);
     const ids = commands.map((c) => c.id);
     expect(ids).toContain('page:home');
-    expect(ids).toContain('settings:features');
+    expect(ids).toContain('settings:dictation');
     expect(ids).toContain('action:dictate');
     expect(ids).toContain('preset:p1');
-    expect(commands.find((c) => c.id === 'settings:features').target).toEqual({
+    expect(commands.find((c) => c.id === 'settings:dictation').target).toEqual({
       kind: 'settings',
-      id: 'features',
+      id: 'dictation',
     });
   });
 
@@ -82,6 +82,14 @@ describe('выдача поиска', () => {
   it('по запросу «дикт» находит действие раньше страницы', () => {
     const result = searchCommands(buildCommands(ctx), 'дикт');
     expect(result[0].id).toBe('action:dictate');
+  });
+
+  it('действие важнее одноимённого раздела настроек', () => {
+    // Раньше на «диктов» первым стоял раздел «Диктовка», и Enter вместо записи
+    // открывал настройки. Раздел должен остаться в списке, но ниже.
+    const result = searchCommands(buildCommands(ctx), 'диктов');
+    expect(result[0].id).toBe('action:dictate');
+    expect(result.map((c) => c.id)).toContain('settings:dictation');
   });
 
   it('ограничивает выдачу, а не показывает всё сразу', () => {

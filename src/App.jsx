@@ -13,6 +13,7 @@ import OnboardingModal from './components/modals/OnboardingModal.jsx';
 import { useRoute, navigate, replace } from './lib/router.js';
 import { keysLabel } from './lib/utils.js';
 import { NAV } from './lib/config.js';
+import { resolveSection } from './lib/settingsSections.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
 
@@ -28,7 +29,7 @@ export default function App() {
   const { settings, updateSettings, presets, instructions, voiceHotkeys } = useAppData();
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState('account');
+  const [settingsSection, setSettingsSection] = useState('dictation');
   const [profileOpen, setProfileOpen] = useState(false);
   // Палитра команд: одна строка на всё приложение (Ctrl+K).
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -46,7 +47,7 @@ export default function App() {
     // пока не спросили имя — не перекрываем приветствие настройками
     if (route.page === 'settings' && settings.onboarded) {
       openedFromHash.current = true;
-      setSettingsSection(route.params.section || 'account');
+      setSettingsSection(resolveSection(route.params.section || 'dictation'));
       setSettingsOpen(true);
       // replace, а не navigate: иначе hashchange закроет только что открытые настройки
       replace(route.params.from || 'home');
@@ -178,7 +179,7 @@ export default function App() {
       if (command === 'clipboard') navigate('clipboard');
       if (command === 'home') navigate('home');
       if (command === 'about') {
-        setSettingsSection('about');
+        setSettingsSection('app');
         setSettingsOpen(true);
       }
     });
@@ -253,7 +254,7 @@ export default function App() {
     }, 120);
   }, []);
   const openProfile = useCallback(() => setProfileOpen(true), []);
-  const openSettings = useCallback((section = 'account') => {
+  const openSettings = useCallback((section = 'dictation') => {
     setSettingsSection(section);
     setSettingsOpen(true);
   }, []);
@@ -276,7 +277,7 @@ export default function App() {
         <div className="app-body">
           <Sidebar
             page={page(route)}
-            onOpenSettings={() => openSettings('account')}
+            onOpenSettings={() => openSettings('app')}
             onOpenProfile={openProfile}
             onOpenPresets={openPresets}
             onOpenCommands={() => setPaletteOpen(true)}
@@ -292,7 +293,7 @@ export default function App() {
         onClose={() => setProfileOpen(false)}
         onOpenSettings={() => {
           setProfileOpen(false);
-          openSettings('account');
+          openSettings('app');
         }}
       />
       <OnboardingModal />

@@ -15,16 +15,12 @@ import path from 'node:path';
 const SECTIONS_DIR = 'src/components/settings/sections';
 const OUT = 'src/components/settings/settingsIndex.js';
 
-/** Секции, которые реально показываются в настройках, и их подписи. */
-const SECTION_LABELS = {
-  account: 'Аккаунт',
-  app: 'Приложение',
-  features: 'Функции',
-  data: 'Данные и разрешения',
-  diagnostics: 'Диагностика',
-  network: 'Сеть',
-  about: 'О программе',
-};
+import { SETTINGS_SECTIONS, resolveSection } from '../src/lib/settingsSections.js';
+
+/** Подпись раздела берём из единственного источника правды, а не пишем руками:
+ * иначе поиск снова начнёт отправлять в «Функции» и «О программе». */
+const SECTION_LABELS = Object.fromEntries(SETTINGS_SECTIONS.map((s) => [s.id, s.label]));
+const labelOf = (id) => SECTION_LABELS[resolveSection(id)] || SETTINGS_SECTIONS[0].label;
 
 // Компоненты, которые рисуют строки настроек внутри раздела: без них поиск не
 // находил ни «Устройство микрофона», ни «Горячий микрофон».
@@ -87,7 +83,7 @@ function build() {
       for (const row of extractRows(fs.readFileSync(full, 'utf8'))) {
         // мусорные обрезки типа «Как» пропускаем: настоящий заголовок длиннее 3 букв
         if (row.title.length < 4) continue;
-        entries.push({ section: id, sectionLabel: SECTION_LABELS[id], title: row.title, desc: row.desc });
+        entries.push({ section: id, sectionLabel: labelOf(id), title: row.title, desc: row.desc });
       }
     }
   }
@@ -96,7 +92,7 @@ function build() {
   if (fs.existsSync(aboutFile)) {
     for (const row of extractInfoRows(fs.readFileSync(aboutFile, 'utf8'))) {
       if (row.title.length < 4) continue;
-      entries.push({ section: 'about', sectionLabel: SECTION_LABELS.about, ...row });
+      entries.push({ section: 'about', sectionLabel: labelOf('about'), ...row });
     }
   }
 

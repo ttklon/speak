@@ -9,14 +9,50 @@
  * существующий раздел.
  */
 export const SETTINGS_SECTIONS = [
-  { id: 'account', label: 'Аккаунт' },
-  { id: 'app', label: 'Приложение' },
-  { id: 'features', label: 'Функции' },
-  { id: 'data', label: 'Данные и разрешения' },
-  { id: 'diagnostics', label: 'Диагностика' },
-  { id: 'network', label: 'Сеть' },
-  { id: 'about', label: 'О программе' },
+  {
+    id: 'dictation',
+    label: 'Диктовка',
+    desc: 'Язык, полировка и качество распознавания.',
+  },
+  {
+    id: 'app',
+    label: 'Приложение',
+    desc: 'Имя, внешний вид, звук и версия. Всё применяется сразу.',
+  },
+  {
+    id: 'data',
+    label: 'Данные',
+    desc: 'Сколько хранить продиктованное и буфер. Всё лежит на этом компьютере.',
+  },
+  {
+    id: 'diagnostics',
+    label: 'Диагностика',
+    desc: 'Что происходит с диктовкой и вставкой сейчас. Журнал никуда не уходит сам.',
+  },
 ];
+
+/**
+ * Куда переехали прежние разделы.
+ *
+ * Настроек было семь вкладок, и человек не понимал, где что: «Аккаунт» рядом с
+ * «Функциями», «Сеть» отдельно от модели, «О программе» отдельно от
+ * «Приложения». Теперь разделов четыре, а старые названия продолжают работать —
+ * по ним приходят подсказки из прошлых версий и прямые ссылки.
+ */
+export const SECTION_ALIASES = {
+  account: 'app',
+  features: 'dictation',
+  network: 'dictation',
+  about: 'app',
+  'data-and-permissions': 'data',
+};
+
+/** Привести любой известный id к нынешнему разделу. */
+export function resolveSection(id) {
+  const value = String(id || '');
+  if (SETTINGS_SECTIONS.some((s) => s.id === value)) return value;
+  return SECTION_ALIASES[value] || SETTINGS_SECTIONS[0].id;
+}
 
 /** Названия разделов для проверок подсказок. */
 export const SETTINGS_SECTION_LABELS = SETTINGS_SECTIONS.map((s) => s.label);
@@ -38,4 +74,4 @@ export function hintSections(text) {
   return found;
 }
 
-export default { SETTINGS_SECTIONS, SETTINGS_SECTION_LABELS, hintSections };
+export default { SETTINGS_SECTIONS, SETTINGS_SECTION_LABELS, SECTION_ALIASES, resolveSection, hintSections };

@@ -16,6 +16,15 @@
 export const COMMAND_LIMIT = 8;
 
 /**
+ * Насколько действие весит больше перехода при поиске.
+ *
+ * Без этого на «диктов» первым стоял раздел настроек «Диктовка» (совпадение с
+ * начала названия, 80 очков), а «Начать диктовку» — ниже (начало слова, 60).
+ * Enter запускал настройки вместо записи.
+ */
+const ACTION_BONUS = 25;
+
+/**
  * Собрать команды из данных приложения.
  *
  * @param {object} ctx
@@ -115,8 +124,13 @@ export function searchCommands(commands = [], query = '', { limit = COMMAND_LIMI
 
   const scored = [];
   list.forEach((command, index) => {
-    const score = scoreCommand(command, q);
-    if (score > 0) scored.push({ command, score, index });
+    // Действие важнее перехода: на «диктов» человек ждёт начала записи, а не
+    // открытия одноимённого раздела настроек. Разделы остаются в списке — ниже.
+    const base = scoreCommand(command, q);
+    // Важно прибавлять только к найденному: иначе действие попадало бы в
+    // выдачу на любой мусорный запрос.
+    const bonus = base > 0 && command.target?.kind === 'action' ? ACTION_BONUS : 0;
+    if (base > 0) scored.push({ command, score: base + bonus, index });
   });
   // При равном счёте порядок исходного списка решает: страницы и действия
   // должны быть предсказуемы, а не «как повезло сортировке».

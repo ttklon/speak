@@ -162,7 +162,7 @@ export default function HomePage() {
               <button
                 type="button"
                 className="link-btn"
-                onClick={() => navigate('settings', { section: 'features' })}
+                onClick={() => navigate('settings', { section: 'dictation' })}
               >
                 Выбрать модель
               </button>
@@ -244,7 +244,7 @@ export default function HomePage() {
               </button>
               {processingMs > 15000 ? (
                 <span className="live-draft__hint">
-                  Долго? В «Настройки → Функции → Модель распознавания» есть режим «Быстро» — он
+                  Долго? В «Настройки → Диктовка → Модель распознавания» есть режим «Быстро» — он
                   считает примерно вдвое быстрее.
                 </span>
               ) : null}
@@ -373,7 +373,7 @@ export default function HomePage() {
             onClick={async () => {
               const bridge = window.zspeakly?.native;
               if (!bridge?.checkUpdates) {
-                navigate('settings', { section: 'about' });
+                navigate('settings', { section: 'app' });
                 return;
               }
               // Сбой сети или самого обновлятора раньше проходил молча:

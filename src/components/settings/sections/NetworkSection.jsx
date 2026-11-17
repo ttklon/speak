@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Button, Select } from '../../ui/Controls.jsx';
+import { Button } from '../../ui/Controls.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { engineName } from '../../../lib/recognition/engine.js';
 import { llmIsDown, resetLlmBackoff } from '../../../lib/ai/textops.js';
 
 export default function NetworkSection() {
-  const { settings, updateSettings } = useAppData();
+  const { settings } = useAppData();
   const { push } = useToast();
   const [status, setStatus] = useState('idle');
   // какие модели реально отдаёт локальный сервер — чтобы не вписывать имя вслепую
@@ -64,12 +64,6 @@ export default function NetworkSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">Сеть</h2>
-      <p className="settings-section__desc">
-        ZSpeakly работает офлайн. Сеть нужна только для необязательной локальной модели и проверки
-        обновлений на GitHub.
-      </p>
-
       <div className="settings-group">
         <div className="settings-group__title">Состояние</div>
         <div className="kv-row">
@@ -81,6 +75,10 @@ export default function NetworkSection() {
           <span className="kv-row__value">{engineName()}</span>
         </div>
         <div className="kv-row">
+          <span className="kv-row__key">Адрес сервера</span>
+          <span className="kv-row__value">{settings.aiEndpoint}</span>
+        </div>
+        <div className="kv-row">
           <span className="kv-row__key">Локальный сервер ИИ</span>
           <span className="kv-row__value">
             {status === 'ok' ? 'доступен' : status === 'fail' ? 'недоступен' : 'не проверялся'}
@@ -90,39 +88,18 @@ export default function NetworkSection() {
       </div>
 
       <div className="settings-group">
-        <div className="settings-group__title">Локальная модель</div>
-        <div className="setting-row">
-          <div className="setting-row__label">Адрес сервера</div>
-          <input
-            className="input settings-inline-input"
-            value={settings.aiEndpoint}
-            onChange={(e) => updateSettings({ aiEndpoint: e.target.value })}
-          />
-        </div>
+        <div className="settings-group__title">Модель для инструкций</div>
+        {/* Адрес и имя модели приложение ищет само на этом компьютере: раньше
+            человек должен был знать, что такое Ollama и какой там порт. */}
         <div className="setting-row">
           <div className="setting-row__label">
-            Модель
+            Найдена на этом компьютере
             <div className="setting-row__desc">
               {models.length
-                ? 'Список взят у локального сервера — выберите из него.'
-                : 'Имя модели в Ollama. Нажмите «Проверить соединение», чтобы получить список.'}
+                ? `Используется ${settings.aiModel}. Другие модели выбираются сами, если эта перестанет отвечать.`
+                : 'Если модели нет, инструкции по выделенному тексту работают офлайн-правилами.'}
             </div>
           </div>
-          {models.length ? (
-            <Select
-              value={models.includes(settings.aiModel) ? settings.aiModel : models[0]}
-              onChange={(v) => updateSettings({ aiModel: v })}
-              options={models.map((m) => ({ value: m, label: m }))}
-            />
-          ) : (
-            <input
-              className="input settings-inline-input"
-              value={settings.aiModel}
-              onChange={(e) => updateSettings({ aiModel: e.target.value })}
-            />
-          )}
-        </div>
-        <div className="row-8">
           <Button variant="ghost" size="sm" onClick={check} loading={status === 'checking'}>
             Проверить соединение
           </Button>

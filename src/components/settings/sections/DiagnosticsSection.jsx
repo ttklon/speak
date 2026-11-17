@@ -405,11 +405,6 @@ export default function DiagnosticsSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">Диагностика</h2>
-      <p className="settings-section__desc">
-        Что происходит на этом компьютере и почему. Журнал по умолчанию никуда не уходит.
-      </p>
-
       <div className="settings-group">
         <div className="settings-group__title">Как сейчас работает диктовка</div>
         <div className="settings-group__desc">То, что чаще всего объясняет «почему не так».</div>

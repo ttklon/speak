@@ -1405,6 +1405,14 @@
   min-height: 0;
 }
 
+.settings-main__head {
+  padding-top: 2px;
+}
+
+.settings-main__head .settings-section__desc {
+  margin-bottom: 10px;
+}
+
 .settings-section__title {
   margin: 0 0 4px;
   font-size: 16px;

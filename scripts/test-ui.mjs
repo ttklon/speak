@@ -569,7 +569,7 @@ async function scenarioOnboarding(browser) {
   await page.close();
 
   // Чистая установка без движка: онбординг обязан подсказать, где взять модель,
-  // и по кнопке вести прямо в «Настройки → Функции».
+  // и по кнопке вести прямо в «Настройки → Диктовка».
   const bare = await browser.newPage();
   await bare.setViewport({ width: 1280, height: 800 });
   await bare.evaluateOnNewDocument(installMockBridge);
@@ -742,7 +742,7 @@ async function scenarioEmptyResult(browser) {
     'сценарии',
     'пустой результат: сказано, что именно проверить',
     /не распознал|нет речи|не было речи/i.test(toast) &&
-      /Настройки → Функции|Данные и разрешения|Тест микрофона/i.test(toast) &&
+      /Настройки → Диктовка|Настройки → Данные|Тест микрофона/i.test(toast) &&
       sections.hasSettings,
     JSON.stringify(toast.slice(0, 120)),
   );
@@ -1707,7 +1707,8 @@ async function scenarioClipboard(browser) {
 }
 
 async function scenarioSettingsSections(browser) {
-  const sections = ['account', 'app', 'features', 'data', 'diagnostics', 'network', 'about'];
+  // Разделов четыре, а не семь: смежное собрано вместе (1.8.0).
+  const sections = ['dictation', 'app', 'data', 'diagnostics'];
   const page = await openPage(browser, '#/settings?section=app&from=home', { settle: 400 });
   takeErrors(page);
   const empty = [];
@@ -1730,16 +1731,38 @@ async function scenarioSettingsSections(browser) {
     });
     if (!info.text || info.text < 40) empty.push(`${section} (${info.title || 'пусто'})`);
   }
-  // 1.6.0: язык живёт в разделе «Функции» (в «Приложении» остались вид и звук)
+  // язык живёт в разделе «Диктовка»
   await page.evaluate(() => {
-    window.location.hash = '#/settings?section=features&from=home';
+    window.location.hash = '#/settings?section=dictation&from=home';
   });
   await sleep(400);
   const labels = await page.evaluate(() => document.body.innerText);
   const honestLanguage = /Язык диктовки/.test(labels) && !/Язык интерфейса/.test(labels);
   record('сценарии', 'настройки: язык называется «диктовки», а не «интерфейса»', honestLanguage);
   const errors = takeErrors(page);
-  record('сценарии', 'настройки: все 7 разделов что-то показывают', empty.length === 0, empty.join(', '));
+  // Старые id разделов продолжают работать: на них ведут подсказки прошлых версий.
+  const aliases = await page.evaluate(async () => {
+    const out = [];
+    for (const id of ['account', 'features', 'network', 'about']) {
+      window.location.hash = `#/settings?section=${id}&from=home`;
+      await new Promise((r) => setTimeout(r, 260));
+      const main = document.querySelector('.settings-main');
+      out.push({ id, text: main ? main.innerText.length : 0 });
+    }
+    return out;
+  });
+  record(
+    'сценарии',
+    'настройки: все 4 раздела что-то показывают',
+    empty.length === 0,
+    empty.join(', '),
+  );
+  record(
+    'сценарии',
+    'настройки: старые ссылки на разделы открывают новые',
+    aliases.every((a) => a.text > 40),
+    aliases.map((a) => `${a.id}:${a.text}`).join(' '),
+  );
   record('сценарии', 'настройки: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
@@ -2892,7 +2915,7 @@ async function scenarioNoModel(browser) {
   record(
     'сценарии',
     'без модели: главная честно говорит и ведёт к выбору модели',
-    /не подключена/i.test(hello) && link && /Функции/i.test(section),
+    /не подключена/i.test(hello) && link && /Диктовка/i.test(section),
     `${hello.slice(0, 70)} → ${section}`,
   );
   const errors = takeErrors(page);
@@ -3025,7 +3048,7 @@ async function scenarioDiagnosticsBrowser(browser) {
     clicked && Boolean(file) && Boolean(blob) && blob.size > 100 && /Отчёт скачан/i.test(info.toast),
     `${JSON.stringify(info.downloads)} | ${info.toast}`,
   );
-  // «Открыть репозиторий» живёт в разделе «О программе» — переходим туда
+  // «Открыть репозиторий» живёт в разделе «Приложение» — переходим туда
   await page.evaluate(() => {
     window.__opened = [];
     const nativeOpen = window.open;
@@ -3035,7 +3058,7 @@ async function scenarioDiagnosticsBrowser(browser) {
     };
     return nativeOpen ? true : true;
   });
-  await clickIn(page, '', 'О программе');
+  await clickIn(page, '', 'Приложение');
   await sleep(600);
   const opened = await page.evaluate(() => {
     const btn = [...document.querySelectorAll('.settings-main button')].find((b) => /Открыть репозиторий/i.test(b.innerText));
@@ -3199,16 +3222,17 @@ async function scenarioNetwork(browser) {
   const calls = await bridgeCalls(page);
   const body = await page.evaluate(() => document.body.innerText);
   record('сценарии', 'сеть: проверка дергает http:get и показывает результат', check && calls.includes('http:get') && /доступна|недоступна|моделей/i.test(body));
-  // список моделей приходит от сервера — имя не нужно вписывать вручную
-  const picked = await page.evaluate(() => {
-    const select = document.querySelector('.settings-main .select');
-    return { found: Boolean(select), text: select?.innerText || '' };
-  });
+  // Адрес и имя модели больше не поля ввода: приложение спрашивает список у
+  // локального сервера и показывает найденную модель само.
+  const auto = await page.evaluate(() => ({
+    inputs: document.querySelectorAll('.settings-main input').length,
+    text: document.querySelector('.settings-main')?.innerText || '',
+  }));
   record(
     'сценарии',
-    'сеть: модель выбирается из списка Ollama',
-    picked.found && /qwen|llama|mistral/i.test(picked.text),
-    picked.text.replace(/\n/g, ' ').slice(0, 80),
+    'сеть: модель находится сама, без ручного адреса и имени',
+    auto.inputs === 0 && /Используется\s+\S/i.test(auto.text),
+    `полей ввода ${auto.inputs}, ${auto.text.replace(/\n/g, ' ').slice(0, 80)}`,
   );
   const errors = takeErrors(page);
   record('сценарии', 'сеть: без ошибок консоли', errors.length === 0, errors[0] || '');

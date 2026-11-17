@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Download, Loader, Trash2, TriangleAlert, X } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
-import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
+import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { MODELS } from '../../../lib/config.js';
@@ -396,9 +396,8 @@ export default function ModelManager() {
         <div className="setting-row__label">
           Держать модель в памяти
           <div className="setting-row__desc">
-            Диктовка начинается без холодного старта: whisper-server загружает модель один раз и
-            отвечает сразу. Занимает столько же памяти, сколько модель (≈0,5 ГБ), и работает, только
-            если в комплекте есть whisper-server.
+            Диктовка начинается без холодного старта, но занято ≈0,5 ГБ памяти. Выключите на слабом
+            ноутбуке.
           </div>
         </div>
         <Toggle
@@ -406,7 +405,11 @@ export default function ModelManager() {
           onChange={async (v) => {
             updateSettings({ keepModelLoaded: v });
             if (!v) {
-              push({ title: 'Модель выгрузится из памяти', description: 'Следующая диктовка снова загрузит её при старте.', tone: 'success' });
+              push({
+                title: 'Модель выгрузится из памяти',
+                description: 'Следующая диктовка снова загрузит её при старте.',
+                tone: 'success',
+              });
               return;
             }
             if (!bridge?.modelsWarm) {

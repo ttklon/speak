@@ -25,11 +25,6 @@ export default function AppSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">Приложение</h2>
-      <p className="settings-section__desc">
-        Внешний вид, звук, микрофон и поведение окна. Всё применяется сразу — кнопки «Сохранить» нет.
-      </p>
-
       <div className="settings-group">
         <div className="settings-group__title">Интерфейс</div>
         <div className="setting-row">

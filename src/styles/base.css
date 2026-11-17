@@ -277,9 +277,17 @@ html[data-theme='light'] :where(button, [role='option'], [role='tab'], a, [tabin
   outline-color: rgba(40, 90, 200, 0.65);
 }
 
-/* Внутри полей ввода рамка уже есть у контейнера — дублировать не нужно */
+/* Внутри поля с рамкой (поиск) фокус уже виден по контейнеру */
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
   outline: none;
+}
+
+/* Но у одиночных полей контейнера нет: без рамки с Tab непонятно, где ты.
+   Проверка доступности в E2E нашла это на поле «Как вас называть». */
+.input:focus-visible,
+.settings-inline-input:focus-visible {
+  outline: 2px solid rgba(var(--overlay-rgb), 0.55);
+  outline-offset: 2px;
 }

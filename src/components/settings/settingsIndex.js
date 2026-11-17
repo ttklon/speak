@@ -9,19 +9,19 @@
 export const SETTING_ENTRIES = [
   {
     "section": "account",
-    "sectionLabel": "Аккаунт",
+    "sectionLabel": "Приложение",
     "title": "Как вас называть",
     "desc": ""
   },
   {
     "section": "account",
-    "sectionLabel": "Аккаунт",
+    "sectionLabel": "Приложение",
     "title": "Слов в истории",
     "desc": ""
   },
   {
     "section": "account",
-    "sectionLabel": "Аккаунт",
+    "sectionLabel": "Приложение",
     "title": "Секунд речи",
     "desc": ""
   },
@@ -87,91 +87,85 @@ export const SETTING_ENTRIES = [
   },
   {
     "section": "features",
-    "sectionLabel": "Функции",
+    "sectionLabel": "Диктовка",
     "title": "Язык диктовки",
     "desc": "Язык речи. Интерфейс пока русский."
   },
   {
     "section": "features",
-    "sectionLabel": "Функции",
+    "sectionLabel": "Диктовка",
     "title": "Умная полировка",
     "desc": "Модель доводит текст после офлайн-правил; без модели остаются только они."
   },
   {
     "section": "features",
-    "sectionLabel": "Функции",
+    "sectionLabel": "Диктовка",
     "title": "Живая расшифровка",
     "desc": "Черновик по ходу речи, раз в 2,5 секунды. Грузит слабый компьютер."
   },
   {
-    "section": "features",
-    "sectionLabel": "Функции",
-    "title": "Инструкции по выделенному тексту",
-    "desc": "Сочетания — в разделе «Горячие клавиши»."
-  },
-  {
-    "section": "features",
-    "sectionLabel": "Функции",
-    "title": "Запоминать скопированное",
-    "desc": "Текст, картинки и пароли — только на этом компьютере."
-  },
-  {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Срок хранения",
     "desc": "Для диктовок и буфера. Старое удаляется при запуске; закреплённое остаётся."
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Занято места",
     "desc": ""
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Расположение файлов",
     "desc": "Профиль приложения: текст, настройки, буфер."
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Всего записей",
     "desc": ""
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
+    "title": "Запоминать скопированное",
+    "desc": "Текст, картинки и пароли — только на этом компьютере."
+  },
+  {
+    "section": "data",
+    "sectionLabel": "Данные",
     "title": "Элементов в истории",
     "desc": "Сколько помнить — приложение решает само: последние 5000 записей или месяц."
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Микрофон",
     "desc": "Нужен для диктовки и предпросмотра голосом."
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Отправка ошибок",
     "desc": "Чтобы падения и сбои распознавания можно было починить. Уходят только технические события — без текста диктовки, буфера обмена и имени. По умолчанию журнал пишется только на этом компьютере: наружу ничего не уходит, пока не указан адрес приёмника. Прежний тумблер «Телеметрия» на это не влияет: сбора статистики в приложении нет."
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Диагностика и журнал",
     "desc": "Последние события, ручная отправка и папка с логами — в разделе «Диагностика»."
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Скачать копию",
     "desc": "Словарь, свои инструкции, AI-инструкции, сочетания, настройки, профиль и история диктовок — одним JSON-файлом. Буфер обмена не выгружается: там бывают пароли и коды."
   },
   {
     "section": "data",
-    "sectionLabel": "Данные и разрешения",
+    "sectionLabel": "Данные",
     "title": "Восстановить из файла",
     "desc": "Заменит текущие данные тем, что лежит в файле. Перед восстановлением спросим подтверждение и покажем, что внутри."
   },
@@ -201,73 +195,73 @@ export const SETTING_ENTRIES = [
   },
   {
     "section": "network",
-    "sectionLabel": "Сеть",
-    "title": "Адрес сервера",
-    "desc": ""
-  },
-  {
-    "section": "network",
-    "sectionLabel": "Сеть",
-    "title": "Модель",
+    "sectionLabel": "Диктовка",
+    "title": "Найдена на этом компьютере",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
+    "title": "Версия и обновления",
+    "desc": "Проверяются сами раз в сутки, канал стабильный. Установка — по кнопке, без перезапуска вручную."
+  },
+  {
+    "section": "about",
+    "sectionLabel": "Приложение",
     "title": "Оболочка",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Распознавание речи",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "whisper.cpp",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Данные",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Хранение",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Лицензия",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Диктовка",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Настройки",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Поиск по буферу",
     "desc": ""
   },
   {
     "section": "about",
-    "sectionLabel": "О программе",
+    "sectionLabel": "Приложение",
     "title": "Диктовка в браузере (превью)",
     "desc": ""
   }

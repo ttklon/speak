@@ -15,17 +15,19 @@ import ModelManager from './ModelManager.jsx';
  * а человек выбирает язык, полировку и качество распознавания.
  */
 export default function FeaturesSection() {
-  const { settings, updateSettings, presets } = useAppData();
+  const { settings, updateSettings } = useAppData();
 
   return (
     <div>
-      <h2 className="settings-section__title">Функции</h2>
-      <p className="settings-section__desc">
-        Остальное приложение настроило за вас: скорость важнее тумблеров.
-      </p>
-
       <div className="settings-group">
-        <div className="settings-group__title">Диктовка</div>
+        <div className="settings-group__title">Что распознавать</div>
+        {/* Что приложение решает само. Это не настройки, а объяснение, почему
+            их здесь нет: человек не должен искать тумблер «как правильно». */}
+        <div className="settings-note">
+          <strong>Остальное приложение решает само:</strong> подбирает модель под железо и меняет
+          её при тормозах, вставляет текст тремя способами, хранит историю месяц. Менять вручную
+          не нужно.
+        </div>
         <div className="setting-row">
           <div className="setting-row__label">
             Язык диктовки
@@ -62,31 +64,9 @@ export default function FeaturesSection() {
             onChange={(v) => updateSettings({ liveWhisper: v })}
           />
         </div>
-        {presets?.length ? (
-          <div className="setting-row">
-            <div className="setting-row__label">
-              Инструкции по выделенному тексту
-              <div className="setting-row__desc">Сочетания — в разделе «Горячие клавиши».</div>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <ModelManager />
-
-      <div className="settings-group">
-        <div className="settings-group__title">Буфер обмена</div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Запоминать скопированное
-            <div className="setting-row__desc">Текст, картинки и пароли — только на этом компьютере.</div>
-          </div>
-          <Toggle
-            checked={settings.clipboardMonitor !== false}
-            onChange={(v) => updateSettings({ clipboardMonitor: v })}
-          />
-        </div>
-      </div>
     </div>
   );
 }

@@ -30,12 +30,10 @@ const ROUTES = [
   { hash: '#/dictionary', name: 'Словарь' },
   { hash: '#/hotkeys', name: 'Горячие клавиши' },
   { hash: '#/instructions', name: 'Инструкции' },
+  { hash: '#/settings?section=dictation&from=home', name: 'Настройки → Диктовка' },
   { hash: '#/settings?section=app&from=home', name: 'Настройки → Приложение' },
-  { hash: '#/settings?section=features&from=home', name: 'Настройки → Функции' },
   { hash: '#/settings?section=data&from=home', name: 'Настройки → Данные' },
-  { hash: '#/settings?section=network&from=home', name: 'Настройки → Сеть' },
   { hash: '#/settings?section=diagnostics&from=home', name: 'Настройки → Диагностика' },
-  { hash: '#/settings?section=about&from=home', name: 'Настройки → О программе' },
 ];
 
 const SEED_SETTINGS = {
