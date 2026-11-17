@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { ChevronRight, Sparkles, User } from 'lucide-react';
+import { ChevronRight, Search, Sparkles, User } from 'lucide-react';
 import Icon from '../ui/Icon.jsx';
 import { NAV } from '../../lib/config.js';
 import { navigate } from '../../lib/router.js';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 
-export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPresets }) {
+export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPresets, onOpenCommands }) {
   const { profile, settings } = useAppData();
   const { push } = useToast();
   const [hovered, setHovered] = useState(null);
@@ -18,12 +18,25 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
 
   return (
     <aside className="sidebar">
+      {/* Поиск и команды: Ctrl+K — для тех, кто знает, кнопка — для тех, кто нет */}
+      <button
+        type="button"
+        className="sidebar__search"
+        onClick={onOpenCommands}
+        title="Поиск и команды (Ctrl + K)"
+      >
+        <Search size={13} strokeWidth={1.7} />
+        <span>Поиск и команды</span>
+        <kbd className="sidebar__search-key">Ctrl K</kbd>
+      </button>
+
       <nav className="sidebar__nav" aria-label="Основная навигация">
-        {NAV.map((item) => (
+        {NAV.map((item, index) => (
           <button
             key={item.id}
             type="button"
             className={`nav-item ${page === item.id ? 'is-active' : ''}`}
+            title={`${item.label} · Ctrl + ${index + 1}`}
             onClick={() => go(item.id)}
             onMouseEnter={() => setHovered(item.id)}
             onMouseLeave={() => setHovered(null)}

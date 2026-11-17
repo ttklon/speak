@@ -112,6 +112,50 @@ body.web .app-shell {
   gap: 1px;
 }
 
+/* Строка «Поиск и команды»: выглядит как поле, но это кнопка — она открывает
+   палитру (Ctrl+K). Мышь и клавиатура ведут в одно место. */
+.sidebar__search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 28px;
+  margin-bottom: 8px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: rgba(var(--overlay-rgb), 0.035);
+  color: var(--text-4);
+  font-size: 11px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.sidebar__search:hover {
+  color: var(--text-2);
+  background: rgba(var(--overlay-rgb), 0.07);
+  border-color: var(--border);
+}
+
+.sidebar__search span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__search-key {
+  flex: none;
+  font-family: inherit;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-soft);
+  color: var(--text-5);
+}
+
 .nav-item {
   display: flex;
   align-items: center;

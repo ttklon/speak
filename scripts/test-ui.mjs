@@ -1915,6 +1915,145 @@ async function scenarioAiInstruction(browser) {
 
 // Модалка должна быть проходима с клавиатуры: Tab не убегает в приложение,
 // Esc закрывает, фокус возвращается на кнопку, которая её открыла.
+// Палитра команд (Ctrl+K): одна строка на всё приложение. Проверяем, что она
+// открывается с клавиатуры, ищет, выполняет и закрывается — и что фокус из неё
+// не уходит в приложение за оверлеем.
+async function scenarioCommandPalette(browser) {
+  const page = await openPage(browser, '#/home', { settle: 400 });
+  takeErrors(page);
+
+  const closedByEsc = async () => {
+    await page.keyboard.press('Escape');
+    await sleep(250);
+    return page.evaluate(() => !document.querySelector('.command'));
+  };
+
+  const opened = await (async () => {
+    await page.keyboard.down('Control');
+    await page.keyboard.press('KeyK');
+    await page.keyboard.up('Control');
+    await sleep(300);
+    return page.evaluate(() => {
+      const input = document.querySelector('.command__input');
+      return {
+        open: Boolean(document.querySelector('.command')),
+        focused: document.activeElement === input,
+        rows: document.querySelectorAll('.command__row').length,
+      };
+    });
+  })();
+  record(
+    'сценарии',
+    'палитра: Ctrl+K открывает поиск и ставит курсор в поле',
+    opened.open && opened.focused && opened.rows > 0,
+    `открыта: ${opened.open ? 'да' : 'нет'} · курсор: ${opened.focused ? 'в поле' : 'нет'} · строк: ${opened.rows}`,
+  );
+
+  const escWorks = await closedByEsc();
+  record('сценарии', 'палитра: Esc закрывает', escWorks, escWorks ? 'закрыта' : 'осталась открытой');
+
+  // Поиск по разделу настроек и переход в него
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyK');
+  await page.keyboard.up('Control');
+  await sleep(250);
+  await page.type('.command__input', 'диагност');
+  await sleep(250);
+  const found = await page.evaluate(() =>
+    [...document.querySelectorAll('.command__row')].map((r) => r.innerText.replace(/\n/g, ' | ')),
+  );
+  await page.keyboard.press('Enter');
+  await sleep(500);
+  const settings = await page.evaluate(() => ({
+    palette: Boolean(document.querySelector('.command')),
+    section: /Диагностика/.test(document.querySelector('.settings-main')?.innerText || ''),
+    hash: location.hash,
+  }));
+  record(
+    'сценарии',
+    'палитра: находит раздел настроек и открывает его',
+    /Диагностика/.test(found.join(' ')) && !settings.palette && settings.section,
+    `${found[0] || 'ничего'} → ${settings.hash}`,
+  );
+  await page.keyboard.press('Escape');
+  await sleep(300);
+
+  // Действие «начать диктовку» из палитры
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyK');
+  await page.keyboard.up('Control');
+  await sleep(250);
+  await page.type('.command__input', 'диктов');
+  await sleep(250);
+  await page.keyboard.press('Enter');
+  await sleep(700);
+  const dictating = await page.evaluate(() => /Слушаю…|Остановить/.test(document.body.innerText));
+  record(
+    'сценарии',
+    'палитра: действие «начать диктовку» действительно запускает запись',
+    dictating,
+    dictating ? 'запись идёт' : 'ничего не произошло',
+  );
+  await page.evaluate(() => window.__e2e.emit('dictation:cancel', { from: 'hud' }));
+  await sleep(500);
+
+  // Стрелки и Tab: фокус остаётся внутри палитры, выбор ходит по кругу
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyK');
+  await page.keyboard.up('Control');
+  await sleep(250);
+  const nav = await page.evaluate(() => {
+    const first = document.querySelector('.command__row.is-active')?.innerText || '';
+    return { first };
+  });
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  const moved = await page.evaluate(() => document.querySelector('.command__row.is-active')?.innerText || '');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  const stillInside = await page.evaluate(() =>
+    Boolean(document.querySelector('.command')?.contains(document.activeElement)),
+  );
+  record(
+    'сценарии',
+    'палитра: стрелки двигают выбор, Tab не уводит фокус наружу',
+    moved !== nav.first && stillInside,
+    `было «${nav.first.split('\n')[0]}» → стало «${moved.split('\n')[0]}» · фокус ${stillInside ? 'внутри' : 'ушёл'}`,
+  );
+
+  // Пустой результат честно говорит, что ничего нет
+  await page.type('.command__input', 'щщщщ');
+  await sleep(250);
+  const empty = await page.evaluate(() => ({
+    text: document.querySelector('.command__empty')?.innerText || '',
+    rows: document.querySelectorAll('.command__row').length,
+  }));
+  record(
+    'сценарии',
+    'палитра: на бессмысленный запрос говорит «ничего не нашлось»',
+    empty.rows === 0 && /ничего не нашлось/i.test(empty.text),
+    empty.text.slice(0, 60),
+  );
+
+  // Ctrl+1…4 — страницы по порядку
+  await closedByEsc();
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Digit3');
+  await page.keyboard.up('Control');
+  await sleep(400);
+  const byNumber = await page.evaluate(() => location.hash);
+  record(
+    'сценарии',
+    'палитра: Ctrl+3 открывает третью страницу меню',
+    /hotkeys/.test(byNumber),
+    byNumber,
+  );
+
+  const errors = takeErrors(page).filter((e) => !/AudioContext|NotAllowedError|microphone/i.test(e));
+  record('сценарии', 'палитра: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioModalFocus(browser) {
   const page = await openPage(browser, '#/hotkeys', { settle: 400 });
   takeErrors(page);
@@ -3694,8 +3833,8 @@ async function scenarioKeyboard(browser) {
   await page.keyboard.up('Control');
   await sleep(500);
   const search = await page.evaluate(() => ({
-    onClipboard: location.hash.includes('clipboard'),
-    focused: document.activeElement?.closest('.clip-toolbar') !== null,
+    palette: Boolean(document.querySelector('.command')),
+    focused: document.activeElement === document.querySelector('.command__input'),
   }));
   record(
     'клавиатура',
@@ -3703,7 +3842,26 @@ async function scenarioKeyboard(browser) {
     opened && closedByX && reopened && closedByEsc,
     `открылись=${opened} крестик=${closedByX} снова=${reopened} Esc=${closedByEsc}`,
   );
-  record('клавиатура', 'Ctrl+K ведёт в буфер и ставит курсор в поиск', search.onClipboard && search.focused, JSON.stringify(search));
+  // Ctrl+K раньше вёл в поиск по буферу — теперь открывает палитру команд.
+  record(
+    'клавиатура',
+    'Ctrl+K открывает палитру команд и ставит курсор в поле',
+    search.palette && search.focused,
+    JSON.stringify(search),
+  );
+  await page.keyboard.press('Escape');
+  await sleep(250);
+
+  // Поиск по буферу остался на своей странице
+  await page.evaluate(() => { window.location.hash = '#/clipboard'; });
+  await sleep(400);
+  const clipSearch = await page.evaluate(() => {
+    const input = document.querySelector('.clip-toolbar .search-input input');
+    if (!input) return false;
+    input.focus();
+    return document.activeElement === input;
+  });
+  record('клавиатура', 'поиск по буферу живёт на странице буфера', clipSearch, clipSearch ? 'поле найдено' : 'поля нет');
   await page.close();
 }
 
@@ -4497,6 +4655,7 @@ async function main() {
       ['правка расшифровки', scenarioEditSnippet],
       ['AI-инструкция', scenarioAiInstruction],
       ['мост', scenarioBridgeWiring],
+      ['палитра команд', scenarioCommandPalette],
       ['модалка и фокус', scenarioModalFocus],
       ['профиль', scenarioProfile],
       ['запись сочетания', scenarioRecorder],

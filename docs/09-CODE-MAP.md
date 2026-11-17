@@ -107,6 +107,7 @@
 | `lib/seed.js` | Фикстура для тестов и скриншотов (тексты, «снимки», словарь): в продукте не используется |
 | `lib/media/recorder.js` | Запись экрана в WebM + постер из первого кадра |
 | `lib/feedback.js` | WebAudio-бипы и эффект печати |
+| `lib/commands.js` | Команды для палитры (Ctrl+K): `buildCommands({pages, settingsSections, actions, presets})` собирает один список из страниц, разделов настроек, действий и AI-инструкций; `searchCommands(commands, query)` фильтрует и ранжирует (точное совпадение 100 → начало названия 80 → начало слова 60 → подстрокой 40 → по подсказке 15), при равном счёте держит порядок списка; `moveSelection(index, delta, length)` — стрелки с заворотом. Чистый модуль, 15 юнит-тестов. Интерфейс — `components/layout/CommandPalette.jsx`: Ctrl+K / Ctrl+/, ↑↓ Enter Esc, Tab не уводит фокус наружу |
 | `lib/router.js` | Hash-роутер (`#/page?param=`) |
 | `lib/config.js` | Единая точка правды: `APP`, `NAV`, `LANGUAGES`, `DEFAULT_SETTINGS`, хоткеи, пресеты, модели, `STORAGE_KEYS` |
 | `components/` | `layout/` (Sidebar, TitleBar), `ui/` (Controls, Modal, Toggle, Icon, DictationHUD), `modals/` (онбординг, профиль, правка, запись сочетания, инструкция), `settings/` (модалка + 7 секций + MicTester + ModelManager + UpdateRow + сгенерированный `settingsIndex.js`) |

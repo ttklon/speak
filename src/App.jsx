@@ -6,11 +6,13 @@ import DictionaryPage from './pages/DictionaryPage.jsx';
 import HotkeysPage from './pages/HotkeysPage.jsx';
 import ClipboardPage from './pages/ClipboardPage.jsx';
 import SettingsModal from './components/settings/SettingsModal.jsx';
+import CommandPalette from './components/layout/CommandPalette.jsx';
 import ProfileModal from './components/modals/ProfileModal.jsx';
 import DictationHUD from './components/ui/DictationHUD.jsx';
 import OnboardingModal from './components/modals/OnboardingModal.jsx';
 import { useRoute, navigate, replace } from './lib/router.js';
 import { keysLabel } from './lib/utils.js';
+import { NAV } from './lib/config.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
 
@@ -28,6 +30,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('account');
   const [profileOpen, setProfileOpen] = useState(false);
+  // Палитра команд: одна строка на всё приложение (Ctrl+K).
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   // «НОВОЕ» у буфера — не вечная наклейка: после первого захода гаснет
   useEffect(() => {
@@ -61,7 +65,9 @@ export default function App() {
     setSettingsOpen(false);
   }, [route.page]);
 
-  // Ctrl+, — настройки, Ctrl+K — поиск по буферу
+  // Ctrl+, — настройки, Ctrl+K — поиск и команды (палитра).
+  // Раньше Ctrl+K открывал поиск только по буферу: сочетание обещало «поиск по
+  // всему», а вело в один раздел. Поиск по буферу остался внутри страницы.
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
@@ -70,11 +76,25 @@ export default function App() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        navigate('clipboard');
-        setTimeout(() => {
-          const input = document.querySelector('.clip-toolbar .search-input input');
-          input?.focus();
-        }, 90);
+        setPaletteOpen((open) => !open);
+      }
+      // Ctrl+/ — та же палитра: привычка из редакторов, где так ищут команды
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+      // Ctrl+1…4 — страницы по порядку в боковой панели. Не срабатывает,
+      // когда человек печатает: иначе цифра не попала бы в поле.
+      if ((e.ctrlKey || e.metaKey) && /^[1-4]$/.test(e.key)) {
+        const target = document.activeElement;
+        const typing =
+          target &&
+          (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        if (typing) return;
+        const page = NAV[Number(e.key) - 1];
+        if (!page) return;
+        e.preventDefault();
+        navigate(page.id);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -259,6 +279,7 @@ export default function App() {
             onOpenSettings={() => openSettings('account')}
             onOpenProfile={openProfile}
             onOpenPresets={openPresets}
+            onOpenCommands={() => setPaletteOpen(true)}
           />
           <main className="content">{content}</main>
         </div>
@@ -275,6 +296,8 @@ export default function App() {
         }}
       />
       <OnboardingModal />
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 
       <SettingsModal
         open={settingsOpen}
