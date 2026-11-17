@@ -142,13 +142,22 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
   // Склеивает уже записанное в PCM 16 кГц — для промежуточной расшифровки,
   // не останавливая микрофон. Хвост длиннее maxSeconds отбрасываем: whisper
   // на минуте речи работает заметно дольше, чем длится сама диктовка.
-  const snapshot = ({ maxSeconds = 30 } = {}) => {
+  const snapshot = ({ maxSeconds = 30, fromMs = 0, toMs = 0 } = {}) => {
     let from = 0;
     let count = frames;
+    // Кусок записи [fromMs, toMs): им пользуется «считать, пока говорите» —
+    // уже сказанное уходит в движок, не останавливая микрофон.
+    if (fromMs > 0 || toMs > 0) {
+      from = Math.min(frames, Math.max(0, Math.floor((Number(fromMs) / 1000) * ctx.sampleRate)));
+      const end = toMs > 0 ? Math.min(frames, Math.ceil((Number(toMs) / 1000) * ctx.sampleRate)) : frames;
+      count = Math.max(0, end - from);
+    }
     const limit = Math.floor(maxSeconds * ctx.sampleRate);
-    if (limit > 0 && frames > limit) {
+    if (limit > 0 && count > limit) {
+      // Ограничение длины действует только на «всю запись». Явно заданный
+      // кусок режется по своим границам: сдвиг молча потерял бы начало.
+      if (!(fromMs > 0 || toMs > 0)) from = frames - limit;
       count = limit;
-      from = frames - limit;
     }
     const part = new Float32Array(count);
     let offset = 0;

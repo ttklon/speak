@@ -45,6 +45,14 @@ describe('отчёт о скорости диктовки', () => {
     expect(report.advice).not.toMatch(/режим легче/);
   });
 
+  it('видно, сколько кусков посчитали заранее, пока человек говорил', () => {
+    const report = analyseSpeed([dictation(20, 1.8, { waitMs: 2100, sttPreParts: 2 })]);
+    expect(report.samples[0]).toMatchObject({ pre: 2, total: 2.1, compute: 1.8 });
+    expect(report.verdict).toBe('ok');
+    // без предварительных кусков — ноль, а не «нет данных»
+    expect(analyseSpeed([dictation(20, 3)]).samples[0].pre).toBe(0);
+  });
+
   it('старые записи без полного времени судятся по счёту — как раньше', () => {
     const report = analyseSpeed([dictation(20, 3)]);
     expect(report.samples[0]).toMatchObject({ compute: 3, total: 3, tail: 0 });

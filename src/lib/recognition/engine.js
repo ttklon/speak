@@ -12,6 +12,7 @@
 
 import { describeRecognitionError } from './errors.js';
 import { startPcmRecording } from '../audio/pcmRecorder.js';
+import { createSpeechTracker, joinChunks } from './chunks.js';
 
 const SpeechRecognitionImpl =
   typeof window !== 'undefined'
@@ -157,6 +158,13 @@ export function createRecognizer(opts = {}) {
     const streamInterval = Number(opts.streamIntervalMs) || 0;
     let streamTimer = null;
     let streamGen = 0;
+    // «Считать, пока говорите»: на паузах уже сказанное уходит в движок, и
+    // после остановки остаётся распознать только хвост. Это и есть разница
+    // между «ждать двадцать секунд» и «ждать одно предложение».
+    const tracker = createSpeechTracker();
+    const preParts = [];
+    let preMs = 0;
+    let preChain = Promise.resolve();
 
     const stopStream = () => {
       streamGen += 1;
@@ -218,13 +226,61 @@ export function createRecognizer(opts = {}) {
       scheduleStream();
     };
 
+    /**
+     * Кусок уже сказанного — в движок, не останавливая микрофон. Проходы идут
+     * по очереди: два whisper на слабом ноутбуке делят ядра и оба медленнее.
+     */
+    const queuePreChunk = (cut) => {
+      preChain = preChain.then(async () => {
+        if (stopped || !recorder) return;
+        const snap = recorder.snapshot?.({ fromMs: cut.fromMs, toMs: cut.atMs, maxSeconds: 0 });
+        if (!snap?.pcm?.length || snap.durationMs < 800) {
+          tracker.rollback(cut.fromMs);
+          return;
+        }
+        try {
+          const res = await native.transcribePcm?.({
+            pcm: snap.pcm,
+            durationMs: snap.durationMs,
+            lang: String(lang || 'ru').slice(0, 2),
+            model: opts.model || 'small',
+            // Словарь и экранный контекст — только для хвоста: на куске они
+            // подсказывают движку то, чего в этом куске ещё не сказано.
+            useDictionary: false,
+            contextPrompt: '',
+            pre: true,
+          });
+          if (res?.ok && String(res.text || '').trim()) {
+            preParts.push(String(res.text).trim());
+            preMs += Number(res.ms) || 0;
+          } else {
+            // Пусто — значит кусок не распознан. Возвращаем границу, иначе
+            // этот звук не попадёт ни в кусок, ни в хвост.
+            tracker.rollback(cut.fromMs);
+          }
+        } catch {
+          tracker.rollback(cut.fromMs);
+        }
+      });
+    };
+
     return {
       kind: 'native',
       async start() {
         try {
           recorder = await startPcmRecording({
             deviceId: opts.deviceId || 'default',
-            onLevel: (v) => onLevel?.(v),
+            onLevel: (v) => {
+              onLevel?.(v);
+              // Уровень микрофона — единственный сигнал, по которому видно
+              // паузу. Дальше решает чистый модуль chunks.js: он скажет,
+              // можно ли уже отдать кусок движку.
+              const atMs = recorder
+                ? Math.round((recorder.frames / (recorder.sampleRate || 16000)) * 1000)
+                : 0;
+              const cut = tracker.feed({ level: v, atMs });
+              if (cut) queuePreChunk(cut);
+            },
             // предролл «горячего микрофона»: звук до нажатия хоткея
             preroll: opts.preroll || null,
           });
@@ -264,6 +320,9 @@ export function createRecognizer(opts = {}) {
         // работал параллельно с итоговым — два whisper-процесса, двойная
         // память и вдвое дольше ожидание.
         stopStream();
+        // Досчитываем уже отправленный кусок: если оборвать его отменой, этот
+        // звук пропадёт — он не попадёт ни в хвост, ни в результат.
+        await Promise.race([preChain, new Promise((resolve) => setTimeout(resolve, 6000))]);
         try {
           await native.cancelTranscribe?.();
         } catch {
@@ -285,18 +344,45 @@ export function createRecognizer(opts = {}) {
         // ответить уже после старта записи
         const contextPrompt =
           typeof opts.getContextPrompt === 'function' ? String(opts.getContextPrompt() || '') : '';
+        // Что уже распознано заранее — то второй раз не считаем. После паузы
+        // сюда попадает только хвост; без пауз предварительных кусков нет, и
+        // хвост равен всей записи (поведение как раньше).
+        const committedMs = Math.min(Number(tracker.committedMs) || 0, durationMs);
+        const RATE = 16000;
+        const tailPcm =
+          committedMs > 0 ? pcm.subarray(Math.min(pcm.length, Math.round((committedMs / 1000) * RATE))) : pcm;
+        const tailMs = Math.max(0, durationMs - committedMs);
+        const preText = joinChunks(preParts);
+        // Хвост короче трети секунды — там нет слов, только дыхание: отдаём
+        // то, что уже распознали, и не тратим проход движка.
+        if (preText && tailPcm.length < RATE * 0.3) {
+          text = preText;
+          onFinal?.({ text, last: text });
+          onEnd?.({
+            text,
+            ms: preMs,
+            spoken: Math.round(durationMs / 100) / 10,
+            mode: 'pre',
+            parts: preParts.length,
+            timeline: { preMs, preParts: preParts.length, tailMs: 0 },
+            model: opts.model || '',
+          });
+          return { text };
+        }
         try {
           // pcm уходит как Int16Array: main превращает его в сырые байты сам,
           // иначе whisper получает мусор вместо звука (был именно такой баг)
           res = await native.transcribePcm?.({
-            pcm,
-            durationMs,
+            pcm: tailPcm,
+            durationMs: tailMs || durationMs,
             lang: String(lang || 'ru').slice(0, 2),
             model: opts.model || 'small',
             // тумблер «Применять словарь при диктовке» управляет и подсказкой
             // whisper'у, и заменой слов в готовом тексте
             useDictionary: opts.useDictionary !== false,
-            contextPrompt,
+            // Продолжение, а не новая фраза: хвост должен подхватить стиль и
+            // термины уже распознанного куска.
+            contextPrompt: preText ? `${preText} ${contextPrompt}`.trim() : contextPrompt,
           });
         } catch (err) {
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });
@@ -304,22 +390,45 @@ export function createRecognizer(opts = {}) {
           return { text: '', reason: String(err?.message || err) };
         }
         if (res?.ok && res.text) {
-          text = res.text;
-          onFinal?.({ text: res.text, last: res.text });
+          // Полный текст — заранее распознанные куски плюс хвост. Один проход
+          // по хвосту вместо всей фразы и есть выигрыш во времени.
+          text = preText ? joinChunks([preText, res.text]) : res.text;
+          onFinal?.({ text, last: text });
           // ms — сколько заняло распознавание: показываем человеку, что движок
           // действительно работал, а не «проглотил» запись
           // spoken — сколько секунд человек реально говорил: по нему видно
           // «20 секунд речи за 3 секунды счёта», а не «обработка…»
           onEnd?.({
-            text: res.text,
-            ms: res.ms,
-            spoken: Number(res.audio?.seconds) || Math.round(durationMs / 100) / 10,
+            text,
+            ms: (Number(res.ms) || 0) + preMs,
+            // «Сколько человек говорил» — это вся запись, а не только хвост:
+            // иначе после паузы в отчёте появилось бы «1 с речи → 5 с ожидания».
+            spoken: Math.round(durationMs / 100) / 10,
             // режим и разложение по этапам: по ним видно, платил ли человек за
             // холодную загрузку модели и сколько стоила подготовка звука
             mode: res.mode || '',
             parts: Number(res.chunks) || Number(res.timeline?.parts) || 1,
-            timeline: res.timeline || null,
+            timeline: {
+              ...(res.timeline || {}),
+              preMs,
+              preParts: preParts.length,
+              tailMs: Math.round(tailMs),
+            },
             model: res.model || '',
+          });
+        } else if (preText) {
+          // Хвост не распознался (шум, обрывок), но заранее посчитанное уже
+          // есть: отдавать пустоту и «ничего не распознано» было бы потерей.
+          text = preText;
+          onFinal?.({ text, last: text });
+          onEnd?.({
+            text,
+            ms: preMs,
+            spoken: Math.round(durationMs / 100) / 10,
+            mode: 'pre',
+            parts: 1,
+            timeline: { preMs, preParts: preParts.length, tailMs: Math.round(tailMs) },
+            model: opts.model || '',
           });
         } else {
           const code = res?.code || 'stt-empty';

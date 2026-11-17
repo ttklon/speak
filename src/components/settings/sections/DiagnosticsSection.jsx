@@ -389,6 +389,7 @@ export default function DiagnosticsSection() {
                   {row.factor ? `×${row.factor.toFixed(1)}` : '—'}
                   {row.mode ? ` · ${row.mode === 'server' ? 'прогретый сервер' : 'whisper-cli'}` : ''}
                   {row.parts > 1 ? ` · ${row.parts} фрагмента` : ''}
+                  {row.pre ? ` · заранее посчитано: ${row.pre}` : ''}
                 </span>
                 <span className={`speed-report__mark ${row.fits ? 'is-ok' : 'is-slow'}`}>
                   {row.fits ? 'в норме' : 'долго'}

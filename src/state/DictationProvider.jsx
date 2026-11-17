@@ -317,6 +317,8 @@ export function DictationProvider({ children }) {
         // обошлась подготовка звука — без этого «долго» некуда девать
         sttMode: sttMeta?.mode || undefined,
         sttParts: sttMeta?.parts > 1 ? sttMeta.parts : undefined,
+        // сколько кусков посчитали заранее, пока человек ещё говорил
+        sttPreParts: sttMeta?.timeline?.preParts > 0 ? sttMeta.timeline.preParts : undefined,
         sttModel: sttMeta?.model || undefined,
         sttWarm: typeof sttMeta?.timeline?.warm === 'boolean' ? sttMeta.timeline.warm : undefined,
         // Отпустил клавишу → текст готов. Включает распознавание, чистку и

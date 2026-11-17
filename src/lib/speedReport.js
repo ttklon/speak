@@ -59,6 +59,8 @@ export function analyseSpeed(entries = [], opts = {}) {
         fits,
         mode: entry.sttMode === 'server' ? 'server' : entry.sttMode === 'cli' ? 'cli' : '',
         parts: Number(entry.sttParts) > 1 ? Number(entry.sttParts) : 1,
+        // «считали, пока говорили»: куски, ушедшие в движок до остановки
+        pre: Number(entry.sttPreParts) > 0 ? Number(entry.sttPreParts) : 0,
         model: entry.sttModel || '',
       };
     });
