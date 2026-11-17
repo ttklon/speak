@@ -1350,7 +1350,10 @@
 /* ── Settings ─────────────────────────────────────────────── */
 .settings-modal {
   width: min(760px, calc(100vw - 60px));
-  height: min(520px, calc(100vh - 80px));
+  /* Высота оставляла под содержимое ~420 px: «Диагностика» и «Приложение»
+     прокручивались на три экрана в маленьком окошке. Теперь окно занимает
+     почти всю высоту, как и положено настройкам. */
+  height: min(760px, calc(100vh - 72px));
   background: var(--bg-elevated);
 }
 
@@ -1876,76 +1879,7 @@
   margin: 2px 0 0;
 }
 
-.profile-modal__hero {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
 
-.profile-modal__avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: #f4f3f6;
-  color: #17171a;
-  display: grid;
-  place-items: center;
-  font-size: 19px;
-  font-weight: 700;
-}
-
-.profile-modal__name {
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.profile-modal__plan {
-  margin-top: 2px;
-  font-size: 10.5px;
-  color: var(--text-4);
-}
-
-.profile-stats {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  padding: 11px;
-  border-radius: var(--radius-md);
-  background: rgba(var(--overlay-rgb), 0.03);
-  border: 1px solid rgba(var(--overlay-rgb), 0.05);
-  text-align: center;
-}
-
-.profile-stats__value {
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--text);
-  letter-spacing: -0.02em;
-}
-
-.profile-stats__label {
-  margin-top: 2px;
-  font-size: 8.5px;
-  color: var(--text-5);
-  line-height: 1.3;
-}
-
-.profile-modal__foot {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 9.5px;
-  color: var(--text-5);
-}
-
-.profile-modal__dot {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--text-5);
-}
 
 /* ── Dictionary extra ─────────────────────────────────────── */
 .dict-empty {

@@ -6,7 +6,7 @@ import { navigate } from '../../lib/router.js';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 
-export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPresets, onOpenCommands }) {
+export default function Sidebar({ page, onOpenSettings, onOpenPresets, onOpenCommands }) {
   const { profile, settings } = useAppData();
   const { push } = useToast();
   const [hovered, setHovered] = useState(null);
@@ -71,7 +71,14 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
           <ChevronRight size={13} className="sidebar__link-arrow" />
         </button>
 
-        <button type="button" className="profile" onClick={onOpenProfile} title="Профиль">
+        {/* Имя менялось в двух местах: здесь (окно «Аккаунт») и в настройках.
+            Осталось одно — настройки, раздел «Приложение»: строки про имя. */}
+        <button
+          type="button"
+          className="profile"
+          onClick={() => onOpenSettings('app')}
+          title="Имя и профиль — в настройках"
+        >
           <span className="profile__avatar">{(displayName || 'Z')[0].toUpperCase()}</span>
           <span className="profile__email">{displayName || 'локальный профиль'}</span>
           <User size={12} className="profile__logout" />

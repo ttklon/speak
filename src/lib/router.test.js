@@ -12,6 +12,11 @@ describe('маршруты по хешу', () => {
 
   it('неизвестный адрес ведёт на главную, а не в пустоту', () => {
     expect(parseHash('#/что-то-своё').page).toBe('home');
+    // старая ссылка на инструкции ведёт в «Горячие клавиши», а не на главную
+    expect(parseHash('#/instructions')).toMatchObject({
+      page: 'hotkeys',
+      params: { tab: 'recommended' },
+    });
     expect(parseHash('').page).toBe('home');
     expect(parseHash('#/').page).toBe('home');
   });

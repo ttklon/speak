@@ -8,6 +8,7 @@ import AddInstructionModal from '../components/modals/AddInstructionModal.jsx';
 import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
+import { useRoute } from '../lib/router.js';
 import { keysLabel, toAccelerator } from '../lib/utils.js';
 import { useTextAction } from '../lib/hotkeys/useTextAction.js';
 import { analyzeStyle, describeStyle } from '../lib/ai/style.js';
@@ -32,12 +33,21 @@ export default function HotkeysPage() {
   const { push } = useToast();
   const { run: runAction, busy } = useTextAction();
   const style = useMemo(() => analyzeStyle(dictations), [dictations]);
-  const [tab, setTab] = useState('voice');
+  const route = useRoute();
+  const [tab, setTab] = useState(route.params?.tab || 'voice');
   const [recorder, setRecorder] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
   // сброс сочетаний затирает настроенные клавиши — спрашиваем подтверждение
   const [confirmReset, setConfirmReset] = useState(false);
   const [query, setQuery] = useState('');
+
+  // Вкладка может приехать в адресе (#/hotkeys?tab=recommended) — так ведёт
+  // кнопка «AI-инструкции» в боковой панели и старая ссылка #/instructions.
+  useEffect(() => {
+    const next = route.params?.tab;
+    if (route.page !== 'hotkeys' || !next) return;
+    if (['voice', 'recommended', 'custom'].includes(next)) setTab(next);
+  }, [route.page, route.params?.tab]);
 
   /** Все включённые AI-инструкции уходят в main-процесс как глобальные хоткеи. */
   const textActions = useMemo(
@@ -139,8 +149,11 @@ export default function HotkeysPage() {
           </p>
         </div>
         <div className="page__actions">
+          {/* «Добавить новую инструкцию» рядом с «Голосовыми сочетаниями» читалось
+              как «добавить сочетание». Теперь подпись говорит, что именно
+              добавляется, и кнопка есть на любой вкладке. */}
           <Button variant="white" size="sm" icon={<Plus size={13} />} onClick={() => setAddOpen(true)}>
-            Добавить новую инструкцию
+            Своя инструкция
           </Button>
         </div>
       </div>
@@ -164,7 +177,10 @@ export default function HotkeysPage() {
               : []),
           ]}
         />
-        <SearchInput value={query} onChange={setQuery} placeholder="Поиск" />
+        {/* Поиск по четырём строкам только занимает место */}
+        {tab === 'voice' && voiceHotkeys.length <= 5 ? null : (
+          <SearchInput value={query} onChange={setQuery} placeholder="Поиск" />
+        )}
       </div>
 
       {tab === 'voice' ? (

@@ -1715,6 +1715,48 @@ async function scenarioClipboard(browser) {
   await page.close();
 }
 
+// Прямые ссылки: то, что человек копирует из подсказки или документации.
+// Раньше #/instructions молча показывал главную, а #/clipboard?tab=image —
+// «Все»: ссылка вела не туда, и это выглядело как «не работает».
+async function scenarioDeepLinks(browser) {
+  const page = await openPage(browser, '#/instructions', { settle: 600 });
+  takeErrors(page);
+  const instructions = await page.evaluate(() => ({
+    title: document.querySelector('.page__title')?.innerText || '',
+    tab: document.querySelector('.tabs__tab.is-active')?.innerText.replace(/\s+/g, ' ').trim() || '',
+  }));
+  record(
+    'сценарии',
+    'ссылка #/instructions открывает инструкции, а не главную',
+    /Горячие клавиши/i.test(instructions.title) && /Рекомендуемые/i.test(instructions.tab),
+    `${instructions.title} · ${instructions.tab}`,
+  );
+
+  await page.goto(`${BASE}/#/clipboard?tab=image`, { waitUntil: 'domcontentloaded' });
+  await sleep(600);
+  const clipTab = await page.evaluate(
+    () => document.querySelector('.clip-toolbar .is-active, .clip-toolbar__tab.is-active')?.innerText.trim() || '',
+  );
+  record('сценарии', 'ссылка #/clipboard?tab=image открывает изображения', /Изображение/i.test(clipTab), clipTab);
+
+  // старые id разделов обязаны открывать новые вкладки
+  await page.goto(`${BASE}/#/settings?section=network&from=home`, { waitUntil: 'domcontentloaded' });
+  await sleep(700);
+  const alias = await page.evaluate(() => ({
+    tab: document.querySelector('.settings-nav.is-active')?.innerText.trim() || '',
+    open: Boolean(document.querySelector('.settings-modal')),
+  }));
+  record(
+    'сценарии',
+    'старая ссылка на «Сеть» открывает «Диктовку»',
+    alias.open && /Диктовка/i.test(alias.tab),
+    `${alias.tab} · окно=${alias.open}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'прямые ссылки без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioSettingsSections(browser) {
   // Разделов четыре, а не семь: смежное собрано вместе (1.8.0).
   const sections = ['dictation', 'app', 'data', 'diagnostics'];
@@ -2123,7 +2165,7 @@ async function scenarioModalFocus(browser) {
   const page = await openPage(browser, '#/hotkeys', { settle: 400 });
   takeErrors(page);
   const opened = await page.evaluate(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => /Добавить новую инструкцию/i.test(b.innerText));
+    const btn = [...document.querySelectorAll('button')].find((b) => /Своя инструкция/i.test(b.innerText));
     if (!btn) return false;
     btn.focus();
     btn.click();
@@ -2150,7 +2192,7 @@ async function scenarioModalFocus(browser) {
   await sleep(350);
   const after = await page.evaluate(() => ({
     closed: !document.querySelector('.modal'),
-    focused: /Добавить новую инструкцию/i.test(document.activeElement?.innerText || ''),
+    focused: /Своя инструкция/i.test(document.activeElement?.innerText || ''),
   }));
   record(
     'сценарии',
@@ -2253,15 +2295,25 @@ const clickIn = async (page, scope, text) =>
     [scope, text],
   );
 
+// Имя меняется в одном месте — настройки → «Приложение». Раньше было ещё окно
+// «Аккаунт» с тем же полем, и человек не понимал, какое из них главное.
 async function scenarioProfile(browser) {
   const page = await openPage(browser, '#/home');
   await page.evaluate(() => document.querySelector('.sidebar__bottom .profile').click());
-  await sleep(350);
-  const input = await page.$('.modal input');
-  if (!input) throw new Error('в профиле нет поля имени');
+  await sleep(500);
+  const settingsOpen = await page.evaluate(() => Boolean(document.querySelector('.settings-modal')));
+  const input = await page.$('.settings-main input');
+  if (!input) throw new Error('в настройках нет поля имени');
   await input.click({ clickCount: 3 });
   await input.type('Мария');
-  const saved = await clickIn(page, '.modal', 'Сохранить') || (await clickIn(page, '.modal', 'Готово'));
+  await page.evaluate(() => document.activeElement?.blur());
+  await sleep(300);
+  const saved = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.settings-modal button')].find((b) => /Готово/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  }) || settingsOpen;
   await sleep(450);
   const body = await page.evaluate(() => document.body.innerText);
   // приветствие берёт имя из настроек, подпись в сайдбаре — из профиля:
@@ -2346,7 +2398,7 @@ async function scenarioRecorder(browser) {
 
 async function scenarioInstruction(browser) {
   const page = await openPage(browser, '#/hotkeys', { settle: 400 });
-  const opened = await clickIn(page, '', 'Добавить новую инструкцию');
+  const opened = await clickIn(page, '', 'Своя инструкция');
   await sleep(350);
   const title = await page.$('.modal input');
   if (!title) throw new Error('нет поля названия инструкции');
@@ -4715,6 +4767,7 @@ async function main() {
       ['пароли', scenarioPasswordVault],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
+      ['прямые ссылки', scenarioDeepLinks],
       ['разделы настроек', scenarioSettingsSections],
       ['темы', scenarioTheme],
       ['поиск по настройкам', scenarioSettingsSearch],

@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
-import { plural } from '../../../lib/ai/style.js';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
@@ -21,6 +20,8 @@ export default function DataSection({ onOpenSection }) {
     importBackup,
   } = useAppData();
   const { push } = useToast();
+  // Срок хранения задаёт приложение (lib/autotune.js), но показываем честно его
+  const retentionDays = Number(settings.dictationRetentionDays) || 30;
   // «Удалить сейчас» стирало всю историю одним щелчком — теперь с подтверждением
   const [confirmDictations, setConfirmDictations] = useState(false);
   const [pendingBackup, setPendingBackup] = useState(null);
@@ -121,17 +122,13 @@ export default function DataSection({ onOpenSection }) {
         <div className="settings-group__title">Диктовки</div>
         <div className="setting-row">
           <div className="setting-row__label">
-            Срок хранения
-            <div className="setting-row__desc">
-              Для диктовок и буфера. Старое удаляется при запуске; закреплённое остаётся.
-            </div>
-          </div>
-          <span className="setting-row__value">30 дней</span>
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
             Занято места
-            <div className="setting-row__desc">Диктовки и буфер вместе: {formatBytes(dictationBytes)} текста.</div>
+            {/* Срок хранения и число записей раньше были отдельными строками:
+                три строки про одно и то же. Теперь одна строка с ответами. */}
+            <div className="setting-row__desc">
+              {dictations.length + clipboard.length} записей · храним {retentionDays} дней · диктовки{' '}
+              {formatBytes(dictationBytes)}
+            </div>
           </div>
           <span className="setting-row__value">{formatBytes(storageSize)}</span>
           <Button
@@ -176,18 +173,6 @@ export default function DataSection({ onOpenSection }) {
           >
             Открыть
           </Button>
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Всего записей
-            <div className="setting-row__desc">
-              {dictations.length} {plural(dictations.length, 'диктовка', 'диктовки', 'диктовок')} ·{' '}
-              {clipboard.length} {plural(clipboard.length, 'элемент', 'элемента', 'элементов')} буфера
-            </div>
-          </div>
-          <span className="setting-row__value">
-            {dictations.length + clipboard.length}
-          </span>
         </div>
         <div className="settings-foot-hint" style={{ marginTop: 6 }}>
           Звук никуда не пишется: распознавание идёт на лету, остаётся только текст.

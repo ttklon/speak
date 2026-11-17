@@ -47,17 +47,23 @@ export default function DictionaryPage() {
         <div>
           <h1 className="page__title">Словарь</h1>
           <p className="page__sub">
-            Добавляйте термины, которые ZSpeakly часто распознаёт неправильно: имена, названия компаний,
-            техническую терминологию. Словарь подмешивается в промпт распознавания и в постобработку.
+            Имена и термины, которые распознаются неправильно: словарь подсказывает их модели и правит
+            текст после распознавания.
           </p>
         </div>
-        <div className="page__actions">
-          <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={() => setOpen(true)}>
-            Добавить
-          </Button>
-        </div>
+        {/* Когда слов нет, кнопка в шапке дублировала «Добавить слово» из пустого
+            состояния: две кнопки об одном. */}
+        {dictionary.length ? (
+          <div className="page__actions">
+            <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={() => setOpen(true)}>
+              Добавить
+            </Button>
+          </div>
+        ) : null}
       </div>
 
+      {/* Вкладки и поиск по пустому словарю — три нуля и поле, куда нечего писать */}
+      {dictionary.length ? (
       <div className="dict-toolbar">
         <Tabs
           variant="underline"
@@ -75,13 +81,11 @@ export default function DictionaryPage() {
         />
         <SearchInput value={query} onChange={setQuery} placeholder="Поиск" icon={<Search size={12} />} />
       </div>
+      ) : null}
 
       {filtered.length === 0 ? (
         <div className="dict-empty">
-          <p>
-            Слов пока нет. Добавьте термины, которые часто распознаются неправильно, например имена или
-            техническую терминологию.
-          </p>
+          <p>Пока пусто. Добавьте имя или термин — и он перестанет распознаваться неправильно.</p>
           <Button variant="white" size="sm" icon={<Plus size={13} />} onClick={() => setOpen(true)}>
             Добавить слово
           </Button>

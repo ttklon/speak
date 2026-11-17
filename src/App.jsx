@@ -7,7 +7,6 @@ import HotkeysPage from './pages/HotkeysPage.jsx';
 import ClipboardPage from './pages/ClipboardPage.jsx';
 import SettingsModal from './components/settings/SettingsModal.jsx';
 import CommandPalette from './components/layout/CommandPalette.jsx';
-import ProfileModal from './components/modals/ProfileModal.jsx';
 import DictationHUD from './components/ui/DictationHUD.jsx';
 import OnboardingModal from './components/modals/OnboardingModal.jsx';
 import { useRoute, navigate, replace } from './lib/router.js';
@@ -30,7 +29,6 @@ export default function App() {
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('dictation');
-  const [profileOpen, setProfileOpen] = useState(false);
   // Палитра команд: одна строка на всё приложение (Ctrl+K).
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -62,7 +60,6 @@ export default function App() {
       openedFromHash.current = false;
       return;
     }
-    setProfileOpen(false);
     setSettingsOpen(false);
   }, [route.page]);
 
@@ -244,16 +241,10 @@ export default function App() {
     });
   }, [push]);
 
-  const openPresets = useCallback(() => {
-    navigate('hotkeys');
-    setTimeout(() => {
-      const tab = Array.from(document.querySelectorAll('.hk-toolbar .tabs__tab')).find((b) =>
-        /Рекомендуемые/i.test(b.textContent || ''),
-      );
-      tab?.click();
-    }, 120);
-  }, []);
-  const openProfile = useCallback(() => setProfileOpen(true), []);
+  // Раньше вкладку «Рекомендуемые» искали в DOM через setTimeout: не успела
+  // отрисоваться — человек оказывался на «Голосовых сочетаниях» и решал, что
+  // кнопка не работает. Теперь вкладка едет в адресе страницы.
+  const openPresets = useCallback(() => navigate('hotkeys', { tab: 'recommended' }), []);
   const openSettings = useCallback((section = 'dictation') => {
     setSettingsSection(section);
     setSettingsOpen(true);
@@ -278,7 +269,6 @@ export default function App() {
           <Sidebar
             page={page(route)}
             onOpenSettings={() => openSettings('app')}
-            onOpenProfile={openProfile}
             onOpenPresets={openPresets}
             onOpenCommands={() => setPaletteOpen(true)}
           />
@@ -288,14 +278,6 @@ export default function App() {
 
       <DictationHUD />
 
-      <ProfileModal
-        open={profileOpen}
-        onClose={() => setProfileOpen(false)}
-        onOpenSettings={() => {
-          setProfileOpen(false);
-          openSettings('app');
-        }}
-      />
       <OnboardingModal />
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />

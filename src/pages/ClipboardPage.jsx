@@ -21,7 +21,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
 import { Button, EmptyState, SearchInput } from '../components/ui/Controls.jsx';
 import { CLIPBOARD_TABS, DEFAULT_SETTINGS } from '../lib/config.js';
 import { dayLabel, formatSeconds, kindLabel, timeHM, truncate } from '../lib/utils.js';
-import { navigate } from '../lib/router.js';
+import { navigate, useRoute } from '../lib/router.js';
 import { startScreenRecording, isRecordingSupported } from '../lib/media/recorder.js';
 
 const TABS = [{ id: 'all', label: 'Все' }, ...CLIPBOARD_TABS];
@@ -45,8 +45,16 @@ export default function ClipboardPage() {
     addClipboardItem,
   } = useAppData();
   const { push } = useToast();
-  const [tab, setTab] = useState('all');
+  const route = useRoute();
+  // Ссылка #/clipboard?tab=image обещала открыть «Изображения», но страница
+  // параметр не читала и всегда показывала «Все».
+  const tabFromUrl = CLIPBOARD_TABS.some((t) => t.id === route.params?.tab) ? route.params.tab : '';
+  const [tab, setTab] = useState(tabFromUrl || 'all');
   const [view, setView] = useState('grid');
+  useEffect(() => {
+    if (tabFromUrl) setTab(tabFromUrl);
+  }, [tabFromUrl]);
+
   // очистка истории — только после подтверждения: один промах мыши не должен
   // стирать всё, что накопилось за день
   const [confirmClear, setConfirmClear] = useState(false);

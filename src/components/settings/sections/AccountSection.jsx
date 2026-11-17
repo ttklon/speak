@@ -8,7 +8,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
  * Почта, подписка и credits из видео-обзора намеренно убраны.
  */
 export default function AccountSection() {
-  const { profile, setProfile, settings, updateSettings, dictations } = useAppData();
+  const { profile, setProfile, settings, updateSettings } = useAppData();
   const { push } = useToast();
   const [name, setName] = useState(settings.userName || profile.name);
 
@@ -30,7 +30,7 @@ export default function AccountSection() {
   return (
     <div>
       <div className="settings-group">
-        <div className="settings-group__title">Имя и итоги</div>
+        <div className="settings-group__title">Имя</div>
         <div className="setting-row">
           <div className="setting-row__label">Как вас называть</div>
           <input
@@ -43,22 +43,6 @@ export default function AccountSection() {
             }}
             placeholder="Ваше имя"
           />
-        </div>
-      {/* числа считаем по истории: раньше здесь была приписка «+ 9000 слов»
-          и «143 секунды», то есть демонстрационные цифры вместо реальных */}
-        <div className="setting-row">
-          <div className="setting-row__label">Слов в истории</div>
-          <span className="setting-row__value">
-            {dictations.reduce((sum, d) => sum + (d.words || 0), 0).toLocaleString('ru-RU')}
-          </span>
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Секунд речи</div>
-          <span className="setting-row__value">
-            {Math.round(
-              dictations.reduce((sum, d) => sum + (d.durationMs || 0), 0) / 1000,
-            ).toLocaleString('ru-RU')}
-          </span>
         </div>
       </div>
 
