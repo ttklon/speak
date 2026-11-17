@@ -157,6 +157,8 @@ export function DictationProvider({ children }) {
   }, [error]);
 
 
+  const stopAtRef = useRef(0);
+
   const finish = useCallback(
     async (
       text,
@@ -290,6 +292,13 @@ export function DictationProvider({ children }) {
         }
       }
       const durationMs = Math.max(400, Date.now() - startedAt.current);
+      // Считаем один раз и обнуляем: иначе повторный проход по той же записи
+      // (правка, пересборка истории) приписал бы ей новое время ожидания.
+      const waitFromStop = () => {
+        const at = stopAtRef.current;
+        stopAtRef.current = 0;
+        return at ? Math.max(0, Date.now() - at) : 0;
+      };
       const item = {
         text: cleaned,
         durationMs,
@@ -310,6 +319,10 @@ export function DictationProvider({ children }) {
         sttParts: sttMeta?.parts > 1 ? sttMeta.parts : undefined,
         sttModel: sttMeta?.model || undefined,
         sttWarm: typeof sttMeta?.timeline?.warm === 'boolean' ? sttMeta.timeline.warm : undefined,
+        // Отпустил клавишу → текст готов. Включает распознавание, чистку и
+        // вставку, поэтому именно это число сравнивается с обещанными пятью
+        // секундами (у старых записей его нет — считаем по sttMs).
+        waitMs: waitFromStop() || undefined,
       };
       // событие в журнал: видно, что движок реально вернул текст, а не «тишину»
       diag.info('stt', cleaned ? 'Диктовка распознана' : 'Пустой результат распознавания', {
@@ -619,6 +632,10 @@ export function DictationProvider({ children }) {
 
   const stop = useCallback(async () => {
     const rec = recRef.current;
+    // Отсюда и до готового текста — то время, которое человек реально ждёт.
+    // Отчёт о скорости раньше судил только счёт движка и потому мог говорить
+    // «укладывается», пока ожидание было дольше пяти секунд.
+    if (rec) stopAtRef.current = Date.now();
     setState('processing');
     setLevel(0);
     if (rec && settingsRef.current.soundFeedback !== false) playCue('stop');

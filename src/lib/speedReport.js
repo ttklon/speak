@@ -36,14 +36,26 @@ export function analyseSpeed(entries = [], opts = {}) {
     .map((entry) => {
       const spoken = Number(entry.spokenMs) / 1000;
       const compute = Number(entry.sttMs) / 1000;
-      const factor = compute > 0 ? spoken / compute : 0;
+      // Человек ждёт не «счёт движка», а всё время от отпускания клавиши до
+      // готового текста: сюда входят чистка, словарь и вставка. Раньше отчёт
+      // судил только по счёту и мог сказать «укладывается», пока ожидание
+      // было заметно дольше пяти секунд. У записей без `waitMs` (старые
+      // версии) считаем по счёту — как раньше.
+      const wait = Number(entry.waitMs) > 0 ? Number(entry.waitMs) / 1000 : compute;
+      const total = Math.max(compute, wait);
+      const factor = total > 0 ? spoken / total : 0;
+      const computeFactor = compute > 0 ? spoken / compute : 0;
       // Две границы: «не дольше пяти секунд» и «минимум вчетверо быстрее речи».
-      const fits = compute <= target && (spoken < 8 || factor >= SPEED_OK_FACTOR);
+      const fits = total <= target && (spoken < 8 || factor >= SPEED_OK_FACTOR);
       return {
         at: Number(entry.createdAt) || 0,
         spoken: round1(spoken),
         compute: round1(compute),
+        total: round1(total),
         factor: round1(factor),
+        computeFactor: round1(computeFactor),
+        // где именно потерялись секунды: в движке или после него
+        tail: round1(Math.max(0, total - compute)),
         fits,
         mode: entry.sttMode === 'server' ? 'server' : entry.sttMode === 'cli' ? 'cli' : '',
         parts: Number(entry.sttParts) > 1 ? Number(entry.sttParts) : 1,
@@ -83,20 +95,27 @@ export function analyseSpeed(entries = [], opts = {}) {
       worst,
       advice: slow.length
         ? `В среднем в ${medianFactor} раза быстрее реального времени (двадцать секунд речи ≈ ${twenty} с), ` +
-          `но один проход занял ${worst.compute} с. Если повторится, приложение перейдёт на режим легче само.`
+          `но одна диктовка ждала ${worst.total} с. Если повторится, приложение перейдёт на режим легче само.`
         : `Укладывается: в среднем в ${medianFactor} раза быстрее реального времени — двадцать секунд речи примерно за ${twenty} с.`,
     };
   }
 
+  // Разделяем две разные причины: движок считал долго — лечится режимом
+  // легче; ожидание длинное при быстром счёте — виновата не модель, и менять
+  // её было бы вредным советом.
+  const computeBound = worst.compute >= worst.total * 0.6;
+
   return {
     samples,
     verdict: 'slow',
+    computeBound,
     medianFactor,
     worst,
-    advice:
-      `Дольше пяти секунд: ${worst.spoken} с речи — ${worst.compute} с счёта. ` +
-      'После двух таких диктовок приложение само перейдёт на режим легче; переключить сразу — ' +
-      '«Настройки → Функции → Модель распознавания».',
+    advice: computeBound
+      ? `Дольше пяти секунд: ${worst.spoken} с речи — ${worst.total} с ожидания, из них ${worst.compute} с считал движок. ` +
+        'После двух таких диктовок приложение само перейдёт на режим легче; переключить сразу можно здесь же.'
+      : `Дольше пяти секунд: ${worst.spoken} с речи — ${worst.total} с ожидания, хотя движок считал ${worst.compute} с. ` +
+        'Секунды ушли не в распознавание: посмотрите «Умную полировку» и «Живую расшифровку» в «Настройки → Функции».',
   };
 }
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Zap } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
@@ -10,7 +11,7 @@ import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
 import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
 import { analyseSpeed } from '../../../lib/speedReport.js';
-import { tierForModel } from '../../../lib/modelTiers.js';
+import { lighterModel, tierForModel } from '../../../lib/modelTiers.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -44,6 +45,45 @@ export default function DiagnosticsSection() {
   // измеряет и никуда не ходит. Человеку нужен ответ «успевает или нет», а не
   // ещё одна таблица настроек.
   const speed = analyseSpeed(dictations);
+  // Переключение на режим легче прямо из отчёта: человек видит «долго» и не
+  // должен идти искать, где это меняется. Если режим ещё не скачан — качаем
+  // и говорим об этом, а не переключаем на отсутствующий файл.
+  const [switching, setSwitching] = useState(false);
+  const currentTier = tierForModel(settings.whisperModel);
+  const lighterTier = currentTier ? lighterModel(currentTier.model) : '';
+  const lighter = lighterTier ? tierForModel(lighterTier) : null;
+  const goLighter = useCallback(async () => {
+    if (!lighter || switching) return;
+    const bridge = window.zspeakly?.native;
+    setSwitching(true);
+    try {
+      const st = bridge?.modelsStatus ? await bridge.modelsStatus().catch(() => null) : null;
+      // Ключ в статусе — имя модели (`base-q5_1`), а не id режима (`fast`).
+      const downloaded = st?.models?.[lighter.model]?.downloaded === true;
+      if (downloaded) {
+        updateSettings({ whisperModel: lighter.model });
+        await bridge?.modelsWarm?.({ model: lighter.model }).catch(() => {});
+        push({
+          title: `Режим «${lighter.label.toLowerCase()}» включён`,
+          description: `${lighter.size} · продиктуйте ту же фразу и посмотрите на секунды выше`,
+          tone: 'success',
+          ttl: 9000,
+        });
+      } else {
+        // Скачивание идёт в фоне и само переключит режим по готовности —
+        // обещать «включено» до файла нельзя.
+        Promise.resolve(bridge?.downloadModel?.(lighter.model)).catch(() => {});
+        push({
+          title: `Скачиваю «${lighter.label.toLowerCase()}» — ${lighter.size}`,
+          description: 'Режим включится, как только файл будет готов. Это один раз.',
+          tone: 'info',
+          ttl: 9000,
+        });
+      }
+    } finally {
+      setSwitching(false);
+    }
+  }, [lighter, push, switching, updateSettings]);
 
   const refresh = useCallback(async () => {
     const bridge = window.zspeakly?.native;
@@ -340,9 +380,12 @@ export default function DiagnosticsSection() {
             {speed.samples.map((row, index) => (
               <div className="speed-report__row" key={`${row.at}-${index}`}>
                 <span className="speed-report__main">
-                  {row.spoken.toFixed(1)} с речи → {row.compute.toFixed(1)} с счёта
+                  {row.spoken.toFixed(1)} с речи → {row.total.toFixed(1)} с ожидания
                 </span>
                 <span className="speed-report__meta">
+                  {/* Человеку важно не «сколько считал движок», а сколько он ждал.
+                      Счёт показываем рядом, чтобы было видно, где именно секунды. */}
+                  {row.tail >= 0.2 ? `счёт ${row.compute.toFixed(1)} с · остальное ${row.tail.toFixed(1)} с · ` : ''}
                   {row.factor ? `×${row.factor.toFixed(1)}` : '—'}
                   {row.mode ? ` · ${row.mode === 'server' ? 'прогретый сервер' : 'whisper-cli'}` : ''}
                   {row.parts > 1 ? ` · ${row.parts} фрагмента` : ''}
@@ -357,6 +400,21 @@ export default function DiagnosticsSection() {
         <div className="settings-foot-hint" style={{ marginTop: 6 }}>
           {speed.advice}
         </div>
+        {speed.verdict === 'slow' && speed.computeBound && lighter ? (
+          <div style={{ marginTop: 8 }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Zap size={12} />}
+              onClick={goLighter}
+              disabled={switching}
+            >
+              {switching
+                ? 'Переключаю…'
+                : `Переключить на «${lighter.label.toLowerCase()}» — ${lighter.size}`}
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <div className="settings-group">

@@ -2308,8 +2308,8 @@ async function scenarioSpeedReport(browser) {
   });
   record(
     'сценарии',
-    'скорость: в диагностике видно секунды речи и секунды счёта',
-    info.rows.length === 3 && /20\.0 с речи → 9\.0 с счёта/.test(info.rows.join(' | ')),
+    'скорость: в диагностике видно секунды речи и полное время ожидания',
+    info.rows.length === 3 && /20\.0 с речи → 9\.0 с ожидания/.test(info.rows.join(' | ')),
     info.rows[0] || '',
   );
   record(
@@ -2321,9 +2321,45 @@ async function scenarioSpeedReport(browser) {
   );
   record(
     'сценарии',
-    'скорость: вердикт честно говорит «дольше пяти секунд» и ведёт в «Функции»',
-    /Дольше пяти секунд/i.test(info.groupText) && /Настройки → Функции/.test(info.groupText),
+    'скорость: вердикт честно говорит «дольше пяти секунд»',
+    /Дольше пяти секунд/i.test(info.groupText) && /считал движок/i.test(info.groupText),
     info.groupText.slice(0, 160),
+  );
+  // Кнопка «переключить на легче» — рядом с вердиктом: совет без кнопки
+  // отправлял человека искать раздел самому.
+  const switchBtn = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.settings-main button')].find((b) =>
+      /Переключить на «быстро»/i.test(b.innerText),
+    );
+    return btn ? btn.innerText.replace(/\n/g, ' ').trim() : '';
+  });
+  record(
+    'сценарии',
+    'скорость: рядом с вердиктом есть кнопка «переключить на быстро»',
+    /быстро/i.test(switchBtn) && /МБ/.test(switchBtn),
+    switchBtn,
+  );
+  const before = await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('zs.settings') || '{}');
+    return s.whisperModel || '';
+  });
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.settings-main button')].find((b) =>
+      /Переключить на «быстро»/i.test(b.innerText),
+    );
+    if (btn) btn.click();
+  });
+  await sleep(900);
+  const afterSwitch = await page.evaluate(() => {
+    const raw = window.zspeakly?.store ? window.__e2e.read('zs.settings') : null;
+    const s = raw || JSON.parse(localStorage.getItem('zs.settings') || '{}');
+    return { model: s.whisperModel || '', body: document.body.innerText };
+  });
+  record(
+    'сценарии',
+    'скорость: кнопка переключает режим на быстрый',
+    afterSwitch.model === 'base-q5_1' && afterSwitch.model !== before,
+    `${before || '—'} → ${afterSwitch.model || '—'}`,
   );
   const errors = takeErrors(page);
   record('сценарии', 'скорость: без ошибок консоли', errors.length === 0, errors[0] || '');
@@ -2776,8 +2812,8 @@ async function scenarioDiagnostics(browser) {
     'диагностика: видно, прогрета ли модель, готов ли помощник ввода и сколько считалась последняя фраза',
     /прогрета/.test(speedRows) &&
       /готов — вставка без запуска программ/.test(speedRows) &&
-      // Замеры есть — видно секунды счёта; замеров нет — это сказано прямо.
-      (/с счёта/.test(speedGroup) || /Замеров пока нет/.test(speedGroup)),
+      // Замеры есть — видно полное время ожидания; замеров нет — это сказано прямо.
+      (/с ожидания/.test(speedGroup) || /Замеров пока нет/.test(speedGroup)),
     `${speedRows.slice(0, 120)} || ${speedGroup.slice(0, 120)}`,
   );
   const errors = takeErrors(page);

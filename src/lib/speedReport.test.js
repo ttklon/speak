@@ -28,8 +28,33 @@ describe('отчёт о скорости диктовки', () => {
     const report = analyseSpeed([dictation(20, 7)]);
     expect(report.verdict).toBe('slow');
     expect(report.worst.compute).toBe(7);
-    // подсказка ведёт в существующий раздел настроек
-    expect(report.advice).toMatch(/Настройки → Функции/);
+    expect(report.worst.total).toBe(7);
+    // Виноват движок — значит речь про режим легче, а не про тумблеры.
+    expect(report.computeBound).toBe(true);
+    expect(report.advice).toMatch(/режим легче/i);
+  });
+
+  it('судят по полному ожиданию, а не только по счёту движка', () => {
+    // Движок считал 2 с, но человек ждал 8: «быстро» тут было бы враньём.
+    const report = analyseSpeed([dictation(20, 2, { waitMs: 8000 })]);
+    expect(report.samples[0]).toMatchObject({ compute: 2, total: 8, tail: 6 });
+    expect(report.verdict).toBe('slow');
+    // Виновата не модель: совет про «режим легче» был бы вредным.
+    expect(report.computeBound).toBe(false);
+    expect(report.advice).toContain('не в распознавание');
+    expect(report.advice).not.toMatch(/режим легче/);
+  });
+
+  it('старые записи без полного времени судятся по счёту — как раньше', () => {
+    const report = analyseSpeed([dictation(20, 3)]);
+    expect(report.samples[0]).toMatchObject({ compute: 3, total: 3, tail: 0 });
+    expect(report.verdict).toBe('ok');
+  });
+
+  it('полное ожидание чуть больше счёта переводит вердикт в «долго»', () => {
+    // 4,9 с счёта проходили границу, 5,3 с ожидания — уже нет.
+    expect(analyseSpeed([dictation(20, 4.9, { waitMs: 5300 })]).verdict).toBe('slow');
+    expect(analyseSpeed([dictation(20, 4.9, { waitMs: 4900 })]).verdict).toBe('ok');
   });
 
   it('порог — ровно пять секунд и вчетверо быстрее речи', () => {
@@ -74,7 +99,7 @@ describe('отчёт о скорости диктовки', () => {
   it('одна медленная фраза из многих не объявляет всё медленным, но названа', () => {
     const report = analyseSpeed([dictation(20, 2), dictation(20, 9), dictation(20, 2.1)]);
     expect(report.verdict).toBe('ok');
-    expect(report.advice).toMatch(/один проход занял 9 с/);
+    expect(report.advice).toMatch(/одна диктовка ждала 9 с/);
     // а когда медленных большинство — вердикт честно плохой
     expect(analyseSpeed([dictation(20, 9), dictation(20, 8), dictation(20, 2)]).verdict).toBe('slow');
   });
