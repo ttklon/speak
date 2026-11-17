@@ -12,7 +12,7 @@
 
 import { describeRecognitionError } from './errors.js';
 import { startPcmRecording } from '../audio/pcmRecorder.js';
-import { createSpeechTracker, joinChunks } from './chunks.js';
+import { createSpeechTracker, mergeOverlap } from './chunks.js';
 
 const SpeechRecognitionImpl =
   typeof window !== 'undefined'
@@ -162,7 +162,10 @@ export function createRecognizer(opts = {}) {
     // после остановки остаётся распознать только хвост. Это и есть разница
     // между «ждать двадцать секунд» и «ждать одно предложение».
     const tracker = createSpeechTracker();
-    const preParts = [];
+    // Уже распознанный текст копится строкой: куски идут с перекрытием, и
+    // каждый следующий надо склеить с предыдущим без дублей.
+    let preText = '';
+    let preCount = 0;
     let preMs = 0;
     let preChain = Promise.resolve();
 
@@ -233,7 +236,10 @@ export function createRecognizer(opts = {}) {
     const queuePreChunk = (cut) => {
       preChain = preChain.then(async () => {
         if (stopped || !recorder) return;
-        const snap = recorder.snapshot?.({ fromMs: cut.fromMs, toMs: cut.atMs, maxSeconds: 0 });
+        // Отдаём чуть больше, чем «новый» звук: слово, разрезанное границей,
+        // должно целиком попасть хотя бы в один кусок.
+        const fromMs = Math.max(0, cut.fromMs - tracker.overlapMs);
+        const snap = recorder.snapshot?.({ fromMs, toMs: cut.atMs, maxSeconds: 0 });
         if (!snap?.pcm?.length || snap.durationMs < 800) {
           tracker.rollback(cut.fromMs);
           return;
@@ -251,7 +257,8 @@ export function createRecognizer(opts = {}) {
             pre: true,
           });
           if (res?.ok && String(res.text || '').trim()) {
-            preParts.push(String(res.text).trim());
+            preText = mergeOverlap(preText, String(res.text).trim());
+            preCount += 1;
             preMs += Number(res.ms) || 0;
           } else {
             // Пусто — значит кусок не распознан. Возвращаем границу, иначе
@@ -349,10 +356,14 @@ export function createRecognizer(opts = {}) {
         // хвост равен всей записи (поведение как раньше).
         const committedMs = Math.min(Number(tracker.committedMs) || 0, durationMs);
         const RATE = 16000;
+        // Хвост тоже с перекрытием: на его стыке с последним куском может быть
+        // половина слова, и `mergeOverlap` снимет дубль.
+        const tailFrom = Math.max(0, committedMs - tracker.overlapMs);
         const tailPcm =
-          committedMs > 0 ? pcm.subarray(Math.min(pcm.length, Math.round((committedMs / 1000) * RATE))) : pcm;
+          committedMs > 0
+            ? pcm.subarray(Math.min(pcm.length, Math.round((tailFrom / 1000) * RATE)))
+            : pcm;
         const tailMs = Math.max(0, durationMs - committedMs);
-        const preText = joinChunks(preParts);
         // Хвост короче трети секунды — там нет слов, только дыхание: отдаём
         // то, что уже распознали, и не тратим проход движка.
         if (preText && tailPcm.length < RATE * 0.3) {
@@ -363,8 +374,8 @@ export function createRecognizer(opts = {}) {
             ms: preMs,
             spoken: Math.round(durationMs / 100) / 10,
             mode: 'pre',
-            parts: preParts.length,
-            timeline: { preMs, preParts: preParts.length, tailMs: 0 },
+            parts: preCount,
+            timeline: { preMs, preParts: preCount, tailMs: 0 },
             model: opts.model || '',
           });
           return { text };
@@ -392,7 +403,7 @@ export function createRecognizer(opts = {}) {
         if (res?.ok && res.text) {
           // Полный текст — заранее распознанные куски плюс хвост. Один проход
           // по хвосту вместо всей фразы и есть выигрыш во времени.
-          text = preText ? joinChunks([preText, res.text]) : res.text;
+          text = preText ? mergeOverlap(preText, res.text) : res.text;
           onFinal?.({ text, last: text });
           // ms — сколько заняло распознавание: показываем человеку, что движок
           // действительно работал, а не «проглотил» запись
@@ -411,7 +422,7 @@ export function createRecognizer(opts = {}) {
             timeline: {
               ...(res.timeline || {}),
               preMs,
-              preParts: preParts.length,
+              preParts: preCount,
               tailMs: Math.round(tailMs),
             },
             model: res.model || '',
@@ -427,7 +438,7 @@ export function createRecognizer(opts = {}) {
             spoken: Math.round(durationMs / 100) / 10,
             mode: 'pre',
             parts: 1,
-            timeline: { preMs, preParts: preParts.length, tailMs: Math.round(tailMs) },
+            timeline: { preMs, preParts: preCount, tailMs: Math.round(tailMs) },
             model: opts.model || '',
           });
         } else {

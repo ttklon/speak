@@ -25,6 +25,18 @@ export const CHUNK_MIN_MS = 6000;
 export const CHUNK_SILENCE_MS = 650;
 /** Ниже этого уровня считается «тихо» (шкала recorder: 0…1, сглаженная). */
 export const CHUNK_LEVEL = 0.08;
+/**
+ * Если человек говорит без пауз, ждать их бессмысленно — режем по времени.
+ * Двадцатисекундная фраза без единой паузы иначе целиком уйдёт в хвост, и
+ * ожидание после кнопки «стоп» снова будет как вся диктовка.
+ *
+ * Резать по таймеру безопасно только потому, что куски идут с перекрытием:
+ * граница может попасть внутрь слова, но оно целиком есть в предыдущем куске,
+ * а дубль снимается при склейке (`mergeOverlap`).
+ */
+export const CHUNK_MAX_MS = 9000;
+/** Сколько звука отдаём повторно, чтобы ни одно слово не потерялось. */
+export const CHUNK_OVERLAP_MS = 400;
 
 /**
  * @param {{minChunkMs?: number, silenceMs?: number, level?: number}} opts
@@ -33,9 +45,32 @@ export function createSpeechTracker(opts = {}) {
   const minChunkMs = Number(opts.minChunkMs) || CHUNK_MIN_MS;
   const silenceMs = Number(opts.silenceMs) || CHUNK_SILENCE_MS;
   const level = Number(opts.level) || CHUNK_LEVEL;
+  const maxChunkMs = Number(opts.maxChunkMs) || CHUNK_MAX_MS;
+  const overlapMs = Number(opts.overlapMs) || CHUNK_OVERLAP_MS;
 
   let quietFrom = null;
   let committedMs = 0;
+  // Последние две секунды уровней: по ним выбирается место разреза, когда
+  // человек говорит без пауз. Слово кончается там, где тише всего, — резать
+  // «где пришлось» значит разрезать слово пополам.
+  const recent = [];
+
+  /**
+   * Самое тихое место в недавнем прошлом — там заканчивается слово.
+   * @returns {number|null} миллисекунда разреза или null, если резать негде
+   */
+  function quietestCut(atMs, fromMs) {
+    const untilMs = atMs - 300;
+    const sinceMs = Math.max(fromMs + 1000, atMs - 2000);
+    let best = null;
+    for (const point of recent) {
+      if (point.atMs < sinceMs || point.atMs > untilMs) continue;
+      if (!best || point.level < best.level) best = point;
+    }
+    if (!best) return null;
+    const cutAt = Math.round(best.atMs);
+    return cutAt - fromMs >= 1500 ? cutAt : null;
+  }
 
   return {
     /** До какого места записи звук уже отправлен в движок. */
@@ -52,9 +87,22 @@ export function createSpeechTracker(opts = {}) {
     feed(sample = {}) {
       const value = Number(sample.level) || 0;
       const atMs = Math.max(0, Math.round(Number(sample.atMs) || 0));
+      recent.push({ atMs, level: value });
+      while (recent.length > 40) recent.shift();
       // Говорит — значит никакой паузы нет.
       if (value > level) {
         quietFrom = null;
+        // Речь без пауз: кусок уже слишком длинный — режем по времени. Место
+        // разреза — самый тихий момент последних двух секунд, но не ближе
+        // 300 мс к текущему: «сейчас» может быть серединой слова.
+        if (atMs - committedMs >= maxChunkMs) {
+          const fromMs = committedMs;
+          const cutAt = quietestCut(atMs, fromMs);
+          if (cutAt !== null) {
+            committedMs = cutAt;
+            return { fromMs, atMs: cutAt, timed: true };
+          }
+        }
         return null;
       }
       if (quietFrom === null) quietFrom = atMs;
@@ -70,7 +118,7 @@ export function createSpeechTracker(opts = {}) {
       committedMs = cutAt;
       // Пауза может продолжаться: следующая граница — не раньше новой паузы.
       quietFrom = atMs;
-      return { fromMs, atMs: cutAt };
+      return { fromMs, atMs: cutAt, timed: false };
     },
 
     /**
@@ -86,6 +134,11 @@ export function createSpeechTracker(opts = {}) {
     /** Сколько звука ещё не отправлено движку. */
     pendingMs(atMs = 0) {
       return Math.max(0, Math.round(Number(atMs) || 0) - committedMs);
+    },
+
+    /** Перекрытие: столько звука повторяется в соседних кусках. */
+    get overlapMs() {
+      return overlapMs;
     },
   };
 }
@@ -115,4 +168,69 @@ export function joinChunks(parts = []) {
   return out.replace(/[ \t]+/g, ' ').replace(/[ \t]+([,.;:!?])/g, '$1').trim();
 }
 
-export default { createSpeechTracker, joinChunks, CHUNK_MIN_MS, CHUNK_SILENCE_MS, CHUNK_LEVEL };
+const words = (text = '') => String(text || '').split(/\s+/).filter(Boolean);
+const bare = (word = '') => String(word).toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+
+/**
+ * Склейка кусков, которые шли с перекрытием.
+ *
+ * Перекрытие нужно, чтобы граница могла проходить где угодно: слово, разрезанное
+ * пополам, целиком есть в предыдущем куске. Плата — дубль на стыке, и его надо
+ * снять. Три случая:
+ *
+ *  1. Последние слова предыдущего куска совпадают с первыми словами нового —
+ *     это тот же текст, второй раз его не пишем.
+ *  2. Первое слово нового куска — обрывок последнего слова предыдущего
+ *     («программу» → «му»): обрывок выбрасываем.
+ *  3. Перекрытия нет — обычная склейка через `joinChunks`.
+ *
+ * Снимаем не больше трёх слов: если человек действительно повторил «да, да»,
+ * это его слова, а не дубль распознавания.
+ */
+export function mergeOverlap(previous = '', next = '') {
+  const left = String(previous || '').trim();
+  const right = String(next || '').trim();
+  if (!left) return right;
+  if (!right) return left;
+
+  const leftWords = words(left);
+  const rightWords = words(right);
+  const max = Math.min(3, leftWords.length, rightWords.length);
+
+  // 1) точное совпадение хвоста и начала
+  for (let k = max; k >= 1; k -= 1) {
+    const tail = leftWords.slice(-k).map(bare).join(' ');
+    const head = rightWords.slice(0, k).map(bare).join(' ');
+    if (tail && tail === head) {
+      const rest = rightWords.slice(k).join(' ');
+      return joinChunks([left, rest]);
+    }
+  }
+
+  // 2) обрывок последнего слова на стыке
+  const lastLeft = bare(leftWords[leftWords.length - 1]);
+  const firstRight = bare(rightWords[0]);
+  if (
+    lastLeft &&
+    firstRight &&
+    firstRight !== lastLeft &&
+    lastLeft.length > firstRight.length &&
+    lastLeft.endsWith(firstRight)
+  ) {
+    const rest = rightWords.slice(1).join(' ');
+    return joinChunks([left, rest]);
+  }
+
+  return joinChunks([left, right]);
+}
+
+export default {
+  createSpeechTracker,
+  joinChunks,
+  mergeOverlap,
+  CHUNK_MIN_MS,
+  CHUNK_SILENCE_MS,
+  CHUNK_LEVEL,
+  CHUNK_MAX_MS,
+  CHUNK_OVERLAP_MS,
+};
