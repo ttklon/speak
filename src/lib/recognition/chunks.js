@@ -20,7 +20,7 @@
  */
 
 /** Короче этого куска резать нечего: накладные расходы съедят выигрыш. */
-export const CHUNK_MIN_MS = 6000;
+export const CHUNK_MIN_MS = 4500;
 /** Пауза, по которой безопасно резать фразу. */
 export const CHUNK_SILENCE_MS = 650;
 /** Ниже этого уровня считается «тихо» (шкала recorder: 0…1, сглаженная). */
@@ -34,13 +34,32 @@ export const CHUNK_LEVEL = 0.08;
  * граница может попасть внутрь слова, но оно целиком есть в предыдущем куске,
  * а дубль снимается при склейке (`mergeOverlap`).
  */
-export const CHUNK_MAX_MS = 9000;
+export const CHUNK_MAX_MS = 6000;
 /** Сколько звука отдаём повторно, чтобы ни одно слово не потерялось. */
 export const CHUNK_OVERLAP_MS = 400;
 
 /**
  * @param {{minChunkMs?: number, silenceMs?: number, level?: number}} opts
  */
+/**
+ * Стоит ли вообще резать запись заранее.
+ *
+ * Нарезка выгодна только на прогретом сервере: там каждый кусок считается без
+ * загрузки весов. Если движок работает через `whisper-cli` (сервер не поднялся,
+ * слабая машина, старый бинарник), то каждый кусок — это снова загрузка
+ * модели с диска, и нарезка сделает диктовку МЕДЛЕННЕЕ, чем один проход по
+ * всей записи. Поэтому режем только когда известно, что сервер отвечал.
+ *
+ * Прогретый сервер виден по итогу прошлой диктовки (`mode: 'server'`). На самой
+ * первой диктовке после запуска это ещё неизвестно — тогда не режем: сэкономим
+ * на первой фразе, выиграем на всех следующих.
+ *
+ * @param {string} mode чем считала прошлая диктовка: 'server' | 'cli' | ''
+ */
+export function shouldPreChunk(mode) {
+  return mode === 'server';
+}
+
 export function createSpeechTracker(opts = {}) {
   const minChunkMs = Number(opts.minChunkMs) || CHUNK_MIN_MS;
   const silenceMs = Number(opts.silenceMs) || CHUNK_SILENCE_MS;
@@ -65,7 +84,9 @@ export function createSpeechTracker(opts = {}) {
     let best = null;
     for (const point of recent) {
       if (point.atMs < sinceMs || point.atMs > untilMs) continue;
-      if (!best || point.level < best.level) best = point;
+      // при равной громкости берём более позднее место: оно ближе к текущей
+      // речи, а значит короче хвост после остановки
+      if (!best || point.level <= best.level) best = point;
     }
     if (!best) return null;
     const cutAt = Math.round(best.atMs);
@@ -226,6 +247,7 @@ export function mergeOverlap(previous = '', next = '') {
 
 export default {
   createSpeechTracker,
+  shouldPreChunk,
   joinChunks,
   mergeOverlap,
   CHUNK_MIN_MS,

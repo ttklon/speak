@@ -12,7 +12,7 @@
 
 import { describeRecognitionError } from './errors.js';
 import { startPcmRecording } from '../audio/pcmRecorder.js';
-import { createSpeechTracker, mergeOverlap } from './chunks.js';
+import { createSpeechTracker, mergeOverlap, shouldPreChunk } from './chunks.js';
 
 const SpeechRecognitionImpl =
   typeof window !== 'undefined'
@@ -27,6 +27,14 @@ const isElectronShell = () =>
 // нет записи звука в файл, и вызов был мёртвым
 export const hasNativeStt = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribePcm);
+
+/**
+ * Чем считала прошлая диктовка: 'server' (прогретый whisper.cpp в памяти),
+ * 'cli' (холодный запуск) или '' (ещё не знаем). От этого зависит, стоит ли
+ * резать запись заранее: на холодном движке каждый кусок — это снова загрузка
+ * весов, и нарезка сделала бы диктовку медленнее.
+ */
+let lastMode = '';
 
 /**
  * Почему запись не дала текста — и что с этим делать.
@@ -256,6 +264,7 @@ export function createRecognizer(opts = {}) {
             contextPrompt: '',
             pre: true,
           });
+          if (res?.mode) lastMode = res.mode;
           if (res?.ok && String(res.text || '').trim()) {
             preText = mergeOverlap(preText, String(res.text).trim());
             preCount += 1;
@@ -282,6 +291,7 @@ export function createRecognizer(opts = {}) {
               // Уровень микрофона — единственный сигнал, по которому видно
               // паузу. Дальше решает чистый модуль chunks.js: он скажет,
               // можно ли уже отдать кусок движку.
+              if (!shouldPreChunk(lastMode)) return;
               const atMs = recorder
                 ? Math.round((recorder.frames / (recorder.sampleRate || 16000)) * 1000)
                 : 0;
@@ -400,6 +410,7 @@ export function createRecognizer(opts = {}) {
           onEnd?.({ text: '' });
           return { text: '', reason: String(err?.message || err) };
         }
+        if (res?.mode) lastMode = res.mode;
         if (res?.ok && res.text) {
           // Полный текст — заранее распознанные куски плюс хвост. Один проход
           // по хвосту вместо всей фразы и есть выигрыш во времени.
