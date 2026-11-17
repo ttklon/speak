@@ -553,7 +553,11 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
     await new Promise((r) => setTimeout(r, 250));
     // вставка в чужое окно идёт через системный SendKeys ('^v'), а не через рендерер
     const calls = spawnCalls.map((c) => `${c.file} ${(c.args || []).join(' ')}`);
-    const pasted = calls.some((c) => /SendKeys\]::SendWait\('\^v'\)/.test(c));
+    // Ctrl+V отправляется одной из независимых дорог: mshta (не боится политик
+    // PowerShell), PowerShell SendKeys или собственный помощник SendInput.
+    const pasted = calls.some(
+      (c) => /SendKeys\(\"\^v\"\)/.test(c) || /SendWait\('\^v'\)/.test(c) || /zs-input\.exe/.test(c),
+    );
     if (!pasted) throw new Error(`не нашёл Ctrl+V: ${calls.join(' | ') || 'пусто'}`);
     if (clipboardText.value !== 'привет из диктовки') throw new Error('текст не в буфере');
   } finally {
@@ -569,7 +573,10 @@ await check('неудачная вставка оставляет текст в 
     spawnPlan.execError = true;
     const ok = await handlers.get('text:insert')({}, 'диктовка в буфере');
     await new Promise((r) => setTimeout(r, 900));
-    if (ok !== false) throw new Error('вставка выдана за успешную');
+    // Ответ теперь объект: способ вставки и причина отказа. «false» без причины
+    // и было тем самым «ничего не работает», которое невозможно разобрать.
+    if (!ok || ok.ok !== false) throw new Error(`вставка выдана за успешную: ${JSON.stringify(ok)}`);
+    if (!ok.reason) throw new Error('отказ без причины — человеку нечего делать');
     if (clipboardText.value !== 'диктовка в буфере') {
       throw new Error(`в буфере: ${clipboardText.value} — обещанного текста нет`);
     }
@@ -603,7 +610,8 @@ await check('вставка без буфера: текст уходит в ок
     spawnPlan.sendInput = { out: `p:25\nok:${text.length}\n`, code: 0 };
     spawnCalls.length = 0;
     const ok = await handlers.get('text:insert')({}, text);
-    if (ok !== true) throw new Error(`вставка не удалась: ${JSON.stringify(ok)}`);
+    if (!ok || ok.ok !== true) throw new Error(`вставка не удалась: ${JSON.stringify(ok)}`);
+    if (ok.method !== 'sendinput') throw new Error(`способ вставки не тот: ${ok.method}`);
     if (clipboardText.value !== 'чужой буфер') throw new Error(`буфер перетёрт: ${clipboardText.value}`);
     const decoded = Buffer.from(spawnPlan.stdin, 'base64').toString('utf8');
     if (decoded !== text) throw new Error(`в помощник ушло не то: ${decoded}`);
@@ -646,7 +654,7 @@ await check('вставка без буфера: полный отказ ухо�
     spawnPlan.sendInput = { out: 'err:empty\n', code: 3 };
     const text = 'запасной путь через буфер';
     const ok = await handlers.get('text:insert')({}, text);
-    if (ok !== true) throw new Error('SendInput не ввёл ничего, а буферный путь не сработал');
+    if (!ok || ok.ok !== true) throw new Error(`SendInput не ввёл ничего, а буферный путь не сработал: ${JSON.stringify(ok)}`);
     if (clipboardText.value !== text) throw new Error(`в буфере: ${clipboardText.value}`);
   } finally {
     spawnPlan.sendInput = null;
@@ -661,7 +669,7 @@ await check('восстановление буфера не перетирает
   try {
     clipboardText.value = 'было в буфере';
     const ok = await handlers.get('text:insert')({}, 'вставка прошла');
-    if (ok !== true) throw new Error('вставка не удалась');
+    if (!ok || ok.ok !== true) throw new Error(`вставка не удалась: ${JSON.stringify(ok)}`);
     await new Promise((r) => setTimeout(r, 120));
     clipboardText.value = 'человек скопировал своё';
     await new Promise((r) => setTimeout(r, 900));
@@ -679,7 +687,7 @@ await check('после успешной вставки возвращается
   try {
     clipboardText.value = 'прежнее содержимое';
     const ok = await handlers.get('text:insert')({}, 'диктованный текст');
-    if (ok !== true) throw new Error('вставка не удалась');
+    if (!ok || ok.ok !== true) throw new Error(`вставка не удалась: ${JSON.stringify(ok)}`);
     await new Promise((r) => setTimeout(r, 900));
     if (clipboardText.value !== 'прежнее содержимое') {
       throw new Error(`в буфере осталось: ${clipboardText.value}`);
@@ -1675,7 +1683,7 @@ await check('вне Windows текст остаётся в буфере: вст�
   clipboardText.value = 'моя заметка';
   const ok = await handlers.get('text:insert')({}, 'надиктованный текст');
   await new Promise((r) => setTimeout(r, 900));
-  if (ok !== false) throw new Error('вставка выдана за успешную');
+  if (!ok || ok.ok !== false) throw new Error(`вставка выдана за успешную: ${JSON.stringify(ok)}`);
   if (clipboardText.value !== 'надиктованный текст') {
     throw new Error(`в буфере осталось: ${clipboardText.value}`);
   }

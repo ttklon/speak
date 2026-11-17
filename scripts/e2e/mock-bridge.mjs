@@ -189,7 +189,18 @@ export function installMockBridge() {
       };
     },
 
-    insertText: ok('text:insert'),
+    // main отвечает объектом: способ вставки и причина отказа. Мок повторяет
+    // ту же форму, иначе интерфейс проверялся бы на другой структуре ответа.
+    insertText: async (text) => {
+      // args — как у настоящего preload: одна позиция на переданный аргумент
+      record('text:insert', [text]);
+      return { ok: true, method: 'win-input', ms: 12 };
+    },
+    // состояние помощника ввода — для «Диагностики»
+    inputStatus: async () => {
+      record('input:status');
+      return { ready: true, reason: '', platform: 'win32', last: { at: Date.now(), ok: true, method: 'win-input', ms: 12, reason: '' } };
+    },
     // куда попадёт текст: главное окно или чужое приложение
     insertTarget: async () => {
       record('text:target');

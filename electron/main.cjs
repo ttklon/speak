@@ -18,6 +18,8 @@ const { sendUnicodeText } = require('./sendInput.cjs');
 // Резидентный помощник ввода: PowerShell поднимается один раз, а не на каждую
 // вставку — иначе диктовка ждёт компиляцию C# дважды подряд.
 const { host: inputHost } = require('./inputHost.cjs');
+const { createWinInput } = require('./winInput.cjs');
+const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
 const {
@@ -60,6 +62,24 @@ let clipboardTimer = null;
 let updater = null;
 let lastClipboardText = '';
 let windowHiddenForInsert = false;
+// Ввод в чужие окна без PowerShell: свой exe, собранный csc.exe при первом
+// использовании. Это главный путь — PowerShell остался запасным.
+let winInput = null;
+const getWinInput = () => {
+  if (!winInput) {
+    let base = '';
+    try {
+      base = path.join(app.getPath('userData'), 'input');
+    } catch {
+      base = '';
+    }
+    winInput = createWinInput({ baseDir: base });
+  }
+  return winInput;
+};
+
+// Чем закончилась последняя вставка: способ, время, причина отказа.
+let lastInsertInfo = { at: 0, ok: null, method: '', ms: 0, reason: '' };
 let lastInsertedText = '';
 let lastInsertedAt = 0;
 // Свою же вставку считаем «своей» только пару секунд: иначе человек,
@@ -1330,6 +1350,21 @@ function registerIpc() {
       }
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
       const ms = Date.now() - started;
+      // «Просто повторы»: на тишине и шуме движок зацикливается и выдаёт одну
+      // фразу несколько раз. Сворачиваем повтор до одного вхождения и пишем об
+      // этом в журнал — вставлять петлю в чужое окно нельзя.
+      if (res?.ok && res.text) {
+        const collapsed = collapseRepetition(res.text);
+        if (collapsed !== res.text) {
+          logger.warn('stt', 'Свёрнут повтор движка', {
+            keep: true,
+            was: res.text.length,
+            now: collapsed.length,
+            loop: looksLikeLoop(res.text),
+          });
+          res = { ...res, text: collapsed };
+        }
+      }
       // whisper иногда «дослышит» фразу, которой не было (тишина, музыка).
       if (res?.ok && whisper.isPhantom?.(res.text)) {
         logger.warn('stt', 'Отброшена фраза-галлюцинация', { keep: true, chars: res.text.length });
@@ -1433,21 +1468,46 @@ function registerIpc() {
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));
 
+  // Вставка текста в активное окно.
+  //
+  // Порядок попыток — от самого надёжного к самому простому, и он же пишется
+  // в журнал вместе с причиной отказа, чтобы «ничего не вставилось» можно было
+  // разобрать по фактам, а не догадками:
+  //   1. свой exe помощника (SendInput) — не зависит от PowerShell и политик;
+  //   2. буфер обмена + Ctrl+V через того же помощника;
+  //   3. прежние пути: резидентный PowerShell-хост и одноразовый PowerShell;
+  //   4. если не вышло ничего — текст остаётся в буфере, и человеку это сказано.
   ipcMain.handle('text:insert', async (_e, text) => {
     const value = String(text || '');
-    if (!value) return false;
+    if (!value) return { ok: false, reason: 'пустой текст' };
     lastInsertedText = value;
     lastInsertedAt = Date.now();
+    const started = Date.now();
+    const input = getWinInput();
+    const known = input.status();
+    if (process.platform === 'win32' && !known.ready) await input.ensure();
+
     // Настройка «Способ вставки»: SendInput не трогает буфер обмена вовсе.
-    // Если он не смог ввести ни одного символа — спокойно идём путём буфера.
     const insertMethod = String((store?.get('zs:settings') || {}).insertMethod || 'clipboard');
     if (insertMethod === 'sendinput' && process.platform === 'win32') {
       const direct = await insertViaSendInput(value);
-      if (direct !== null) {
-        // Буфер остался чужим: мониторинг не должен счесть это своей записью,
-        // поэтому запоминаем актуальное содержимое, а не наш текст.
+      if (direct === true) {
+        logger.info('insert', 'Текст введён без буфера', { keep: true, ms: Date.now() - started, chars: value.length, method: 'sendinput' });
         lastClipboardText = clipboard.readText() || '';
-        return direct;
+        lastInsertInfo = { at: Date.now(), ok: true, method: 'sendinput', ms: Date.now() - started, reason: '' };
+        return { ok: true, method: 'sendinput', ms: Date.now() - started };
+      }
+      if (direct && typeof direct === 'object' && direct.partial > 0) {
+        // Часть уже в окне: буфером дублировать нельзя, иначе текст задвоится.
+        lastClipboardText = clipboard.readText() || '';
+        lastInsertInfo = {
+          at: Date.now(),
+          ok: false,
+          method: 'sendinput',
+          ms: Date.now() - started,
+          reason: `введено ${direct.partial} из ${direct.total}`,
+        };
+        return { ok: false, method: 'sendinput', partial: direct.partial, total: direct.total, reason: direct.reason || '' };
       }
     }
     lastClipboardText = value; // чтобы мониторинг не добавил это в историю
@@ -1458,14 +1518,54 @@ function registerIpc() {
     const previousImage = clipboard.readImage();
     const hadImage = previousImage && !previousImage.isEmpty();
     clipboard.writeText(value);
-    const pasted = await pasteToActiveWindow();
+    // Сначала свой помощник: Ctrl+V через SendInput, без PowerShell и без
+    // Add-Type. Именно на этом шаге раньше и ломалось — политика PowerShell
+    // запрещала сценарий, вставка молча не происходила, а уведомление «Готово»
+    // приходило. Теперь отказ виден в журнале с причиной.
+    let pasted = false;
+    let method = '';
+    let reason = '';
+    if (process.platform === 'win32' && input.status().ready) {
+      hideWindowForInsert();
+      const fast = await input.paste();
+      restoreWindowAfterInsert();
+      if (fast?.ok) {
+        pasted = true;
+        method = 'win-input';
+      } else {
+        reason = String(fast?.reason || '');
+      }
+    }
+    // mshta: не зависит от политик PowerShell и не требует сборки помощника
+    if (!pasted) {
+      hideWindowForInsert();
+      pasted = await pasteViaMshta();
+      restoreWindowAfterInsert();
+      method = pasted ? 'mshta' : '';
+      if (!pasted && !reason) reason = 'Ctrl+V через mshta не сработал';
+    }
+    if (!pasted) {
+      pasted = await pasteToActiveWindow();
+      method = pasted ? 'powershell' : '';
+      if (!pasted) reason = reason ? `${reason}; PowerShell не помог` : 'Ctrl+V не сработал (PowerShell)';
+    }
     if (!pasted) {
       // Вставка не удалась — и тогда текст ОСТАЁТСЯ в буфере: именно это
       // обещает тост «Текст скопирован в буфер, нажмите Ctrl+V». Раньше буфер
       // всё равно восстанавливался через 700 мс, и обещанного текста там не было.
       lastClipboardText = value;
-      return false;
+      logger.error('insert', 'Вставка не удалась, текст оставлен в буфере', {
+        keep: true,
+        ms: Date.now() - started,
+        chars: value.length,
+        method: method || 'none',
+        reason,
+        helper: input.status().reason || 'готов',
+      });
+      lastInsertInfo = { at: Date.now(), ok: false, method: 'clipboard', ms: Date.now() - started, reason };
+      return { ok: false, method: 'clipboard', reason, helper: input.status() };
     }
+    logger.info('insert', 'Текст вставлен', { keep: true, ms: Date.now() - started, chars: value.length, method });
     setTimeout(() => {
       try {
         // Если за эти полсекунды человек успел что-то скопировать сам — его
@@ -1483,8 +1583,22 @@ function registerIpc() {
         /* ignore */
       }
     }, 500);
-    return pasted;
+    lastInsertInfo = { at: Date.now(), ok: true, method, ms: Date.now() - started, reason: '' };
+    return { ok: true, method, ms: Date.now() - started };
   });
+  // Состояние вставки: чем вставляем, что было в прошлый раз и почему не
+  // вышло. Без этого «текст не вставляется» — неразрешимая жалоба.
+  ipcMain.handle('input:status', async () => {
+    const input = getWinInput();
+    if (process.platform === 'win32' && !input.status().ready) await input.ensure();
+    return {
+      ...input.status(),
+      helper: inputHost.status(),
+      last: lastInsertInfo,
+      platform: process.platform,
+    };
+  });
+
   // Куда уйдёт текст: наше окно (значит, вставляем прямо в поле) или чужое
   // приложение с названием — это видно в интерфейсе ещё до вставки.
   ipcMain.handle('text:target', async () => {
@@ -2285,6 +2399,32 @@ async function insertViaSendInput(value) {
     return { ok: false, partial: res.sent, total: res.total, reason: res.reason || '' };
   }
   return null;
+}
+
+/**
+ * Ctrl+V через mshta: `WScript.Shell.SendKeys` — часть Windows, её не касаются
+ * политики PowerShell (ExecutionPolicy, ConstrainedLanguage). Нужен как ещё один
+ * независимый путь: если PowerShell на машине запрещён, вставка всё равно будет.
+ * Сама по себе mshta умеет только аккорды, текст она не печатает — поэтому это
+ * именно запасной путь для «вставить из буфера».
+ */
+function pasteViaMshta() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve(false);
+      return;
+    }
+    const script = 'vbscript:CreateObject("WScript.Shell").SendKeys("^v"):close()';
+    execFile(
+      'mshta.exe',
+      [script],
+      { windowsHide: true, timeout: 8000 },
+      (error) => {
+        if (error) console.warn('[paste] mshta failed', error.message);
+        resolve(!error);
+      },
+    );
+  });
 }
 
 function pasteToActiveWindow() {

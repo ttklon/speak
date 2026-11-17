@@ -4,7 +4,7 @@ import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
-import { localEvents } from '../../../lib/diagnostics.js';
+import { diag, localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
 import { APP } from '../../../lib/config.js';
@@ -27,6 +27,9 @@ function timeOf(at) {
  * «Данные → Диагностика». Честно показывает, что собирается, что уходит на
  * сервер и что происходит в последних событиях. Отправку можно выключить.
  */
+/** Пробный текст: короткий, узнаваемый, без латиницы на всякий случай. */
+const INSERT_PROBE = 'Проверка вставки ZSpeakly — этот текст должен появиться здесь.';
+
 export default function DiagnosticsSection() {
   const { settings, updateSettings, dictations } = useAppData();
   const { push } = useToast();
@@ -49,6 +52,11 @@ export default function DiagnosticsSection() {
   // должен идти искать, где это меняется. Если режим ещё не скачан — качаем
   // и говорим об этом, а не переключаем на отсутствующий файл.
   const [switching, setSwitching] = useState(false);
+  // Состояние вставки: чем вставляем и что было в прошлый раз. Без этого
+  // «текст не вставляется» невозможно разобрать — только догадываться.
+  const [inputStatus, setInputStatus] = useState(null);
+  const [probe, setProbe] = useState(null);
+  const [probeBusy, setProbeBusy] = useState(false);
   const currentTier = tierForModel(settings.whisperModel);
   const lighterTier = currentTier ? lighterModel(currentTier.model) : '';
   const lighter = lighterTier ? tierForModel(lighterTier) : null;
@@ -104,6 +112,72 @@ export default function DiagnosticsSection() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Статус вставки спрашиваем один раз при открытии: он показывает, собран ли
+  // помощник ввода и чем закончилась прошлая вставка.
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.inputStatus) return;
+    bridge
+      .inputStatus()
+      .then((st) => setInputStatus(st || null))
+      .catch(() => setInputStatus(null));
+  }, []);
+
+  /**
+   * Проверка вставки «как в жизни»: три секунды на то, чтобы переключиться в
+   * нужное окно, потом настоящая вставка пробного текста. Приложение умеет
+   * только вставлять — проверить результат за человека оно не может, поэтому
+   * спрашиваем прямо «появился ли текст» и пишем ответ в журнал.
+   */
+  const checkInsert = useCallback(async () => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.insertText) {
+      push({ title: 'Только в приложении', description: 'В браузере вставка в другие окна недоступна.', tone: 'warn' });
+      return;
+    }
+    setProbeBusy(true);
+    setProbe(null);
+    push({
+      title: 'Переключитесь в нужное окно',
+      description: 'Через три секунды вставлю пробный текст — поставьте курсор туда, где хотите его увидеть.',
+      tone: 'info',
+      ttl: 3200,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    let res = null;
+    try {
+      res = await bridge.insertText(INSERT_PROBE);
+    } catch (error) {
+      res = { ok: false, reason: String(error?.message || error) };
+    }
+    setProbeBusy(false);
+    setProbe(res || { ok: false, reason: 'нет ответа' });
+    const status = bridge.inputStatus ? await bridge.inputStatus().catch(() => null) : null;
+    if (status) setInputStatus(status);
+    diag.info('insert', res?.ok ? 'Проверка вставки: текст доставлен' : 'Проверка вставки: отказ', {
+      method: res?.method || '',
+      reason: res?.reason || '',
+    });
+  }, [push]);
+
+  const confirmProbe = useCallback(
+    (appeared) => {
+      diag.info('insert', appeared ? 'Человек подтвердил: текст появился' : 'Человек сообщил: текст не появился', {
+        method: probe?.method || '',
+      });
+      push({
+        title: appeared ? 'Вставка работает' : 'Вставка не дошла до окна',
+        description: appeared
+          ? 'Дальше диктовка будет вставляться так же.'
+          : 'Причина и способ записаны в журнал. Текст всегда остаётся в буфере — его можно вставить через Ctrl+V.',
+        tone: appeared ? 'success' : 'warn',
+        ttl: 10000,
+      });
+      setProbe(null);
+    },
+    [probe, push],
+  );
 
   // адрес берём из настроек главного процесса: он же переживает перезапуск
   useEffect(() => {
@@ -481,6 +555,19 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="kv-row">
+          <span className="kv-row__key">Движок вставки</span>
+          <span className="kv-row__value">
+            {!inputStatus
+              ? '—'
+              : inputStatus.ready
+                ? 'свой помощник SendInput готов — вставка без PowerShell'
+                : `помощник SendInput недоступен: ${inputStatus.reason || 'неизвестно'} — вставка через буфер и PowerShell`}
+            {inputStatus?.last?.at
+              ? ` · прошлая: ${inputStatus.last.ok ? 'получилась' : 'не получилась'}${inputStatus.last.method ? `, способ ${inputStatus.last.method === 'win-input' ? 'SendInput' : inputStatus.last.method === 'powershell' ? 'PowerShell' : 'буфер'}` : ''}${inputStatus.last.reason ? ` (${inputStatus.last.reason})` : ''}`
+              : ''}
+          </span>
+        </div>
+        <div className="kv-row">
           <span className="kv-row__key">Запуск окна</span>
           <span className="kv-row__value">
             {!system
@@ -497,6 +584,47 @@ export default function DiagnosticsSection() {
             {system ? `${system.cpus} ядер, ${system.ramGb} ГБ памяти, версия ${system.version}` : '—'}
           </span>
         </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Вставка в другие окна</div>
+        <div className="settings-group__desc">
+          Текст вставляется в активное окно. Проверка честная: приложение вставит настоящий
+          пробный текст, а вы скажете, появился он или нет — приложение не может увидеть чужие окна.
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Проверка вставки
+            <div className="setting-row__desc">
+              {probeBusy
+                ? 'Вставляю через три секунды после нажатия…'
+                : probe
+                  ? probe.ok
+                    ? 'Текст отправлен в активное окно. Появился?'
+                    : `Вставка отказала: ${probe.reason || 'причина неизвестна'}. Текст остался в буфере — вставьте через Ctrl+V.`
+                  : 'Нажмите, переключитесь в Блокнот или Word и дождитесь пробного текста.'}
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={checkInsert} disabled={probeBusy}>
+            {probeBusy ? 'Вставляю…' : 'Проверить вставку'}
+          </Button>
+        </div>
+        {probe?.ok ? (
+          <div className="setting-row">
+            <div className="setting-row__label">
+              Текст появился?
+              <div className="setting-row__desc">Ответ попадёт в журнал — по нему видно, работает ли вставка.</div>
+            </div>
+            <div className="setting-row__actions">
+              <Button variant="white" size="sm" onClick={() => confirmProbe(true)}>
+                Да, появился
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => confirmProbe(false)}>
+                Нет
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="settings-group">

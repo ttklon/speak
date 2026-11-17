@@ -1231,3 +1231,10 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Ответ на вопрос «появился ли текст» — две кнопки рядом с подписью */
+.setting-row__actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}

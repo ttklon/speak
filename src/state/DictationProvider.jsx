@@ -379,12 +379,24 @@ export function DictationProvider({ children }) {
                 });
                 return;
               }
-              if (res === false) {
+              // main теперь отвечает объектом: способ вставки, причина отказа.
+              // Молчаливое «не вставилось» — это и есть «ничего не работает»,
+              // поэтому причина называется прямо, а не «что-то пошло не так».
+              if (res === false || (res && typeof res === 'object' && res.ok === false)) {
+                const why =
+                  res && typeof res === 'object' && res.reason
+                    ? `Причина: ${res.reason}.`
+                    : 'Автоматическая вставка не сработала.';
                 pushToast({
-                  title: 'Текст скопирован в буфер',
-                  description: 'Вставить автоматически не удалось — нажмите Ctrl+V в нужном окне.',
+                  title: 'Текст в буфере — нажмите Ctrl+V',
+                  description: `${why} Текст не потерян: он в буфере обмена и в истории.`,
                   tone: 'warn',
-                  ttl: 9000,
+                  ttl: 12000,
+                });
+                diag.warn('stt', 'Вставка не удалась', {
+                  method: (res && res.method) || '',
+                  reason: (res && res.reason) || '',
+                  helper: (res && res.helper && res.helper.reason) || '',
                 });
               }
             })

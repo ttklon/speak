@@ -178,6 +178,18 @@ export const SETTING_ENTRIES = [
   {
     "section": "diagnostics",
     "sectionLabel": "Диагностика",
+    "title": "Проверка вставки",
+    "desc": ""
+  },
+  {
+    "section": "diagnostics",
+    "sectionLabel": "Диагностика",
+    "title": "Текст появился?",
+    "desc": "Ответ попадёт в журнал — по нему видно, работает ли вставка."
+  },
+  {
+    "section": "diagnostics",
+    "sectionLabel": "Диагностика",
     "title": "Самопроверка",
     "desc": ""
   },

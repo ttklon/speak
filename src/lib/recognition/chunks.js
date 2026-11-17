@@ -218,6 +218,22 @@ export function mergeOverlap(previous = '', next = '') {
   const rightWords = words(right);
   const max = Math.min(3, leftWords.length, rightWords.length);
 
+  // 0) Целое предложение на стыке. Бывает, что хвост распознаётся вместе с
+  // последним предложением предыдущего куска — тогда предыдущее предложение
+  // повторилось бы целиком («просто повторы» в чужом окне). Сравниваем
+  // предложения без регистра и знаков препинания.
+  const leftSentences = String(left).split(/(?<=[.!?…])\s+/).filter(Boolean);
+  const rightSentences = String(right).split(/(?<=[.!?…])\s+/).filter(Boolean);
+  if (leftSentences.length && rightSentences.length) {
+    const lastLeft = bare(leftSentences[leftSentences.length - 1].replace(/[.!?…]+$/u, ''));
+    const firstRight = bare(rightSentences[0].replace(/[.!?…]+$/u, ''));
+    if (lastLeft && firstRight && lastLeft === firstRight && leftSentences.length > 1) {
+      // оставляем предложение в предыдущем куске, из нового его убираем
+      const rest = rightSentences.slice(1).join(' ');
+      return joinChunks([left, rest]);
+    }
+  }
+
   // 1) точное совпадение хвоста и начала
   for (let k = max; k >= 1; k -= 1) {
     const tail = leftWords.slice(-k).map(bare).join(' ');

@@ -1056,10 +1056,43 @@ async function scenarioInsertFailed(browser) {
   }));
   record(
     'сценарии',
-    'вставка не удалась: текст в истории и тост «скопирован в буфер»',
-    /скопирован в буфер/i.test(state.toast) && state.stored === 'Привет как дела.',
-    `${state.stored} · ${state.toast.slice(0, 60)}`,
+    'вставка не удалась: текст в истории и честный тост «нажмите Ctrl+V»',
+    // main отвечает объектом с причиной; интерфейс обязан её показать, а не
+    // молчать — молчание и было жалобой «ничего не работает».
+    /нажмите Ctrl\+V/i.test(state.toast) && state.stored === 'Привет как дела.',
+    `${state.stored} · ${state.toast.slice(0, 80)}`,
   );
+
+  // Тот же отказ, но с причиной от main: она должна дойти до человека.
+  const reasonPage = await openPage(browser, '#/home', {
+    patchNative: () => {
+      const native = window.zspeakly && window.zspeakly.native;
+      if (!native) return;
+      native.transcribePcm = async () => ({ ok: true, text: 'раз два три', engine: 'whisper' });
+      native.insertText = async () => ({
+        ok: false,
+        method: 'clipboard',
+        reason: 'Ctrl+V через mshta не сработал',
+      });
+    },
+  });
+  takeErrors(reasonPage);
+  await reasonPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await reasonPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const reasonToast = await reasonPage.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+  );
+  record(
+    'сценарии',
+    'вставка не удалась: причина отказа доходит до человека',
+    /mshta/i.test(reasonToast),
+    reasonToast.slice(0, 90),
+  );
+  const reasonErrors = takeErrors(reasonPage).filter((e) => !/AudioContext|NotAllowedError/i.test(e));
+  record('сценарии', 'вставка с причиной: без ошибок консоли', reasonErrors.length === 0, reasonErrors[0] || '');
+  await reasonPage.close();
   const errors = takeErrors(page);
   record('сценарии', 'вставка не удалась: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
