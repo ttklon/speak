@@ -1836,6 +1836,10 @@ function registerIpc() {
         engineMode: whisper.serverStatus?.().last?.mode || '',
         lastSttMs: whisper.serverStatus?.().last?.ms || 0,
         inputHost: inputHost.status(),
+        // Помощник ввода и итог последней вставки: по отчёту видно, собран ли
+        // он и чем закончилась попытка, — иначе «не вставляется» не разобрать.
+        winInput: getWinInput().status(),
+        lastInsert: lastInsertInfo,
       };
     } catch (err) {
       return { error: String(err?.message || err) };

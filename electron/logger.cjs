@@ -392,6 +392,23 @@ const logger = {
           sys.lastSttMs ? ` · последняя диктовка ${Math.round(sys.lastSttMs / 100) / 10} с (${sys.engineMode || '?'})` : ''
         }`,
       );
+      if (sys.winInput) {
+        lines.push(
+          `ввод SendInput: ${
+            sys.winInput.ready
+              ? `помощник собран (${sys.winInput.path || 'путь неизвестен'})`
+              : `недоступен: ${sys.winInput.reason || 'причина неизвестна'}`
+          }`,
+        );
+      }
+      if (sys.lastInsert && sys.lastInsert.at) {
+        const li = sys.lastInsert;
+        lines.push(
+          `последняя вставка: ${li.ok ? 'получилась' : 'НЕ получилась'} · способ ${li.method || '?'} · ${
+            li.ms || 0
+          } мс${li.reason ? ` · причина: ${li.reason}` : ''}`,
+        );
+      }
       if (sys.inputHost) {
         lines.push(
           `помощник ввода: ${

@@ -3,9 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { findCompiler, candidateCompilers, helperPaths, parseHelperOutput, createWinInput } = require(
-  '../../electron/winInput.cjs',
-);
+const {
+  findCompiler,
+  candidateCompilers,
+  helperPaths,
+  parseHelperOutput,
+  createWinInput,
+  HELPER_SOURCE,
+} = require('../../electron/winInput.cjs');
 
 describe('поиск компилятора C#', () => {
   it('перебирает Framework64 и Framework, начиная с 4.0', () => {
@@ -74,5 +79,43 @@ describe('честный отказ вне Windows', () => {
     const state = input.status();
     expect(state.platform).toBe('linux');
     expect(typeof state.reason).toBe('string');
+  });
+});
+
+describe('исходник помощника (собрать C# здесь нельзя — проверяем структуру)', () => {
+  it('зовёт SendInput с UNICODE и скан-кодами', () => {
+    expect(HELPER_SOURCE).toMatch(/SendInput\(/);
+    expect(HELPER_SOURCE).toMatch(/KEYEVENTF_UNICODE/);
+    // Ctrl+V скан-кодом: не зависит от раскладки
+    expect(HELPER_SOURCE).toMatch(/VK_V/);
+    expect(HELPER_SOURCE).toMatch(/VK_CONTROL/);
+  });
+
+  it('умеет Enter и Tab как настоящие клавиши', () => {
+    expect(HELPER_SOURCE).toMatch(/VK_RETURN/);
+    expect(HELPER_SOURCE).toMatch(/VK_TAB/);
+  });
+
+  it('не использует синтаксис новее C# 5 — csc.exe из .NET Framework его не поймёт', () => {
+    expect(HELPER_SOURCE).not.toMatch(/\$"/); // интерполяция строк
+    expect(HELPER_SOURCE).not.toMatch(/\bnameof\s*\(/);
+    expect(HELPER_SOURCE).not.toMatch(/\?\./); // null-conditional
+    expect(HELPER_SOURCE).not.toMatch(/=>\s*[^;]+;/); // expression-bodied члены
+    expect(HELPER_SOURCE).not.toMatch(/\bvar\b/); // допустим, но пусть будет явно
+  });
+
+  it('фигурные скобки сбалансированы — иначе компилятор упадёт молча', () => {
+    const open = (HELPER_SOURCE.match(/{/g) || []).length;
+    const close = (HELPER_SOURCE.match(/}/g) || []).length;
+    expect(open).toBe(close);
+    expect(open).toBeGreaterThan(20);
+  });
+
+  it('пишет результат в stdout одной строкой JSON и возвращает код выхода', () => {
+    expect(HELPER_SOURCE).toMatch(/Console\.WriteLine/);
+    expect(HELPER_SOURCE).toMatch(/return 0;/);
+    expect(HELPER_SOURCE).toMatch(/return complete \? 0 : 1;/);
+    // ответ должен быть валидным JSON-экранированием
+    expect(HELPER_SOURCE).toMatch(/sb\.Append\('\\\\'\)/);
   });
 });

@@ -414,4 +414,14 @@ function createWinInput({ baseDir, platform = process.platform, exists = fs.exis
   };
 }
 
-module.exports = { createWinInput, findCompiler, candidateCompilers, helperPaths, parseHelperOutput, HELPER_VERSION };
+module.exports = {
+  createWinInput,
+  findCompiler,
+  candidateCompilers,
+  helperPaths,
+  parseHelperOutput,
+  HELPER_VERSION,
+  // исходник отдаём наружу, чтобы тест проверял его структуру: собрать C# в
+  // Linux нельзя, а ошибку в нём лучше поймать до выпуска
+  HELPER_SOURCE: CS_SOURCE,
+};
