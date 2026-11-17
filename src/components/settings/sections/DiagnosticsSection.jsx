@@ -10,6 +10,7 @@ import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
 import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
 import { analyseSpeed } from '../../../lib/speedReport.js';
+import { tierForModel } from '../../../lib/modelTiers.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -292,16 +293,12 @@ export default function DiagnosticsSection() {
     <div>
       <h2 className="settings-section__title">Диагностика</h2>
       <p className="settings-section__desc">
-        Чтобы ошибки можно было починить, а не угадывать. По умолчанию журнал пишется только на
-        этом компьютере; отправку на сервер можно включить в любой момент, указав адрес приёмника.
+        Что происходит на этом компьютере и почему. Журнал по умолчанию никуда не уходит.
       </p>
 
       <div className="settings-group">
         <div className="settings-group__title">Как сейчас работает диктовка</div>
-        <div className="settings-group__desc">
-          Снимок настроек, которые чаще всего объясняют «почему не так»: их видно сразу, без
-          пролистывания разделов. Это же уходит в отчёт, если отправить его в поддержку.
-        </div>
+        <div className="settings-group__desc">То, что чаще всего объясняет «почему не так».</div>
         <div className="kv-row">
           <span className="kv-row__key">Движок</span>
           <span className="kv-row__value">{engineName()}</span>
@@ -309,8 +306,8 @@ export default function DiagnosticsSection() {
         <div className="kv-row">
           <span className="kv-row__key">Модель</span>
           <span className="kv-row__value">
-            {settings.whisperModel || 'small-q5_1'}
-            {settings.keepModelLoaded === true ? ' (держится в памяти)' : ''}
+            {tierForModel(settings.whisperModel)?.label || 'Сбалансированно'}
+            {settings.keepModelLoaded === true ? ', держится в памяти' : ''}
           </span>
         </div>
         <div className="kv-row">
@@ -331,21 +328,12 @@ export default function DiagnosticsSection() {
               : 'выключен — запись начинается с нажатия'}
           </span>
         </div>
-        <div className="kv-row">
-          <span className="kv-row__key">Вставка текста</span>
-          <span className="kv-row__value">
-            {settings.insertMethod === 'sendinput'
-              ? 'SendInput без буфера обмена (только Windows)'
-              : 'буфер обмена + Ctrl+V, прежний буфер возвращается'}
-          </span>
-        </div>
       </div>
 
       <div className="settings-group">
         <div className="settings-group__title">Скорость: укладывается ли в пять секунд</div>
         <div className="settings-group__desc">
-          Замеры по последним диктовкам: сколько секунд вы говорили и сколько секунд считал движок.
-          Это факт, а не обещание каталога моделей.
+          Замеры последних диктовок: сколько говорили и сколько считал движок.
         </div>
         {speed.samples.length ? (
           <div className="speed-report">
@@ -400,19 +388,15 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="kv-row">
-          <span className="kv-row__key">Движок whisper.cpp</span>
-          <span className="kv-row__value">
-            {system ? `${system.engine}${system.vad ? ', VAD-модель на месте' : ', без VAD-модели'}` : '—'}
-          </span>
-        </div>
-        <div className="kv-row">
           <span className="kv-row__key">Модель на диске</span>
           <span className="kv-row__value">
-            {system ? `${system.model} — ${system.modelDownloaded ? 'скачана' : 'нет файла'}` : '—'}
+            {system
+              ? `${system.model} — ${system.modelDownloaded ? 'скачана' : 'нет файла'}${system.vad ? ', VAD на месте' : ', без VAD'}`
+              : '—'}
           </span>
         </div>
         <div className="kv-row">
-          <span className="kv-row__key">Скорость: модель в памяти</span>
+          <span className="kv-row__key">Модель в памяти</span>
           <span className="kv-row__value">
             {!system
               ? '—'
@@ -447,28 +431,7 @@ export default function DiagnosticsSection() {
                 : '—'}
           </span>
         </div>
-        <div className="kv-row">
-          <span className="kv-row__key">Прогрев модели</span>
-          <span className="kv-row__value">
-            {!system
-              ? '—'
-              : system.warmMs
-                ? `${(Math.round(system.warmMs / 100) / 10).toLocaleString('ru-RU')} с на загрузку весов — один раз за запуск`
-                : system.engineWarm
-                  ? 'модель уже в памяти'
-                  : 'ещё не грелась'}
-          </span>
-        </div>
-        <div className="kv-row">
-          <span className="kv-row__key">Последняя диктовка</span>
-          <span className="kv-row__value">
-            {system?.lastSttMs
-              ? `${(Math.round(system.lastSttMs / 100) / 10).toLocaleString('ru-RU')} с распознавания (${
-                  system.engineMode === 'server' ? 'модель в памяти' : 'с загрузкой весов'
-                })`
-              : 'ещё не было'}
-          </span>
-        </div>
+
         <div className="kv-row">
           <span className="kv-row__key">Компьютер</span>
           <span className="kv-row__value">

@@ -194,9 +194,13 @@ export default function HomePage() {
             диктует «запятая» словами и правит текст руками. */}
         <p className="hero__hint">{VOICE_COMMAND_TIP}</p>
 
-        <div className="hero__stats">
-          <HeroStat value={formatK(totalWords)} unit="" label="слов в истории" />
-          <HeroStat value={Math.round(totalSeconds / 60)} unit="мин" label="речи продиктовано" />
+        <div className={`hero__stats ${dictations.length ? '' : 'hero__stats--empty'}`}>
+          {dictations.length ? (
+            <>
+              <HeroStat value={formatK(totalWords)} unit="" label="слов в истории" />
+              <HeroStat value={Math.round(totalSeconds / 60)} unit="мин" label="речи продиктовано" />
+            </>
+          ) : null}
           <button
             type="button"
             className={`hero__mic ${listening ? 'is-recording' : ''}`}
@@ -240,7 +244,8 @@ export default function HomePage() {
               </button>
               {processingMs > 15000 ? (
                 <span className="live-draft__hint">
-                  Долго? Модель <b>base</b> распознаёт в разы быстрее — «Настройки → Распознавание».
+                  Долго? В «Настройки → Функции → Модель распознавания» есть режим «Быстро» — он
+                  считает примерно вдвое быстрее.
                 </span>
               ) : null}
             </div>
@@ -289,13 +294,16 @@ export default function HomePage() {
         <div className="section-head">
           <h2 className="section-head__title">Недавние</h2>
           <div className="section-head__actions">
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder="Поиск по расшифровкам"
-              className="recent__search"
-              icon={<Search size={12} />}
-            />
+            {/* Поле поиска по пустой истории — декорация: искать нечего. */}
+            {dictations.length ? (
+              <SearchInput
+                value={query}
+                onChange={setQuery}
+                placeholder="Поиск по расшифровкам"
+                className="recent__search"
+                icon={<Search size={12} />}
+              />
+            ) : null}
             {/* Кнопка есть только когда есть что показывать: неактивная
                 «ПОКАЗАТЬ ВСЁ» выглядела как сломанная — нажимаешь, ничего. */}
             {filtered.length > 6 ? (
@@ -356,8 +364,8 @@ export default function HomePage() {
 
         <div className="recent__footer">
           <span className="recent__footer-text">
-            Версия {APP.version} · {totalWords.toLocaleString('ru-RU')} слов ·{' '}
-            {Math.round(totalSeconds)} с речи
+            Версия {APP.version}
+            {dictations.length ? ` · ${totalWords.toLocaleString('ru-RU')} слов за всё время` : ''}
           </span>
           <button
             type="button"

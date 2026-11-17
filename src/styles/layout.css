@@ -192,47 +192,6 @@ body.web .app-shell {
   padding-top: 10px;
 }
 
-.plan-card {
-  padding: 10px 2px 8px;
-  border-top: 1px solid var(--border-soft);
-  margin-top: 6px;
-}
-
-.plan-card__title {
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--text);
-  letter-spacing: -0.01em;
-}
-
-.plan-card__limit {
-  margin-top: 4px;
-  font-size: 10.5px;
-  color: var(--text-3);
-}
-
-.plan-card__bar {
-  margin: 8px 0 9px;
-  height: 2px;
-  border-radius: 2px;
-  background: rgba(var(--overlay-rgb), 0.1);
-  overflow: hidden;
-}
-
-.plan-card__bar > span {
-  display: block;
-  height: 100%;
-  background: var(--text);
-  border-radius: 2px;
-}
-
-.plan-card__text {
-  font-size: 9.5px;
-  line-height: 1.45;
-  color: var(--text-4);
-  margin: 0 0 10px;
-}
-
 .sidebar__link {
   display: flex;
   align-items: center;
@@ -260,6 +219,13 @@ body.web .app-shell {
 
 .sidebar__link-arrow {
   opacity: 0.5;
+}
+
+.sidebar__link--presets {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 2px;
+  height: 30px;
 }
 
 .sidebar__link--settings {

@@ -6,8 +6,7 @@ import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { MODELS } from '../../../lib/config.js';
-import { MODEL_TIERS, TIER_MODELS, tierForModel } from '../../../lib/modelTiers.js';
-import { engineName } from '../../../lib/recognition/engine.js';
+import { MODEL_TIERS, tierForModel } from '../../../lib/modelTiers.js';
 
 /**
  * Модель распознавания: три режима вместо каталога из десяти моделей.
@@ -247,11 +246,10 @@ export default function ModelManager() {
 
   const downloaded = status?.models ? Object.values(status.models).filter((m) => m.downloaded).length : 0;
   const activeTier = tierForModel(settings.whisperModel);
-  // Модель из старого каталога (q8_0, medium, fp16 small): она ещё работает, но
-  // тяжелее любого из трёх режимов. Не переключаем молча — предлагаем одной
-  // кнопкой, потому что «приложение само поменяло модель» выглядит как поломка.
-  const legacyModel = Boolean(settings.whisperModel) && !TIER_MODELS.includes(settings.whisperModel);
-  const tierEntry = MODELS.find((m) => m.tier === activeTier.id);
+  // Старых имён моделей здесь больше нет: `lib/settingsMigration.js` переводит
+  // их на ближайший режим ещё при загрузке настроек. Держать в интерфейсе
+  // предупреждение про модель, которой уже не существует, значило бы объяснять
+  // человеку то, чего он не выбирал.
 
   /**
    * Честное измерение на этом компьютере: последняя диктовка, где известны и
@@ -284,9 +282,10 @@ export default function ModelManager() {
             Скачиваются сюда же, один раз — дальше всё работает без интернета.
           </span>
         ) : null}
-        Сейчас работает режим <strong>«{activeTier.label.toLowerCase()}»</strong>. Менять его обычно не
-        нужно: приложение выбрало его под этот компьютер и само переключится, если диктовка окажется
-        медленной. Движок: {engineName()}.
+        Сейчас работает режим{' '}
+        <strong>«{tierForModel(status?.active || settings.whisperModel).label.toLowerCase()}»</strong>.
+        Менять его обычно не нужно — приложение выбрало его под этот компьютер и само переключится,
+        если диктовка окажется медленной.
         {status?.bin ? (
           <>
             {' '}
@@ -306,37 +305,13 @@ export default function ModelManager() {
           <>
             {' '}
             <span className="model-state model-state--warn">
-              <TriangleAlert size={11} /> выбранный режим не скачан — работает «
-              {tierForModel(status.active).label.toLowerCase()}»
+              <TriangleAlert size={11} /> «{tierForModel(status.preferred).label.toLowerCase()}» ещё не
+              скачан
             </span>
           </>
         ) : null}
       </div>
 
-      {legacyModel && tierEntry ? (
-        <div className="model-measure model-measure--warn">
-          Сейчас выбрана старая модель «{settings.whisperModel}» — она тяжелее любого из трёх режимов.
-          <Button
-            variant="ghost"
-            size="sm"
-            style={{ marginLeft: 8 }}
-            onClick={() => {
-              if (status?.models?.[tierEntry.id]?.downloaded) {
-                updateSettings({ whisperModel: tierEntry.id });
-                push({
-                  title: `Режим «${activeTier.label.toLowerCase()}»`,
-                  description: `${tierEntry.size} · столько же точности, но быстрее`,
-                  tone: 'success',
-                });
-                return;
-              }
-              download(tierEntry.id);
-            }}
-          >
-            Переключить на «{activeTier.label.toLowerCase()}»
-          </Button>
-        </div>
-      ) : null}
 
       {measured ? (
         <div className="model-measure">

@@ -38,13 +38,18 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
       </nav>
 
       <div className="sidebar__bottom">
-        <button type="button" className="plan-card plan-card--action" onClick={onOpenPresets}>
-          <div className="plan-card__title">AI-инструкции</div>
-          <div className="plan-card__limit">Выдели текст — нажми клавиши</div>
-          <p className="plan-card__text">Переписать, сократить, перевести. Офлайн, без лимитов.</p>
-          <span className="btn btn--white btn--sm btn--block">
-            <Sparkles size={12} /> Открыть
-          </span>
+        {/* Раньше здесь стояла промо-плитка в четыре строки с большой белой
+            кнопкой: место в боковой панели занимала реклама раздела, а не
+            навигация. Теперь это обычная строка меню, как «Настройки». */}
+        <button
+          type="button"
+          className="sidebar__link sidebar__link--presets"
+          onClick={onOpenPresets}
+          title="Инструкции по выделенному тексту"
+        >
+          <Sparkles size={14} strokeWidth={1.6} />
+          <span>AI-инструкции</span>
+          <ChevronRight size={13} className="sidebar__link-arrow" />
         </button>
 
         <button type="button" className="sidebar__link sidebar__link--settings" onClick={onOpenSettings}>

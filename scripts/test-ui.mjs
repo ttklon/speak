@@ -2330,47 +2330,35 @@ async function scenarioSpeedReport(browser) {
   await page.close();
 }
 
-// Модель из старого каталога (десять моделей) больше не прячется: приложение
-// говорит, что она тяжелее трёх режимов, и предлагает перейти одной кнопкой.
-async function scenarioLegacyModel(browser) {
+// Старые имена моделей (base/small/medium/tiny из каталога прежних версий) при
+// загрузке переводятся на один из трёх режимов: иначе приложение искало бы на
+// диске файл, которого больше нет, и молчало о том, что модели нет.
+async function scenarioOldModelName(browser) {
   const page = await openPage(browser, '#/settings?section=features&from=home', {
     settle: 700,
-    // fp16 small (466 МБ) — модель из старого каталога, которой больше нет в списке
     settings: { whisperModel: 'small' },
   });
   takeErrors(page);
   const body = await page.evaluate(() => document.body.innerText);
-  record(
-    'сценарии',
-    'старая модель: видно, что она тяжелее трёх режимов, и есть кнопка перехода',
-    /старая модель «small»/i.test(body) && /Переключить на «сбалансированно»/i.test(body),
-    body.match(/Сейчас выбрана старая модель[^\n]*/)?.[0] || '',
-  );
-  const tierCards = await page.evaluate(
-    () => [...document.querySelectorAll('.model-card')].length,
-  );
-  record('сценарии', 'старая модель: в списке по-прежнему ровно три режима', tierCards === 3, `карточек: ${tierCards}`);
-  const switched = await clickIn(page, '', 'Переключить на «сбалансированно»');
-  await sleep(700);
   const saved = await page.evaluate(() => {
     const raw = window.zspeakly?.store ? window.__e2e.read('zs.settings') : null;
-    const s = raw || (JSON.parse(localStorage.getItem('zs.settings') || '{}'));
+    const s = raw || JSON.parse(localStorage.getItem('zs.settings') || '{}');
     return s?.whisperModel || '';
   });
-  // сбалансированный режим уже скачан в моке — значит переключение, а не загрузка
+  const tiers = ['base-q5_1', 'small-q5_1', 'large-v3-turbo-q5_0'];
   record(
     'сценарии',
-    'старая модель: кнопка переводит на выбранный режим',
-    switched && saved === 'small-q5_1',
+    'старое имя модели переводится на существующий режим',
+    tiers.includes(saved) && !/старая модель/i.test(body),
     String(saved),
   );
+  const tierCards = await page.evaluate(() => document.querySelectorAll('.model-card').length);
+  record('сценарии', 'старое имя модели: в списке ровно три режима', tierCards === 3, `карточек: ${tierCards}`);
   const errors = takeErrors(page);
-  record('сценарии', 'старая модель: без ошибок консоли', errors.length === 0, errors[0] || '');
+  record('сценарии', 'старое имя модели: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
-// Браузерное превью: без движка микрофон «слушает» тишину, и раньше человек
-// решал, что приложение сломано. Теперь об этом сказано прямо на главной.
 async function scenarioBrowserPreviewNotice(browser) {
   // отдельная страница без моста: так выглядит браузерное превью
   const page = await browser.newPage();
@@ -2771,15 +2759,26 @@ async function scenarioDiagnostics(browser) {
   // Быстрый путь: видно, прогрета ли модель и готов ли помощник ввода
   const speedRows = await page.evaluate(() =>
     [...document.querySelectorAll('.kv-row')]
-      .filter((r) => /Скорость: модель в памяти|Помощник ввода|Последняя диктовка/.test(r.innerText))
+      .filter((r) => /Модель в памяти|Помощник ввода/.test(r.innerText))
       .map((r) => r.innerText.replace(/\n+/g, ': '))
       .join(' | '),
   );
+  // Секунды последней фразы теперь живут в отчёте о скорости: отдельная строка
+  // «Последняя диктовка» повторяла те же числа третьим местом.
+  const speedGroup = await page.evaluate(() =>
+    [...document.querySelectorAll('.settings-group')]
+      .filter((g) => /укладывается ли в пять секунд/i.test(g.innerText))
+      .map((g) => g.innerText.replace(/\n+/g, ' '))
+      .join(' '),
+  );
   record(
     'сценарии',
-    'диагностика: видно, прогрета ли модель, готов ли помощник ввода и сколько заняла последняя диктовка',
-    /прогрета/.test(speedRows) && /готов — вставка без запуска программ/.test(speedRows) && /0,8 с распознавания/.test(speedRows),
-    speedRows.slice(0, 200),
+    'диагностика: видно, прогрета ли модель, готов ли помощник ввода и сколько считалась последняя фраза',
+    /прогрета/.test(speedRows) &&
+      /готов — вставка без запуска программ/.test(speedRows) &&
+      // Замеры есть — видно секунды счёта; замеров нет — это сказано прямо.
+      (/с счёта/.test(speedGroup) || /Замеров пока нет/.test(speedGroup)),
+    `${speedRows.slice(0, 120)} || ${speedGroup.slice(0, 120)}`,
   );
   const errors = takeErrors(page);
   record('сценарии', 'диагностика: без ошибок консоли', errors.length === 0, errors[0] || '');
@@ -4476,7 +4475,7 @@ async function main() {
       ['отмена скачивания модели', scenarioModelCancel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
-      ['старая модель', scenarioLegacyModel],
+      ['старое имя модели', scenarioOldModelName],
       ['скорость диктовки', scenarioSpeedReport],
       ['самопроверка диктовки', scenarioSelfTest],
       ['превью без движка', scenarioBrowserPreviewNotice],

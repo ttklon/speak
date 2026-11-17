@@ -29,9 +29,7 @@ export default function FeaturesSection() {
         <div className="setting-row">
           <div className="setting-row__label">
             Язык диктовки
-            <div className="setting-row__desc">
-              На нём распознаётся речь. Интерфейс пока русский — на него выбор не влияет.
-            </div>
+            <div className="setting-row__desc">Язык речи. Интерфейс пока русский.</div>
           </div>
           <Select
             value={settings.language}
@@ -44,8 +42,7 @@ export default function FeaturesSection() {
           <div className="setting-row__label">
             Умная полировка
             <div className="setting-row__desc">
-              Локальная модель доводит формулировки после офлайн-правил: ждём её не дольше 0,9
-              секунды, а если её нет — работают правила, они включены всегда.
+              Модель доводит текст после офлайн-правил; без модели остаются только они.
             </div>
           </div>
           <Toggle
@@ -57,9 +54,7 @@ export default function FeaturesSection() {
           <div className="setting-row__label">
             Живая расшифровка
             <div className="setting-row__desc">
-              Текст появляется по ходу речи: раз в 2,5 секунды — отдельный проход движка. На
-              слабом компьютере это заметная нагрузка; по умолчанию выключено, чтобы вставка
-              была максимально быстрой.
+              Черновик по ходу речи, раз в 2,5 секунды. Грузит слабый компьютер.
             </div>
           </div>
           <Toggle
@@ -71,10 +66,7 @@ export default function FeaturesSection() {
           <div className="setting-row">
             <div className="setting-row__label">
               Инструкции по выделенному тексту
-              <div className="setting-row__desc">
-                «Перевести на английский», «Сделать формально» и остальные — в разделе «Горячие
-                клавиши». Там же их сочетания.
-              </div>
+              <div className="setting-row__desc">Сочетания — в разделе «Горячие клавиши».</div>
             </div>
           </div>
         ) : null}
@@ -87,10 +79,7 @@ export default function FeaturesSection() {
         <div className="setting-row">
           <div className="setting-row__label">
             Запоминать скопированное
-            <div className="setting-row__desc">
-              История текста, картинок и паролей хранится на этом компьютере; срок и лимит
-              подобраны автоматически — за месяц набирается несколько тысяч записей.
-            </div>
+            <div className="setting-row__desc">Текст, картинки и пароли — только на этом компьютере.</div>
           </div>
           <Toggle
             checked={settings.clipboardMonitor !== false}

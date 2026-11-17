@@ -135,8 +135,7 @@ export default function HotkeysPage() {
         <div>
           <h1 className="page__title">Горячие клавиши</h1>
           <p className="page__sub">
-            Настройте сочетания клавиш для активации ZSpeakly. Нажмите клавиши, чтобы начать запись,
-            отпустите — текст подставится в активное поле.
+            Нажмите сочетание — запись; нажмите ещё раз — текст в активном поле.
           </p>
         </div>
         <div className="page__actions">
@@ -147,14 +146,22 @@ export default function HotkeysPage() {
       </div>
 
       <div className="hk-toolbar">
+        {/* Вкладка без содержимого — это не раздел, а пустая страница. Раньше
+            здесь всегда стояли три вкладки, две из которых показывали «0» и
+            ничего больше. Показываем вкладку, только если в ней что-то есть
+            (или если она уже открыта). */}
         <Tabs
           variant="underline"
           value={tab}
           onChange={setTab}
           items={[
             { id: 'voice', label: 'Голосовые сочетания клавиш', count: voiceHotkeys.length },
-            { id: 'recommended', label: 'Рекомендуемые горячие клавиши', count: presets.length },
-            { id: 'custom', label: 'Мои горячие клавиши', count: instructions.length },
+            ...(presets.length || tab === 'recommended'
+              ? [{ id: 'recommended', label: 'Рекомендуемые', count: presets.length }]
+              : []),
+            ...(instructions.length || tab === 'custom'
+              ? [{ id: 'custom', label: 'Мои', count: instructions.length }]
+              : []),
           ]}
         />
         <SearchInput value={query} onChange={setQuery} placeholder="Поиск" />
@@ -183,7 +190,11 @@ export default function HotkeysPage() {
                         size="sm"
                         onRemove={() => updateHotkey(hk.id, { keys: [] })}
                       />
-                      {hk.double ? <span className="sep">×2</span> : null}
+                      {/* «×2» читается как «два раза это сочетание», а не как
+                          «двойное нажатие». Пишем словом: на нём же висит
+                          диктовка, и человек должен понять, что двойное
+                          нажатие — другая команда. */}
+                      {hk.double ? <span className="sep">дважды</span> : null}
                     </div>
                   ) : (
                     <button
@@ -219,7 +230,10 @@ export default function HotkeysPage() {
                 </div>
               </div>
 
-              {hk.id === 'screen-aware' ? (
+              {/* «Стиль письма» на свежей установке — тумблер без смысла:
+                  анализировать нечего, а рядом написано «продиктуйте пару
+                  фраз». Показываем только когда есть что анализировать. */}
+              {hk.id === 'screen-aware' && (dictations?.length || 0) > 2 ? (
                 <div className="hk-row--sub">
                   <div className="hk-row__body">
                     <div className="hk-row__title">Стиль письма</div>
@@ -255,8 +269,7 @@ export default function HotkeysPage() {
       {tab === 'recommended' ? (
         <div className="stack-8">
           <p className="hk-note">
-            Готовые AI-инструкции. Выделите текст, нажмите сочетание — ZSpeakly перепишет его локально.
-            Работает без интернета: правила + словарь, либо ваша локальная модель Ollama.
+            Выделите текст и нажмите сочетание — ZSpeakly перепишет его локально, без интернета.
           </p>
           {filteredPresets.map((p) => (
             <div key={p.id} className="preset-row">

@@ -888,7 +888,11 @@ export function DictationProvider({ children }) {
       if (now - lastAt < 2000) return;
       lastAt = now;
       const percent = Number(p.percent || 0);
-      const what = p.id === 'engine' ? 'движок распознавания' : `модель ${p.id || 'base'}`;
+      // Имя файла модели человеку ничего не говорит, а «модель small-q5_1»
+      // ещё и звучит как внутренность. Говорим размер — он объясняет, чего
+      // ждём: 60 МБ или полгигабайта.
+      const tier = p.id && p.id !== 'engine' ? tierForModel(p.id) : null;
+      const what = p.id === 'engine' ? 'движок распознавания' : tier ? `модель, ${tier.size}` : 'модель распознавания';
       pushToast({
         title: `Скачиваю ${what} — ${percent}%`,
         description: announced ? '' : 'Это один раз: дальше ZSpeakly работает офлайн.',

@@ -1,5 +1,4 @@
 import { useMemo, useRef, useState } from 'react';
-import { TriangleAlert } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { plural } from '../../../lib/ai/style.js';
@@ -120,8 +119,7 @@ export default function DataSection({ onOpenSection }) {
     <div>
       <h2 className="settings-section__title">Данные и разрешения</h2>
       <p className="settings-section__desc">
-        Продектованный текст и его записи. По умолчанию 30 дней. Рекомендуем хранить не менее 7:
-        при меньшем сроке может не остаться возможности вернуться к записи или повторить попытку.
+        Сколько хранить продиктованный текст и буфер. Всё лежит на этом компьютере.
       </p>
 
       <div className="settings-group">
@@ -130,8 +128,7 @@ export default function DataSection({ onOpenSection }) {
           <div className="setting-row__label">
             Срок хранения
             <div className="setting-row__desc">
-              Месяц — и для диктовок, и для буфера. Старые записи удаляются при запуске и при
-              смене данных; закреплённое в буфере остаётся.
+              Для диктовок и буфера. Старое удаляется при запуске; закреплённое остаётся.
             </div>
           </div>
           <span className="setting-row__value">30 дней</span>
@@ -192,20 +189,11 @@ export default function DataSection({ onOpenSection }) {
           </div>
           <span className="setting-row__value">{formatBytes(storageSize)}</span>
         </div>
-      </div>
-
-      <div className="settings-group">
-        <div className="settings-group__title">Аудио</div>
-        <div className="notice">
-          <span className="notice__icon">
-            <TriangleAlert size={13} />
-          </span>
-          <span>
-            ZSpeakly не пишет звук на диск: распознавание идёт на лету, остаётся только текст.
-            Поэтому удалять нечего — истории записей просто нет.
-          </span>
+        <div className="settings-foot-hint" style={{ marginTop: 6 }}>
+          Звук никуда не пишется: распознавание идёт на лету, остаётся только текст.
         </div>
       </div>
+
 
       <div className="settings-group">
         <div className="settings-group__title">Буфер обмена</div>

@@ -65,6 +65,19 @@
   margin-top: 20px;
 }
 
+/* На свежей установке истории нет: двух нулей «0 слов / 0 мин» не показываем,
+   а кнопку диктовки ставим туда, где её ищут — сразу под подсказками. */
+.hero__stats--empty {
+  margin: 26px 0 8px;
+}
+
+.hero__stats--empty .hero__mic {
+  margin-left: 0;
+  height: 38px;
+  padding: 0 20px;
+  font-size: 12.5px;
+}
+
 .hero-stat__label {
   font-size: 7.5px;
   letter-spacing: 0.11em;
