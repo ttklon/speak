@@ -2375,6 +2375,40 @@
   color: #ffd666;
 }
 
+/* Ход подготовки к диктовке: движок и модель скачиваются прямо в этом окне */
+.onboarding__prep {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--overlay-rgb), 0.04);
+  color: var(--text-4);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.onboarding__prep.is-bad {
+  border: 1px solid rgba(255, 143, 122, 0.22);
+  background: rgba(255, 143, 122, 0.06);
+}
+
+.onboarding__bar {
+  height: 4px;
+  border-radius: 3px;
+  background: rgba(var(--overlay-rgb), 0.08);
+  overflow: hidden;
+}
+
+.onboarding__bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent, #7cd4a8);
+  transition: width 0.25s ease;
+}
+
 /* ── Тест микрофона ─────────────────────────────────────────────────────── */
 .mic-level {
   height: 4px;

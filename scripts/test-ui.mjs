@@ -568,45 +568,54 @@ async function scenarioOnboarding(browser) {
   record('сценарии', 'онбординг не пугает плашкой, когда движок уже есть', noWarning);
   await page.close();
 
-  // Чистая установка без движка: онбординг обязан подсказать, где взять модель,
-  // и по кнопке вести прямо в «Настройки → Диктовка».
+  // Чистая установка без модели: одна кнопка «Скачать и начать» ставит движок
+  // и модель прямо в окне онбординга — без похода в настройки.
   const bare = await browser.newPage();
   await bare.setViewport({ width: 1280, height: 800 });
   await bare.evaluateOnNewDocument(installMockBridge);
   await bare.evaluateOnNewDocument(() => {
-    // моста нет — как в браузере или в Windows-сборке без whisper.cpp
+    // модель ещё не скачана: main отвечает, что распознавать нечем
     if (window.zspeakly?.native) {
-      window.zspeakly.native.transcribePcm = undefined;
-      window.zspeakly.native.sttStatus = undefined;
-      window.zspeakly.native.transcribe = undefined;
+      window.zspeakly.native.sttStatus = async () => ({ available: false, reason: 'модель не найдена' });
     }
     localStorage.setItem('mockstore:zs.settings', JSON.stringify({ onboarded: false }));
   });
   await bare.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
   await bare.waitForSelector('.modal', { timeout: 8000 }).catch(() => {});
-  await sleep(500);
+  await sleep(600);
   const cta = await bare.evaluate(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => /Скачать модель/i.test(b.innerText));
+    const btn = [...document.querySelectorAll('.modal button')].find((b) => /Скачать и начать/i.test(b.innerText));
     const warn = document.querySelector('.onboarding__hint--warn')?.innerText || '';
     return { found: Boolean(btn), warn };
   });
-  let navigated = false;
   if (cta.found) {
     await bare.evaluate(() => {
-      const btn = [...document.querySelectorAll('.modal button')].find((b) => /Скачать модель/i.test(b.innerText));
+      const btn = [...document.querySelectorAll('.modal button')].find((b) => /Скачать и начать/i.test(b.innerText));
       btn?.click();
     });
-    await sleep(700);
-    // приложение открывает настройки поверх страницы, а не меняет страницу
-    navigated = await bare.evaluate(
-      () => Boolean(document.querySelector('.settings-modal')) && /Модель распознавания/i.test(document.body.innerText),
-    );
+    await sleep(900);
   }
+  const mid = await bare.evaluate(() => ({
+    text: document.querySelector('.modal')?.innerText || '',
+    settingsOpen: Boolean(document.querySelector('.settings-modal')),
+  }));
+  await sleep(3200);
+  const after = await bare.evaluate(() => ({
+    text: document.querySelector('.modal')?.innerText || '',
+    cta: [...document.querySelectorAll('.modal button')].map((b) => b.innerText.trim()),
+  }));
+  const calls = await bridgeCalls(bare);
   record(
     'сценарии',
-    'онбординг без движка ведёт к скачиванию модели',
-    cta.found && /движок|Web Speech|модел/i.test(cta.warn) && navigated,
-    `кнопка=${cta.found} плашка=${cta.warn.slice(0, 60)} настройки=${navigated}`,
+    'онбординг без модели скачивает её сам, без похода в настройки',
+    cta.found &&
+      /движок|Web Speech|модел/i.test(cta.warn) &&
+      !mid.settingsOpen &&
+      /Скачиваю/i.test(mid.text) &&
+      calls.includes('models:download') &&
+      /Готово/i.test(after.text) &&
+      after.cta.some((t) => /Начать работу/i.test(t)),
+    `кнопка=${cta.found} настройки=${mid.settingsOpen} звонки=${calls.filter((c) => c.startsWith('models:')).join(',')} финал=${after.text.split('\n').pop()}`,
   );
   await bare.close();
 }

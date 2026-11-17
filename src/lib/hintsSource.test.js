@@ -79,6 +79,65 @@ describe('тексты интерфейса ведут в существующи
   });
 });
 
+describe('подсказки называют реально существующие строки настроек', () => {
+  // «Настройки → Приложение → Тест микрофона» бесполезно, если строки «Тест
+  // микрофона» там нет: раздел человек найдёт, а дальше — тупик. Поэтому
+  // проверяем не только раздел, но и последнюю часть пути.
+  const TAIL_PATTERN = /Настройки\s*→\s*[^»→\n]+→\s*([^»\n]+)/gu;
+  // «Модель распознавания: скачайте…» — в цели только название.
+  const cutTail = (tail) =>
+    String(tail)
+      .replace(/[«»"']/g, '')
+      .split(/[:—–,.;]/)[0]
+      .trim();
+
+  const normalize = (text) =>
+    String(text)
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/[^а-яa-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  /** Всё, что реально нарисовано в настройках: строки, группы, кнопки. */
+  function settingsCorpus() {
+    const dir = path.join(ROOT, 'components', 'settings');
+    const parts = [];
+    const walk = (current) => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(js|jsx)$/.test(entry.name)) parts.push(fs.readFileSync(full, 'utf8'));
+      }
+    };
+    walk(dir);
+    return normalize(parts.join('\n'));
+  }
+
+  it('каждый шаг после второго «→» находится в настройках', () => {
+    const corpus = settingsCorpus();
+    const broken = [];
+    const checked = [];
+    for (const file of sourceFiles()) {
+      for (const line of codeLines(fs.readFileSync(file, 'utf8'))) {
+        for (const match of line.matchAll(TAIL_PATTERN)) {
+          const tail = cutTail(match[1]);
+          const needle = normalize(tail);
+          if (needle.length < 3) continue;
+          checked.push(tail);
+          if (!corpus.includes(needle)) {
+            broken.push(`${path.relative(ROOT, file)}: «${tail}»`);
+          }
+        }
+      }
+    }
+    expect(broken).toEqual([]);
+    // тест не «зелёный по пустоте»: составные подсказки в проекте есть
+    expect(checked.length).toBeGreaterThan(2);
+  });
+});
+
 describe('в текстах интерфейса нет моделей из старого каталога', () => {
   // В интерфейсе три режима (lib/modelTiers.js). Подписи вроде «Модель base
   // распознаёт быстрее» остались от прежнего каталога и отправляли человека
