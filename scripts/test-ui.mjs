@@ -2702,7 +2702,9 @@ async function scenarioSelfTest(browser) {
   record(
     'сценарии',
     'самопроверка: на экране секунды записи и текст, а не «ничего не произошло»',
-    /Записано 2 с, распознано за \d+\.\d с: «/.test(shown),
+    // секунды — честные, а не ровно «2»: часть времени уходит на открытие
+    // микрофона, и показывать заветную двойку значило бы врать
+    /Записано \d(?:[.,]\d)? с, распознано за \d+\.\d с: «/.test(shown),
     shown.slice(0, 140),
   );
   const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '));

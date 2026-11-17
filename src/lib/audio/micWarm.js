@@ -10,6 +10,7 @@
  */
 
 import { createRingBuffer } from './ringBuffer.js';
+import { createAudioContext } from './context.js';
 
 const pickAudioContext = () =>
   (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) || null;
@@ -87,11 +88,15 @@ export function createMicWarm({ deviceId = 'default', prerollMs = 600 } = {}) {
         });
       }
       stream = media;
-      ctx = new Ctx();
+      // Та же частота, что у самой записи: предролл ложится в буфер без
+      // повторного ресемплинга, и первые слова не звучат глуше остальных.
+      ctx = createAudioContext(Ctx).ctx;
+      if (!ctx) throw new Error('Микрофон недоступен в этом окружении');
       sampleRate = ctx.sampleRate || 48000;
       ring = createRingBuffer(Math.round((sampleRate * Math.max(200, prerollMs)) / 1000));
       source = ctx.createMediaStreamSource(stream);
-      processor = ctx.createScriptProcessor(4096, 1, 1);
+      // то же окно, что у самой записи: предролл должен ложиться без стыка
+      processor = ctx.createScriptProcessor(1024, 1, 1);
       processor.onaudioprocess = (event) => {
         try {
           ring.push(event.inputBuffer.getChannelData(0));

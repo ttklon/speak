@@ -5,28 +5,10 @@
  * Уровень сигнала считаем тут же (RMS), чтобы HUD пульсировал без опроса main.
  */
 
-const TARGET_RATE = 16000;
+import { TARGET_RATE, createAudioContext, resampleAudio } from './context.js';
 
-function pickAudioContext() {
-  const Ctx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
-  return Ctx || null;
-}
-
-/** Простой ресемплер: линейная интерполяция из одной частоты в другую. */
-function resampleLinear(float32, inputRate, outputRate) {
-  if (inputRate === outputRate || !float32?.length) return float32;
-  const ratio = inputRate / outputRate;
-  const length = Math.floor(float32.length / ratio);
-  const out = new Float32Array(length);
-  for (let i = 0; i < length; i += 1) {
-    const pos = i * ratio;
-    const i0 = Math.floor(pos);
-    const i1 = Math.min(float32.length - 1, i0 + 1);
-    const frac = pos - i0;
-    out[i] = float32[i0] * (1 - frac) + float32[i1] * frac;
-  }
-  return out;
-}
+const pickAudioContext = () =>
+  (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) || null;
 
 function toInt16(float32) {
   const out = new Int16Array(float32.length);
@@ -75,10 +57,15 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     });
     fellBack = true;
   }
-  const ctx = new Ctx();
-  // некоторые системы не дают 16 кГц — тогда пишем в родной частоте и ресемплим
+  // Просим 16 кГц сразу: тогда ресемплинг делает движок с фильтром. Если
+  // система не даёт — пишем в родной частоте и ресемплим сами (с low-pass).
+  const { ctx, native } = createAudioContext(Ctx);
+  if (!ctx) throw new Error('Микрофон недоступен в этом окружении');
   const source = ctx.createMediaStreamSource(stream);
-  const processor = ctx.createScriptProcessor(4096, 1, 1);
+  // Окно 1024 отсчёта: при 16 кГц это 64 мс. Раньше стояло 4096, и на 16 кГц
+  // это 256 мс — столько звука в конце фразы могло не дойти до движка (буфер,
+  // не набравшийся к отпусканию клавиши, терялся), а в начале — уйти на разгон.
+  const processor = ctx.createScriptProcessor(1024, 1, 1);
 
   const chunks = [];
   let frames = 0;
@@ -91,7 +78,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
   // Предролл: первые сотни миллисекунд уже записаны до старта — кладём их
   // первыми, иначе начало фразы пропадает на открытии устройства.
   if (preroll?.samples?.length) {
-    const prepared = resampleLinear(preroll.samples, preroll.sampleRate || ctx.sampleRate, ctx.sampleRate);
+    const prepared = resampleAudio(preroll.samples, preroll.sampleRate || ctx.sampleRate, ctx.sampleRate);
     if (prepared.length) {
       chunks.push(prepared);
       frames += prepared.length;
@@ -175,7 +162,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
       if (start >= from + count) break;
     }
     return {
-      pcm: toInt16(resampleLinear(part, ctx.sampleRate, TARGET_RATE)),
+      pcm: toInt16(resampleAudio(part, ctx.sampleRate, TARGET_RATE)),
       durationMs: Math.round((count / ctx.sampleRate) * 1000),
       truncated: from > 0,
     };
@@ -184,6 +171,9 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
   return {
     /** true, если запись идёт не с выбранного микрофона, а с системного */
     fellBack,
+    /** частота исходной записи и признак «писали сразу в 16 кГц» */
+    captureRate: ctx.sampleRate,
+    nativeRate: native,
     /** накопленный звук без остановки записи (для живой расшифровки) */
     snapshot,
     get sampleRate() {
@@ -213,8 +203,15 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
         merged.set(c, offset);
         offset += c.length;
       }
-      const pcm = toInt16(resampleLinear(merged, ctx.sampleRate, TARGET_RATE));
-      return { pcm, sampleRate: TARGET_RATE, durationMs: Math.round((frames / ctx.sampleRate) * 1000) };
+      const pcm = toInt16(resampleAudio(merged, ctx.sampleRate, TARGET_RATE));
+      return {
+        pcm,
+        sampleRate: TARGET_RATE,
+        durationMs: Math.round((frames / ctx.sampleRate) * 1000),
+        // для диагностики: писали сразу в 16 кГц (native) или ресемплили сами
+        captureRate: ctx.sampleRate,
+        nativeRate: native,
+      };
     },
     abort() {
       aborted = true;

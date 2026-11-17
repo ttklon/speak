@@ -348,6 +348,20 @@ await check('автоподбор: две медленные диктовки п
   // это и есть обещание «фраза на двадцать секунд распознаётся за пять»
   const borderline = tune.decide({ ...base, ms: 6000, seconds: 20, strikes: 1 });
   if (borderline.switchTo !== 'base-q5_1') throw new Error(`20 с за 6 с не признано медленным: ${JSON.stringify(borderline)}`);
+  // Короткая фраза «три секунды речи за два» — это не медленно, а разгон
+  // движка: раньше такие две фразы подряд уводили человека на самую лёгкую
+  // модель, и он получал «быстро, но кашу». Короткие фразы не судим.
+  const brief = tune.decide({ ...base, ms: 2000, seconds: 3, strikes: 0 });
+  if (brief.switchTo || brief.strikes !== 0 || brief.reason !== 'short') {
+    throw new Error(`короткая фраза принята за медленную: ${JSON.stringify(brief)}`);
+  }
+  const briefTwice = tune.decide({ ...base, ms: 2000, seconds: 3, strikes: 1 });
+  if (briefTwice.switchTo || briefTwice.strikes !== 0) {
+    throw new Error(`две короткие фразы утащили модель вниз: ${JSON.stringify(briefTwice)}`);
+  }
+  // а если короткая фраза ждала дольше обещанных пяти секунд — это уже поломка
+  const stalled = tune.decide({ ...base, ms: 7000, seconds: 3, strikes: 1 });
+  if (stalled.switchTo !== 'base-q5_1') throw new Error(`3 с речи за 7 с не признано поломкой: ${JSON.stringify(stalled)}`);
 });
 
 await check('автоподбор: уважает ручной выбор, выключенный тумблер и крайние ступени', () => {
@@ -1190,7 +1204,7 @@ await check('аргументы whisper: без контекста, жадное
     return i < 0 ? '' : args[i + 1];
   };
   if (pair('-mc') !== '0') throw new Error('нет -mc 0 (контекст прошлой диктовки)');
-  if (pair('-bs') !== '1') throw new Error('нет -bs 1 (beám search вместо greedy)');
+  if (pair('-bs') !== '3') throw new Error('нет -bs 3 (beam search вместо greedy: с «-bs 1» мелкие модели дают кашу)');
   // -nf: без повторного прохода с другой температурой (он удваивал ожидание)
   if (!args.includes('-nf')) throw new Error('нет -nf: движок может считать ту же фразу дважды');
   if (!args.includes('--vad')) throw new Error('нет --vad');
@@ -1929,11 +1943,11 @@ await check('длинная диктовка без прогретого сер�
   if (runs.length !== 1) throw new Error(`движок запускался ${runs.length} раз — веса грузятся повторно`);
 });
 
-await check('сервер распознавания поднимается с жадным декодированием и без контекста', async () => {
+await check('сервер распознавания поднимается с поиском по вариантам и без контекста', async () => {
   const whisperLib = require(path.resolve('electron/whisper.cjs'));
   const args = whisperLib.serverArgs({ modelPath: 'ggml-base.bin', port: 17801, threads: 2, vadModel: 'vad.bin' });
   const joined = args.join(' ');
-  for (const flag of ['-mc 0', '-bs 1', '-bo 1', '-nt', '-sns']) {
+  for (const flag of ['-mc 0', '-bs 3', '-bo 1', '-nt', '-sns']) {
     if (!joined.includes(flag)) throw new Error(`нет флага ${flag}: ${joined}`);
   }
   if (!joined.includes('--vad')) throw new Error('VAD-гейт потерялся');

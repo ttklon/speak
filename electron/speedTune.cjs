@@ -11,6 +11,10 @@
  *
  *  - «успевает» = минимум вчетверо быстрее реального времени: именно отсюда
  *    берётся обещанные пять секунд на двадцатисекундную фразу (20 / 4 = 5);
+ *  - короткие фразы не судим: на трёх секундах речи секунда уходит на запуск
+ *    движка, и «в 1,5 раза быстрее реального времени» — это про разгон, а не
+ *    про мощность машины. Раньше из-за этого приложение сползало на самую
+ *    лёгкую модель по двум коротким фразам и потом выдавало кашу;
  *  - одна медленная фраза — ещё не повод: нужны две подряд;
  *  - быстрая фраза сбрасывает счётчик;
  *  - ручной выбор человека и выключенный автоподбор не трогаем;
@@ -21,6 +25,10 @@
 const REALTIME_OK = 4;
 const SLOW_STRIKES = 2;
 const MAX_SWITCHES = 2;
+/** Обещанный максимум ожидания на длинную фразу, мс (см. «двадцать за пять»). */
+const PROMISE_MS = 5000;
+/** Короче этого речь не судим по скорости: разгон движка перевешивает. */
+const MIN_SECONDS = 6;
 
 /**
  * @returns {{switchTo: string, strikes: number, realtime: number, reason: string}}
@@ -43,6 +51,12 @@ function decide({
     return { switchTo: '', strikes: 0, realtime, reason: 'off' };
   }
   if (!realtime) return { switchTo: '', strikes, realtime: 0, reason: 'unknown' };
+  // Короткая фраза: соотношение «речь / счёт» обманчиво, потому что запуск
+  // движка — фиксированная плата. Судим её только по обещанию «пять секунд»,
+  // иначе две быстрые короткие фразы утаскивают человека на слабую модель.
+  if (seconds < MIN_SECONDS && ms <= PROMISE_MS) {
+    return { switchTo: '', strikes: 0, realtime, reason: 'short' };
+  }
   if (realtime >= REALTIME_OK) return { switchTo: '', strikes: 0, realtime, reason: 'fast' };
 
   const next = strikes + 1;
@@ -58,4 +72,4 @@ function decide({
   return { switchTo: lighter, strikes: 0, realtime, reason: 'slow' };
 }
 
-module.exports = { decide, REALTIME_OK, SLOW_STRIKES, MAX_SWITCHES };
+module.exports = { decide, REALTIME_OK, SLOW_STRIKES, MAX_SWITCHES, PROMISE_MS, MIN_SECONDS };

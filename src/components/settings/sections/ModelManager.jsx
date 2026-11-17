@@ -286,6 +286,14 @@ export default function ModelManager() {
         <strong>«{tierForModel(status?.active || settings.whisperModel).label.toLowerCase()}»</strong>.
         Менять его обычно не нужно — приложение выбрало его под этот компьютер и само переключится,
         если диктовка окажется медленной.
+        {tierForModel(status?.active || settings.whisperModel).id === 'fast' ? (
+          <>
+            {' '}
+            <strong>
+              Самый быстрый режим путает слова — «Сбалансированно» даёт заметно более читаемый текст.
+            </strong>
+          </>
+        ) : null}
         {status?.bin ? (
           <>
             {' '}
@@ -351,7 +359,9 @@ export default function ModelManager() {
                   {tier?.label || m.label}
                   {tier?.recommended ? <span className="model-badge model-badge--pick">ставится само</span> : null}
                   {info?.downloaded ? (
-                    <span className="model-badge">скачано · {info.actualMb ? `${info.actualMb} МБ` : m.size}</span>
+                    // просто «скачано»: размер уже стоит строкой ниже, а два
+                    // разных числа в одной карточке читались как ошибка
+                    <span className="model-badge">скачано</span>
                   ) : null}
                 </div>
                 <div className="model-card__meta">
