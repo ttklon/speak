@@ -28,6 +28,7 @@ electron/                     привилегированный процесс
   whisper.cjs   поиск whisper-cli + ggml-модели, транскрипция wav
   hardware.cjs  режим под железо: быстро / сбалансированно / максимум
   speedTune.cjs правило автоподбора по замерам (чистая функция, её проверяет смоук)
+  (в renderer: lib/speedReport.js — отчёт «укладывается ли в пять секунд»)
 
 src/                          renderer (React 18 + Vite)
   state/

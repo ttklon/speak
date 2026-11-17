@@ -158,7 +158,10 @@ export function DictationProvider({ children }) {
 
 
   const finish = useCallback(
-    async (text, { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0 } = {}) => {
+    async (
+      text,
+      { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0, sttMeta = null } = {},
+    ) => {
       // защита от двойного завершения (web-движок + фолбэк); держим до конца
       // второй стадии, иначе модель успевала запуститься дважды
       if (finishing.current) return null;
@@ -301,6 +304,12 @@ export function DictationProvider({ children }) {
         // сколько секунд человек говорил: вместе с sttMs это и есть «успевает ли
         // модель», по этим числам выбирается режим и это же видно в настройках
         spokenMs: spokenSeconds > 0 ? Math.round(spokenSeconds * 1000) : undefined,
+        // чем считали: прогретый сервер или холодный whisper-cli, и во сколько
+        // обошлась подготовка звука — без этого «долго» некуда девать
+        sttMode: sttMeta?.mode || undefined,
+        sttParts: sttMeta?.parts > 1 ? sttMeta.parts : undefined,
+        sttModel: sttMeta?.model || undefined,
+        sttWarm: typeof sttMeta?.timeline?.warm === 'boolean' ? sttMeta.timeline.warm : undefined,
       };
       // событие в журнал: видно, что движок реально вернул текст, а не «тишину»
       diag.info('stt', cleaned ? 'Диктовка распознана' : 'Пустой результат распознавания', {
@@ -564,14 +573,18 @@ export function DictationProvider({ children }) {
             setLevel(0);
           }
         },
-        onEnd: async ({ text, ms, spoken }) => {
+        onEnd: async ({ text, ms, spoken, mode, parts, timeline, model }) => {
           recRef.current = null;
           setState('processing');
           setLevel(0);
           // Текст вставляем сразу: искусственная пауза «как в видео» только
           // задерживала вставку (диктовка должна появляться в окне мгновенно).
           // Исключение — включённая вторая стадия чистки моделью: тогда ждём её.
-          const item = await finish(text, { sttMs: ms, spokenSeconds: spoken || 0 });
+          const item = await finish(text, {
+            sttMs: ms,
+            spokenSeconds: spoken || 0,
+            sttMeta: { mode, parts, timeline, model },
+          });
           if (opts.onResult) opts.onResult(item);
         },
       });

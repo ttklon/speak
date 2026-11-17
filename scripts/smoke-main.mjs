@@ -1109,6 +1109,27 @@ await check('живая расшифровка и финальный прохо�
   }
 });
 
+await check('замер по этапам: отчёт говорит, сколько стоили обрезка, wav и счёт', async () => {
+  runWhisper('Проверка диктовки');
+  const res = await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(3000),
+    durationMs: 3000,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: false,
+  });
+  if (!res?.ok) throw new Error(`распознавание не удалось: ${JSON.stringify(res)}`);
+  const t = res.timeline;
+  if (!t) throw new Error('нет разложения по этапам');
+  for (const key of ['trimMs', 'wavMs', 'computeMs', 'parts', 'mode', 'warm', 'model']) {
+    if (!(key in t)) throw new Error(`в отчёте нет «${key}»`);
+  }
+  if (!(t.trimMs >= 0 && t.wavMs >= 0 && t.computeMs >= 0)) throw new Error('отрицательные времена');
+  if (typeof t.warm !== 'boolean') throw new Error('не сказано, был ли сервер прогрет');
+  if (!t.model) throw new Error('не сказано, какой моделью считали');
+  if (!res.model) throw new Error('в ответе нет модели');
+});
+
 await check('пропуск движка: whisper получает --prompt со словарём и контекстом', async () => {
   await handlers.get('store:set')({}, 'zs:dictionary', [
     { word: 'ZSpeakly', pronunciation: 'зи-спикли' },

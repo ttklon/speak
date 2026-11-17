@@ -9,6 +9,7 @@ import { writeClipboard } from '../../../lib/clipboard.js';
 import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
 import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
+import { analyseSpeed } from '../../../lib/speedReport.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -25,7 +26,7 @@ function timeOf(at) {
  * сервер и что происходит в последних событиях. Отправку можно выключить.
  */
 export default function DiagnosticsSection() {
-  const { settings, updateSettings } = useAppData();
+  const { settings, updateSettings, dictations } = useAppData();
   const { push } = useToast();
   const [status, setStatus] = useState(null);
   // «Система и железо» — то, что main реально проверил на этой машине
@@ -38,6 +39,10 @@ export default function DiagnosticsSection() {
   // «Проверить диктовку»: запись с микрофона и настоящий проход движка
   const [selfTest, setSelfTest] = useState(null);
   const [selfBusy, setSelfBusy] = useState(false);
+  // Отчёт о скорости: считается из истории диктовок, ничего дополнительно не
+  // измеряет и никуда не ходит. Человеку нужен ответ «успевает или нет», а не
+  // ещё одна таблица настроек.
+  const speed = analyseSpeed(dictations);
 
   const refresh = useCallback(async () => {
     const bridge = window.zspeakly?.native;
@@ -333,6 +338,36 @@ export default function DiagnosticsSection() {
               ? 'SendInput без буфера обмена (только Windows)'
               : 'буфер обмена + Ctrl+V, прежний буфер возвращается'}
           </span>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Скорость: укладывается ли в пять секунд</div>
+        <div className="settings-group__desc">
+          Замеры по последним диктовкам: сколько секунд вы говорили и сколько секунд считал движок.
+          Это факт, а не обещание каталога моделей.
+        </div>
+        {speed.samples.length ? (
+          <div className="speed-report">
+            {speed.samples.map((row, index) => (
+              <div className="speed-report__row" key={`${row.at}-${index}`}>
+                <span className="speed-report__main">
+                  {row.spoken.toFixed(1)} с речи → {row.compute.toFixed(1)} с счёта
+                </span>
+                <span className="speed-report__meta">
+                  {row.factor ? `×${row.factor.toFixed(1)}` : '—'}
+                  {row.mode ? ` · ${row.mode === 'server' ? 'прогретый сервер' : 'whisper-cli'}` : ''}
+                  {row.parts > 1 ? ` · ${row.parts} фрагмента` : ''}
+                </span>
+                <span className={`speed-report__mark ${row.fits ? 'is-ok' : 'is-slow'}`}>
+                  {row.fits ? 'в норме' : 'долго'}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="settings-foot-hint" style={{ marginTop: 6 }}>
+          {speed.advice}
         </div>
       </div>
 

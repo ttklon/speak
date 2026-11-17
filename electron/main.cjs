@@ -1176,7 +1176,9 @@ function registerIpc() {
       seconds: payload?.durationMs ? Math.round(payload.durationMs / 100) / 10 : undefined,
     });
     // Паузы по краям записи убираем: whisper точнее на коротком чистом фрагменте.
+    const trimStarted = Date.now();
     const trimmed = whisper.trimSilence?.(raw, payload?.sampleRate || 16000) || raw;
+    const trimMs = Date.now() - trimStarted;
     logger.info('stt', 'Обрезка тишины', {
       keep: true,
       beforeMs: Math.round((raw.length / 2 / (payload?.sampleRate || 16000)) * 1000),
@@ -1187,11 +1189,13 @@ function registerIpc() {
     // Имя уникальное: живая расшифровка и финальный проход могут идти почти
     // одновременно, и два вызова с одним именем перезаписали бы друг другу звук.
     const wav = path.join(dir, `dictation-${Date.now()}-${randomUUID().slice(0, 8)}.wav`);
+    const wavStarted = Date.now();
     try {
       fs.writeFileSync(wav, writeWav(trimmed, payload?.sampleRate || 16000));
     } catch (err) {
       return { ok: false, text: '', reason: `не записал wav: ${err.message}` };
     }
+    const wavMs = Date.now() - wavStarted;
     // Подсказка движку: термины с экрана (если локальная модель их назвала) +
     // словарь. Словарь не передаём, когда тумблер «Применять словарь при
     // диктовке» выключен: настройка должна работать целиком.
@@ -1230,6 +1234,7 @@ function registerIpc() {
       // окна внутри одного процесса: один холодный старт вместо трёх.
       const spokenSeconds = audio?.seconds || 0;
       const serverNow = whisper.serverStatus?.() || {};
+      const wasWarm = serverNow.ready === true;
       const canSplit = spokenSeconds > 28 && serverNow.ready === true;
       const parts = canSplit ? whisper.splitBySilence?.(trimmed, sr) || [trimmed] : [trimmed];
       const MAX_PARTS = 3;
@@ -1330,6 +1335,18 @@ function registerIpc() {
         logger.warn('stt', 'Отброшена фраза-галлюцинация', { keep: true, chars: res.text.length });
         return { ok: false, text: '', code: 'phantom', reason: 'в записи не было речи' };
       }
+      // Где именно ушло время: обрезка тишины, запись wav, сам счёт движка.
+      // Без этого «двадцать секунд» невозможно разложить на причины — а без
+      // разложения любые оптимизации превращаются в угадывание.
+      const timeline = {
+        trimMs,
+        wavMs,
+        computeMs: ms,
+        parts: totalParts,
+        mode: res?.mode || 'cli',
+        warm: wasWarm,
+        model,
+      };
       logger[res?.ok ? 'info' : 'error']('stt', res?.ok ? 'Распознавание завершено' : 'Распознавание не удалось', {
         keep: true,
         ms,
@@ -1337,6 +1354,9 @@ function registerIpc() {
         // холодную загрузку модели (cli) или считал прогретый сервер (server)
         mode: res?.mode || 'cli',
         parts: totalParts,
+        trimMs,
+        wavMs,
+        warm: wasWarm,
         chars: String(res?.text || '').length,
         reason: res?.reason || '',
       });
@@ -1360,6 +1380,10 @@ function registerIpc() {
         // «обработка» без объяснений
         sttMs: ms,
         mode: res?.mode || 'cli',
+        // разложение по этапам: интерфейс показывает «сколько считал движок»,
+        // а диагностика — ещё и сколько стоила подготовка звука
+        timeline,
+        model,
         autoTunedTo: autoTunedTo || undefined,
         audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined,
         chunks: totalParts > 1 ? totalParts : undefined,

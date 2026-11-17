@@ -1544,6 +1544,49 @@
 
 /* Замер на этом компьютере: «20,4 с речи → 3,1 с счёта». Обещания каталога
    проверяются фактом, а не наоборот. */
+/* Отчёт о скорости в диагностике: строки «сколько говорил → сколько считал».
+   Главное — вердикт справа, поэтому колонка помечена цветом, а не только текстом. */
+.speed-report {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0 4px;
+}
+
+.speed-report__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--overlay-rgb), 0.06);
+  background: rgba(var(--overlay-rgb), 0.03);
+  font-size: 10px;
+}
+
+.speed-report__main {
+  color: var(--text);
+}
+
+.speed-report__meta {
+  color: var(--text-5);
+}
+
+.speed-report__mark {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.speed-report__mark.is-ok {
+  color: var(--green);
+}
+
+.speed-report__mark.is-slow {
+  color: rgb(232, 152, 60);
+}
+
 .model-measure--warn {
   border-color: rgba(255, 176, 32, 0.35);
   color: var(--text-3);

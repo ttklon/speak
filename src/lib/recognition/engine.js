@@ -314,6 +314,12 @@ export function createRecognizer(opts = {}) {
             text: res.text,
             ms: res.ms,
             spoken: Number(res.audio?.seconds) || Math.round(durationMs / 100) / 10,
+            // режим и разложение по этапам: по ним видно, платил ли человек за
+            // холодную загрузку модели и сколько стоила подготовка звука
+            mode: res.mode || '',
+            parts: Number(res.chunks) || Number(res.timeline?.parts) || 1,
+            timeline: res.timeline || null,
+            model: res.model || '',
           });
         } else {
           const code = res?.code || 'stt-empty';

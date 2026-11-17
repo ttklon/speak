@@ -2270,6 +2270,66 @@ async function scenarioHardwareModel(browser) {
   await page.close();
 }
 
+// «Укладывается ли в пять секунд» — вопрос, который человек задаёт вслух.
+// Отвечаем замером из истории: сколько говорил, сколько считал, в норме или нет.
+async function scenarioSpeedReport(browser) {
+  const now = Date.now();
+  const row = (id, spokenMs, sttMs, mode, ago) => ({
+    id,
+    text: 'Проверка скорости диктовки',
+    words: 3,
+    spokenMs,
+    sttMs,
+    sttMode: mode,
+    createdAt: now - ago,
+    source: 'dictation',
+  });
+  const page = await openPage(browser, '#/settings?section=diagnostics&from=home', {
+    settle: 700,
+    storeSeed: {
+      'zs.dictations': [
+        row('d-slow-1', 20000, 9000, 'cli', 0),
+        row('d-slow-2', 24000, 8000, 'server', 1000),
+        row('d-fast', 20000, 3000, 'server', 2000),
+        // слишком короткая запись: не показатель, в отчёт не идёт
+        row('d-short', 500, 200, 'server', 3000),
+      ],
+    },
+  });
+  takeErrors(page);
+  const info = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.speed-report__row')].map((el) =>
+      el.innerText.replace(/\n/g, ' '),
+    );
+    const group = [...document.querySelectorAll('.settings-group')].find((g) =>
+      /Скорость: укладывается ли в пять секунд/.test(g.innerText),
+    );
+    return { rows, groupText: group ? group.innerText.replace(/\n/g, ' ') : '' };
+  });
+  record(
+    'сценарии',
+    'скорость: в диагностике видно секунды речи и секунды счёта',
+    info.rows.length === 3 && /20\.0 с речи → 9\.0 с счёта/.test(info.rows.join(' | ')),
+    info.rows[0] || '',
+  );
+  record(
+    'сценарии',
+    'скорость: каждая строка помечена «в норме» или «долго»',
+    // подпись помечена CSS-ом как заголовочно-прописная — сравниваем без учёта регистра
+    /долго/i.test(info.rows.join(' ')) && /в норме/i.test(info.rows.join(' ')),
+    info.rows.slice(0, 2).join(' ;; '),
+  );
+  record(
+    'сценарии',
+    'скорость: вердикт честно говорит «дольше пяти секунд» и ведёт в «Функции»',
+    /Дольше пяти секунд/i.test(info.groupText) && /Настройки → Функции/.test(info.groupText),
+    info.groupText.slice(0, 160),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'скорость: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Модель из старого каталога (десять моделей) больше не прячется: приложение
 // говорит, что она тяжелее трёх режимов, и предлагает перейти одной кнопкой.
 async function scenarioLegacyModel(browser) {
@@ -4417,6 +4477,7 @@ async function main() {
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
       ['старая модель', scenarioLegacyModel],
+      ['скорость диктовки', scenarioSpeedReport],
       ['самопроверка диктовки', scenarioSelfTest],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
