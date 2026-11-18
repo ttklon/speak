@@ -1,7 +1,7 @@
 {
   "name": "zspeakly",
   "productName": "ZSpeakly",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "private": true,
   "description": "ZSpeakly — офлайн голосовой ввод для Windows 11: диктовка в любое поле, словарь, AI-инструкции и буфер обмена.",
   "author": {
@@ -36,7 +36,8 @@
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
-    "electron-updater": "^6.8.11"
+    "electron-updater": "^6.8.11",
+    "onnxruntime-node": "^1.31.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -62,7 +63,16 @@
       "dist/**/*",
       "electron/**/*",
       "icons/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/onnxruntime-node/bin/napi-*/{darwin,linux}/**",
+      "!**/node_modules/onnxruntime-web/**",
+      "!**/node_modules/onnxruntime-common/**",
+      "!**/node_modules/onnxruntime-node/bin/**/*cuda*",
+      "!**/node_modules/onnxruntime-node/bin/**/*tensorrt*",
+      "!**/node_modules/onnxruntime-node/bin/**/*dml*"
+    ],
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**"
     ],
     "win": {
       "target": [
@@ -115,6 +125,13 @@
         "to": "models",
         "filter": [
           "**/*.bin"
+        ]
+      },
+      {
+        "from": "electron/assets/gigaam",
+        "to": "gigaam",
+        "filter": [
+          "**/*.onnx"
         ]
       }
     ]

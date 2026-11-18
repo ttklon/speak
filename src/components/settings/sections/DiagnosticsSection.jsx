@@ -56,8 +56,27 @@ export default function DiagnosticsSection() {
   // Состояние вставки: чем вставляем и что было в прошлый раз. Без этого
   // «текст не вставляется» невозможно разобрать — только догадываться.
   const [inputStatus, setInputStatus] = useState(null);
+  // Состояние русской модели: включится ли она на следующей диктовке. Без этой
+  // строки «на русском распознаёт хуже» объяснить нечем — человек не знает,
+  // скачана ли модель и видит ли её приложение.
+  const [russian, setRussian] = useState(null);
   const [probe, setProbe] = useState(null);
   const [probeBusy, setProbeBusy] = useState(false);
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.modelsStatus) return undefined;
+    let alive = true;
+    bridge
+      .modelsStatus()
+      .then((status) => {
+        if (alive && status?.russian) setRussian(status.russian);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [settings.language]);
+
   const currentTier = tierForModel(settings.whisperModel);
   const lighterTier = currentTier ? lighterModel(currentTier.model) : '';
   const lighter = lighterTier ? tierForModel(lighterTier) : null;
@@ -412,6 +431,16 @@ export default function DiagnosticsSection() {
         <div className="kv-row">
           <span className="kv-row__key">Движок</span>
           <span className="kv-row__value">{engineName()}</span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Русский язык</span>
+          <span className="kv-row__value">
+            {russian === null
+              ? 'проверяю…'
+              : russian.available
+                ? 'своя модель, включается сама'
+                : russian.reason}
+          </span>
         </div>
         <div className="kv-row">
           <span className="kv-row__key">Модель</span>

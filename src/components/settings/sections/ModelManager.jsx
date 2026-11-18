@@ -95,8 +95,13 @@ export default function ModelManager() {
         }
         if (p.ok) {
           push({
-            title: p.id === 'engine' ? 'Движок установлен' : 'Модель скачана',
-            description: p.id === 'engine' ? 'движок распознавания готов к работе' : 'Скачано, диктовка работает на новом режиме',
+            title: p.id === 'engine' ? 'Движок установлен' : p.id === 'russian' ? 'Русская модель готова' : 'Модель скачана',
+            description:
+              p.id === 'engine'
+                ? 'движок распознавания готов к работе'
+                : p.id === 'russian'
+                  ? 'теперь русский текст распознаётся точнее — с запятыми и заглавными'
+                  : 'Скачано, диктовка работает на новом режиме',
             tone: 'success',
           });
         } else {
@@ -134,6 +139,35 @@ export default function ModelManager() {
       } else {
         pushOnce('Не удалось скачать модель', res?.reason, 'warn');
       }
+    }
+  };
+
+  /**
+   * Русская модель скачивается отдельно: она не «четвёртый режим», а второй
+   * движок для русского языка. Человек не выбирает её в обычной жизни —
+   * приложение включает её само, как только файлы на месте.
+   */
+  const downloadRussian = async () => {
+    if (!bridge?.downloadRussianModel) {
+      push({
+        title: 'Скачивание доступно в приложении',
+        description: 'В браузере моделями управляет установленная версия на Windows.',
+        tone: 'warn',
+      });
+      return;
+    }
+    setBusy('russian');
+    setProgress((prev) => ({ ...prev, russian: 0 }));
+    let res;
+    try {
+      res = await bridge.downloadRussianModel();
+    } catch (err) {
+      res = { ok: false, reason: String(err?.message || err) };
+    }
+    await refresh();
+    if (!res?.ok) {
+      setBusy(null);
+      pushOnce('Не удалось скачать русскую модель', res?.reason, 'warn');
     }
   };
 
@@ -401,6 +435,41 @@ export default function ModelManager() {
           </div>
         );
       })}
+
+      {/* Русский язык — отдельный движок, а не «ещё один режим»: у него своя
+          модель, свой размер и своё правило включения. */}
+      <div className={`model-card model-card--russian ${status?.russian?.available ? 'is-active' : ''}`}>
+        <div className="grow" style={{ textAlign: 'left' }}>
+          <div className="model-card__name">
+            Русский язык
+            {status?.russian?.available ? <span className="model-badge">скачано</span> : null}
+          </div>
+          <div className="model-card__meta">
+            {status?.russian?.bytes ? `${Math.round(status.russian.bytes / 1024 / 1024)} МБ` : '226 МБ'} · точнее
+            понимает русские слова · знаки препинания сам
+          </div>
+          <div className="model-card__desc">
+            {status?.russian?.available
+              ? 'Включается сама, когда вы диктуете по-русски. Другие языки остаются на прежнем движке.'
+              : status?.russian?.missing?.length && status.russian.reason.includes('не полностью')
+                ? 'Прошлое скачивание не закончилось — нажмите «Продолжить», файлы докачаются.'
+                : 'Скачать один раз: русские слова перестанут путаться, а запятые и заглавные появятся без правки.'}
+          </div>
+        </div>
+        {status?.russian?.available ? (
+          <Check size={13} style={{ color: 'var(--green)' }} aria-label="Русская модель скачана" />
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={busy === 'russian' ? <Loader size={12} /> : <Download size={12} />}
+            onClick={() => downloadRussian()}
+            disabled={Boolean(busy)}
+          >
+            {busy === 'russian' ? `${progress.russian || 0}%` : status?.russian?.missing?.length < 4 ? 'Продолжить' : 'Скачать'}
+          </Button>
+        )}
+      </div>
 
       <div className="setting-row">
         <div className="setting-row__label">

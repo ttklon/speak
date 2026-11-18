@@ -29,6 +29,9 @@ const {
 
 const { JsonStore } = require('./store.cjs');
 const whisper = require('./whisper.cjs');
+// русский движок: GigaAM v3 на процессоре, включается сам для русского языка
+const gigaam = require('./gigaam.cjs');
+const { chooseEngine } = require('./sttEngine.cjs');
 const { createUpdater } = require('./updater.cjs');
 const models = require('./models.cjs');
 // Подбор модели под железо: одна и та же модель не может быть быстрой и на
@@ -1226,6 +1229,54 @@ function registerIpc() {
       beforeMs: Math.round((raw.length / 2 / (payload?.sampleRate || 16000)) * 1000),
       afterMs: Math.round((trimmed.length / 2 / (payload?.sampleRate || 16000)) * 1000),
     });
+    // Русская модель: решение принимает политика (electron/sttEngine.cjs), а не
+    // настройка. Модель локальная, поэтому приватность не меняется — зато она
+    // не путает русские слова и сама ставит знаки препинания.
+    const sttSettingsNow = store?.get('zs:settings') || {};
+    const gigaamStatus = gigaam.status();
+    const engineChoice = chooseEngine({
+      language: sttSettingsNow.language,
+      gigaam: gigaamStatus,
+      seconds: audio?.seconds || 0,
+    });
+    if (engineChoice.engine === 'gigaam') {
+      const srGiga = payload?.sampleRate || 16000;
+      const gigaStarted = Date.now();
+      const resGiga = await gigaam.transcribe(trimmed, {
+        sampleRate: srGiga,
+        onProgress: (done, total) => {
+          try {
+            mainWindow?.webContents.send('stt:progress', { done, total });
+          } catch {
+            /* окно закрыто */
+          }
+        },
+      });
+      if (resGiga.ok && resGiga.text) {
+        logger.info('stt', 'Распознано русской моделью', {
+          keep: true,
+          ms: resGiga.ms,
+          chunks: resGiga.chunks,
+          chars: resGiga.text.length,
+        });
+        return {
+          ok: true,
+          text: resGiga.text,
+          ms: resGiga.ms,
+          mode: 'gigaam',
+          model: 'gigaam-v3',
+          parts: resGiga.chunks,
+          timeline: { total: Date.now() - gigaStarted },
+        };
+      }
+      // Не получилось — говорим об этом в журнал и распознаём прежним движком:
+      // человек должен получить текст, а не пустоту с молчанием в отчёте.
+      logger.warn('stt', 'Русская модель не справилась, распознаём прежним движком', {
+        keep: true,
+        reason: resGiga.reason || 'пустой текст',
+        ms: resGiga.ms,
+      });
+    }
     const dir = path.join(app.getPath('temp'), 'zspeakly');
     fs.mkdirSync(dir, { recursive: true });
     // Имя уникальное: живая расшифровка и финальный проход могут идти почти
@@ -1486,7 +1537,12 @@ function registerIpc() {
   });
 
   // «Отменить распознавание»: человек не обязан ждать большую модель.
-  ipcMain.handle('stt:cancel', () => (whisper.cancel ? whisper.cancel('отменено пользователем') : false));
+  ipcMain.handle('stt:cancel', () => {
+    // Отменить надо тот движок, который сейчас считает: русский или прежний.
+    const russian = gigaam.cancel ? gigaam.cancel() : false;
+    const legacy = whisper.cancel ? whisper.cancel('отменено пользователем') : false;
+    return russian || legacy;
+  });
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));
 
@@ -2027,6 +2083,10 @@ function registerIpc() {
       vadActive: Boolean(whisper.findVadModel?.()),
       preferred,
       active: active ? path.basename(active).replace(/^ggml-/, '').replace(/\.bin$/, '') : '',
+      // Русская модель: есть ли она, сколько занимает и почему не работает.
+      // Отдельного запроса интерфейсу не нужно — состояние приходит вместе с
+      // состоянием моделей, одной карточкой.
+      russian: gigaam.status(),
     };
   });
   /**
@@ -2198,6 +2258,25 @@ function registerIpc() {
   ipcMain.handle('models:prepare', () => autoPrepareRecognition());
 
   ipcMain.handle('models:cancel', () => models.cancelDownload());
+  // Русская модель: скачивание с проверкой размера и хеша каждого файла.
+  // Прогресс идёт тем же событием, что и у остальных моделей, но с id
+  // «russian»: в интерфейсе это одна карточка, а не второй механизм.
+  ipcMain.handle('models:download-russian', async () => {
+    const res = await gigaam.downloadModel({
+      onProgress: ({ received, total, file }) => {
+        const percent = total ? Math.round((received / total) * 100) : 0;
+        mainWindow?.webContents.send('model:progress', { id: 'russian', percent, received, total, file });
+      },
+    });
+    const ok = res.available === true;
+    mainWindow?.webContents.send('model:progress', { id: 'russian', percent: ok ? 100 : 0, done: true, ok });
+    logger.info('stt', ok ? 'Русская модель готова' : 'Русская модель не скачалась', {
+      keep: true,
+      reason: res.reason || '',
+    });
+    return { ok, ...res };
+  });
+  ipcMain.handle('models:cancel-russian', () => gigaam.cancelDownload());
   ipcMain.handle('models:import', async (_e, sourcePath) => models.importModel(sourcePath));
   ipcMain.handle('models:download-engine', async () => {
     const res = await models.downloadEngine((percent) => {
@@ -2596,10 +2675,20 @@ app.whenReady().then(() => {
     store.set('zs:installId', fresh);
     logger.setInstallId(fresh);
   }
+  // Состояние русской модели — в первую же запись журнала: без этого «почему
+  // на русском распознаёт хуже, чем у других» невозможно разобрать постфактум.
+  const russianAtStart = (() => {
+    try {
+      return gigaam.status();
+    } catch {
+      return { available: false, reason: 'неизвестно' };
+    }
+  })();
   logger.info('app', 'Запуск ZSpeakly', {
     keep: true,
     version: appVersion,
     engine: engineInfo.available ? 'whisper.cpp' : 'нет',
+    russian: russianAtStart.available ? 'готова' : russianAtStart.reason || 'нет',
   });
 
   registerIpc();

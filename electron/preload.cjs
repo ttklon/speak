@@ -76,6 +76,9 @@ contextBridge.exposeInMainWorld('zspeakly', {
     saveFile: (payload) => ipcRenderer.invoke('app:save-file', payload),
     modelsStatus: () => ipcRenderer.invoke('models:status'),
     modelsCancel: () => ipcRenderer.invoke('models:cancel'),
+    // русская модель (GigaAM v3): скачивается отдельно от whisper-моделей
+    downloadRussianModel: () => ipcRenderer.invoke('models:download-russian'),
+    cancelRussianModel: () => ipcRenderer.invoke('models:cancel-russian'),
     modelsWarm: (model) => ipcRenderer.invoke('models:warm', model),
     downloadModel: (id) => ipcRenderer.invoke('models:download', id),
     saveBackup: (json) => ipcRenderer.invoke('data:save-backup', json),

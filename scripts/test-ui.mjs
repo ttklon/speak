@@ -2499,6 +2499,21 @@ async function scenarioModels(browser) {
     /быстрее речи/i.test(cardText) && !/realtime/i.test(cardText) && !/\bRAM\b/.test(cardText) && /памяти/i.test(cardText),
     cardText.slice(0, 160),
   );
+  // Русский язык — отдельная карточка: своя модель, свой размер, своё правило
+  // включения. Проверяем, что она есть и говорит словами, а не названием модели.
+  const russianCard = await page.evaluate(() => {
+    const card = document.querySelector('.model-card--russian');
+    return card ? card.innerText.replace(/\n+/g, ' ') : '';
+  });
+  record(
+    'сценарии',
+    'русский язык: отдельная карточка с размером и понятным обещанием',
+    /Русский язык/.test(russianCard) &&
+      /МБ/.test(russianCard) &&
+      /запят|препинани/i.test(russianCard) &&
+      !/GigaAM|onnx|int8|realtime/i.test(russianCard),
+    russianCard.slice(0, 180) || 'карточки нет',
+  );
   const errors = takeErrors(page);
   record('сценарии', 'модели: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
@@ -2751,7 +2766,11 @@ async function scenarioOldModelName(browser) {
     tiers.includes(saved) && !/старая модель/i.test(body),
     String(saved),
   );
-  const tierCards = await page.evaluate(() => document.querySelectorAll('.model-card').length);
+  // Русская модель — отдельная карточка со своим классом: она не «четвёртый
+  // режим», поэтому считаем только карточки режимов.
+  const tierCards = await page.evaluate(
+    () => document.querySelectorAll('.model-card:not(.model-card--russian)').length,
+  );
   record('сценарии', 'старое имя модели: в списке ровно три режима', tierCards === 3, `карточек: ${tierCards}`);
   const errors = takeErrors(page);
   record('сценарии', 'старое имя модели: без ошибок консоли', errors.length === 0, errors[0] || '');

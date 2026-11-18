@@ -2073,6 +2073,245 @@ await check('text:target честно говорит, куда попадёт т
   }
 });
 
+// ── Русский движок (GigaAM v3): словарь, нарезка, декодирование, скачивание ──
+// Модель весит 226 МБ и в песочнице недоступна, поэтому проверяем то, что можно
+// проверить без весов: склейку текста, нарезку длинной записи, сам цикл
+// декодирования на подставных сетях и скачивание с проверкой хеша. Это ровно те
+// места, где ошибка даёт «почти правильный» текст и молчаливую поломку.
+
+await check('словарь русской модели: кусочки, пробелы, пустой токен', async () => {
+  const { parseVocabulary, tokensToText } = require(path.resolve('electron/gigaamVocab.cjs'));
+  // порядок кусочков нарочно перемешан: номер важнее строки
+  const text = ['▁ 1', '. 2', 'т 3', 'е 4', 'в 5', 'и 6', ', 7', 'р 8', 'п 9', '<blk> 10', '▁п 11'].join('\n');
+  const vocab = parseVocabulary(text);
+  if (vocab.blankId !== 10) throw new Error(`пустой токен не найден: ${vocab.blankId}`);
+  // «привет, привет.» — проверяем и склейку, и пробел перед запятой
+  const ids = [11, 8, 6, 5, 4, 3, 7, 1, 11, 8, 6, 5, 4, 3, 2];
+  const out = tokensToText(vocab, ids);
+  if (out !== 'привет, привет.') throw new Error(`склейка дала «${out}»`);
+  // пробел после открывающей кавычки и перед закрывающей — лишний
+  const q = parseVocabulary(['« 1', 'с 2', 'л 3', 'о 4', 'в 5', 'о 6', '» 7', '<blk> 8'].join('\n'));
+  if (tokensToText(q, [1, 2, 3, 4, 5, 6, 7]) !== '«слово»') throw new Error('кавычки склеены неверно');
+  let failed = false;
+  try {
+    parseVocabulary('мусор без номера');
+  } catch {
+    failed = true;
+  }
+  if (!failed) throw new Error('битый словарь принят молча');
+});
+
+await check('длинная запись режется на куски не длиннее двадцати секунд', () => {
+  const { chunkRanges, quietestPoint } = require(path.resolve('electron/gigaamChunking.cjs'));
+  const sr = 16000;
+  // 45 секунд: речь с паузами каждые 6 секунд — разрез обязан попасть в паузу
+  const total = 45 * sr;
+  const samples = new Float32Array(total);
+  for (let i = 0; i < total; i++) {
+    const second = i / sr;
+    const inPause = Math.abs(second % 6) < 0.25;
+    samples[i] = inPause ? 0 : Math.sin((2 * Math.PI * 220 * i) / sr) * 0.3;
+  }
+  const ranges = chunkRanges(samples, 20 * sr);
+  const sum = ranges.reduce((acc, r) => acc + r.count, 0);
+  if (sum !== total) throw new Error(`куски покрывают ${sum} из ${total} отсчётов`);
+  if (ranges.some((r) => r.count > 20 * sr)) throw new Error('кусок длиннее предела');
+  if (ranges.length < 3) throw new Error(`45 секунд разрезаны на ${ranges.length} куска`);
+  // первый разрез — в паузе: рядом с местом разреза энергия близка к нулю
+  const cut = ranges[0].count;
+  const near = quietestPoint(samples, Math.max(0, cut - 800), cut + 800);
+  const energy = Math.abs(near - cut) <= 800 ? true : false;
+  if (!energy) throw new Error('разрез ушёл далеко от тишины');
+});
+
+await check('кусок посреди фразы не начинает новое предложение с заглавной', () => {
+  const { continuing, append } = require(path.resolve('electron/gigaamChunking.cjs'));
+  if (continuing('я пошёл в магазин и', 'Купил хлеб.') !== 'купил хлеб.') {
+    throw new Error('заглавная посреди фразы осталась');
+  }
+  if (continuing('Купил хлеб.', 'Потом пошёл домой.') !== 'Потом пошёл домой.') {
+    throw new Error('заглавная после точки потеряна');
+  }
+  // аббревиатура не трогается: вторая буква заглавная
+  if (continuing('мы говорили про', 'США и Канаду.') !== 'США и Канаду.') {
+    throw new Error('аббревиатура испорчена');
+  }
+  if (append('', ' текст ') !== 'текст') throw new Error('пробелы не подрезаны');
+  if (append('привет', '') !== 'привет') throw new Error('пустой кусок добавил пробел');
+});
+
+await check('движок выбирается политикой: русский — русская модель, остальное — прежняя', () => {
+  const { chooseEngine } = require(path.resolve('electron/sttEngine.cjs'));
+  const ready = { available: true };
+  const cases = [
+    [{ language: 'ru', gigaam: ready, seconds: 4 }, 'gigaam'],
+    [{ language: 'ru-RU', gigaam: ready, seconds: 4 }, 'gigaam'],
+    [{ language: 'en', gigaam: ready, seconds: 4 }, 'whisper'],
+    [{ language: 'ru', gigaam: { available: false, reason: 'модель не скачана' }, seconds: 4 }, 'whisper'],
+    [{ language: 'ru', gigaam: ready, seconds: 0.4 }, 'whisper'],
+  ];
+  for (const [input, expected] of cases) {
+    const got = chooseEngine(input);
+    if (got.engine !== expected) throw new Error(`${JSON.stringify(input)} → ${got.engine}, ждали ${expected}`);
+    if (!got.why) throw new Error('решение без причины: в журнале будет нечего читать');
+  }
+  // причина отказа — та, что пришла от движка, а не выдуманная
+  const why = chooseEngine({ language: 'ru', gigaam: { available: false, reason: 'нет модуля расчёта' } });
+  if (!why.why.includes('нет модуля')) throw new Error('причина отказа потерялась');
+});
+
+await check('жадное декодирование собирает фразу из подставных сетей', async () => {
+  const gigaam = require(path.resolve('electron/gigaam.cjs'));
+  const { parseVocabulary } = require(path.resolve('electron/gigaamVocab.cjs'));
+  // словарь: ▁ п р и в е т <blk>
+  const vocab = parseVocabulary(['▁ 0', 'п 1', 'р 2', 'и 3', 'в 4', 'е 5', 'т 6', '<blk> 7'].join('\n'));
+  const frameTokens = [[0, 1, 2], [3, 4, 5], [6], [7]];
+  const session = (run) => ({ run });
+  const state = { frame: -1, inside: 0 };
+  const sessions = {
+    vocab,
+    preprocessor: session(async (feeds) => {
+      // один кадр признаков на 10 отсчётов — как у настоящего графа
+      const frames = Math.max(1, Math.floor(feeds.waveforms.data.length / 10));
+      return {
+        features: { data: new Float32Array(64 * frames), dims: [1, 64, frames], get: () => frames },
+        features_lens: { data: BigInt64Array.from([BigInt(frames)]), dims: [1], get: () => frames },
+      };
+    }),
+    encoder: session(async (feeds) => {
+      const frames = feeds.audio_signal.dims[2];
+      const dim = 4;
+      return {
+        // «вес» кадра — его номер: так декодер получает нужный токен по порядку
+        encoded: {
+          // Значение по индексу (i % frames) — это «номер кадра»; движок берёт
+          // кадр как flat[0 * frames + frame], поэтому номер доходит до джойнта.
+          data: new Float32Array(dim * frames).map((_, i) => i % frames),
+          dims: [1, dim, frames],
+          get: () => 0,
+        },
+        encoded_len: { data: Int32Array.from([Math.min(frames, frameTokens.length)]), dims: [1], get: () => Math.min(frames, frameTokens.length) },
+      };
+    }),
+    decoder: session(async (feeds) => {
+      const token = Number(feeds.x.data[0]);
+      return {
+        dec: { data: new Float32Array(320).fill(token), dims: [1, 1, 320], get: () => 0 },
+        h: { data: new Float32Array(320), dims: [1, 1, 320], get: () => 0 },
+        c: { data: new Float32Array(320), dims: [1, 1, 320], get: () => 0 },
+      };
+    }),
+    joint: session(async (feeds) => {
+      // Номер кадра лежит в первом значении энкодера: по нему выбираем, что
+      // этот кадр «говорит». Внутри кадра выдаём токены по порядку — так
+      // проверяется и предел в три токена на кадр.
+      const frameNumber = Math.round(feeds.enc.data[0]);
+      const tokens = frameTokens[Math.max(0, Math.min(frameNumber, frameTokens.length - 1))];
+      if (frameNumber !== state.frame) {
+        state.frame = frameNumber;
+        state.inside = 0;
+      }
+      const logits = new Float32Array(8).fill(-1);
+      const next = tokens[state.inside];
+      if (next === undefined || next === 7) logits[7] = 5;
+      else logits[next] = 5;
+      state.inside += 1;
+      return { joint: { data: logits, dims: [1, 1, 8], get: () => 0 } };
+    }),
+  };
+  gigaam.setTestDeps({ sessions, files: [] });
+  try {
+    const pcm = Buffer.alloc(16000 * 2);
+    for (let i = 0; i < 16000; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 8) * 8000), i * 2);
+    const result = await gigaam.transcribe(pcm, { sampleRate: 16000 });
+    if (!result.ok) throw new Error(`движок отказал: ${result.reason}`);
+    if (!result.text.startsWith('привет')) throw new Error(`получилось «${result.text}»`);
+    if (result.chunks !== 1) throw new Error(`ожидали один кусок, а вышло ${result.chunks}`);
+    // движок обязан отказать на чужой частоте, а не молча пересчитать неправильно
+    const wrongRate = await gigaam.transcribe(pcm, { sampleRate: 48000 });
+    if (wrongRate.ok || !/16 кГц/.test(wrongRate.reason)) throw new Error('чужая частота принята молча');
+
+    // Отмена посреди счёта: кнопка «Отменить» должна влиять на русский движок,
+    // а не только на прежний. Считаем недолго и просим остановиться.
+    const stopAfter = { left: 3 };
+    // Несколько десятков кадров «тишины»: отмена должна прервать именно счёт,
+    // а не совпасть с его концом.
+    sessions.encoder = session(async (feeds) => {
+      const frames = 60;
+      const dim = 4;
+      return {
+        encoded: { data: new Float32Array(dim * frames), dims: [1, dim, frames], get: () => 0 },
+        encoded_len: { data: Int32Array.from([frames]), dims: [1], get: () => frames },
+      };
+    });
+    sessions.joint = session(async (feeds) => {
+      if (stopAfter.left-- <= 0) gigaam.cancel();
+      const logits = new Float32Array(8).fill(-1);
+      logits[7] = 5;
+      return { joint: { data: logits, dims: [1, 1, 8], get: () => 0 } };
+    });
+    const cancelled = await gigaam.transcribe(pcm, { sampleRate: 16000 });
+    if (cancelled.ok || !/отмен/.test(cancelled.reason)) {
+      throw new Error(`отмена проигнорирована: ${JSON.stringify(cancelled)}`);
+    }
+  } finally {
+    gigaam.reset();
+  }
+});
+
+await check('скачивание русской модели проверяет размер и хеш каждого файла', async () => {
+  const gigaam = require(path.resolve('electron/gigaam.cjs'));
+  const crypto = require('node:crypto');
+  const http = require('node:http');
+  const files = {
+    'v3_e2e_rnnt_vocab.txt': '▁ 0\nа 1\n<blk> 2\n',
+    'v3_e2e_rnnt_joint.int8.onnx': 'joint-bytes',
+  };
+  const manifest = Object.entries(files).map(([name, body]) => ({
+    name,
+    size: Buffer.byteLength(body),
+    sha256: crypto.createHash('sha256').update(body).digest('hex'),
+  }));
+  const server = http.createServer((req, res) => {
+    const name = req.url.split('/').pop();
+    if (!(name in files)) {
+      res.statusCode = 404;
+      res.end('нет такого файла');
+      return;
+    }
+    res.end(files[name]);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  gigaam.setTestDeps({ files: manifest, ort: { InferenceSession: {} } });
+  try {
+    const state = gigaam.status();
+    if (state.available) throw new Error('движок «готов» без файлов');
+    if (state.missing.length !== manifest.length) throw new Error('не все файлы считаются отсутствующими');
+    const done = await gigaam.downloadModel({ baseUrl: `http://127.0.0.1:${port}` });
+    if (!done.available) throw new Error(`после скачивания движок не готов: ${done.reason}`);
+    const onDisk = fs.readFileSync(path.join(gigaam.modelDir(), 'v3_e2e_rnnt_vocab.txt'), 'utf8');
+    if (onDisk !== files['v3_e2e_rnnt_vocab.txt']) throw new Error('скачался не тот файл');
+
+    // повреждённый файл не должен становиться моделью
+    fs.rmSync(gigaam.modelDir(), { recursive: true, force: true });
+    const broken = files['v3_e2e_rnnt_vocab.txt'] + 'испорчено';
+    files['v3_e2e_rnnt_vocab.txt'] = broken;
+    let failed = false;
+    try {
+      await gigaam.downloadModel({ baseUrl: `http://127.0.0.1:${port}` });
+    } catch (err) {
+      failed = /повреждённым/.test(String(err?.message || err));
+    }
+    if (!failed) throw new Error('повреждённый файл принят как модель');
+    const leftovers = fs.readdirSync(gigaam.modelDir()).filter((name) => name.endsWith('.unverified'));
+    if (leftovers.length) throw new Error(`остались недокачанные файлы: ${leftovers.join(', ')}`);
+  } finally {
+    server.close();
+    gigaam.reset();
+  }
+});
+
 console.log(`\nOK (${ok.length}):`);
 ok.forEach((n) => console.log('  ✓', n));
 if (fail.length) {
