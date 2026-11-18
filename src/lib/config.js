@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.12.0',
+  version: '1.13.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -260,6 +260,7 @@ export const STORAGE_KEYS = {
   hotkeys: 'zs.hotkeys',
   presets: 'zs.presets',
   instructions: 'zs.instructions',
+  snippets: 'zs.snippets',
   stats: 'zs.stats',
   profile: 'zs.profile',
 };

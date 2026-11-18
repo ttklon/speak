@@ -720,6 +720,67 @@ async function scenarioVoiceCommands(browser) {
 }
 
 /**
+ * Быстрые блоки: сказал триггер целиком — вставился готовый текст.
+ * Проверяем через настоящий проход диктовки, а не только юнит-тестом: важно,
+ * что блок доходит и в историю, и в окно, и что он не срабатывает посреди фразы.
+ */
+async function scenarioSnippets(browser) {
+  const body = 'С уважением,\nИван Петров\n+7 900 000-00-00';
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: {
+      'zs.dictations': [],
+      'zs.mockSttText': 'моя подпись',
+      'zs.snippets': [{ id: 's1', trigger: 'моя подпись', body, createdAt: Date.now() }],
+    },
+  });
+  takeErrors(page);
+  await clickText(page, 'Начать диктовку');
+  await sleep(1100);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2300);
+  const result = await page.evaluate(() => {
+    const list = window.__e2e.read('zs.dictations');
+    const saved = Array.isArray(list) && list[0] ? String(list[0].text || '') : '';
+    const inserts = (window.__bridgeCalls || [])
+      .filter((c) => c.channel === 'text:insert')
+      .map((c) => String(c.args?.[0] || ''));
+    return { saved, inserted: inserts[0] || '' };
+  });
+  record(
+    'сценарии',
+    'быстрые блоки: сказанный триггер вставил готовый текст',
+    result.saved === body && result.inserted === body,
+    JSON.stringify(result.saved.slice(0, 60)),
+  );
+
+  // В словаре блок виден человеку: триггер и начало текста, без «технических» имён
+  const dict = await openPage(browser, '#/dictionary', {
+    storeSeed: { 'zs.snippets': [{ id: 's1', trigger: 'моя подпись', body, createdAt: Date.now() }] },
+    settle: 700,
+  });
+  takeErrors(dict);
+  const shown = await dict.evaluate(() => {
+    const row = document.querySelector('.snippet-row');
+    return row ? row.innerText.replace(/\n+/g, ' ') : '';
+  });
+  record(
+    'сценарии',
+    'быстрые блоки: в словаре видно, что сказать и что вставится',
+    /моя подпись/i.test(shown) && /С уважением/.test(shown),
+    shown.slice(0, 120) || 'блока нет',
+  );
+  const dictErrors = takeErrors(dict);
+  record('сценарии', 'быстрые блоки: без ошибок консоли', dictErrors.length === 0, dictErrors[0] || '');
+  await dict.close();
+  await page.close();
+}
+
+/**
  * Оформление под окно: одна и та же диктовка в мессенджер и в редактор кода.
  * Проверяем через настоящий проход (мок движка, живая цепочка), а не только
  * юнит-тестом правила: важно, что текст и в истории, и на вставке одинаковый.
@@ -4954,6 +5015,7 @@ async function main() {
       ['диктовка', scenarioDictation],
       ['голосовые команды', scenarioVoiceCommands],
       ['оформление под окно', scenarioAppFormat],
+      ['быстрые блоки', scenarioSnippets],
       ['пустой результат', scenarioEmptyResult],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],

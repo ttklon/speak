@@ -29,6 +29,7 @@ import {
   sanitizePresets,
   sanitizeStats,
 } from '../lib/sanitize.js';
+import { SNIPPET_LIMITS, normalizePhrase, sanitizeSnippets } from '../lib/snippets.js';
 
 const AppDataContext = createContext(null);
 
@@ -87,6 +88,12 @@ export function AppDataProvider({ children }) {
   });
   const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => [], {
     sanitize: sanitizeDictionary,
+  });
+  // Быстрые блоки: сказал «моя подпись» — вставился текст. Хранятся рядом со
+  // словарём, потому что это тоже «мои слова», но правило другое: словарь
+  // правит написание, блок заменяет всю фразу.
+  const [snippets, setSnippets] = usePersistentState(STORAGE_KEYS.snippets, () => [], {
+    sanitize: sanitizeSnippets,
   });
   // Чистим и по весу: история с картинками могла вырасти до десятков мегабайт,
   // и её разбор при запуске был заметен как «приложение долго открывается».
@@ -235,6 +242,28 @@ export function AppDataProvider({ children }) {
     [setDictionary],
   );
 
+  const addSnippet = useCallback(
+    (trigger, body) => {
+      const cleanTrigger = String(trigger || '').replace(/\s+/gu, ' ').trim();
+      const cleanBody = String(body || '').trim();
+      if (!cleanTrigger || !cleanBody) return null;
+      const entry = {
+        id: uid('snip'),
+        trigger: cleanTrigger.slice(0, SNIPPET_LIMITS.trigger),
+        body: cleanBody.slice(0, SNIPPET_LIMITS.body),
+        createdAt: Date.now(),
+      };
+      // Тот же триггер (без учёта регистра и знаков) не дублируем, а заменяем:
+      // иначе человек не поймёт, какой из двух блоков сработал.
+      const key = normalizePhrase(entry.trigger);
+      setSnippets((prev) => [entry, ...prev.filter((s) => normalizePhrase(s.trigger) !== key)]);
+      return entry;
+    },
+    [setSnippets],
+  );
+
+  const removeSnippet = useCallback((id) => setSnippets((prev) => prev.filter((s) => s.id !== id)), [setSnippets]);
+
   const addClipboardItem = useCallback(
     (item) => {
       setClipboard((prev) => {
@@ -330,6 +359,7 @@ export function AppDataProvider({ children }) {
     setDictations([]);
     setClipboard([]);
     setDictionary([]);
+    setSnippets([]);
     setInstructions([]);
     setPresets(DEFAULT_AI_PRESETS);
     setVoiceHotkeys(DEFAULT_VOICE_HOTKEYS);
@@ -339,11 +369,11 @@ export function AppDataProvider({ children }) {
     // прежнее имя, хотя приложение обещало «настройки по умолчанию»
     setProfile({ name: '' });
   }, [
-    setDictations, setClipboard, setDictionary,
+    setDictations, setClipboard, setDictionary, setSnippets,
     setInstructions, setPresets, setVoiceHotkeys, setSettings, setStats, setProfile,
   ]);
 
-  const bytes = useMemo(() => storageBytes(), [dictations, clipboard, dictionary]);
+  const bytes = useMemo(() => storageBytes(), [dictations, clipboard, dictionary, snippets]);
 
   // Резервная копия: словарь, инструкции, настройки, пресеты и история.
   // Буфер обмена намеренно не выгружается — там бывают пароли и коды.
@@ -355,13 +385,14 @@ export function AppDataProvider({ children }) {
       settings,
       dictations,
       dictionary,
+      snippets,
       voiceHotkeys,
       presets,
       instructions,
       stats,
       profile,
     }),
-    [settings, dictations, dictionary, voiceHotkeys, presets, instructions, stats, profile],
+    [settings, dictations, dictionary, snippets, voiceHotkeys, presets, instructions, stats, profile],
   );
 
   const importBackup = useCallback(
@@ -372,7 +403,7 @@ export function AppDataProvider({ children }) {
       if (payload.app && payload.app !== 'ZSpeakly') {
         throw new Error(`копия от другого приложения: ${String(payload.app).slice(0, 40)}`);
       }
-      const lists = ['dictations', 'dictionary', 'voiceHotkeys', 'presets', 'instructions'];
+      const lists = ['dictations', 'dictionary', 'snippets', 'voiceHotkeys', 'presets', 'instructions'];
       const hasList = lists.some((k) => Array.isArray(payload[k]));
       const hasSettings = payload.settings && typeof payload.settings === 'object';
       if (!hasList && !hasSettings) throw new Error('в файле нет данных ZSpeakly');
@@ -416,6 +447,11 @@ export function AppDataProvider({ children }) {
         setDictionary(clean);
         applied.push(`словарь (${clean.length})`);
       }
+      if (Array.isArray(payload.snippets)) {
+        const clean = sanitizeSnippets(payload.snippets);
+        setSnippets(clean);
+        applied.push(`быстрые блоки (${clean.length})`);
+      }
       if (Array.isArray(payload.voiceHotkeys)) {
         setVoiceHotkeys(payload.voiceHotkeys);
         applied.push('голосовые сочетания');
@@ -453,6 +489,9 @@ export function AppDataProvider({ children }) {
       dictionary,
       addDictionaryWord,
       removeDictionaryWord,
+      snippets,
+      addSnippet,
+      removeSnippet,
       clipboard,
       addClipboardItem,
       removeClipboardItem,
@@ -482,7 +521,8 @@ export function AppDataProvider({ children }) {
     [
       exportBackup, importBackup,
       settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, clearDictations,
-      dictionary, addDictionaryWord, removeDictionaryWord, clipboard, addClipboardItem,
+      dictionary, addDictionaryWord, removeDictionaryWord, snippets, addSnippet, removeSnippet,
+    clipboard, addClipboardItem,
       removeClipboardItem, updateClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
       updateHotkey, resetHotkeys, presets, togglePreset, updatePresetKeys, instructions, addInstruction,
       removeInstruction, updateInstruction, stats, recordWords, profile, setProfile, resetAll, bytes,

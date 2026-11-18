@@ -22,6 +22,7 @@ import { applyVoiceCommands } from '../lib/voiceCommands.js';
 // оформление под место вставки: в мессенджере точка в конце лишняя, в
 // редакторе кода — заглавная буква; решается без человека и без модели
 import { formatForApp, resolveAppStyle } from '../lib/appFormat.js';
+import { expandSnippet } from '../lib/snippets.js';
 import { createPolishGate } from '../lib/ai/polishGate.js';
 import { describeScreen } from '../lib/ai/vision.js';
 import { playCue } from '../lib/feedback.js';
@@ -85,7 +86,8 @@ function speak(text, language = 'ru', voiceURI = '', onFail = null) {
 const DictationContext = createContext(null);
 
 export function DictationProvider({ children }) {
-  const { settings, dictionary, addDictation, recordWords, updateSettings, updateDictation } = useAppData();
+  const { settings, dictionary, snippets, addDictation, recordWords, updateSettings, updateDictation } =
+    useAppData();
   const [state, setState] = useState('idle'); // idle | listening | processing | done
   const [draft, setDraft] = useState(''); // живой текст
   const [level, setLevel] = useState(0);
@@ -135,6 +137,8 @@ export function DictationProvider({ children }) {
   const liveDraftRef = useRef(liveDraft);
   liveDraftRef.current = liveDraft;
   const dictRef = useRef(dictionary);
+  // быстрые блоки: «моя подпись» → готовый текст
+  const snippetsRef = useRef(snippets);
   const stopFallback = useRef(null);
   // «Ворота» полировки: помнят, успевает ли модель, и режут лишнее ожидание.
   const gateRef = useRef(null);
@@ -163,7 +167,8 @@ export function DictationProvider({ children }) {
   useEffect(() => {
     settingsRef.current = settings;
     dictRef.current = dictionary;
-  }, [settings, dictionary]);
+    snippetsRef.current = snippets;
+  }, [settings, dictionary, snippets]);
 
   const engine = useMemo(() => engineName(), []);
   const { push: pushToast } = useToast();
@@ -231,6 +236,21 @@ export function DictationProvider({ children }) {
         : corrected;
       // Чистка — построчно: иначе схлопнулись бы переносы, сказанные голосом.
       let cleaned = polishing ? cleanLines(commanded) : commanded.trim();
+      // Быстрый блок: сказал триггер целиком — вставляем готовый текст вместо
+      // фразы. Срабатывает только на точное совпадение: «поставь мою подпись
+      // в конце» должно остаться речью, а не превратиться в подпись.
+      let snippetHit = null;
+      if (spoken && insert && sessionOpts.current.insert !== false) {
+        const expanded = expandSnippet(cleaned, snippetsRef.current || []);
+        if (expanded.snippet) {
+          snippetHit = expanded.snippet;
+          cleaned = expanded.text;
+          diag.info('stt', 'Быстрый блок развёрнут', {
+            trigger: snippetHit.trigger,
+            chars: cleaned.length,
+          });
+        }
+      }
       // Куда и как вставляем — решаем один раз: этот же стиль нужен и позднему
       // ответу модели (он приходит уже после вставки и обновляет историю),
       // иначе в истории оказался бы текст с точкой, которой в окне нет.
@@ -241,7 +261,9 @@ export function DictationProvider({ children }) {
       // Вторая стадия («Переписывать диктовку моделью»): офлайн-правила уже
       // дали текст, локальная модель доводит формулировки. Модель может
       // не ответить — тогда остаётся результат правил, диктовка не ломается.
-      if (polishing && cleaned && settingsRef.current.aiDictationRewrite === true) {
+      // Развёрнутый блок моделью не переписываем: это авторский текст, а не
+      // расшифровка, — правки в подписи или реквизитах были бы порчей.
+      if (polishing && cleaned && !snippetHit && settingsRef.current.aiDictationRewrite === true) {
         setState('processing');
         const before = cleaned.length;
         // Бюджет полировки. Раньше здесь стояло «ждём до 6 секунд» — и человек

@@ -461,6 +461,7 @@ scripts/           иконки, dev-запуск, модели, CI-хелпер
 | [10-HOW-DICTATION-APPS-WORK.md](docs/10-HOW-DICTATION-APPS-WORK.md) | Как устроены Wispr Flow, superwhisper, Svara и Phonon: модели, VAD, чистка текста, вставка — и что из этого есть в ZSpeakly |
 | [11-ANALOGUES-2026.md](docs/11-ANALOGUES-2026.md) | 32 аналога «речь → текст»: таблица, разборы, что взять себе. Главное — русская модель GigaAM v3 (MIT): WER ≈8,4 % против ≈25 % у Whisper-large-v3 |
 | [12-RUSSIAN-ENGINE.md](docs/12-RUSSIAN-ENGINE.md) | Русский движок GigaAM v3: зачем второй движок, как он устроен, что проверено, как проверить на своём звуке |
+| [13-LIMITATIONS.md](docs/13-LIMITATIONS.md) | Известные ограничения: микрофоны, права администратора, платформа, данные, что не проверено |
 
 ## Лицензия
 

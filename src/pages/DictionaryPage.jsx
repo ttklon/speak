@@ -6,15 +6,21 @@ import { Button, SearchInput, Tabs } from '../components/ui/Controls.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import { dayLabel } from '../lib/utils.js';
+import { SNIPPET_LIMITS, snippetExamples } from '../lib/snippets.js';
 
 export default function DictionaryPage() {
-  const { dictionary, addDictionaryWord, removeDictionaryWord, settings, updateSettings } = useAppData();
+  const { dictionary, addDictionaryWord, removeDictionaryWord, snippets, addSnippet, removeSnippet, settings, updateSettings } =
+    useAppData();
   const { push } = useToast();
   const [tab, setTab] = useState('all');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [word, setWord] = useState('');
   const [pron, setPron] = useState('');
+  // Быстрые блоки: фраза-триггер и текст, который вместо неё вставляется.
+  const [snipOpen, setSnipOpen] = useState(false);
+  const [snipTrigger, setSnipTrigger] = useState('');
+  const [snipBody, setSnipBody] = useState('');
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -39,6 +45,19 @@ export default function DictionaryPage() {
       setPron('');
       setOpen(false);
     }
+  };
+
+  const submitSnippet = () => {
+    const entry = addSnippet(snipTrigger, snipBody);
+    if (!entry) return;
+    push({
+      title: 'Блок сохранён',
+      description: `Скажите «${entry.trigger}» — вставится ваш текст`,
+      tone: 'success',
+    });
+    setSnipTrigger('');
+    setSnipBody('');
+    setSnipOpen(false);
   };
 
   return (
@@ -137,6 +156,111 @@ export default function DictionaryPage() {
           />
         </div>
       </div>
+
+      {/* Быстрые блоки. Лежат рядом со словарём, потому что это тоже «мои
+          слова»: словарь правит написание, блок заменяет всю фразу. */}
+      <div className="settings-group">
+        <div className="settings-group__title">Быстрые блоки</div>
+        <div className="settings-group__desc">
+          Скажите фразу целиком — вместо неё вставится готовый текст: подпись, адрес, шаблон ответа.
+          {snippets.length ? ` Сейчас есть: ${snippetExamples(snippets).join(', ')}.` : ''}
+        </div>
+        {snippets.length ? (
+          <div className="snippet-list">
+            {snippets.map((snippet) => (
+              <div key={snippet.id} className="snippet-row">
+                <div className="grow" style={{ textAlign: 'left' }}>
+                  <div className="snippet-row__trigger">«{snippet.trigger}»</div>
+                  <div className="snippet-row__body">
+                    {snippet.body.length > 90 ? `${snippet.body.slice(0, 90)}…` : snippet.body}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="icon-btn icon-btn--sm icon-btn--danger"
+                  aria-label={`Удалить блок «${snippet.trigger}»`}
+                  onClick={() => {
+                    removeSnippet(snippet.id);
+                    push({
+                      title: 'Блок удалён',
+                      description: snippet.trigger,
+                      tone: 'warn',
+                      ttl: 8000,
+                      action: {
+                        label: 'Вернуть',
+                        onClick: () => addSnippet(snippet.trigger, snippet.body),
+                      },
+                    });
+                  }}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="settings-note">
+            Пока блоков нет. Пример: триггер «моя подпись», текст — имя, должность и телефон. Скажете
+            «моя подпись» — вставится всё сразу.
+          </div>
+        )}
+        <div className="page__actions" style={{ marginTop: 10 }}>
+          <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={() => setSnipOpen(true)}>
+            Добавить блок
+          </Button>
+        </div>
+      </div>
+
+      <Modal
+        open={snipOpen}
+        onClose={() => setSnipOpen(false)}
+        title="Новый быстрый блок"
+        width={460}
+        footer={
+          <>
+            <Button variant="bare" onClick={() => setSnipOpen(false)}>
+              Отмена
+            </Button>
+            <Button variant="white" onClick={submitSnippet} disabled={!snipTrigger.trim() || !snipBody.trim()}>
+              Сохранить
+            </Button>
+          </>
+        }
+      >
+        <div className="stack-12">
+          <div className="field">
+            <label className="field__label" htmlFor="snip-trigger">
+              Что сказать
+            </label>
+            <input
+              id="snip-trigger"
+              className="input"
+              data-autofocus
+              maxLength={SNIPPET_LIMITS.trigger}
+              value={snipTrigger}
+              placeholder="Например: моя подпись"
+              onChange={(e) => setSnipTrigger(e.target.value)}
+            />
+            <span className="field__hint">
+              Блок срабатывает, только если сказать эту фразу целиком и ничего больше.
+            </span>
+          </div>
+          <div className="field">
+            <label className="field__label" htmlFor="snip-body">
+              Что вставить
+            </label>
+            <textarea
+              id="snip-body"
+              className="input"
+              rows={5}
+              maxLength={SNIPPET_LIMITS.body}
+              value={snipBody}
+              placeholder={'С уважением,\nИван Петров\n+7 900 000-00-00'}
+              onChange={(e) => setSnipBody(e.target.value)}
+            />
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={open}
