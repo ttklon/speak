@@ -96,7 +96,7 @@ export default function ModelManager() {
         if (p.ok) {
           push({
             title: p.id === 'engine' ? 'Движок установлен' : 'Модель скачана',
-            description: p.id === 'engine' ? 'whisper.cpp готов к работе' : 'Скачано, диктовка работает на новом режиме',
+            description: p.id === 'engine' ? 'движок распознавания готов к работе' : 'Скачано, диктовка работает на новом режиме',
             tone: 'success',
           });
         } else {
@@ -298,14 +298,14 @@ export default function ModelManager() {
           <>
             {' '}
             <span className="model-state model-state--ok">
-              <Check size={11} /> whisper.cpp установлен
+              <Check size={11} /> Движок установлен
             </span>
           </>
         ) : status ? (
           <>
             {' '}
             <span className="model-state model-state--warn">
-              <TriangleAlert size={11} /> whisper.cpp не найден
+              <TriangleAlert size={11} /> Движок не найден
             </span>
           </>
         ) : null}
@@ -345,7 +345,7 @@ export default function ModelManager() {
                   updateSettings({ whisperModel: m.id });
                   push({
                     title: `Режим «${tier?.label.toLowerCase() || m.label}»`,
-                    description: `${m.size} · ${m.quality} точность · ${m.speed} быстрее реального времени`,
+                    description: `${m.size} · ${m.speedText} · точность ${m.quality}`,
                     tone: 'success',
                   });
                   return;
@@ -365,7 +365,7 @@ export default function ModelManager() {
                   ) : null}
                 </div>
                 <div className="model-card__meta">
-                  {m.size} · RAM {m.ram} · {m.speed} realtime · точность {m.quality}
+                  {m.size} · памяти {m.ram} · {m.speedText} · точность {m.quality}
                 </div>
                 <div className="model-card__desc">{tier?.desc || m.desc}</div>
               </div>

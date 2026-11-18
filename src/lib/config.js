@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.9.3',
+  version: '1.9.4',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -245,6 +245,7 @@ export const MODELS = MODEL_TIERS.map((tier) => ({
   size: tier.size,
   ram: tier.ram,
   speed: tier.speed,
+  speedText: tier.speedText,
   quality: tier.quality,
   desc: tier.desc,
   recommended: tier.recommended === true,

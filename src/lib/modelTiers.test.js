@@ -83,6 +83,15 @@ describe('три режима распознавания', () => {
     expect(20 / balanced).toBeLessThanOrEqual(5);
   });
 
+  it('скорость сказана словами, а не «×realtime»', () => {
+    // «8× realtime» — жаргон из мира замеров: человеку он не говорит ничего.
+    for (const tier of MODEL_TIERS) {
+      expect(tier.speedText).toMatch(/^в \d+ раз(а)? быстрее речи$/);
+      // число в словах и в техническом поле — одно и то же
+      expect(realtimeFactor(tier.model)).toBe(Number(/(\d+)/.exec(tier.speedText)[1]));
+    }
+  });
+
   it('tierById отдаёт null на мусор', () => {
     expect(tierById('nope')).toBeNull();
     expect(tierById('max').model).toBe('large-v3-turbo-q5_0');

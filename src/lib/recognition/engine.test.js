@@ -56,7 +56,9 @@ describe('без движка распознавания', () => {
   it('в подсказке для браузера говорится, что офлайн — только в приложении', () => {
     const rec = createRecognizer({});
     const err = rec.start();
-    expect(String(err.hint)).toMatch(/Web Speech/);
+    // «Web Speech» человеку ничего не говорит: подсказка говорит о системном
+    // распознавании, а имя технологии остаётся в «Диагностике»
+    expect(String(err.hint)).toMatch(/системн[а-яё]+ распознавания/);
     expect(String(err.hint)).toMatch(/Windows/);
   });
 });

@@ -2420,6 +2420,17 @@ async function scenarioModels(browser) {
   await sleep(700);
   const calls = await bridgeCalls(page);
   record('сценарии', 'модели: кнопка «Скачать» дергает main-процесс', clicked && calls.includes('models:download'), calls.filter((c) => c.startsWith('models')).join(','));
+  // Подписи карточек — для человека, а не для замеров: «8× realtime» и «RAM»
+  // читаются как шифр, поэтому скорость сказана словами.
+  const cardText = await page.evaluate(() =>
+    [...document.querySelectorAll('.model-card__meta')].map((el) => el.innerText.replace(/\n/g, ' ')).join(' ;; '),
+  );
+  record(
+    'сценарии',
+    'модели: скорость сказана словами, без «×realtime» и «RAM»',
+    /быстрее речи/i.test(cardText) && !/realtime/i.test(cardText) && !/\bRAM\b/.test(cardText) && /памяти/i.test(cardText),
+    cardText.slice(0, 160),
+  );
   const errors = takeErrors(page);
   record('сценарии', 'модели: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
@@ -2694,7 +2705,8 @@ async function scenarioBrowserPreviewNotice(browser) {
   record(
     'сценарии',
     'превью без движка: на главной сказано, почему диктовка молчит',
-    /Web Speech|нет движка распознавания/i.test(note) && /приложении/i.test(note),
+    // «Web Speech» человеку ничего не говорит — проверяем смысл, а не имя технологии
+    /системн[а-яё]+ движок|нет движка распознавания/i.test(note) && /приложении/i.test(note),
     note.slice(0, 120),
   );
   const errors = takeErrors(page);

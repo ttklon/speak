@@ -39,7 +39,7 @@ function codeLines(text) {
   return text
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => !/^(\*|\/\/|\/\*)/.test(line));
+    .filter((line) => !/^(\*|\/\/|\/\*|\{\/\*)/.test(line));
 }
 
 describe('тексты интерфейса ведут в существующие разделы настроек', () => {
@@ -135,6 +135,50 @@ describe('подсказки называют реально существую�
     expect(broken).toEqual([]);
     // тест не «зелёный по пустоте»: составные подсказки в проекте есть
     expect(checked.length).toBeGreaterThan(2);
+  });
+});
+
+describe('в текстах интерфейса нет жаргона', () => {
+  // «8× realtime», «Web Speech», «whisper.cpp установлен» — это имена из мира
+  // разработки. Человек, который хочет говорить и получать текст, читает их и
+  // не понимает, что делать. Технические имена остаются только в «Диагностике»
+  // и в «О программе» — там их место.
+  //
+  // Границы слов важны: realtimeFactor и hasWebSpeech — это код, а не текст.
+  const JARGON = [
+    { re: /(?<![A-Za-z])realtime(?![A-Za-z])/i, what: 'realtime' },
+    // в коде это ещё и литерал регулярки (/Web Speech/) — такой не считаем
+    { re: /Web Speech(?!\/)/, what: 'Web Speech' },
+    { re: /whisper\.cpp (установлен|не найден|не распознал)/, what: 'whisper.cpp как подпись действия' },
+    { re: /(?<![A-Za-z])RAM(?![A-Za-z])/, what: 'RAM' },
+  ];
+  // Исключения: «Диагностика» и «О программе» — там технические имена уместны.
+  const ALLOWED = /DiagnosticsSection\.jsx$|AboutSection\.jsx$|settingsIndex\.js$|config\.js$|recognition\/engine\.js$/;
+
+  const jargonIn = (line) => JARGON.filter((rule) => rule.re.test(line)).map((rule) => rule.what);
+
+  it('проверка ловит жаргон, а не только пустоту', () => {
+    expect(jargonIn('{m.size} · RAM {m.ram} · {m.speed} realtime · точность {m.quality}')).toEqual([
+      'realtime',
+      'RAM',
+    ]);
+    expect(jargonIn('Это окно в браузере: распознавание идёт через Web Speech')).toEqual(['Web Speech']);
+    // и не срабатывает на код
+    expect(jargonIn('const realtimeFactor = f; hasWebSpeech(); const ramGb = 8;')).toEqual([]);
+    expect(jargonIn("const engineHint = /Web Speech/.test(engine)")).toEqual([]);
+  });
+
+  it('ни один видимый текст не требует знать название технологии', () => {
+    const offenders = [];
+    for (const file of sourceFiles()) {
+      if (ALLOWED.test(file)) continue;
+      for (const line of codeLines(fs.readFileSync(file, 'utf8'))) {
+        for (const what of jargonIn(line)) {
+          offenders.push(`${path.relative(ROOT, file)}: ${what} — ${line.slice(0, 70)}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
 
