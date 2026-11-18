@@ -944,6 +944,11 @@ await check('отчёт диагностики сохраняется файло
     if (!text2.includes(needle)) throw new Error(`в отчёте нет «${needle}»`);
   }
   if (text2.includes('СекретноеСлово')) throw new Error('в отчёт попали слова словаря');
+  // Живая расшифровка теперь решается приложением: в отчёте должно быть
+  // видно, ручной это выбор или автоматический, а не глухое «включена».
+  if (!/живая расшифровка: (решает приложение|включена вручную|выключена вручную)/.test(text2)) {
+    throw new Error(`в отчёте непонятно, кто выбрал живую расшифровку: ${(text2.match(/живая расшифровка: .*/) || [''])[0]}`);
+  }
   fs.rmSync(res2.path, { force: true });
   handlers.get('store:set')({}, 'zs:settings', { ...st, insertMethod: 'clipboard', micPreroll: false });
   fs.rmSync(res.path, { force: true });

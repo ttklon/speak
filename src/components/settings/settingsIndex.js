@@ -89,7 +89,7 @@ export const SETTING_ENTRIES = [
     "section": "features",
     "sectionLabel": "Диктовка",
     "title": "Живая расшифровка",
-    "desc": "Черновик по ходу речи, раз в 2,5 секунды. Грузит слабый компьютер."
+    "desc": ""
   },
   {
     "section": "data",

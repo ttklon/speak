@@ -1419,10 +1419,14 @@ async function scenarioPauseAndCancel(browser) {
 async function scenarioLiveWhisper(browser) {
   // Живая расшифровка: пока человек говорит, whisper спрашивают повторно и
   // текст в черновике обновляется. Без настройки — ни одного лишнего вызова.
-  const run = async (liveWhisper) => {
+  const run = async (liveWhisper, model) => {
     const page = await openPage(browser, '#/home', {
       // полировка выключена: сценарий про проходы распознавания, а не про модель
-      settings: { liveWhisper, aiDictationRewrite: false },
+      settings: {
+        liveWhisper,
+        ...(model ? { whisperModel: model } : {}),
+        aiDictationRewrite: false,
+      },
       patchNative: () => {
         const native = window.zspeakly && window.zspeakly.native;
         if (!native) return;
@@ -1464,6 +1468,10 @@ async function scenarioLiveWhisper(browser) {
 
   const on = await run(true);
   const off = await run(false);
+  // 'auto' — значение по умолчанию у нового профиля: приложение решает само.
+  // На «Быстро» движок успевает и черновик, на «Сбалансированно» — уже нет.
+  const autoFast = await run('auto', 'base-q5_1');
+  const autoBalanced = await run('auto', 'small-q5_1');
   const partials = on.during.calls.filter((c) => c.partial).length;
   record(
     'сценарии',
@@ -1491,6 +1499,53 @@ async function scenarioLiveWhisper(browser) {
   );
   const errors = [...on.errors, ...off.errors];
   record('сценарии', 'живая расшифровка: без ошибок консоли', errors.length === 0, errors[0] || '');
+
+  const autoFastPartials = autoFast.during.calls.filter((c) => c.partial).length;
+  record(
+    'сценарии',
+    'живая расшифровка: на «Быстро» включается сама, без настройки',
+    autoFast.during.calls.length > 0 && autoFastPartials > 0,
+    `${autoFastPartials} промежуточных вызовов`,
+  );
+  const autoBalancedPartials = autoBalanced.during.calls.filter((c) => c.partial).length;
+  record(
+    'сценарии',
+    'живая расшифровка: на «Сбалансированно» сама не включается — итог не ждёт',
+    autoBalancedPartials === 0,
+    `${autoBalancedPartials} промежуточных вызовов`,
+  );
+
+  // Строка настроек объясняет решение словами и не притворяется тумблером:
+  // человек не должен выбирать «как правильно» между черновиком и итогом.
+  const settingsPage = await openPage(browser, '#/settings?section=features&from=home', {
+    settings: { liveWhisper: 'auto', whisperModel: 'base-q5_1' },
+    settle: 700,
+  });
+  takeErrors(settingsPage);
+  const liveRow = await settingsPage.evaluate(() => {
+    const row = [...document.querySelectorAll('.settings-main .setting-row')].find((el) =>
+      /Живая расшифровка/.test(el.innerText),
+    );
+    if (!row) return { text: '', toggle: false };
+    return {
+      text: row.innerText.replace(/\n+/g, ' '),
+      toggle: Boolean(row.querySelector('[role="switch"], input[type="checkbox"]')),
+    };
+  });
+  record(
+    'сценарии',
+    'живая расшифровка: в настройках строка-объяснение, а не тумблер',
+    !liveRow.toggle && /включена/i.test(liveRow.text) && /сама/i.test(liveRow.text),
+    liveRow.text.slice(0, 160) || 'строки нет',
+  );
+  const settingsErrors = takeErrors(settingsPage);
+  record(
+    'сценарии',
+    'живая расшифровка: настройка без ошибок консоли',
+    settingsErrors.length === 0,
+    settingsErrors[0] || '',
+  );
+  await settingsPage.close();
 }
 
 async function scenarioPinnedLimit(browser) {

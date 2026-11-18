@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.9.4',
+  version: '1.9.5',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -196,11 +196,12 @@ export const DEFAULT_SETTINGS = {
   // 1.6.0: включён по умолчанию — скорость важнее, тумблер остался в «Функциях →
   // Микрофон» для тех, кому мешает горящий индикатор микрофона.
   micPreroll: true,
-  // промежуточная расшифровка whisper. По умолчанию выключена: каждый
-  // промежуточный проход — это ещё один запуск whisper, и на модели small
-  // запись в 30 секунд превращалась в минуту ожидания без результата.
-  // Включать есть смысл с tiny/base.
-  liveWhisper: false,
+  // Живая расшифровка: 'auto' — решает приложение (lib/liveDraftPolicy.js).
+  // Черновик по ходу речи — это дополнительный проход движка каждые 2,5 с: на
+  // «Быстро» он почти бесплатен, на «Сбалансированно» и «Максимуме» отбирает
+  // процессор у готового текста. true/false — ручной выбор из старых версий,
+  // он уважается.
+  liveWhisper: 'auto',
   // способ вставки: 'clipboard' — буфер + Ctrl+V, 'sendinput' — без буфера
   insertMethod: 'clipboard',
   autoLaunch: false,

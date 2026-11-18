@@ -194,6 +194,13 @@ async function send({ force = false, filter = null } = {}) {
  * @param {boolean} opts.enabled       включать ли отправку
  * @param {string} opts.endpoint       переопределить приёмник ('' = никогда)
  */
+/** Как в отчёте назвать живую расшифровку: значение может быть и «сама». */
+function liveDraftLabel(value) {
+  if (value === true || value === 'включена вручную') return 'включена вручную';
+  if (value === false || value === 'выключена вручную') return 'выключена вручную';
+  return 'решает приложение';
+}
+
 function init(opts = {}) {
   if (opts.dir) filePath = path.join(opts.dir, 'logs', 'zspeakly.log');
   if (opts.endpoint !== undefined) endpoint = opts.endpoint || '';
@@ -359,7 +366,7 @@ const logger = {
       lines.push('── настройки диктовки ──');
       lines.push(`модель: ${st.model || '?'}${st.keepModelLoaded ? ' (держится в памяти)' : ''}`);
       lines.push(`язык: ${st.language || '?'}`);
-      lines.push(`живая расшифровка: ${st.liveWhisper ? 'включена' : 'выключена'}`);
+      lines.push(`живая расшифровка: ${liveDraftLabel(st.liveWhisper)}`);
       lines.push(`горячий микрофон: ${st.micPreroll ? 'включён' : 'выключен'}`);
       lines.push(`вставка: ${st.insertMethod === 'sendinput' ? 'SendInput без буфера' : 'буфер обмена + Ctrl+V'}`);
       lines.push(`микрофон: ${st.customMic ? 'выбран пользователем' : 'системный'}`);

@@ -42,7 +42,11 @@ export function migrateSettings(prev = {}, defaults = {}) {
   const next = { ...defaults, ...prev };
   if (!prev?.[SPEED_FIX_MARKER]) {
     if (prev.whisperModel === 'small') next.whisperModel = 'base';
-    if (prev.liveWhisper === true) next.liveWhisper = false;
+    // Раньше здесь было жёсткое «включено → выключено»: живой проход на
+    // медленной модели превращал полминуты записи в минуту ожидания. Теперь
+    // решение принимает lib/liveDraftPolicy.js по режиму и замерам, поэтому
+    // старый выбор человека не выключаем навсегда — переводим в «сама».
+    if (prev.liveWhisper === true) next.liveWhisper = 'auto';
     if (prev.keepModelLoaded === undefined) next.keepModelLoaded = true;
     next[SPEED_FIX_MARKER] = true;
   }

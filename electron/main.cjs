@@ -1899,7 +1899,8 @@ function registerIpc() {
           model: s.whisperModel || 'small',
           keepModelLoaded: s.keepModelLoaded === true,
           language: s.language || 'ru',
-          liveWhisper: s.liveWhisper !== false,
+          // 'auto' — приложение решает само; true/false — ручной выбор
+          liveWhisper: s.liveWhisper === true ? 'включена вручную' : s.liveWhisper === false ? 'выключена вручную' : 'сама',
           micPreroll: s.micPreroll === true,
           insertMethod: s.insertMethod || 'clipboard',
           customMic: Boolean(s.audioDeviceId && s.audioDeviceId !== 'default'),

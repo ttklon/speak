@@ -4,11 +4,13 @@ import { migrateSettings, SPEED_FIX_MARKER, MODEL_TIER_FIX_MARKER } from './sett
 import { TIER_MODELS } from './modelTiers.js';
 
 describe('миграция настроек 1.5.1', () => {
-  it('старые умолчания переводятся на быстрые: base вместо small, живая расшифровка выключена', () => {
+  it('старые умолчания переводятся на быстрые: base вместо small, живая расшифровка — «сама»', () => {
     const prev = { whisperModel: 'small', liveWhisper: true, keepModelLoaded: undefined };
     const next = migrateSettings(prev, DEFAULT_SETTINGS);
     expect(next.whisperModel).toBe('base-q5_1');
-    expect(next.liveWhisper).toBe(false);
+    // раньше здесь было жёсткое false; теперь решение принимает
+    // lib/liveDraftPolicy.js, и выбор человека не выключается навсегда
+    expect(next.liveWhisper).toBe('auto');
     expect(next.keepModelLoaded).toBe(true);
     expect(next[SPEED_FIX_MARKER]).toBe(true);
   });

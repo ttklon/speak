@@ -6,6 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
 import { formatLiveDraft } from '../lib/recognition/liveDraft.js';
+import { resolveLiveDraft } from '../lib/liveDraftPolicy.js';
 import { createMicWarm } from '../lib/audio/micWarm.js';
 import { applyDictionary, formatK, words } from '../lib/utils.js';
 // Вставка в поле самого приложения: если человек диктует, стоя курсором в
@@ -94,9 +95,17 @@ export function DictationProvider({ children }) {
   const [processingMs, setProcessingMs] = useState(0);
   // прогресс по фрагментам длинной записи: { done, total }
   const [sttProgress, setSttProgress] = useState(null);
-  // живая расшифровка возможна только с whisper.cpp: браузерный движок сам
-  // отдаёт промежуточный текст, а whisper нужно спрашивать повторно
-  const liveText = settings.liveWhisper !== false && hasNativeStt();
+  // Живая расшифровка возможна только с локальным движком: браузерный сам
+  // отдаёт промежуточный текст, а whisper нужно спрашивать повторно. Включать
+  // её или нет — решает приложение по режиму и замерам (lib/liveDraftPolicy.js):
+  // черновик — это лишний проход движка, и на «Максимуме» он отбирает процессор
+  // у готового текста.
+  const liveDraft = resolveLiveDraft({
+    setting: settings.liveWhisper,
+    model: settings.whisperModel,
+    hasNative: hasNativeStt(),
+  });
+  const liveText = liveDraft.enabled;
   // отдельное окно индикатора реально показано (а не просто «должно быть»)
   const [hudNativeOn, setHudNativeOn] = useState(false);
   const hudHiddenByUser = useRef(false);
@@ -109,6 +118,10 @@ export function DictationProvider({ children }) {
   const draftRef = useRef('');
   const finalRef = useRef('');
   const settingsRef = useRef(settings);
+  // политика живой расшифровки нужна внутри обработчиков — держим её в ref,
+  // чтобы не пересоздавать замыкания на каждое измерение
+  const liveDraftRef = useRef(liveDraft);
+  liveDraftRef.current = liveDraft;
   const dictRef = useRef(dictionary);
   const stopFallback = useRef(null);
   // «Ворота» полировки: помнят, успевает ли модель, и режут лишнее ожидание.
@@ -551,7 +564,7 @@ export function DictationProvider({ children }) {
         getContextPrompt: () => (opts.screenAware ? screenTermsRef.current : ''),
         // 2,5 с — компромисс: whisper на коротком отрезке успевает за это время,
         // а текст в плашке не отстаёт от речи на полминуты
-        streamIntervalMs: settingsRef.current.liveWhisper !== false ? 2500 : 0,
+        streamIntervalMs: liveDraftRef.current.enabled ? 2500 : 0,
         onStart: () => setState('listening'),
         onPartial: ({ text, interim, truncated }) => {
           const composed = [text, interim].filter(Boolean).join(' ');

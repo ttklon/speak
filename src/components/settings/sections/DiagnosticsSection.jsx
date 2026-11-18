@@ -9,6 +9,7 @@ import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
 import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
+import { resolveLiveDraft } from '../../../lib/liveDraftPolicy.js';
 import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
 import { analyseSpeed } from '../../../lib/speedReport.js';
 import { lighterModel, tierForModel } from '../../../lib/modelTiers.js';
@@ -422,11 +423,17 @@ export default function DiagnosticsSection() {
         <div className="kv-row">
           <span className="kv-row__key">Живая расшифровка</span>
           <span className="kv-row__value">
-            {settings.liveWhisper === false
-              ? 'выключена — текст после остановки'
-              : hasNativeStt()
-                ? 'включена — whisper пересчитывает запись раз в 2,5 с'
-                : 'включена, но работает только с whisper.cpp'}
+            {(() => {
+              const live = resolveLiveDraft({
+                setting: settings.liveWhisper,
+                model: settings.whisperModel,
+                hasNative: hasNativeStt(),
+              });
+              if (!live.enabled) return 'выключена — текст после остановки';
+              return live.explicit
+                ? 'включена вручную — запись пересчитывается раз в 2,5 с'
+                : 'включена сама — движок успевает пересчитывать запись раз в 2,5 с';
+            })()}
           </span>
         </div>
         <div className="kv-row">

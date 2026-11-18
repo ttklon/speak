@@ -2,6 +2,8 @@ import { Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { LANGUAGES } from '../../../lib/config.js';
+import { hasNativeStt } from '../../../lib/recognition/engine.js';
+import { resolveLiveDraft } from '../../../lib/liveDraftPolicy.js';
 import ModelManager from './ModelManager.jsx';
 
 /**
@@ -14,8 +16,16 @@ import ModelManager from './ModelManager.jsx';
  * диктовку медленнее или тише. Теперь эти значения задаёт `lib/autotune.js`,
  * а человек выбирает язык, полировку и качество распознавания.
  */
+/** «включена сама: …» → «Включена сама: …» — это начало предложения. */
+const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1) : '');
+
 export default function FeaturesSection() {
   const { settings, updateSettings } = useAppData();
+  const live = resolveLiveDraft({
+    setting: settings.liveWhisper,
+    model: settings.whisperModel,
+    hasNative: hasNativeStt(),
+  });
 
   return (
     <div>
@@ -25,8 +35,8 @@ export default function FeaturesSection() {
             их здесь нет: человек не должен искать тумблер «как правильно». */}
         <div className="settings-note">
           <strong>Остальное приложение решает само:</strong> подбирает модель под железо и меняет
-          её при тормозах, вставляет текст тремя способами, хранит историю месяц. Менять вручную
-          не нужно.
+          её при тормозах, включает живую расшифровку, когда движок успевает, вставляет текст
+          тремя способами и хранит историю месяц. Менять вручную не нужно.
         </div>
         <div className="setting-row">
           <div className="setting-row__label">
@@ -52,17 +62,22 @@ export default function FeaturesSection() {
             onChange={(v) => updateSettings({ aiDictationRewrite: v })}
           />
         </div>
+        {/* Тумблера больше нет: черновик по ходу речи — это лишний проход
+            движка, и включать его имеет смысл только когда движок успевает.
+            Решает lib/liveDraftPolicy.js, а строка говорит, что решилось. */}
         <div className="setting-row">
           <div className="setting-row__label">
             Живая расшифровка
             <div className="setting-row__desc">
-              Черновик по ходу речи, раз в 2,5 секунды. Грузит слабый компьютер.
+              Черновик по ходу речи, раз в 2,5 секунды. {capitalize(live.why)}.{' '}
+              {live.explicit
+                ? 'Это ваш выбор — приложение его не меняет.'
+                : 'На «Сбалансированно» и «Максимуме» она выключается сама, чтобы не задерживать готовый текст.'}
             </div>
           </div>
-          <Toggle
-            checked={settings.liveWhisper === true}
-            onChange={(v) => updateSettings({ liveWhisper: v })}
-          />
+          <span className={`setting-row__value ${live.enabled ? 'is-on' : ''}`}>
+            {live.enabled ? 'включена' : 'выключена'}
+          </span>
         </div>
       </div>
 
