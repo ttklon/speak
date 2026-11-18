@@ -238,29 +238,15 @@ export default function DataSection({ onOpenSection }) {
             Проверить
           </Button>
         </div>
+        {/* Тумблер отправки живёт в «Диагностике» — там же адрес приёмника, состояние
+            журнала и кнопка «Сохранить отчёт в файл». Два одинаковых тумблера в двух
+            разделах читались как две разные настройки. */}
         <div className="setting-row">
           <div className="setting-row__label">
-            Отправка ошибок
+            Отправка отчётов
             <div className="setting-row__desc">
-              Чтобы падения и сбои распознавания можно было починить. Уходят только технические
-              события — без текста диктовки, буфера обмена и имени. По умолчанию журнал пишется
-              только на этом компьютере: наружу ничего не уходит, пока не указан адрес приёмника.
-              Прежний тумблер «Телеметрия» на это не влияет: сбора статистики в приложении нет.
-            </div>
-          </div>
-          <Toggle
-            checked={settings.diagnostics !== false}
-            onChange={(v) => {
-              updateSettings({ diagnostics: v });
-              window.zspeakly?.native?.diagSetEnabled?.(v).catch?.(() => {});
-            }}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Диагностика и журнал
-            <div className="setting-row__desc">
-              Последние события, ручная отправка и папка с логами — в разделе «Диагностика».
+              Журнал пишется на этом компьютере: без текста диктовки, буфера обмена и имени.
+              Включается и настраивается в «Диагностике» — рядом видно, что именно уходит.
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={() => onOpenSection('diagnostics')}>

@@ -1014,6 +1014,12 @@ function registerIpc() {
         const prev = store.get('zs:settings') || {};
         if (prev.whisperModel && value.whisperModel && prev.whisperModel !== value.whisperModel) {
           store.set('zs:modelPinned', true);
+          // Модель выбрали руками — прошлое «мы сами спустились» больше не в счёт
+          try {
+            store.set('zs:autoDowngraded', false);
+          } catch {
+            /* не мешает самой записи */
+          }
         }
       }
     } catch {
@@ -1087,6 +1093,13 @@ function registerIpc() {
       const lighter = verdict.switchTo;
       autoSwitches += 1;
       store.set('zs:settings', { ...settings, whisperModel: lighter });
+      // Запоминаем, что спустились сами: при следующем запуске поднимать
+      // качество обратно на ту же машину — значит спорить с замерами.
+      try {
+        store.set('zs:autoDowngraded', true);
+      } catch {
+        /* не мешает переключению */
+      }
       const payload = {
         from: model,
         to: lighter,
@@ -1132,15 +1145,24 @@ function registerIpc() {
         downloaded,
         pinned: store?.get('zs:modelPinned') === true,
         autoOptimize: settings.autoOptimize !== false,
+        downgradedByApp: store?.get('zs:autoDowngraded') === true,
       });
       if (!decision.switchTo) return '';
       const pick = decision.pick;
       store.set('zs:settings', { ...settings, whisperModel: pick.id });
+      // Поднялись — пометка больше не нужна: следующее падение снова её поставит
+      if (decision.up) {
+        try {
+          store.set('zs:autoDowngraded', false);
+        } catch {
+          /* не мешает переключению */
+        }
+      }
       try {
         mainWindow?.webContents.send('stt:auto-tune', {
           from: current,
           to: pick.id,
-          reason: 'hardware',
+          reason: decision.up ? 'quality' : 'hardware',
           why: pick.why,
         });
       } catch {

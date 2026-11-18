@@ -105,6 +105,27 @@ function worthSwitching(current, recommended) {
 }
 
 /**
+ * Стоит ли поднимать качество: человек сидит на самой лёгкой ступени, но
+ * железо по нашим же меркам тянет «Сбалансированно».
+ *
+ * Зачем: автоподбор умеет только спускаться. Если он когда-то сполз на base
+ * (например, из-за старых версий, где короткие фразы считались медленными),
+ * человек остаётся с моделью, которая путает слова, и никогда об этом не
+ * узнает — «Быстро» выглядит как его собственный выбор. Одну ступень вверх
+ * поднимаем сами, но только если приложение само же и спустилось
+ * (downgradedByApp) — иначе это была бы ручная настройка.
+ */
+function worthUpgrading(p = {}) {
+  if (p.downgradedByApp === true) return false;
+  if (p.current !== FAST_TIER) return false;
+  const pick = pickModel({ cpus: p.cpus, ramGb: p.ramGb });
+  // Слабая машина: её собственный выбор — «Быстро», поднимать некуда
+  if (pick.tier === 'fast') return false;
+  if (!Array.isArray(p.downloaded) || !p.downloaded.includes(pick.id)) return false;
+  return pick;
+}
+
+/**
  * Стоит ли переключаться на другую модель прямо сейчас (при запуске).
  * Чистая функция: и решение, и его причина проверяются тестом.
  * @param {{cpus?: number, ramGb?: number, current?: string, downloaded?: string[],
@@ -118,8 +139,17 @@ function plan(p = {}) {
   if (p.pinned === true) return none;
   const downloaded = Array.isArray(p.downloaded) ? p.downloaded : [];
   if (!downloaded.includes(pick.id)) return none;
-  if (!worthSwitching(p.current, pick.id)) return none;
-  return { switchTo: pick.id, why: pick.why, pick };
+  if (worthSwitching(p.current, pick.id)) return { switchTo: pick.id, why: pick.why, pick, up: false };
+  const better = worthUpgrading({ ...p, downloaded });
+  if (better) {
+    return {
+      switchTo: better.id,
+      why: `${better.why}. Прошлый режим был самым лёгким — текст на нём путается`,
+      pick: better,
+      up: true,
+    };
+  }
+  return none;
 }
 
 /** Своё железо — тем же форматом, что ждёт pickModel. */
@@ -133,6 +163,7 @@ function thisMachine() {
 
 module.exports = {
   pickModel,
+  worthUpgrading,
   plan,
   worthSwitching,
   weightOf,

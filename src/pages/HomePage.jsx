@@ -386,7 +386,7 @@ export default function HomePage() {
                 return;
               }
               if (res?.status === 'available') {
-                push({ title: `Доступна ${res.version}`, description: 'Откройте «О программе», чтобы скачать.', tone: 'success' });
+                push({ title: `Доступна ${res.version}`, description: 'Обновление скачивается в «Настройки → Приложение → Версия и обновления» — там же кнопка «Скачать».', tone: 'success' });
               } else if (res?.status === 'latest') {
                 push({ title: 'Обновлений нет', description: `Установлена ${APP.version}.`, tone: 'success' });
               } else if (res?.status === 'error') {

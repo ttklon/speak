@@ -1852,9 +1852,27 @@ await check('переход на лёгкую модель: только ког�
   if (hw.plan({ cpus: 2, ramGb: 4, current: 'small', downloaded: ['small', 'base-q5_1'], autoOptimize: false }).switchTo !== '') {
     throw new Error('переключил при выключенном автоподборе');
   }
-  // мощный ПК на base: качество можно поднять, но это не «слишком тяжёлая» — молчим
-  if (hw.plan({ cpus: 12, ramGb: 32, current: 'base', downloaded: ['base', 'small-q5_1'] }).switchTo !== '') {
-    throw new Error('поднял качество без спроса');
+  // мощный ПК на base: поднимаем на ступень выше сами — самый лёгкий режим
+  // путает слова, а машина тянет «Сбалансированно»
+  const up = hw.plan({ cpus: 8, ramGb: 16, current: 'base-q5_1', downloaded: ['base-q5_1', 'small-q5_1'] });
+  if (up.switchTo !== 'small-q5_1' || up.up !== true) throw new Error(`не поднял качество: ${JSON.stringify(up)}`);
+  if (!/точнее|точность|Быстро/.test(up.why)) throw new Error(`не объяснил, зачем поднял: ${up.why}`);
+  // спустились сами — обратно не поднимаем, иначе спор с собственными замерами
+  const stay = hw.plan({
+    cpus: 8,
+    ramGb: 16,
+    current: 'base-q5_1',
+    downloaded: ['base-q5_1', 'small-q5_1'],
+    downgradedByApp: true,
+  });
+  if (stay.switchTo) throw new Error('поднялся обратно после собственного спуска');
+  // на слабой машине «Быстро» — это честный выбор, поднимать некуда
+  if (hw.plan({ cpus: 2, ramGb: 4, current: 'base-q5_1', downloaded: ['base-q5_1', 'small-q5_1'] }).switchTo !== '') {
+    throw new Error('поднял модель на слабом ПК');
+  }
+  // выше стоит другая модель — не наше дело
+  if (hw.plan({ cpus: 8, ramGb: 16, current: 'large-v3-turbo-q5_0', downloaded: ['large-v3-turbo-q5_0'] }).switchTo !== '') {
+    throw new Error('тронул модель, которая не самая лёгкая');
   }
 });
 

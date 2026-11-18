@@ -2521,6 +2521,34 @@ async function scenarioHardwareModel(browser) {
     return s?.whisperModel || '';
   });
   record('сценарии', 'подбор модели: настройка совпала с тем, что выбрал main', saved === 'base-q5_1', String(saved));
+
+  // Обратный ход: раньше приложение умело только спускаться на ступень легче и
+  // могло оставить человека на самом слабом режиме навсегда. Теперь, если
+  // железо тянет точнее, оно поднимает режим само — и говорит об этом словами.
+  await page.evaluate(() =>
+    window.__e2e.emit('stt:auto-tune', {
+      from: 'base-q5_1',
+      to: 'small-q5_1',
+      reason: 'quality',
+      why: '8 ядер, 16 ГБ — режим «Сбалансированно»: small-q5_1 точнее base при той же скорости',
+    }),
+  );
+  await sleep(700);
+  const upToast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+  );
+  record(
+    'сценарии',
+    'подбор модели: подъём качества объясняется словами, а не цифрами',
+    /текст точнее/i.test(upToast) && /сбалансированно/i.test(upToast) && !/0\.0 с/.test(upToast),
+    upToast.slice(0, 140),
+  );
+  const savedUp = await page.evaluate(() => {
+    const raw =
+      window.__e2e.read('zs.settings') || JSON.parse(localStorage.getItem('zs.settings') || '{}');
+    return raw?.whisperModel || '';
+  });
+  record('сценарии', 'подбор модели: подъём записан в настройки', savedUp === 'small-q5_1', String(savedUp));
   const errors = takeErrors(page);
   record('сценарии', 'подбор модели: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
