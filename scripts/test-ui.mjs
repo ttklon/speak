@@ -719,6 +719,74 @@ async function scenarioVoiceCommands(browser) {
   await page.close();
 }
 
+/**
+ * Оформление под окно: одна и та же диктовка в мессенджер и в редактор кода.
+ * Проверяем через настоящий проход (мок движка, живая цепочка), а не только
+ * юнит-тестом правила: важно, что текст и в истории, и на вставке одинаковый.
+ */
+async function scenarioAppFormat(browser) {
+  const dictate = async (page) => {
+    await clickText(page, 'Начать диктовку');
+    await sleep(1100);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await sleep(2200);
+    return page.evaluate(() => {
+      const list = window.__e2e.read('zs.dictations');
+      const saved = Array.isArray(list) && list[0] ? String(list[0].text || '') : '';
+      const inserts = (window.__bridgeCalls || [])
+        .filter((c) => c.channel === 'text:insert')
+        .map((c) => String(c.args?.[0] || ''));
+      return { saved, inserted: inserts[0] || '' };
+    });
+  };
+
+  // Мессенджер: точка в конце лишняя
+  const chat = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'привет как дела' },
+  });
+  takeErrors(chat);
+  await chat.evaluate(() => {
+    window.zspeakly.native.insertTarget = async () => ({ own: false, app: 'Telegram Desktop', title: 'Telegram' });
+  });
+  const inChat = await dictate(chat);
+  record(
+    'сценарии',
+    'оформление: в мессенджере без точки в конце, история совпадает с вставкой',
+    inChat.saved === 'Привет как дела' && inChat.inserted === inChat.saved,
+    JSON.stringify(inChat.saved),
+  );
+  await chat.close();
+
+  // Редактор кода: ни заглавной, ни точки
+  const code = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'добавь проверку на пустой массив' },
+  });
+  takeErrors(code);
+  await code.evaluate(() => {
+    window.zspeakly.native.insertTarget = async () => ({
+      own: false,
+      app: 'Code',
+      title: 'main.js — Visual Studio Code',
+    });
+  });
+  const inCode = await dictate(code);
+  record(
+    'сценарии',
+    'оформление: в редакторе кода без заглавной и без точки',
+    inCode.saved === 'добавь проверку на пустой массив' && !/\.$/.test(inCode.saved),
+    JSON.stringify(inCode.saved),
+  );
+  const errors = takeErrors(code);
+  record('сценарии', 'оформление: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await code.close();
+}
+
 // Пустой результат распознавания — самое непонятное состояние: человек
 // говорил, а в поле ничего и ни слова объяснения. Теперь приложение говорит,
 // что именно случилось: молчал микрофон или движок не разобрал слова.
@@ -1550,6 +1618,14 @@ async function scenarioLiveWhisper(browser) {
     'тишина: правило авто-стопа названо в «Функциях»',
     /двадцать секунд тишины/i.test(autoStopNote) && /сама|само/i.test(autoStopNote),
     autoStopNote.slice(0, 200) || 'строки нет',
+  );
+  // Оформление под окно — тоже решение приложения, а не настройка: человек
+  // должен узнать о нём из той же строки, а не удивляться точке в мессенджере.
+  record(
+    'сценарии',
+    'оформление: правило «под окно» названо в «Функциях»',
+    /оформление/i.test(autoStopNote) && /мессенджер/i.test(autoStopNote) && /письм/i.test(autoStopNote),
+    autoStopNote.slice(0, 220) || 'строки нет',
   );
   const settingsErrors = takeErrors(settingsPage);
   record(
@@ -3716,7 +3792,7 @@ async function scenarioDictationIntoOwnField(browser) {
   record(
     'сценарии',
     'диктовка: пока человек говорит, видно, куда попадёт текст',
-    /Вставим/.test(hint) && /Visual Studio Code/.test(hint),
+    /Вставим/.test(hint) && /Блокнот/.test(hint),
     hint || 'подсказки нет',
   );
 
@@ -4877,6 +4953,7 @@ async function main() {
       ['онбординг', scenarioOnboarding],
       ['диктовка', scenarioDictation],
       ['голосовые команды', scenarioVoiceCommands],
+      ['оформление под окно', scenarioAppFormat],
       ['пустой результат', scenarioEmptyResult],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],

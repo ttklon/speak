@@ -204,7 +204,9 @@ export function installMockBridge() {
     // куда попадёт текст: главное окно или чужое приложение
     insertTarget: async () => {
       record('text:target');
-      return { own: false, app: 'Code', title: 'Visual Studio Code' };
+      // Нейтральное чужое окно: оформление по стилю окна проверяется отдельным
+      // сценарием, а остальные проверки должны видеть текст как есть.
+      return { own: false, app: 'notepad', title: 'Безымянный — Блокнот' };
     },
     pasteToActive: async () => {
       record('text:paste');

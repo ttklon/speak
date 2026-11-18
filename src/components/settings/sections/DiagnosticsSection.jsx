@@ -10,6 +10,7 @@ import { writeClipboard } from '../../../lib/clipboard.js';
 import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
 import { resolveLiveDraft } from '../../../lib/liveDraftPolicy.js';
+import { describeTarget } from '../../../lib/appFormat.js';
 import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
 import { analyseSpeed } from '../../../lib/speedReport.js';
 import { lighterModel, tierForModel } from '../../../lib/modelTiers.js';
@@ -60,8 +61,26 @@ export default function DiagnosticsSection() {
   // строки «на русском распознаёт хуже» объяснить нечем — человек не знает,
   // скачана ли модель и видит ли её приложение.
   const [russian, setRussian] = useState(null);
+  // Куда попадёт текст и как он будет оформлен: одно и то же место, где человек
+  // ищет ответ на «почему тут без точки».
+  const [target, setTarget] = useState(null);
   const [probe, setProbe] = useState(null);
   const [probeBusy, setProbeBusy] = useState(false);
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.insertTarget) return undefined;
+    let alive = true;
+    bridge
+      .insertTarget()
+      .then((info) => {
+        if (alive && info && typeof info === 'object') setTarget(info);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.modelsStatus) return undefined;
@@ -569,6 +588,14 @@ export default function DiagnosticsSection() {
                 : system.engineWarming
                   ? 'греется: первая фраза может быть медленнее'
                   : 'не прогрета — каждая фраза начинается с загрузки весов'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Оформление под окно</span>
+          <span className="kv-row__value">
+            {!target
+              ? 'окно не определено'
+              : `${target.app || 'без имени'} — ${describeTarget(target).label}`}
           </span>
         </div>
         <div className="kv-row">

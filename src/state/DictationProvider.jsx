@@ -19,6 +19,9 @@ import { tierForModel } from '../lib/modelTiers.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS, cleanLines, llmRewrite, polishDictation } from '../lib/ai/textops.js';
 import { applyVoiceCommands } from '../lib/voiceCommands.js';
+// оформление под место вставки: в мессенджере точка в конце лишняя, в
+// редакторе кода — заглавная буква; решается без человека и без модели
+import { formatForApp, resolveAppStyle } from '../lib/appFormat.js';
 import { createPolishGate } from '../lib/ai/polishGate.js';
 import { describeScreen } from '../lib/ai/vision.js';
 import { playCue } from '../lib/feedback.js';
@@ -152,6 +155,11 @@ export function DictationProvider({ children }) {
   // как подсказка. Живут до следующего кадра и нигде не сохраняются.
   const screenTermsRef = useRef('');
 
+  // Куда попадёт текст: спрашиваем на старте записи, в фоне. На остановке
+  // берём готовый ответ — иначе ожидание вставки выросло бы на запрос к окну,
+  // а обещание «20 секунд речи за 5 секунд» ломается на ровном месте.
+  const targetRef = useRef(null);
+
   useEffect(() => {
     settingsRef.current = settings;
     dictRef.current = dictionary;
@@ -223,6 +231,13 @@ export function DictationProvider({ children }) {
         : corrected;
       // Чистка — построчно: иначе схлопнулись бы переносы, сказанные голосом.
       let cleaned = polishing ? cleanLines(commanded) : commanded.trim();
+      // Куда и как вставляем — решаем один раз: этот же стиль нужен и позднему
+      // ответу модели (он приходит уже после вставки и обновляет историю),
+      // иначе в истории оказался бы текст с точкой, которой в окне нет.
+      const where =
+        insert && sessionOpts.current.insert !== false
+          ? resolveAppStyle(targetRef.current || {})
+          : { style: 'neutral', why: '', label: '' };
       // Вторая стадия («Переписывать диктовку моделью»): офлайн-правила уже
       // дали текст, локальная модель доводит формулировки. Модель может
       // не ответить — тогда остаётся результат правил, диктовка не ломается.
@@ -267,7 +282,7 @@ export function DictationProvider({ children }) {
           polishPromise
             .then((late) => {
               if (!late) return;
-              const improved = cleanLines(late);
+              const improved = formatForApp(cleanLines(late), where.style);
               if (!improved || improved === cleaned) return;
               const id = lastItemId.current;
               if (id && updateDictation) updateDictation(id, { text: improved, words: words(improved) });
@@ -312,6 +327,21 @@ export function DictationProvider({ children }) {
               });
             }
           }
+        }
+      }
+      // Оформление под окно, куда вставляем: мессенджер — без точки в конце,
+      // редактор кода — без заглавной и точки, письмо — с заглавной и точкой.
+      // Ничего не переписываем, только знаки и регистр первой буквы.
+      if (cleaned && where.style !== 'neutral') {
+        const shaped = formatForApp(cleaned, where.style);
+        if (shaped && shaped !== cleaned) {
+          diag.info('stt', 'Оформление под окно', {
+            style: where.style,
+            why: where.why,
+            before: cleaned.length,
+            after: shaped.length,
+          });
+          cleaned = shaped;
         }
       }
       const durationMs = Math.max(400, Date.now() - startedAt.current);
@@ -508,6 +538,13 @@ export function DictationProvider({ children }) {
           ? createSilenceWatch({ idleMs: AUTO_STOP_IDLE_MS, now: Date.now() })
           : null;
       setHudOpen(true);
+      // Активное окно — заранее и не дожидаясь: к остановке ответ уже есть.
+      targetRef.current = null;
+      Promise.resolve(window.zspeakly?.native?.insertTarget?.())
+        .then((info) => {
+          if (info && typeof info === 'object') targetRef.current = info;
+        })
+        .catch(() => {});
       // «диктовка с учётом экрана»: один снимок экрана, чтобы подсказать
       // распознаванию контекст (термины, имена). Снимок не сохраняется на диск.
       if (opts.screenAware && window.zspeakly?.native?.captureScreen) {
