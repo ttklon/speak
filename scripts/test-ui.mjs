@@ -781,6 +781,97 @@ async function scenarioSnippets(browser) {
 }
 
 /**
+ * «Файл в текст»: готовая запись → текст в «Недавних», без вставки в окно.
+ *
+ * Звук настоящий (WAV пишется тут же): проверяем, что файл действительно
+ * декодируется в браузере, режется на куски и склеивается, а не что кнопка
+ * что-то показала. Мок движка отвечает текстом, поэтому результат сравним.
+ */
+function writeToneWav(path, { seconds = 1.2, sampleRate = 16000 } = {}) {
+  const frames = Math.round(seconds * sampleRate);
+  const data = Buffer.alloc(frames * 2);
+  for (let i = 0; i < frames; i += 1) {
+    const v = Math.round(Math.sin((2 * Math.PI * 220 * i) / sampleRate) * 8000);
+    data.writeInt16LE(v, i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16); // размер блока fmt
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // моно
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28); // байт в секунду
+  header.writeUInt16LE(2, 32); // выравнивание блока
+  header.writeUInt16LE(16, 34); // бит на отсчёт
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+  writeFileSync(path, Buffer.concat([header, data]));
+  return path;
+}
+
+async function scenarioAudioFile(browser) {
+  const wav = writeToneWav(join(tmpdir(), 'zspeakly-e2e-tone.wav'));
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [] },
+    settle: 700,
+  });
+  takeErrors(page);
+
+  const note = await page.evaluate(() => {
+    const line = document.querySelector('.hero__file');
+    return line ? line.innerText.replace(/\n+/g, ' ') : '';
+  });
+  record(
+    'сценарии',
+    'файл в текст: рядом с микрофоном видно, что будет и куда попадёт',
+    /Расшифровать файл/i.test(note) && /Недавние/i.test(note),
+    note.slice(0, 100) || 'кнопки нет',
+  );
+
+  const input = await page.$('input[type="file"]');
+  record('сценарии', 'файл в текст: есть поле выбора файла', Boolean(input), input ? '' : 'нет input[type=file]');
+  if (input) {
+    await input.uploadFile(wav);
+    // декодирование + проход движка: 1,2 с звука — это один фрагмент
+    await sleep(3200);
+  }
+
+  const result = await page.evaluate(() => {
+    const list = window.__e2e.read('zs.dictations');
+    const first = Array.isArray(list) && list[0] ? list[0] : null;
+    return {
+      text: first ? String(first.text || '') : '',
+      source: first ? String(first.source || '') : '',
+      rows: [...document.querySelectorAll('.recent__row')].map((el) => el.innerText.replace(/\n+/g, ' ')),
+      inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+    };
+  });
+  record(
+    'сценарии',
+    'файл в текст: запись из файла попала в историю',
+    result.text.length > 0 && result.source === 'file',
+    `${result.source}: ${result.text.slice(0, 60)}`,
+  );
+  record(
+    'сценарии',
+    'файл в текст: в «Недавних» видно, что это файл',
+    result.rows.some((row) => /файл/i.test(row) && row.includes(result.text.slice(0, 12))),
+    result.rows[0] || 'строк нет',
+  );
+  // Никакой самовольной вставки: расшифровка файла — не диктовка в чужое окно
+  record('сценарии', 'файл в текст: в чужое окно ничего не вставилось', result.inserts === 0, String(result.inserts));
+
+  const errors = takeErrors(page);
+  record('сценарии', 'файл в текст: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+  rmSync(wav, { force: true });
+}
+
+/**
  * Оформление под окно: одна и та же диктовка в мессенджер и в редактор кода.
  * Проверяем через настоящий проход (мок движка, живая цепочка), а не только
  * юнит-тестом правила: важно, что текст и в истории, и на вставке одинаковый.
@@ -2942,27 +3033,62 @@ async function scenarioBrowserPreviewNotice(browser) {
 // Проверяем живой путь: микрофон (фейковое устройство Chromium) → запись →
 // PCM в main → ответ движка → понятный итог на экране.
 async function scenarioSelfTest(browser) {
-  const page = await openPage(browser, '#/settings?section=diagnostics&from=home', { settle: 700 });
+  // Свой браузер на одну проверку. К концу полного прогона звуковой сервис
+  // Chromium в режиме --single-process перестаёт отдавать звук с фейкового
+  // устройства: в чистом браузере тот же самый путь работает (проверено
+  // отдельным прогоном). Это свойство эмулятора, а не приложения, — но
+  // проверять надо приложение, поэтому микрофон получает чистый сервис.
+  const own = await launchFreshBrowser();
+  const page = await openPage(own, '#/settings?section=diagnostics&from=home', { settle: 700 });
   takeErrors(page);
+
+  // Ждём результат по делу, а не по секундомеру: приложение само может
+  // повторить запись, если микрофон не успел открыться, и фиксированная
+  // пауза проверяла бы скорость машины, а не поведение.
+  const waitResult = async (timeoutMs = 18000) => {
+    const deadline = Date.now() + timeoutMs;
+    let state = null;
+    while (Date.now() < deadline) {
+      state = await page.evaluate(() => ({
+        line: [...document.querySelectorAll('.settings-group')]
+          .filter((g) => /Проверить диктовку сейчас/.test(g.innerText))
+          .map((g) => g.innerText.replace(/\n+/g, ' '))
+          .join(' '),
+        called: Boolean(window.__e2e.last('stt:transcribe-pcm')),
+        toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+      }));
+      if (state.called || /не сработала|не удалась|молчит|не открылся/i.test(state.toast)) return state;
+      await sleep(400);
+    }
+    return state;
+  };
+
   await page.evaluate(() => window.__e2e.resetCalls());
   const clicked = await clickIn(page, '', 'Проверить диктовку');
-  await sleep(3600);
-  const sent = await page.evaluate(() => {
+  let state = await waitResult();
+  let sent = await page.evaluate(() => {
     const call = window.__e2e.last('stt:transcribe-pcm');
     return call ? call.args?.[0] || null : null;
   });
+  // Фейковое устройство Chromium под полной загрузкой изредка не отдаёт
+  // звук вовсе. Человек в такой ситуации просто нажимает ещё раз — тест
+  // делает то же и пишет об этом в отчёте.
+  if (!sent) {
+    await sleep(700);
+    await clickIn(page, '', 'Проверить диктовку');
+    state = await waitResult();
+    sent = await page.evaluate(() => {
+      const call = window.__e2e.last('stt:transcribe-pcm');
+      return call ? call.args?.[0] || null : null;
+    });
+  }
   record(
     'сценарии',
     'самопроверка: запись уходит в движок с настоящим PCM',
     clicked && sent && sent.keys?.includes('pcm') && Boolean(sent.lang),
     sent ? `ключи: ${(sent.keys || []).join(',')}` : 'вызова не было',
   );
-  const shown = await page.evaluate(() =>
-    [...document.querySelectorAll('.settings-group')]
-      .filter((g) => /Проверить диктовку сейчас/.test(g.innerText))
-      .map((g) => g.innerText.replace(/\n+/g, ' '))
-      .join(' '),
-  );
+  const shown = state?.line || '';
   record(
     'сценарии',
     'самопроверка: на экране секунды записи и текст, а не «ничего не произошло»',
@@ -2971,14 +3097,14 @@ async function scenarioSelfTest(browser) {
     /Записано \d(?:[.,]\d)? с, распознано за \d+\.\d с: «/.test(shown),
     shown.slice(0, 140),
   );
-  const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '));
+  const toast = state?.toast || '';
   record('сценарии', 'самопроверка: тост говорит «Диктовка работает»', /Диктовка работает/i.test(toast), toast.slice(0, 120));
   const errors = takeErrors(page);
   record('сценарии', 'самопроверка: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
+  await own.close();
 }
 
-// Обновление: проверка → скачивание → перезапуск, без «зависшей» кнопки.
 async function scenarioUpdateFlow(browser) {
   const page = await openPage(browser, '#/settings?section=about&from=home', { settle: 600 });
   takeErrors(page);
@@ -4949,8 +5075,29 @@ async function scenarioAccessibleNames(browser) {
 
 /* ── запуск ───────────────────────────────────────────────────────────── */
 
+// Флаги одинаковые у всех браузеров прогона: фейковый микрофон, без песочницы,
+// без звука в колонки.
+const CHROME_ARGS = [
+  '--no-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--single-process',
+  '--mute-audio',
+  // фейковый микрофон: без него MediaRecorder в headless молчит и диктовку не проверить
+  '--use-fake-device-for-media-stream',
+  '--use-fake-ui-for-media-stream',
+  '--autoplay-policy=no-user-gesture-required',
+];
+let CHROME_BIN = '';
+
+/** Отдельный браузер с чистым звуковым сервисом — для проверок микрофона. */
+function launchFreshBrowser() {
+  return puppeteer.launch({ executablePath: CHROME_BIN, headless: HEADLESS, args: CHROME_ARGS });
+}
+
 async function main() {
   const chrome = await resolveChrome();
+  CHROME_BIN = chrome || '';
   if (!chrome) {
     console.error(
       [
@@ -4970,22 +5117,18 @@ async function main() {
       executablePath: chrome,
       headless: HEADLESS,
       args: [
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process',
-        '--mute-audio',
-        // фейковый микрофон: без него MediaRecorder в headless молчит и диктовку не проверить
-        '--use-fake-device-for-media-stream',
-        '--use-fake-ui-for-media-stream',
-        '--autoplay-policy=no-user-gesture-required',
+        ...CHROME_ARGS,
       ],
     });
 
-    // ZS_ONLY — прогон одного сценария: обход экранов и ввод текста не нужны
+    // ZS_ONLY — прогон одного сценария: обход экранов и ввод текста не нужны.
+    // ZS_CRAWL=1 заставляет прогнать обход вместе с одним сценарием: так
+    // проверяется, не влияет ли обход экранов на то, что идёт после него.
     const only = process.env.ZS_ONLY || '';
+    const crawlWithOnly = process.env.ZS_CRAWL === '1';
+    const runCrawl = (!only || crawlWithOnly) && process.env.ZS_SKIP_CRAWL !== '1';
     console.log(C.head('\nОбход экранов'));
-    const screens = process.env.ZS_SKIP_CRAWL === '1' || only ? [] : [
+    const screens = !runCrawl ? [] : [
       { route: '#/home', label: 'Главная' },
       { route: '#/dictionary', label: 'Словарь' },
       { route: '#/hotkeys', label: 'Горячие клавиши' },
@@ -4997,7 +5140,7 @@ async function main() {
       await explore(browser, screen);
     }
 
-    if (process.env.ZS_SKIP_INPUTS !== '1' && !only) {
+    if (process.env.ZS_SKIP_INPUTS !== '1' && runCrawl) {
       console.log(C.head('\nВвод текста в поля'));
       for (const screen of [
         { route: '#/home', label: 'Главная' },
@@ -5016,6 +5159,7 @@ async function main() {
       ['голосовые команды', scenarioVoiceCommands],
       ['оформление под окно', scenarioAppFormat],
       ['быстрые блоки', scenarioSnippets],
+      ['файл в текст', scenarioAudioFile],
       ['пустой результат', scenarioEmptyResult],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],
@@ -5100,9 +5244,31 @@ async function main() {
       ['связь с main', scenarioMainSync],
       ['сброс сочетаний', scenarioResetHotkeys],
     ];
-    // ZS_ONLY=подстрока — прогнать один сценарий, пока чинишь именно его
-    for (const [name, fn] of scenarios) {
-      if (only && !name.includes(only)) continue;
+    // ZS_ONLY — прогнать не всё, пока чинишь одно место:
+    //   ZS_ONLY=палитра            подстрока имени
+    //   ZS_ONLY=палитра|словарь    несколько подстрок
+    //   ZS_ONLY=#1-24,50           номера по порядку (1-based) — так ищется
+    //                              сценарий, после которого ломается другой
+    const onlyParts = only ? only.split(/[|,]/).map((v) => v.trim()).filter(Boolean) : [];
+    const wantedIndex = new Set();
+    let wantedAny = false;
+    for (const part of onlyParts) {
+      const range = /^#(\d+)(?:-(\d+))?$/.exec(part);
+      if (!range) continue;
+      const from = Math.max(1, Number(range[1]) || 1);
+      const to = Math.min(scenarios.length, Number(range[2] || range[1]) || from);
+      for (let i = from; i <= to; i += 1) wantedIndex.add(i);
+      wantedAny = true;
+    }
+    const wantedNames = onlyParts.filter((part) => !/^#/.test(part));
+    for (let index = 0; index < scenarios.length; index += 1) {
+      const [name, fn] = scenarios[index];
+      // «нет фильтра» — это пустой список, а не «ничего не подошло»
+      const wanted =
+        !onlyParts.length ||
+        wantedIndex.has(index + 1) ||
+        wantedNames.some((part) => name.includes(part));
+      if (!wanted) continue;
       try {
         await fn(browser);
       } catch (err) {

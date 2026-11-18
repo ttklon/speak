@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Mic, Pause, Pencil, Play, Search, Square, Trash2, X } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useDictation } from '../state/DictationProvider.jsx';
@@ -8,6 +8,7 @@ import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
 import { engineName, hasNativeStt, hasWebSpeech } from '../lib/recognition/engine.js';
 import { VOICE_COMMAND_TIP } from '../lib/voiceCommands.js';
+import { AUDIO_ACCEPT, progressLabel } from '../lib/recognition/audioFile.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
 import { APP } from '../lib/config.js';
 import Icon from '../components/ui/Icon.jsx';
@@ -28,7 +29,13 @@ function HeroStat({ value, unit, label }) {
 
 export default function HomePage() {
   const { dictations, voiceHotkeys, settings, deleteDictation, addDictation } = useAppData();
-  const { state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress, cancelProcessing } = useDictation();
+  const {
+    state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress,
+    cancelProcessing, fileJob, transcribeFile, cancelFile,
+  } = useDictation();
+  // выбор файла: скрытый input — единственный способ открыть системный
+  // диалог без нативного окна и новых разрешений
+  const fileInputRef = useRef(null);
   const { push } = useToast();
   useEffect(() => {
     if (state !== 'listening') {
@@ -228,6 +235,60 @@ export default function HomePage() {
           ) : null}
         </div>
 
+        {/* «Файл в текст»: диктовка и расшифровка записи — разные задачи.
+            Кнопка стоит рядом с микрофоном, но не спорит с ним: она вторичная. */}
+        <p className="hero__file">
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={Boolean(fileJob)}
+          >
+            Расшифровать файл
+          </button>
+          <span className="hero__file-note">
+            запись из диктофона или встречи (WAV, MP3, M4A) — текст попадёт в «Недавние»,
+            в чужое окно ничего не вставится
+          </span>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={AUDIO_ACCEPT}
+            hidden
+            aria-label="Файл для расшифровки"
+            onChange={(e) => {
+              const chosen = e.target.files?.[0];
+              // input обнуляем сразу: иначе повторный выбор того же файла не
+              // вызовет onChange, и кнопка будет выглядеть сломанной
+              e.target.value = '';
+              if (chosen) transcribeFile(chosen);
+            }}
+          />
+        </p>
+
+        {fileJob ? (
+          <div className="live-draft live-draft--processing" role="status">
+            <div className="live-draft__head">
+              <span className="dot-live" />
+              {fileJob.phase === 'decode'
+                ? 'Читаю файл…'
+                : `${progressLabel(fileJob.done, fileJob.total)} · ${fileJob.name}`}
+            </div>
+            <p className="live-draft__text">
+              {fileJob.preview || (
+                <span className="muted">
+                  Звук разбирается — первые слова появятся через несколько секунд.
+                </span>
+              )}
+            </p>
+            <div className="live-draft__actions">
+              <button type="button" className="link-btn" onClick={cancelFile}>
+                ОТМЕНИТЬ
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {state === 'processing' ? (
           <div className="live-draft live-draft--processing">
             <div className="live-draft__head">
@@ -317,7 +378,7 @@ export default function HomePage() {
         <div className="recent__list">
           {visible.length === 0 ? (
             <div className="recent__empty">
-              {query ? `Для «${query}» результатов не найдено` : 'Пока нет расшифровок — начните диктовку'}
+              {query ? `Для «${query}» результатов не найдено` : 'Пока нет расшифровок — начните диктовку или расшифруйте файл'}
             </div>
           ) : null}
           {visible.map((item) => (
@@ -334,6 +395,13 @@ export default function HomePage() {
               }}
             >
               <span className="recent__time">{timeHM(item.createdAt)}</span>
+              {/* Откуда текст: из файла или из диктовки. Без пометки человек не
+                  понимает, почему запись появилась сама. */}
+              {item.source === 'file' ? (
+                <span className="recent__tag" title={item.fileName || 'Расшифровка файла'}>
+                  файл
+                </span>
+              ) : null}
               <span className="recent__text">{truncate(item.text, 108)}</span>
               {/* Сколько заняло распознавание: видно, что движок работал, и
                   сразу понятно, если на этой машине он медленный. */}

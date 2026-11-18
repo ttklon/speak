@@ -24,6 +24,16 @@ import { applyVoiceCommands } from '../lib/voiceCommands.js';
 import { formatForApp, resolveAppStyle } from '../lib/appFormat.js';
 import { expandSnippet } from '../lib/snippets.js';
 import { createPolishGate } from '../lib/ai/polishGate.js';
+import { decodeAudioFile } from '../lib/audio/decodeFile.js';
+import {
+  FILE_ERRORS,
+  fileTitle,
+  formatDuration,
+  mergeFileText,
+  planWindows,
+  slicePcm,
+  validateAudioFile,
+} from '../lib/recognition/audioFile.js';
 import { describeScreen } from '../lib/ai/vision.js';
 import { playCue } from '../lib/feedback.js';
 import { diag } from '../lib/diagnostics.js';
@@ -103,6 +113,10 @@ export function DictationProvider({ children }) {
   const [processingMs, setProcessingMs] = useState(0);
   // прогресс по фрагментам длинной записи: { done, total }
   const [sttProgress, setSttProgress] = useState(null);
+  // «Файл в текст»: что именно происходит сейчас — расшифровка, сколько
+  // фрагментов из скольких, и последние распознанные слова (чтобы окно не
+  // молчало минуту на длинной встрече)
+  const [fileJob, setFileJob] = useState(null);
   // Живая расшифровка возможна только с локальным движком: браузерный сам
   // отдаёт промежуточный текст, а whisper нужно спрашивать повторно. Включать
   // её или нет — решает приложение по режиму и замерам (lib/liveDraftPolicy.js):
@@ -505,6 +519,158 @@ export function DictationProvider({ children }) {
     },
     [addDictation, recordWords],
   );
+
+  /**
+   * «Файл в текст»: готовая запись → текст в истории, без вставки в окно.
+   *
+   * Тот же движок, что у диктовки, но звук приходит из файла: декодируем его в
+   * браузере (WAV/MP3/M4A/OGG/FLAC/WEBM), режем на куски по 30 с с перекрытием
+   * и склеиваем текст без повторов. В окно ничего не вставляется намеренно:
+   * человек расшифровывает встречу, а не диктует в чужое приложение.
+   */
+  const fileJobRef = useRef(null);
+  const transcribeFile = useCallback(
+    async (file) => {
+      const native = typeof window !== 'undefined' ? window.zspeakly?.native : null;
+      if (!native?.transcribePcm) {
+        pushToast({ ...FILE_ERRORS['no-engine'], tone: 'warn', ttl: 12000 });
+        return null;
+      }
+      const name = fileTitle(file?.name);
+      const fits = validateAudioFile({ name: file?.name, size: file?.size });
+      if (!fits.ok) {
+        pushToast({ title: 'Этот файл не подойдёт', description: fits.message, tone: 'warn', ttl: 11000 });
+        return null;
+      }
+      const job = { cancelled: false };
+      fileJobRef.current = job;
+      setFileJob({ name, phase: 'decode', done: 0, total: 0, preview: '' });
+      const startedAtMs = Date.now();
+
+      let decoded;
+      try {
+        decoded = await decodeAudioFile(file);
+      } catch (err) {
+        fileJobRef.current = null;
+        setFileJob(null);
+        const key = String(err?.message || '') === 'decode' ? 'decode' : 'failed';
+        diag.warn('stt', 'Файл не разобрался', { reason: String(err?.message || err) });
+        pushToast({ ...FILE_ERRORS[key], tone: 'warn', ttl: 12000 });
+        return null;
+      }
+      // Пределы проверяем ещё раз по настоящей длительности: размер файла о ней
+      // не говорит (час MP3 весит меньше десяти минут WAV).
+      const byDuration = validateAudioFile({ name: file?.name, size: 0, durationMs: decoded.durationMs });
+      if (!byDuration.ok) {
+        fileJobRef.current = null;
+        setFileJob(null);
+        pushToast({ title: 'Запись слишком длинная', description: byDuration.message, tone: 'warn', ttl: 11000 });
+        return null;
+      }
+      const windows = planWindows(decoded.durationMs);
+      if (!windows.length) {
+        fileJobRef.current = null;
+        setFileJob(null);
+        pushToast({ ...FILE_ERRORS.empty, tone: 'warn' });
+        return null;
+      }
+
+      const lang = String(langTag(settingsRef.current.language) || 'ru-RU').slice(0, 2);
+      const parts = [];
+      let sttMs = 0;
+      let failed = 0;
+      for (let i = 0; i < windows.length; i += 1) {
+        if (job.cancelled) break;
+        const win = windows[i];
+        setFileJob({ name, phase: 'run', done: i, total: windows.length, preview: mergeFileText(parts).slice(-240) });
+        try {
+          const res = await native.transcribePcm({
+            pcm: slicePcm(decoded.pcm, { ...win, sampleRate: decoded.sampleRate }),
+            durationMs: win.toMs - win.fromMs,
+            lang,
+            model: settingsRef.current.whisperModel,
+            // словарь и подсказка — на весь файл: термины известны заранее, и
+            // это тот случай, когда подсказка помогает, а не мешает
+            useDictionary: true,
+            contextPrompt: '',
+          });
+          if (res?.ok) {
+            const text = String(res.text || '').trim();
+            if (text) parts.push(text);
+            else failed += 1;
+            sttMs += Number(res.ms) || 0;
+          } else {
+            failed += 1;
+          }
+        } catch {
+          failed += 1;
+        }
+        setFileJob({
+          name,
+          phase: 'run',
+          done: i + 1,
+          total: windows.length,
+          preview: mergeFileText(parts).slice(-240),
+        });
+      }
+      fileJobRef.current = null;
+      setFileJob(null);
+
+      if (job.cancelled) {
+        diag.info('stt', 'Расшифровка файла отменена', { name });
+        return null;
+      }
+      const merged = mergeFileText(parts);
+      const corrected =
+        settingsRef.current.dictionaryEnabled !== false ? applyDictionary(merged, dictRef.current) : merged;
+      const text = corrected.trim();
+      if (!text) {
+        diag.warn('stt', 'Файл без речи', { name, failed, parts: windows.length });
+        pushToast({ ...(failed === windows.length ? FILE_ERRORS.failed : FILE_ERRORS.empty), tone: 'warn', ttl: 11000 });
+        return null;
+      }
+      const item = {
+        text,
+        durationMs: decoded.durationMs,
+        words: words(text),
+        createdAt: Date.now(),
+        id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        language: settingsRef.current.language,
+        source: 'file',
+        fileName: name,
+        sttMs: sttMs || undefined,
+        sttModel: settingsRef.current.whisperModel,
+        sttParts: windows.length > 1 ? windows.length : undefined,
+      };
+      addDictation(item);
+      // Слова считаем в общую статистику, секунды — нет: это не продиктованная
+      // речь, и «речи продиктовано» не должно расти от чужой записи.
+      recordWords(item.words, 0);
+      diag.info('stt', 'Файл расшифрован', {
+        name,
+        parts: windows.length,
+        failed,
+        words: item.words,
+        durationMs: decoded.durationMs,
+        ms: Date.now() - startedAtMs,
+      });
+      pushToast({
+        title: 'Файл расшифрован',
+        description: `${name} · ${formatDuration(decoded.durationMs)} · ${item.words} слов — в «Недавних»`,
+        tone: 'success',
+        ttl: 9000,
+      });
+      return item;
+    },
+    [addDictation, recordWords, pushToast],
+  );
+
+  const cancelFile = useCallback(() => {
+    const job = fileJobRef.current;
+    if (!job) return false;
+    job.cancelled = true;
+    return true;
+  }, []);
 
   useEffect(() => {
     const wanted = settingsRef.current?.micPreroll === true && hasNativeStt();
@@ -1243,6 +1409,11 @@ export function DictationProvider({ children }) {
       resume,
       cancelProcessing,
       finish,
+      // «Файл в текст»: задание и отмена — состояние живёт здесь, чтобы кнопка
+      // на главной и строка прогресса показывали одно и то же
+      fileJob,
+      transcribeFile,
+      cancelFile,
       clearError: () => setError(null),
       setHudOpen,
       formatK,
@@ -1251,6 +1422,7 @@ export function DictationProvider({ children }) {
     [
       state, draft, level, error, last, mode, elapsed, hudOpen, paused, processingMs, sttProgress,
       hudAllowed, hudNativeOn, engine, micWarmState, start, stop, toggle, pause, resume, cancelProcessing, finish, askAgent,
+      fileJob, transcribeFile, cancelFile,
     ],
   );
 
