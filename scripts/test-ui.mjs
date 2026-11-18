@@ -1538,6 +1538,19 @@ async function scenarioLiveWhisper(browser) {
     !liveRow.toggle && /включена/i.test(liveRow.text) && /сама/i.test(liveRow.text),
     liveRow.text.slice(0, 160) || 'строки нет',
   );
+  // Забытая запись больше не висит до сторожа: двадцать секунд тишины — и
+  // она завершается сама. Правило должно быть названо там, где человек читает
+  // «что приложение решает само», иначе это выглядит как случайный обрыв.
+  const autoStopNote = await settingsPage.evaluate(() => {
+    const note = document.querySelector('.settings-main .settings-note, .settings-note');
+    return note ? note.innerText.replace(/\n+/g, ' ') : '';
+  });
+  record(
+    'сценарии',
+    'тишина: правило авто-стопа названо в «Функциях»',
+    /двадцать секунд тишины/i.test(autoStopNote) && /сама|само/i.test(autoStopNote),
+    autoStopNote.slice(0, 200) || 'строки нет',
+  );
   const settingsErrors = takeErrors(settingsPage);
   record(
     'сценарии',

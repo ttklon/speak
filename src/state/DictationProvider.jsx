@@ -7,6 +7,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
 import { formatLiveDraft } from '../lib/recognition/liveDraft.js';
 import { resolveLiveDraft } from '../lib/liveDraftPolicy.js';
+// авто-стоп: в режиме «переключатель» запись завершается сама после тишины,
+// иначе забытая запись тянет минуты пустого звука в распознавание
+import { AUTO_STOP_IDLE_MS, autoStopNotice, createSilenceWatch } from '../lib/autoStop.js';
 import { createMicWarm } from '../lib/audio/micWarm.js';
 import { applyDictionary, formatK, words } from '../lib/utils.js';
 // Вставка в поле самого приложения: если человек диктует, стоя курсором в
@@ -111,6 +114,12 @@ export function DictationProvider({ children }) {
   const hudHiddenByUser = useRef(false);
 
   const recRef = useRef(null);
+  // сторож тишины текущей записи (только для режима «переключатель»)
+  const silenceRef = useRef(null);
+  // как начата запись: удержание клавиши или переключатель
+  const modeRef = useRef('hold');
+  // stop нужен внутри обработчика уровня, а объявлен ниже — держим ссылку
+  const stopRef = useRef(null);
   const startedAt = useRef(0);
   // пауза: сколько времени запись стояла и когда встала
   const pausedTotal = useRef(0);
@@ -491,6 +500,13 @@ export function DictationProvider({ children }) {
       setElapsed(0);
       setState('listening');
       if (opts.mode) setMode(opts.mode);
+      modeRef.current = opts.mode || 'hold';
+      // В режиме удержания стоп даёт клавиша — сторож не нужен и только мешал бы
+      // (человек думает над фразой, держа клавишу). В переключателе — нужен.
+      silenceRef.current =
+        modeRef.current === 'toggle'
+          ? createSilenceWatch({ idleMs: AUTO_STOP_IDLE_MS, now: Date.now() })
+          : null;
       setHudOpen(true);
       // «диктовка с учётом экрана»: один снимок экрана, чтобы подсказать
       // распознаванию контекст (термины, имена). Снимок не сохраняется на диск.
@@ -579,7 +595,23 @@ export function DictationProvider({ children }) {
           draftRef.current = text;
           setDraft(text);
         },
-        onLevel: (v) => setLevel(v),
+        onLevel: (v) => {
+          setLevel(v);
+          // Авто-стоп по тишине. Считаем только пока идёт запись и только в
+          // переключателе; на паузе тишина — это норма, а не конец диктовки.
+          const watch = silenceRef.current;
+          if (!watch || !recRef.current || pausedAt.current) return;
+          if (!watch.feed(v, Date.now())) return;
+          silenceRef.current = null;
+          diag.info('stt', 'Запись остановлена по тишине', { idleMs: AUTO_STOP_IDLE_MS });
+          // Молчаливая остановка выглядела бы как сбой посреди фразы.
+          pushToast({
+            title: 'Запись остановлена',
+            description: autoStopNotice(AUTO_STOP_IDLE_MS),
+            ttl: 7000,
+          });
+          Promise.resolve(stopRef.current?.()).catch(() => {});
+        },
         // не ошибка, но человек должен знать: микрофон из настроек пропал
         onNotice: (t) => pushToast(t),
         onError: (err) => {
@@ -659,6 +691,7 @@ export function DictationProvider({ children }) {
   );
 
   const stop = useCallback(async () => {
+    silenceRef.current = null;
     const rec = recRef.current;
     // Отсюда и до готового текста — то время, которое человек реально ждёт.
     // Отчёт о скорости раньше судил только счёт движка и потому мог говорить
@@ -701,6 +734,12 @@ export function DictationProvider({ children }) {
     if (!item && text.trim()) return;
     if (!text.trim()) setState('idle');
   }, [finish]);
+
+  // stop объявлен ниже обработчика уровня, а нужен ему в момент тишины:
+  // ссылка, а не прямой вызов
+  useEffect(() => {
+    stopRef.current = stop;
+  }, [stop]);
 
   /**
    * «Режим агента»: двойное нажатие сочетания — задаём короткий вопрос
@@ -783,6 +822,8 @@ export function DictationProvider({ children }) {
       pausedTotal.current += Date.now() - pausedAt.current;
       pausedAt.current = 0;
     }
+    // снятие с паузы — не конец диктовки: отсчёт тишины начинается заново
+    silenceRef.current?.reset(Date.now());
     setPaused(false);
   }, []);
 
