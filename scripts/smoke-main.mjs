@@ -318,7 +318,7 @@ await check('IPC-каналы зарегистрированы', () => {
   const need = [
     'stt:transcribe-pcm', 'text:insert', 'text:undo-last', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
-    'models:status', 'models:download', 'models:download-engine', 'models:cancel', 'models:delete',
+    'models:status', 'models:compare', 'models:download', 'models:download-engine', 'models:cancel', 'models:delete',
     'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',
   ];
   const missing = need.filter((ch) => !handlers.has(ch));
@@ -577,6 +577,14 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
   } finally {
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   }
+});
+
+await check('сравнение моделей отказывает словами, а не пустотой', async () => {
+  const res = await handlers.get('models:compare')({}, { pcm: new Uint8Array(0), models: ['small-q5_1'] });
+  if (!res || res.ok !== false) throw new Error(`сравнение пустой записи выдано за успех: ${JSON.stringify(res)}`);
+  if (!res.reason) throw new Error('отказ без причины');
+  const none = await handlers.get('models:compare')({}, { pcm: new Uint8Array(3200), models: [] });
+  if (!none || none.ok !== false || !none.reason) throw new Error('пустой список моделей не объяснён');
 });
 
 await check('«Отмени» отказывает с причиной, а не молча', async () => {

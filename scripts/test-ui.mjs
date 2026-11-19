@@ -5687,6 +5687,83 @@ async function scenarioAccessibleNames(browser) {
   await page.close();
 }
 
+// «Сравнить модели на моей записи»: человек говорит фразу один раз, а приложение
+// прогоняет её через скачанные модели. Победителя объявляем только по словарю —
+// приложение не знает, что человек сказал, и не имеет права решать за него.
+async function scenarioModelCompare(browser) {
+  const own = await launchFreshBrowser();
+  const page = await openPage(own, '#/settings?section=dictation&from=home', {
+    settle: 700,
+    storeSeed: {
+      'zs.dictionary': [
+        { id: 'w1', word: 'Zoom' },
+        { id: 'w2', word: 'Telegram' },
+        { id: 'w3', word: 'Docker' },
+      ],
+    },
+  });
+  takeErrors(page);
+
+  // Ждём по факту: приложение пишет 5 секунд, потом считает две модели.
+  const waitCompare = async (timeoutMs = 25000) => {
+    const deadline = Date.now() + timeoutMs;
+    let state = null;
+    while (Date.now() < deadline) {
+      state = await page.evaluate(() => ({
+        called: Boolean(window.__e2e.last('models:compare')),
+        rows: document.querySelectorAll('.compare__row').length,
+        winner: document.querySelector('.compare__row.is-winner .compare__model')?.innerText || '',
+        summary: document.querySelector('.compare__summary')?.innerText || '',
+        error: document.querySelector('.settings-note')?.innerText || '',
+      }));
+      if (state.rows > 0 || /не получилось|не открылся|тишина/i.test(state.error)) return state;
+      await sleep(400);
+    }
+    return state;
+  };
+
+  await page.evaluate(() => window.__e2e.resetCalls());
+  let clicked = await clickIn(page, '', 'Записать и сравнить');
+  if (!clicked) {
+    // кнопка могла быть недоступна до чтения статуса моделей
+    await sleep(900);
+    clicked = await clickIn(page, '', 'Записать и сравнить');
+  }
+  let state = await waitCompare();
+  if (!state?.rows && !state?.called) {
+    await sleep(700);
+    await clickIn(page, '', 'Записать и сравнить');
+    state = await waitCompare();
+  }
+  record('сценарии', 'сравнение моделей: кнопка запускает запись и сравнение', clicked && Boolean(state?.called), `нажата=${clicked} вызов=${Boolean(state?.called)}`);
+  record(
+    'сценарии',
+    'сравнение моделей: рядом видно текст каждой модели и время счёта',
+    state?.rows >= 2,
+    `строк ${state?.rows ?? 0}`,
+  );
+  record(
+    'сценарии',
+    'сравнение моделей: победителя называем по словарю, а не «на глаз»',
+    /3 из 3/.test(state?.summary || '') && /Сбалансированно|Быстро|Максимум качества/.test(state?.winner || ''),
+    state?.summary || 'итога нет',
+  );
+  const sent = await page.evaluate(() => {
+    const call = window.__e2e.last('models:compare');
+    return call ? call.args?.[0] || null : null;
+  });
+  record(
+    'сценарии',
+    'сравнение моделей: сравниваем только скачанные, без загрузки гигабайтов',
+    Array.isArray(sent?.models) && sent.models.length === 2 && !sent.models.includes('large-v3-turbo-q5_0'),
+    (sent?.models || []).join(', ') || 'ничего не отправлено',
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'сравнение моделей: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+  await own.close();
+}
+
 /* ── запуск ───────────────────────────────────────────────────────────── */
 
 // Флаги одинаковые у всех браузеров прогона: фейковый микрофон, без песочницы,
@@ -5826,6 +5903,7 @@ async function main() {
       ['старое имя модели', scenarioOldModelName],
       ['скорость диктовки', scenarioSpeedReport],
       ['самопроверка диктовки', scenarioSelfTest],
+      ['сравнение моделей', scenarioModelCompare],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

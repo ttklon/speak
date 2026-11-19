@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Download, Loader, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Check, Download, Loader, Mic, Trash2, TriangleAlert, X } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
@@ -7,6 +7,7 @@ import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { MODELS } from '../../../lib/config.js';
 import { MODEL_TIERS, tierForModel } from '../../../lib/modelTiers.js';
+import { pickCompareModels, runModelComparison } from '../../../lib/modelCompare.js';
 
 /**
  * Модель распознавания: три режима вместо каталога из десяти моделей.
@@ -22,11 +23,15 @@ import { MODEL_TIERS, tierForModel } from '../../../lib/modelTiers.js';
  * сколько секунд речи и сколько секунд счёта.
  */
 export default function ModelManager() {
-  const { settings, updateSettings, dictations } = useAppData();
+  const { settings, updateSettings, dictations, dictionary } = useAppData();
   const { push } = useToast();
   const bridge = typeof window !== 'undefined' ? window.zspeakly?.native : null;
 
   const [status, setStatus] = useState(null); // { models: {...}, bin: bool }
+  // Сравнение моделей на одной записи: пишем 5 секунд и прогоняем через все
+  // скачанные модели. Победителя называем только по словам словаря.
+  const [compare, setCompare] = useState(null); // { stage, rows, summary, error }
+  const [compareLevel, setCompareLevel] = useState(0);
   const [progress, setProgress] = useState({}); // id → percent
   const [busy, setBusy] = useState(null);
   // Одинаковые сообщения приходят и с события прогресса, и с ответа на
@@ -343,6 +348,45 @@ export default function ModelManager() {
     };
   }, [dictations]);
 
+  // какие модели вообще можно сравнить: только скачанные, текущая первой
+  const downloadedModels = status?.models
+    ? Object.entries(status.models)
+        .filter(([, info]) => info?.downloaded)
+        .map(([id]) => id)
+    : [];
+  const compareReady = pickCompareModels({
+    downloaded: downloadedModels,
+    current: settings.whisperModel,
+    order: MODEL_TIERS.map((tier) => tier.model),
+  });
+
+  const startCompare = async () => {
+    if (compare?.stage === 'record' || compare?.stage === 'compare') return;
+    setCompare({ stage: 'record' });
+    setCompareLevel(0);
+    const words = (dictionary || []).map((entry) => entry?.word || entry).filter(Boolean);
+    const res = await runModelComparison({
+      models: compareReady,
+      lang: settings.language || 'ru',
+      words,
+      seconds: 5,
+      onLevel: setCompareLevel,
+      onStage: (stage) => setCompare((prev) => ({ ...(prev || {}), stage })),
+    });
+    if (!res.ok) {
+      setCompare({ error: res.reason || 'сравнение не удалось' });
+      push({ title: 'Сравнение не получилось', description: res.reason || '', tone: 'warn', ttl: 9000 });
+      return;
+    }
+    setCompare({ stage: 'done', rows: res.rows, summary: res.summary, winner: res.winner });
+    push({
+      title: res.winner ? `Точнее: ${tierForModel(res.winner)?.label || res.winner}` : 'Сравнение готово',
+      description: res.summary,
+      tone: 'success',
+      ttl: 12000,
+    });
+  };
+
   return (
     <div className="settings-group">
       <div className="settings-group__title">Модель распознавания</div>
@@ -548,6 +592,54 @@ export default function ModelManager() {
           </Button>
         )}
       </div>
+
+      {/* Сравнение на своей записи: вместо спора «какая модель лучше» — факт
+          с этого микрофона. Победителя объявляем только по словарю: приложение
+          не знает, что человек сказал, врать «эта точнее» оно не имеет права. */}
+      <div className="setting-row">
+        <div className="setting-row__label">
+          Сравнить модели на моей записи
+          <div className="setting-row__desc">
+            Скажите фразу с вашими терминами — прогоним её через скачанные модели. Покажем текст,
+            время и сколько слов из словаря услышала каждая. Победителя называем только по словарю;
+            остальное сравните глазами.
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={compare?.stage === 'record' || compare?.stage === 'compare' ? <Loader size={12} /> : <Mic size={12} />}
+          disabled={compare?.stage === 'record' || compare?.stage === 'compare' || compareReady.length < 2}
+          onClick={startCompare}
+        >
+          {compare?.stage === 'record' ? 'Говорите…' : compare?.stage === 'compare' ? 'Считаю…' : 'Записать и сравнить'}
+        </Button>
+      </div>
+      {compareReady.length < 2 ? (
+        <div className="settings-note">
+          Для сравнения нужны две скачанные модели. Сейчас скачано: {compareReady.length || 'ни одной'}.
+          Скачайте ещё одну — сравнение покажет, какая точнее на вашем микрофоне, без догадок.
+        </div>
+      ) : null}
+      {compare?.error ? <div className="settings-note">{compare.error}</div> : null}
+      {compare?.rows?.length ? (
+        <div className="compare">
+          {compare.rows.map((row) => (
+            <div key={row.model} className={`compare__row ${compare.winner === row.model ? 'is-winner' : ''}`}>
+              <div className="compare__model">
+                {tierForModel(row.model)?.label || row.model}
+                {row.ok ? null : <span className="compare__fail"> — не расслышала</span>}
+              </div>
+              <div className="compare__text">{row.ok ? row.text : row.reason}</div>
+              <div className="compare__meta">
+                {row.ok ? `${(row.ms / 1000).toFixed(1).replace('.', ',')} с` : '—'}
+                {row.ok && row.score ? ` · словарь: ${row.score.matched.length} из ${row.score.total}` : ''}
+              </div>
+            </div>
+          ))}
+          {compare.summary ? <div className="compare__summary">{compare.summary}</div> : null}
+        </div>
+      ) : null}
 
       <div className="setting-row">
         <div className="setting-row__label">

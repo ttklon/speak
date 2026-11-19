@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     notify: (payload) => ipcRenderer.invoke('app:notify', payload),
     saveFile: (payload) => ipcRenderer.invoke('app:save-file', payload),
     modelsStatus: () => ipcRenderer.invoke('models:status'),
+    // сравнить модели на одной записи: { pcm, sampleRate, lang, models }
+    compareModels: (payload) => ipcRenderer.invoke('models:compare', payload),
     modelsCancel: () => ipcRenderer.invoke('models:cancel'),
     // русская модель (GigaAM v3): скачивается отдельно от whisper-моделей
     downloadRussianModel: () => ipcRenderer.invoke('models:download-russian'),

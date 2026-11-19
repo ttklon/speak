@@ -417,6 +417,23 @@ export function installMockBridge() {
         },
       };
     },
+    // Сравнение моделей: как настоящий main — по строке на модель, с текстом и
+    // временем. Одна модель «слышит» термин из словаря, другая нет.
+    compareModels: async (payload) => {
+      record('models:compare', [payload]);
+      const models = Array.isArray(payload?.models) ? payload.models : [];
+      const rows = models.map((model, i) => ({
+        model,
+        ok: true,
+        text:
+          i === 0
+            ? 'включи зум и телеграм'
+            : 'включи Zoom и Telegram, а ещё Docker',
+        ms: 900 + i * 700,
+        reason: '',
+      }));
+      return { ok: true, seconds: 4.2, rows, reason: '' };
+    },
     downloadModel: async (id) => {
       record('models:download', [id]);
       // держим скачивание «в полёте», чтобы успеть нажать «Отменить»

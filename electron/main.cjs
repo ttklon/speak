@@ -2427,6 +2427,75 @@ function registerIpc() {
     return res;
   });
 
+  // Сравнение моделей на одной записи. Человек говорит фразу один раз, а мы
+  // прогоняем её через скачанные модели и отдаём текст, время и попадания в
+  // словарь. Победителя объявляет интерфейс и только по словарю — приложение
+  // не знает, что человек сказал, и не имеет права решать за него.
+  ipcMain.handle('models:compare', async (_e, payload) => {
+    const pcmView = payload?.pcm;
+    const raw =
+      pcmView instanceof Uint8Array
+        ? Buffer.from(pcmView.buffer, pcmView.byteOffset, pcmView.byteLength)
+        : Buffer.from(pcmView?.buffer || pcmView || [], pcmView?.byteOffset || 0, pcmView?.byteLength || 0);
+    if (!raw.length) return { ok: false, reason: 'пустая запись' };
+    const models = Array.from(
+      new Set((Array.isArray(payload?.models) ? payload.models : []).map(String).filter(Boolean)),
+    ).slice(0, 3);
+    if (!models.length) return { ok: false, reason: 'нет моделей для сравнения' };
+    const sr = Number(payload?.sampleRate) || 16000;
+    const lang = payload?.lang || 'ru';
+    const prepared = audioPrep.preparePcm(raw, { sampleRate: sr, silentRms: 40 });
+    if (prepared.before.rms < 40 || prepared.before.peak < 250) {
+      return { ok: false, reason: 'в записи тишина — скажите фразу целиком' };
+    }
+    const compacted = audioPrep.compactSilence(prepared.pcm, { sampleRate: sr });
+    const trimmed = whisper.trimSilence?.(compacted.pcm, sr) || compacted.pcm;
+    const dir = path.join(app.getPath('temp'), 'zspeakly');
+    fs.mkdirSync(dir, { recursive: true });
+    const wav = path.join(dir, `compare-${Date.now()}-${randomUUID().slice(0, 8)}.wav`);
+    try {
+      fs.writeFileSync(wav, writeWav(trimmed, sr));
+      const rows = [];
+      for (const model of models) {
+        const st = whisper.status(model);
+        if (!st.available) {
+          rows.push({ model, ok: false, reason: st.reason || 'модель не скачана' });
+          continue;
+        }
+        const started = Date.now();
+        // Сравниваем честно: одинаковый режим для всех, без адаптивных поблажек.
+        const res = await whisper.transcribe(wav, {
+          lang,
+          model,
+          prompt: '',
+          keepLoaded: false,
+          useVad: true,
+        });
+        rows.push({
+          model,
+          ok: Boolean(res?.ok && res.text),
+          text: res?.text || '',
+          ms: res?.ms || Date.now() - started,
+          reason: res?.ok ? '' : res?.reason || 'нет текста',
+        });
+        logger.info('stt', 'Сравнение моделей: проход', {
+          keep: true,
+          model,
+          ms: res?.ms || 0,
+          chars: (res?.text || '').length,
+        });
+      }
+      return {
+        ok: rows.some((row) => row.ok),
+        seconds: Math.round((trimmed.length / 2 / sr) * 10) / 10,
+        rows,
+        reason: rows.some((row) => row.ok) ? '' : 'ни одна модель не дала текст',
+      };
+    } finally {
+      fs.rmSync(wav, { force: true });
+    }
+  });
+
   ipcMain.handle('models:status', () => {
     const base = models.modelStatus();
     // Какую модель whisper возьмёт на самом деле: выбранная может быть не
