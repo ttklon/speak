@@ -91,14 +91,17 @@ const SHOTS = [
     hash: '#/settings?section=features&from=home',
     scope: 'viewport',
     before: async (page) => {
+      // Раньше здесь искалась карточка с «tiny» — её больше нет (режимы
+      // называются «Быстро / Сбалансированно / Максимум»), и снимок молча
+      // показывал верх раздела вместо моделей. Теперь ищем заголовок группы.
       await page.evaluate(() => {
-        // показываем карточки моделей начиная с tiny — вместе с «рекомендуем»
-        const card = [...document.querySelectorAll('.model-card')].find((c) => /tiny/i.test(c.innerText));
         const main = document.querySelector('.settings-main');
-        if (card && main) {
-          const top = card.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-          main.scrollTop = Math.max(0, top - 90);
-        }
+        if (!main) return;
+        const title = [...document.querySelectorAll('.settings-group__title')].find((el) =>
+          /Модель распознавания/.test(el.textContent || ''),
+        );
+        const group = title?.closest('.settings-group');
+        if (group) main.scrollTop = Math.max(0, group.offsetTop - 80);
       });
       await pause(300);
     },

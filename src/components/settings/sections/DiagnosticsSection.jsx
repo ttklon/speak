@@ -60,6 +60,9 @@ export default function DiagnosticsSection() {
   // Состояние русской модели: включится ли она на следующей диктовке. Без этой
   // строки «на русском распознаёт хуже» объяснить нечем — человек не знает,
   // скачана ли модель и видит ли её приложение.
+  // В браузере моста нет: без этого флага обе строки навсегда показывали
+  // «проверяю…», хотя проверять некому — обещание, которое не выполнится.
+  const nativeBridge = typeof window !== 'undefined' ? window.zspeakly?.native : null;
   const [russian, setRussian] = useState(null);
   // Состояние модели европейских языков: та же причина, что и у русской —
   // «почему на английском считает прежний движок» должно быть видно.
@@ -459,7 +462,9 @@ export default function DiagnosticsSection() {
           <span className="kv-row__key">Русский язык</span>
           <span className="kv-row__value">
             {russian === null
-              ? 'проверяю…'
+              ? nativeBridge?.modelsStatus
+                ? 'проверяю…'
+                : 'только в приложении'
               : russian.available
                 ? 'своя модель, включается сама'
                 : russian.reason}
@@ -469,7 +474,9 @@ export default function DiagnosticsSection() {
           <span className="kv-row__key">Европейские языки</span>
           <span className="kv-row__value">
             {european === null
-              ? 'проверяю…'
+              ? nativeBridge?.modelsStatus
+                ? 'проверяю…'
+                : 'только в приложении'
               : european.available
                 ? 'своя модель, включается сама'
                 : european.reason}

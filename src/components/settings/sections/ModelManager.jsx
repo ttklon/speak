@@ -484,7 +484,7 @@ export default function ModelManager() {
           </div>
           <div className="model-card__meta">
             {status?.russian?.bytes ? `${Math.round(status.russian.bytes / 1024 / 1024)} МБ` : '226 МБ'} · точнее
-            понимает русские слова · знаки препинания сам
+            понимает русские слова · знаки препинания ставит сама
           </div>
           <div className="model-card__desc">
             {status?.russian?.available
@@ -520,7 +520,7 @@ export default function ModelManager() {
           </div>
           <div className="model-card__meta">
             {status?.european?.bytes ? `${Math.round(status.european.bytes / 1024 / 1024)} МБ` : '640 МБ'} · быстрее
-            прежнего движка · запятые и заглавные ставит сам
+            прежнего движка · запятые и заглавные ставит сама
           </div>
           <div className="model-card__desc">
             {status?.european?.available
