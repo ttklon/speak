@@ -5758,6 +5758,33 @@ async function scenarioModelCompare(browser) {
     Array.isArray(sent?.models) && sent.models.length === 2 && !sent.models.includes('large-v3-turbo-q5_0'),
     (sent?.models || []).join(', ') || 'ничего не отправлено',
   );
+  // Победитель — не только строчка текста: модель можно сразу сделать основной,
+  // не возвращаясь к списку моделей выше.
+  const beforeApply = await page.evaluate(() => (window.__e2e.read('zs.settings') || {}).whisperModel || '');
+  const applyClicked = await page.evaluate(() => {
+    const btn = document.querySelector('.compare__apply');
+    if (btn) btn.click();
+    return Boolean(btn);
+  });
+  await sleep(500);
+  const afterApply = await page.evaluate(() => ({
+    model: (window.__e2e.read('zs.settings') || {}).whisperModel || '',
+    currentRows: document.querySelectorAll('.compare__current').length,
+    toasts: [...document.querySelectorAll('.toast__title')].map((n) => n.innerText).join(' | '),
+  }));
+  record(
+    'сценарии',
+    'сравнение моделей: «Сделать основной» переключает диктовку на эту модель',
+    applyClicked && afterApply.model && afterApply.model !== beforeApply && afterApply.currentRows === 1,
+    `было «${beforeApply}», стало «${afterApply.model}»`,
+  );
+  record(
+    'сценарии',
+    'сравнение моделей: о смене модели сказано словами',
+    /Модель стала основной/.test(afterApply.toasts),
+    afterApply.toasts || 'тоста нет',
+  );
+
   const errors = takeErrors(page);
   record('сценарии', 'сравнение моделей: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();

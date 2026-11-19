@@ -329,6 +329,19 @@ function buildSttPrompt({ context = '', dictionary = [], tail = '' } = {}) {
     seen.add(key);
     words.push(word);
     used += cost;
+    // Произношение — второй способ сказать то же слово: «ZSpeakly» человек
+    // произносит «зи-спикли». Маленькая модель слышит звук, а не буквы, и такая
+    // пара в подсказке помогает ей связать одно с другим. Это не украшение:
+    // без него словарь работает только если модель уже знает слово.
+    const pron = String(entry && typeof entry === 'object' ? entry.pronunciation || '' : '').trim();
+    if (pron && pron.toLowerCase() !== key && !seen.has(pron.toLowerCase())) {
+      const pronCost = pron.length + 2;
+      if (used + pronCost <= STT_DICT_LIMIT) {
+        seen.add(pron.toLowerCase());
+        words.push(pron);
+        used += pronCost;
+      }
+    }
   }
   const dict = words.join(', ');
   // Порядок: контекст экрана, словарь, хвост прошлой фразы. Хвост в конце —

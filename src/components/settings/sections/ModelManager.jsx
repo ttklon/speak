@@ -354,6 +354,18 @@ export default function ModelManager() {
         .filter(([, info]) => info?.downloaded)
         .map(([id]) => id)
     : [];
+  // Сравнение — это не только текст на экране: если модель услышала лучше,
+  // её можно сразу поставить основной, не ища переключатель выше.
+  const applyCompared = (row) => {
+    if (!row?.model) return;
+    updateSettings({ whisperModel: row.model });
+    push({
+      title: 'Модель стала основной',
+      description: `Диктовка будет считать на «${tierForModel(row.model)?.label || row.model}».`,
+      tone: 'success',
+    });
+  };
+
   const compareReady = pickCompareModels({
     downloaded: downloadedModels,
     current: settings.whisperModel,
@@ -632,8 +644,17 @@ export default function ModelManager() {
               </div>
               <div className="compare__text">{row.ok ? row.text : row.reason}</div>
               <div className="compare__meta">
-                {row.ok ? `${(row.ms / 1000).toFixed(1).replace('.', ',')} с` : '—'}
-                {row.ok && row.score ? ` · словарь: ${row.score.matched.length} из ${row.score.total}` : ''}
+                <span>
+                  {row.ok ? `${(row.ms / 1000).toFixed(1).replace('.', ',')} с` : '—'}
+                  {row.ok && row.score ? ` · словарь: ${row.score.matched.length} из ${row.score.total}` : ''}
+                </span>
+                {row.ok && row.model !== settings.whisperModel ? (
+                  <Button variant="ghost" size="sm" className="compare__apply" onClick={() => applyCompared(row)}>
+                    Сделать основной
+                  </Button>
+                ) : row.ok ? (
+                  <span className="compare__current">сейчас основная</span>
+                ) : null}
               </div>
             </div>
           ))}

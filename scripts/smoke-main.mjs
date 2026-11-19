@@ -1368,6 +1368,30 @@ await check('подсказка не разрастается: не больше
   if (!prompt.startsWith('О')) throw new Error('контекст экрана потерялся при обрезке');
 });
 
+await check('подсказка: произношение помогает движку услышать слово', async () => {
+  // «ZSpeakly» человек говорит «зи-спикли»: маленькая модель слышит звук, а не
+  // буквы, поэтому в подсказку идёт и написание, и произношение.
+  const savedDict = await handlers.get('store:get')({}, 'zs:dictionary');
+  await handlers.get('store:set')({}, 'zs:dictionary', [
+    { word: 'ZSpeakly', pronunciation: 'зи-спикли', pinned: true },
+    { word: 'Docker' },
+  ]);
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(500),
+    durationMs: 500,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const prompt = call.args[call.args.indexOf('--prompt') + 1] || '';
+  if (!prompt.includes('ZSpeakly')) throw new Error(`нет слова: ${prompt}`);
+  if (!prompt.includes('зи-спикли')) throw new Error(`нет произношения: ${prompt}`);
+  await handlers.get('store:set')({}, 'zs:dictionary', savedDict);
+});
+
 await check('подсказка: словарь не вытесняется контекстом экрана', async () => {
   await handlers.get('store:set')(
     {},
@@ -1390,9 +1414,18 @@ await check('подсказка: словарь не вытесняется ко
   if (prompt.length > 500) throw new Error(`подсказка ${prompt.length} символов`);
   if (!prompt.includes('Термин')) throw new Error('словарь потерялся в подсказке');
   // whisper берёт последние токены: словарь обязан стоять в хвосте и не рваться
-  if (!/Термин\d+$/.test(prompt)) throw new Error(`словарь обрезан посреди слова: ${prompt.slice(-40)}`);
-  const words = prompt.split(',').length;
-  if (words < 20) throw new Error(`слов в подсказке мало: ${words}`);
+  const items = prompt.split(', ');
+  const terms = items.filter((w) => w.startsWith('Термин'));
+  const lastTerm = terms[terms.length - 1] || '';
+  if (!/^Термин\d+$/.test(lastTerm)) {
+    throw new Error(`словарь обрезан посреди слова: ${prompt.slice(-40)}`);
+  }
+  // после словаря идёт только хвост прошлой фразы, а не ещё кусок словаря
+  const after = items.slice(items.indexOf(lastTerm) + 1);
+  if (after.some((w) => w.startsWith('Термин'))) {
+    throw new Error(`словарь разорван: ${prompt.slice(-60)}`);
+  }
+  if (items.length < 20) throw new Error(`слов в подсказке мало: ${items.length}`);
 });
 
 await check('whisper получает все ядра и -sns против галлюцинаций', async () => {
