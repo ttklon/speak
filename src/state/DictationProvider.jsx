@@ -4,7 +4,15 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createRecognizer, engineName, hasNativeStt, hasWebSpeech, langTag } from '../lib/recognition/engine.js';
+import {
+  createRecognizer,
+  engineName,
+  hasNativeStt,
+  hasWebSpeech,
+  langTag,
+  lastRecordedAudio,
+} from '../lib/recognition/engine.js';
+import { retryAvailability, shouldReplaceText } from '../lib/retryLast.js';
 import { formatLiveDraft } from '../lib/recognition/liveDraft.js';
 import { resolveLiveDraft } from '../lib/liveDraftPolicy.js';
 // авто-стоп: в режиме «переключатель» запись завершается сама после тишины,
@@ -1363,6 +1371,68 @@ export function DictationProvider({ children }) {
    * «Отменить распознавание»: убить текущий проход whisper, не дожидаясь
    * минуты. Текст не вставляется — человек сам решил прервать.
    */
+  /**
+   * «Переспросить точно»: последняя запись ещё в памяти — прогоняем её ещё раз
+   * честным проходом. Меняем текст только если точный проход услышал больше:
+   * подменить фразу на другую, не лучшую, — хуже, чем оставить как было.
+   */
+  const [retrying, setRetrying] = useState(false);
+  const retryLast = useCallback(async () => {
+    const native = typeof window !== 'undefined' ? window.zspeakly?.native : null;
+    const audio = lastRecordedAudio();
+    const check = retryAvailability({ audio, native });
+    if (!check.ok) {
+      pushToast({ title: 'Переспросить нечем', description: check.reason, tone: 'warn' });
+      return { ok: false, reason: check.reason };
+    }
+    if (!last || retrying) return { ok: false, reason: 'нечего уточнять' };
+    setRetrying(true);
+    try {
+      const res = await native.transcribePcm({
+        pcm: audio.pcm,
+        durationMs: audio.durationMs,
+        lang: audio.lang,
+        model: settingsRef.current.whisperModel,
+        useDictionary: settingsRef.current.dictionaryEnabled !== false,
+        // честный проход по просьбе: main не смотрит на замеры скорости
+        thorough: true,
+      });
+      if (!res?.ok) {
+        pushToast({
+          title: 'Точный проход не удался',
+          description: res?.reason || 'движок не ответил',
+          tone: 'warn',
+        });
+        return { ok: false, reason: res?.reason || 'failed' };
+      }
+      const verdict = shouldReplaceText(last.text, res.text);
+      if (!verdict.replace) {
+        pushToast({
+          title: 'Оставили как было',
+          description: `${verdict.note}. Скажите ближе к микрофону — услышит точнее.`,
+          tone: 'default',
+        });
+        return { ok: true, replaced: false, text: last.text, note: verdict.note };
+      }
+      updateDictation(last.id, {
+        text: res.text,
+        sttMs: res.ms,
+        sttThorough: true,
+        sttSecondPass: true,
+        sttModel: res.model || settingsRef.current.whisperModel,
+      });
+      setLast((prev) => (prev ? { ...prev, text: res.text, sttThorough: true, sttSecondPass: true } : prev));
+      pushToast({
+        title: 'Точный проход услышал больше',
+        description: truncate(res.text, 120),
+        tone: 'success',
+      });
+      return { ok: true, replaced: true, text: res.text, note: verdict.note };
+    } finally {
+      setRetrying(false);
+    }
+  }, [last, retrying, updateDictation]);
+
   const cancelProcessing = useCallback(() => {
     try {
       window.zspeakly?.native?.cancelTranscribe?.();
@@ -1733,6 +1803,9 @@ export function DictationProvider({ children }) {
       fileJob,
       transcribeFile,
       cancelFile,
+      // «Переспросить точно» — по последней записи, пока она в памяти
+      retryLast,
+      retrying,
       clearError: () => setError(null),
       setHudOpen,
       formatK,
@@ -1741,7 +1814,7 @@ export function DictationProvider({ children }) {
     [
       state, draft, level, error, last, mode, elapsed, hudOpen, paused, micQuiet, processingMs, sttProgress,
       hudAllowed, hudNativeOn, engine, micWarmState, start, stop, toggle, pause, resume, cancelProcessing, finish, askAgent,
-      fileJob, transcribeFile, cancelFile,
+      fileJob, transcribeFile, cancelFile, retryLast, retrying,
     ],
   );
 

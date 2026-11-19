@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, Mic, Pause, Pencil, Play, Search, Square, Trash2, X } from 'lucide-react';
+import { Copy, Loader2, Mic, Pause, Pencil, Play, RotateCw, Search, Square, Trash2, X } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useDictation } from '../state/DictationProvider.jsx';
 import { writeClipboard } from '../lib/clipboard.js';
@@ -47,7 +47,7 @@ export default function HomePage() {
   const { dictations, voiceHotkeys, settings, deleteDictation, addDictation, updateDictation } = useAppData();
   const {
     state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress,
-    cancelProcessing, fileJob, transcribeFile, cancelFile,
+    cancelProcessing, fileJob, transcribeFile, cancelFile, retryLast, retrying,
   } = useDictation();
   // выбор файла: скрытый input — единственный способ открыть системный
   // диалог без нативного окна и новых разрешений
@@ -385,6 +385,19 @@ export default function HomePage() {
             <Icon name="check" size={13} />
             <span className="last-result__text">{truncate(last.id === typedId ? typed : last.text, 96)}</span>
             <span className="last-result__meta">{formatSeconds(last.durationMs)}</span>
+            {/* Ошибку видно сразу после вставки: последняя запись ещё в памяти,
+                поэтому её можно прогнать честным проходом, не повторяя вслух.
+                Текст меняется только если точный проход услышал больше. */}
+            <button
+              type="button"
+              className="icon-btn icon-btn--sm"
+              onClick={() => retryLast()}
+              disabled={retrying}
+              title="Переспросить точно: прогнать последнюю запись честным проходом"
+              aria-label="Переспросить точно"
+            >
+              {retrying ? <Loader2 size={12} className="spin" /> : <RotateCw size={12} />}
+            </button>
             <button type="button" className="icon-btn icon-btn--sm" onClick={() => copyText(last.text)}>
               <Copy size={12} />
             </button>

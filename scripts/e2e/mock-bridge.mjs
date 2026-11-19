@@ -178,12 +178,17 @@ export function installMockBridge() {
           contextPrompt: payload?.contextPrompt,
           // true — промежуточный проход живой расшифровки
           partial: payload?.partial === true,
+          // true — «Переспросить точно»: человек попросил честный проход сам
+          thorough: payload?.thorough === true,
         },
       ]);
       // ms — как у настоящего main: интерфейс показывает «за сколько распознано»
+      const base = custom === null ? 'Проверка диктовки: раз, два, три.' : custom;
       return {
         ok: true,
-        text: custom === null ? 'Проверка диктовки: раз, два, три.' : custom,
+        // Честный проход по просьбе человека слышит больше — иначе кнопку
+        // «Переспросить точно» нечем проверить.
+        text: payload?.thorough === true ? `${base} Четыре.`.replace(/\s+/g, ' ').trim() : base,
         engine: 'whisper',
         ms: 1400,
         // как настоящий main: рассказываем, что сделали со звуком и как считали

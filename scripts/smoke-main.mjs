@@ -1428,6 +1428,26 @@ await check('подсказка: словарь не вытесняется ко
   if (items.length < 20) throw new Error(`слов в подсказке мало: ${items.length}`);
 });
 
+await check('«переспросить точно»: честный проход по просьбе, без оглядки на замеры', async () => {
+  // Замеры говорят «машина слабая, не трать время» — но человек нажал кнопку,
+  // значит это его время и его выбор: проход должен быть честным.
+  await handlers.get('store:set')({}, 'zs:dictionary', []);
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(900),
+    durationMs: 900,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+    thorough: true,
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const args = call.args.join(' ');
+  if (!/\s-bs 5(\s|$)/.test(args)) throw new Error(`нет широкого перебора: ${args}`);
+  if (/\s-nf(\s|$)/.test(args)) throw new Error('честный проход запретил повтор температур');
+});
+
 await check('whisper получает все ядра и -sns против галлюцинаций', async () => {
   runWhisper('текст');
   spawnCalls.length = 0;

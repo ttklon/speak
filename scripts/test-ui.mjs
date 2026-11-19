@@ -3866,6 +3866,67 @@ async function scenarioDictationUndo(browser) {
 }
 
 // Очистка истории диктовок — только после подтверждения, пустая история молчит делом.
+/**
+ * «Переспросить точно»: человек видит ошибку сразу после вставки, а запись ещё
+ * в памяти — значит второй текст можно получить без повтора вслух. Проверяем
+ * и главное правило: текст меняется, только когда точный проход услышал больше.
+ */
+async function scenarioRetryLast(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'Проверка диктовки: раз, два, три.' },
+    settle: 600,
+  });
+  takeErrors(page);
+  await clickText(page, 'Начать диктовку');
+  await sleep(1100);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2300);
+  const before = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
+  const clicked = await page.evaluate(() => {
+    const btn = document.querySelector('.last-result [aria-label="Переспросить точно"]');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(1400);
+  const after = await page.evaluate(() => {
+    const item = (window.__e2e.read('zs.dictations') || [])[0] || {};
+    const calls = (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm');
+    return {
+      text: String(item.text || ''),
+      edited: Boolean(item.sttSecondPass),
+      thoroughSent: calls.some((c) => c.args?.[0]?.thorough === true),
+      toasts: [...document.querySelectorAll('.toast__title')].map((n) => n.innerText).join(' | '),
+    };
+  });
+  record(
+    'сценарии',
+    'переспросить точно: кнопка у последней расшифровки прогоняет запись ещё раз',
+    clicked && after.thoroughSent,
+    `нажата=${clicked} честный проход=${after.thoroughSent}`,
+  );
+  record(
+    'сценарии',
+    'переспросить точно: точный проход услышал больше — текст и история обновились',
+    Boolean(before) && after.text.length > before.length && /Четыре/.test(after.text) && after.edited,
+    `${before} → ${after.text}`,
+  );
+  record(
+    'сценарии',
+    'переспросить точно: о результате сказано словами',
+    /Точный проход услышал больше/.test(after.toasts),
+    after.toasts || 'тоста нет',
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'переспросить точно: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioClearDictations(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
   takeErrors(page);
@@ -5931,6 +5992,7 @@ async function main() {
       ['скорость диктовки', scenarioSpeedReport],
       ['самопроверка диктовки', scenarioSelfTest],
       ['сравнение моделей', scenarioModelCompare],
+      ['переспросить точно', scenarioRetryLast],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

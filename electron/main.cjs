@@ -1555,7 +1555,12 @@ function registerIpc() {
       // Сколько точности можно позволить: решают замеры прошлых проходов, а
       // не «железо вообще». На слабой машине остаётся быстрый путь, на быстрой
       // сразу считаем честно — иначе запас простаивал бы.
-      const plan = decodePlan(decodeHistory, { seconds: spokenSeconds });
+      // Человек может попросить честный проход сам — кнопкой «Переспросить
+      // точно»: тот же звук, но с широким перебором. Замеры здесь не решают:
+      // это его время и его выбор.
+      const auto = decodePlan(decodeHistory, { seconds: spokenSeconds });
+      const plan =
+        payload?.thorough === true ? { ...auto, thorough: true, reason: 'по просьбе человека' } : auto;
       if (plan.factor !== null) {
         logger.info('stt', 'Режим распознавания', {
           keep: true,

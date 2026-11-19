@@ -29,6 +29,35 @@ export const hasNativeStt = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribePcm);
 
 /**
+ * Последняя запись — чтобы её можно было переспросить точным проходом.
+ *
+ * Ошибку видно сразу после вставки, но второй текст раньше можно было получить
+ * только повторив фразу голосом. Держим ровно одну запись (до 40 секунд — это
+ * меньше 1,3 МБ) и отпускаем предыдущую: хранить историю звука на устройстве
+ * человек не просил.
+ */
+const LAST_AUDIO_LIMIT_MS = 40000;
+let lastAudio = null;
+
+export function lastRecordedAudio() {
+  return lastAudio;
+}
+
+export function clearLastRecordedAudio() {
+  lastAudio = null;
+}
+
+function rememberRecordedAudio(pcm, durationMs, lang) {
+  if (!pcm?.length || !(durationMs >= 350) || durationMs > LAST_AUDIO_LIMIT_MS) {
+    lastAudio = null;
+    return;
+  }
+  // Копия: исходный буфер переиспользуется рекордером и после остановки
+  // превратился бы в мусор.
+  lastAudio = { pcm: Int16Array.from(pcm), durationMs: Math.round(durationMs), lang: lang || 'ru' };
+}
+
+/**
  * Чем считала прошлая диктовка: 'server' (прогретый whisper.cpp в памяти),
  * 'cli' (холодный запуск) или '' (ещё не знаем). От этого зависит, стоит ли
  * резать запись заранее: на холодном движке каждый кусок — это снова загрузка
@@ -377,6 +406,7 @@ export function createRecognizer(opts = {}) {
           onEnd?.({ text: '' });
           return { text: '', reason: 'too-short' };
         }
+        rememberRecordedAudio(pcm, durationMs, langCode());
         let res;
         // подсказка с экрана берётся в последний момент: локальная модель могла
         // ответить уже после старта записи
