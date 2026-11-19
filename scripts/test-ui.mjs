@@ -974,6 +974,60 @@ async function scenarioVoiceCommand(browser) {
 }
 
 /**
+ * Оговорки: человек поправил себя на полуслове — в тексте остаётся то, что он
+ * имел в виду. Проверяем и обратное: уточнение («то есть убери воду») не
+ * выкидывается.
+ */
+async function scenarioSelfCorrection(browser) {
+  const dictate = async (spoken) => {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false },
+      storeSeed: { 'zs.dictations': [], 'zs.mockSttText': spoken },
+      settle: 600,
+    });
+    takeErrors(page);
+    await clickText(page, 'Начать диктовку');
+    await sleep(1100);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await sleep(2300);
+    const res = await page.evaluate(() => {
+      const list = window.__e2e.read('zs.dictations');
+      const saved = Array.isArray(list) && list[0] ? String(list[0].text || '') : '';
+      const inserts = (window.__bridgeCalls || [])
+        .filter((c) => c.channel === 'text:insert')
+        .map((c) => String(c.args?.[0] || ''));
+      return { saved, inserted: inserts[0] || '' };
+    });
+    const errors = takeErrors(page);
+    await page.close();
+    return { ...res, errors };
+  };
+
+  const fixed = await dictate('Встреча в четыре, то есть в три часа.');
+  record(
+    'сценарии',
+    'оговорка: «в четыре… то есть в три» — в тексте остаётся три',
+    fixed.saved === 'Встреча в три часа.' && fixed.inserted === fixed.saved,
+    `${fixed.saved} · вставлено: ${fixed.inserted.slice(0, 40)}`,
+  );
+
+  const kept = await dictate('Сократи, то есть убери воду и вводные слова.');
+  record(
+    'сценарии',
+    'оговорка: уточнение не выкидывается, текст остаётся как сказано',
+    kept.saved === 'Сократи, то есть убери воду и вводные слова.',
+    kept.saved,
+  );
+
+  const errors = [...fixed.errors, ...kept.errors];
+  record('сценарии', 'оговорка: без ошибок консоли', errors.length === 0, errors[0] || '');
+}
+
+/**
  * Оформление под окно: одна и та же диктовка в мессенджер и в редактор кода.
  * Проверяем через настоящий проход (мок движка, живая цепочка), а не только
  * юнит-тестом правила: важно, что текст и в истории, и на вставке одинаковый.
@@ -5263,6 +5317,7 @@ async function main() {
       ['быстрые блоки', scenarioSnippets],
       ['файл в текст', scenarioAudioFile],
       ['команда голосом', scenarioVoiceCommand],
+      ['оговорки', scenarioSelfCorrection],
       ['пустой результат', scenarioEmptyResult],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],

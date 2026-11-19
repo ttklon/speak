@@ -27,6 +27,7 @@ import { createPolishGate } from '../lib/ai/polishGate.js';
 import { decodeAudioFile } from '../lib/audio/decodeFile.js';
 import { readSelectionText, writeSelectionText } from '../lib/hotkeys/selection.js';
 import { runInstruction } from '../lib/ai/instructions.js';
+import { dropSelfCorrections } from '../lib/ai/selfCorrect.js';
 import {
   COMMAND_ERRORS,
   commandInstruction,
@@ -261,6 +262,16 @@ export function DictationProvider({ children }) {
         : corrected;
       // Чистка — построчно: иначе схлопнулись бы переносы, сказанные голосом.
       let cleaned = polishing ? cleanLines(commanded) : commanded.trim();
+      // Оговорки: «встреча в четыре… то есть в три» — в тексте остаётся то,
+      // что человек имел в виду. Правило осторожное: убираем только когда
+      // замена очевидна (число, имя, день недели), уточнение не трогаем.
+      if (spoken && cleaned) {
+        const fixed = dropSelfCorrections(cleaned);
+        if (fixed.fixes > 0) {
+          cleaned = fixed.text;
+          diag.info('stt', 'Оговорка убрана', { fixes: fixed.fixes, chars: cleaned.length });
+        }
+      }
       // Быстрый блок: сказал триггер целиком — вставляем готовый текст вместо
       // фразы. Срабатывает только на точное совпадение: «поставь мою подпись
       // в конце» должно остаться речью, а не превратиться в подпись.
