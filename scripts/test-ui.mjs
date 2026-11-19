@@ -2951,6 +2951,22 @@ async function scenarioModels(browser) {
       !/GigaAM|onnx|int8|realtime/i.test(russianCard),
     russianCard.slice(0, 180) || 'карточки нет',
   );
+  // Европейские языки — вторая отдельная карточка. Проверяем не только её
+  // наличие, но и честность: что она обещает и чего не обещает.
+  const europeanCard = await page.evaluate(() => {
+    const card = document.querySelector('.model-card--european');
+    return card ? card.innerText.replace(/\n+/g, ' ') : '';
+  });
+  record(
+    'сценарии',
+    'европейские языки: карточка с размером, обещанием и границей',
+    /Европейские языки/.test(europeanCard) &&
+      /МБ/.test(europeanCard) &&
+      /английск/i.test(europeanCard) &&
+      /китайск/i.test(europeanCard) &&
+      !/Parakeet|parakeet|onnx|int8|realtime/i.test(europeanCard),
+    europeanCard.slice(0, 200) || 'карточки нет',
+  );
   const errors = takeErrors(page);
   record('сценарии', 'модели: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
@@ -3206,7 +3222,9 @@ async function scenarioOldModelName(browser) {
   // Русская модель — отдельная карточка со своим классом: она не «четвёртый
   // режим», поэтому считаем только карточки режимов.
   const tierCards = await page.evaluate(
-    () => document.querySelectorAll('.model-card:not(.model-card--russian)').length,
+    () =>
+      document.querySelectorAll('.model-card:not(.model-card--russian):not(.model-card--european)')
+        .length,
   );
   record('сценарии', 'старое имя модели: в списке ровно три режима', tierCards === 3, `карточек: ${tierCards}`);
   const errors = takeErrors(page);

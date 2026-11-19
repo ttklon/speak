@@ -31,6 +31,8 @@ const { JsonStore } = require('./store.cjs');
 const whisper = require('./whisper.cjs');
 // русский движок: GigaAM v3 на процессоре, включается сам для русского языка
 const gigaam = require('./gigaam.cjs');
+// европейский движок: Parakeet TDT v3, включается сам для европейских языков
+const parakeet = require('./parakeet.cjs');
 const { chooseEngine } = require('./sttEngine.cjs');
 const { createUpdater } = require('./updater.cjs');
 const models = require('./models.cjs');
@@ -1282,9 +1284,11 @@ function registerIpc() {
     // не путает русские слова и сама ставит знаки препинания.
     const sttSettingsNow = store?.get('zs:settings') || {};
     const gigaamStatus = gigaam.status();
+    const parakeetStatus = parakeet.status();
     const engineChoice = chooseEngine({
       language: sttSettingsNow.language,
       gigaam: gigaamStatus,
+      parakeet: { ...parakeetStatus, languages: parakeet.LANGUAGES },
       seconds: audio?.seconds || 0,
     });
     if (engineChoice.engine === 'gigaam') {
@@ -1323,6 +1327,45 @@ function registerIpc() {
         keep: true,
         reason: resGiga.reason || 'пустой текст',
         ms: resGiga.ms,
+      });
+    }
+    if (engineChoice.engine === 'parakeet') {
+      const srPara = payload?.sampleRate || 16000;
+      const paraStarted = Date.now();
+      const resPara = await parakeet.transcribe(trimmed, {
+        sampleRate: srPara,
+        onProgress: (done, total) => {
+          try {
+            mainWindow?.webContents.send('stt:progress', { done, total });
+          } catch {
+            /* окно закрыто */
+          }
+        },
+      });
+      if (resPara.ok && resPara.text) {
+        logger.info('stt', 'Распознано европейской моделью', {
+          keep: true,
+          language: sttSettingsNow.language || 'ru',
+          ms: resPara.ms,
+          chunks: resPara.chunks,
+          chars: resPara.text.length,
+        });
+        return {
+          ok: true,
+          text: resPara.text,
+          ms: resPara.ms,
+          mode: 'parakeet',
+          model: 'parakeet-tdt-0.6b-v3',
+          parts: resPara.chunks,
+          timeline: { total: Date.now() - paraStarted },
+        };
+      }
+      // Не получилось — говорим об этом в журнал и распознаём прежним движком:
+      // человек должен получить текст, а не пустоту с молчанием в отчёте.
+      logger.warn('stt', 'Европейская модель не справилась, распознаём прежним движком', {
+        keep: true,
+        reason: resPara.reason || 'пустой текст',
+        ms: resPara.ms,
       });
     }
     const dir = path.join(app.getPath('temp'), 'zspeakly');
@@ -1592,10 +1635,12 @@ function registerIpc() {
 
   // «Отменить распознавание»: человек не обязан ждать большую модель.
   ipcMain.handle('stt:cancel', () => {
-    // Отменить надо тот движок, который сейчас считает: русский или прежний.
+    // Отменить надо тот движок, который сейчас считает: русский, европейский
+    // или прежний.
     const russian = gigaam.cancel ? gigaam.cancel() : false;
+    const european = parakeet.cancel ? parakeet.cancel() : false;
     const legacy = whisper.cancel ? whisper.cancel('отменено пользователем') : false;
-    return russian || legacy;
+    return russian || european || legacy;
   });
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));
@@ -2141,6 +2186,9 @@ function registerIpc() {
       // Отдельного запроса интерфейсу не нужно — состояние приходит вместе с
       // состоянием моделей, одной карточкой.
       russian: gigaam.status(),
+      // Европейская модель: две карточки с моделями не должны требовать двух
+      // запросов — состояние приходит вместе с состоянием моделей.
+      european: { ...parakeet.status(), languages: parakeet.LANGUAGES },
     };
   });
   /**
@@ -2311,7 +2359,16 @@ function registerIpc() {
   prepareRecognition = autoPrepareRecognition;
   ipcMain.handle('models:prepare', () => autoPrepareRecognition());
 
-  ipcMain.handle('models:cancel', () => models.cancelDownload());
+  // Отмена одна на все загрузки: человек видит кнопку «Отменить скачивание»,
+  // а не три разных, и она обязана остановить ту модель, которая качается
+  // сейчас, — раньше отменялась только обычная, а русская продолжала качать.
+  ipcMain.handle('models:cancel', () => {
+    const legacy = models.cancelDownload();
+    const russian = gigaam.cancelDownload();
+    const european = parakeet.cancelDownload();
+    if (legacy?.ok || russian || european) return { ok: true };
+    return { ok: false, reason: legacy?.reason || 'нечего отменять' };
+  });
   // Русская модель: скачивание с проверкой размера и хеша каждого файла.
   // Прогресс идёт тем же событием, что и у остальных моделей, но с id
   // «russian»: в интерфейсе это одна карточка, а не второй механизм.
@@ -2331,6 +2388,24 @@ function registerIpc() {
     return { ok, ...res };
   });
   ipcMain.handle('models:cancel-russian', () => gigaam.cancelDownload());
+  // Европейская модель: та же схема, другое событие прогресса («european»),
+  // чтобы две загрузки не путали проценты друг друга.
+  ipcMain.handle('models:download-european', async () => {
+    const res = await parakeet.downloadModel({
+      onProgress: ({ received, total, file }) => {
+        const percent = total ? Math.round((received / total) * 100) : 0;
+        mainWindow?.webContents.send('model:progress', { id: 'european', percent, received, total, file });
+      },
+    });
+    const ok = res.available === true;
+    mainWindow?.webContents.send('model:progress', { id: 'european', percent: ok ? 100 : 0, done: true, ok });
+    logger.info('stt', ok ? 'Европейская модель готова' : 'Европейская модель не скачалась', {
+      keep: true,
+      reason: res.reason || '',
+    });
+    return { ok, ...res };
+  });
+  ipcMain.handle('models:cancel-european', () => parakeet.cancelDownload());
   ipcMain.handle('models:import', async (_e, sourcePath) => models.importModel(sourcePath));
   ipcMain.handle('models:download-engine', async () => {
     const res = await models.downloadEngine((percent) => {
@@ -2738,11 +2813,20 @@ app.whenReady().then(() => {
       return { available: false, reason: 'неизвестно' };
     }
   })();
+  // Состояние европейской модели — там же и по той же причине.
+  const europeanAtStart = (() => {
+    try {
+      return parakeet.status();
+    } catch {
+      return { available: false, reason: 'неизвестно' };
+    }
+  })();
   logger.info('app', 'Запуск ZSpeakly', {
     keep: true,
     version: appVersion,
     engine: engineInfo.available ? 'whisper.cpp' : 'нет',
     russian: russianAtStart.available ? 'готова' : russianAtStart.reason || 'нет',
+    european: europeanAtStart.available ? 'готова' : europeanAtStart.reason || 'нет',
   });
 
   registerIpc();

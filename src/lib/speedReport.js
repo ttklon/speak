@@ -27,6 +27,24 @@ const round1 = (value) => Math.round(Number(value) * 10) / 10;
  * @returns {{samples: Array, verdict: 'ok'|'slow'|'unknown', medianFactor: number,
  *   worst: object|null, advice: string}}
  */
+/**
+ * Как назвать движок, который считал эту запись, по-человечески.
+ *
+ * Раньше в отчёте было только «прогретый сервер» и «whisper-cli», поэтому
+ * записи, посчитанные русской моделью, выглядели как «движок не указан» — а
+ * человеку как раз и нужно знать, чем считали.
+ */
+export const ENGINE_WORDS = {
+  server: 'прогретый сервер',
+  cli: 'whisper-cli',
+  gigaam: 'русская модель',
+  parakeet: 'модель европейских языков',
+};
+
+export function engineWord(mode) {
+  return ENGINE_WORDS[mode] || '';
+}
+
 export function analyseSpeed(entries = [], opts = {}) {
   const { target = SPEED_TARGET_SECONDS, limit = 5, minSpokenMs = SPEED_MIN_SPOKEN_MS } = opts;
   const list = Array.isArray(entries) ? entries : [];
@@ -57,7 +75,8 @@ export function analyseSpeed(entries = [], opts = {}) {
         // где именно потерялись секунды: в движке или после него
         tail: round1(Math.max(0, total - compute)),
         fits,
-        mode: entry.sttMode === 'server' ? 'server' : entry.sttMode === 'cli' ? 'cli' : '',
+        // Только известные движки: чужое значение не должно превращаться в подпись
+        mode: engineWord(entry.sttMode) ? entry.sttMode : '',
         parts: Number(entry.sttParts) > 1 ? Number(entry.sttParts) : 1,
         // «считали, пока говорили»: куски, ушедшие в движок до остановки
         pre: Number(entry.sttPreParts) > 0 ? Number(entry.sttPreParts) : 0,

@@ -24,14 +24,13 @@
  *    диктовка остаётся на whisper — молчаливой подмены нет.
  */
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
-const http = require('node:http');
-const https = require('node:https');
 const path = require('node:path');
 const { app } = require('electron');
 
-const { SAMPLE_RATE, append, chunkRanges, continuing, DEFAULT_MAX_SECONDS } = require('./gigaamChunking.cjs');
+const { downloadFiles, hashFile, safeUnlink } = require('./modelDownload.cjs');
+
+const { SAMPLE_RATE, append, chunkRanges, continuing, DEFAULT_MAX_SECONDS } = require('./chunking.cjs');
 const { parseVocabulary, tokensToText } = require('./gigaamVocab.cjs');
 
 /** Коммит репозитория модели: адрес обязан указывать на байты, а не на «main». */
@@ -415,38 +414,17 @@ async function downloadModel(options = {}) {
   const files = modelFiles();
   const baseUrl = options.baseUrl || BASE_URL;
   const total = files.reduce((sum, file) => sum + file.size, 0);
-  fs.mkdirSync(dir, { recursive: true });
   downloadState = { cancelled: false, received: 0, total };
-  const absent = missingFiles();
-  const missing = files.filter((file) => absent.includes(file.name));
-  const already = total - missing.reduce((sum, file) => sum + file.size, 0);
-  let received = already;
   try {
-    for (const file of missing) {
-      if (downloadState.cancelled) throw new Error('скачивание отменено');
-      const destination = path.join(dir, file.name);
-      const temporary = `${destination}.unverified`;
-      await downloadFile(`${baseUrl}/${file.name}`, temporary, (bytes) => {
-        downloadState.received = received + bytes;
-        options.onProgress?.({ received: downloadState.received, total, file: file.name });
-      });
-      if (downloadState.cancelled) {
-        safeUnlink(temporary);
-        throw new Error('скачивание отменено');
-      }
-      const actual = await hashFile(temporary);
-      if (actual !== file.sha256) {
-        safeUnlink(temporary);
-        throw new Error(`файл ${file.name} пришёл повреждённым`);
-      }
-      fs.renameSync(temporary, destination);
-      received += file.size;
-      downloadState.received = received;
-      options.onProgress?.({ received, total, file: file.name });
-    }
+    await downloadFiles({
+      dir,
+      files,
+      baseUrl,
+      missing: missingFiles(),
+      state: downloadState,
+      onProgress: options.onProgress,
+    });
   } finally {
-    // Недокачанные файлы не должны оставаться на диске под видом модели.
-    for (const file of files) safeUnlink(path.join(dir, `${file.name}.unverified`));
     downloadState = null;
   }
   unload();
@@ -466,60 +444,6 @@ function cancelDownload() {
   if (!downloadState) return false;
   downloadState.cancelled = true;
   return true;
-}
-
-function safeUnlink(file) {
-  try {
-    fs.unlinkSync(file);
-  } catch {
-    /* файла нет — и хорошо */
-  }
-}
-
-function hashFile(file) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(file);
-    stream.on('error', reject);
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('end', () => resolve(hash.digest('hex')));
-  });
-}
-
-/** Скачать один файл с поддержкой перенаправлений (Hugging Face отдаёт LFS с другого хоста). */
-function downloadFile(url, destination, onBytes, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > 5) {
-      reject(new Error('слишком много перенаправлений'));
-      return;
-    }
-    const client = url.startsWith('http:') ? http : https;
-    const request = client.get(url, { headers: { 'User-Agent': 'ZSpeakly' }, timeout: 30000 }, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        response.resume();
-        const next = new URL(response.headers.location, url).toString();
-        downloadFile(next, destination, onBytes, redirects + 1).then(resolve, reject);
-        return;
-      }
-      if (response.statusCode !== 200) {
-        response.resume();
-        reject(new Error(`сервер модели ответил ${response.statusCode}`));
-        return;
-      }
-      const sink = fs.createWriteStream(destination);
-      let bytes = 0;
-      response.on('data', (chunk) => {
-        bytes += chunk.length;
-        onBytes(bytes);
-      });
-      response.pipe(sink);
-      sink.on('error', reject);
-      response.on('error', reject);
-      sink.on('finish', () => resolve(bytes));
-    });
-    request.on('timeout', () => request.destroy(new Error('сервер модели не ответил')));
-    request.on('error', reject);
-  });
 }
 
 /** Подстановка сетей и модуля в тестах: настоящее ядро проверяется отдельно, руками. */

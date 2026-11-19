@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SPEED_OK_FACTOR, SPEED_TARGET_SECONDS, analyseSpeed } from './speedReport.js';
+import { SPEED_OK_FACTOR, SPEED_TARGET_SECONDS, analyseSpeed, engineWord } from './speedReport.js';
 
 const dictation = (spokenSeconds, computeSeconds, extra = {}) => ({
   id: `d-${spokenSeconds}-${computeSeconds}`,
@@ -124,6 +124,16 @@ describe('отчёт о скорости диктовки', () => {
     expect(report.samples[0].parts).toBe(1);
     // неизвестный режим не выдумывает значение
     expect(analyseSpeed([dictation(20, 3, { sttMode: 'что-то' })]).samples[0].mode).toBe('');
+  });
+
+  it('называет движок по-человечески, включая русскую и европейскую модели', () => {
+    // Запись, посчитанная русской моделью, раньше выглядела как «движок не
+    // указан»: в отчёте были только сервер и whisper-cli.
+    expect(analyseSpeed([dictation(20, 3, { sttMode: 'gigaam' })]).samples[0].mode).toBe('gigaam');
+    expect(engineWord('gigaam')).toBe('русская модель');
+    expect(engineWord('parakeet')).toBe('модель европейских языков');
+    expect(engineWord('server')).toBe('прогретый сервер');
+    expect(engineWord('')).toBe('');
   });
 
   it('лимит строк уважается', () => {

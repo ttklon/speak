@@ -12,7 +12,7 @@ import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
 import { resolveLiveDraft } from '../../../lib/liveDraftPolicy.js';
 import { describeTarget } from '../../../lib/appFormat.js';
 import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
-import { analyseSpeed } from '../../../lib/speedReport.js';
+import { analyseSpeed, engineWord } from '../../../lib/speedReport.js';
 import { lighterModel, tierForModel } from '../../../lib/modelTiers.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
@@ -61,6 +61,9 @@ export default function DiagnosticsSection() {
   // строки «на русском распознаёт хуже» объяснить нечем — человек не знает,
   // скачана ли модель и видит ли её приложение.
   const [russian, setRussian] = useState(null);
+  // Состояние модели европейских языков: та же причина, что и у русской —
+  // «почему на английском считает прежний движок» должно быть видно.
+  const [european, setEuropean] = useState(null);
   // Куда попадёт текст и как он будет оформлен: одно и то же место, где человек
   // ищет ответ на «почему тут без точки».
   const [target, setTarget] = useState(null);
@@ -89,6 +92,7 @@ export default function DiagnosticsSection() {
       .modelsStatus()
       .then((status) => {
         if (alive && status?.russian) setRussian(status.russian);
+        if (alive && status?.european) setEuropean(status.european);
       })
       .catch(() => {});
     return () => {
@@ -462,6 +466,16 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="kv-row">
+          <span className="kv-row__key">Европейские языки</span>
+          <span className="kv-row__value">
+            {european === null
+              ? 'проверяю…'
+              : european.available
+                ? 'своя модель, включается сама'
+                : european.reason}
+          </span>
+        </div>
+        <div className="kv-row">
           <span className="kv-row__key">Модель</span>
           <span className="kv-row__value">
             {tierForModel(settings.whisperModel)?.label || 'Сбалансированно'}
@@ -511,7 +525,7 @@ export default function DiagnosticsSection() {
                       Счёт показываем рядом, чтобы было видно, где именно секунды. */}
                   {row.tail >= 0.2 ? `счёт ${row.compute.toFixed(1)} с · остальное ${row.tail.toFixed(1)} с · ` : ''}
                   {row.factor ? `×${row.factor.toFixed(1)}` : '—'}
-                  {row.mode ? ` · ${row.mode === 'server' ? 'прогретый сервер' : 'whisper-cli'}` : ''}
+                  {row.mode ? ` · ${engineWord(row.mode)}` : ''}
                   {row.parts > 1 ? ` · ${row.parts} фрагмента` : ''}
                   {row.pre ? ` · заранее посчитано: ${row.pre}` : ''}
                 </span>

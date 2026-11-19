@@ -2129,7 +2129,7 @@ await check('словарь русской модели: кусочки, про�
 });
 
 await check('длинная запись режется на куски не длиннее двадцати секунд', () => {
-  const { chunkRanges, quietestPoint } = require(path.resolve('electron/gigaamChunking.cjs'));
+  const { chunkRanges, quietestPoint } = require(path.resolve('electron/chunking.cjs'));
   const sr = 16000;
   // 45 секунд: речь с паузами каждые 6 секунд — разрез обязан попасть в паузу
   const total = 45 * sr;
@@ -2152,7 +2152,7 @@ await check('длинная запись режется на куски не д�
 });
 
 await check('кусок посреди фразы не начинает новое предложение с заглавной', () => {
-  const { continuing, append } = require(path.resolve('electron/gigaamChunking.cjs'));
+  const { continuing, append } = require(path.resolve('electron/chunking.cjs'));
   if (continuing('я пошёл в магазин и', 'Купил хлеб.') !== 'купил хлеб.') {
     throw new Error('заглавная посреди фразы осталась');
   }
@@ -2337,6 +2337,114 @@ await check('скачивание русской модели проверяет
     server.close();
     gigaam.reset();
   }
+});
+
+await check('словарь европейской модели: кусочки, пробелы, служебные токены', async () => {
+  const parakeet = require(path.resolve('electron/parakeet.cjs'));
+  const vocab = parakeet.parseVocabulary(
+    ['\u2581hello 0', '\u2581world 1', '\u2581 2', '<blk> 3', '<unk> 4', 'мусор без номера', ''].join('\n'),
+  );
+  if (vocab.blankId !== 3) throw new Error(`пустой токен не найден: ${vocab.blankId}`);
+  if (vocab.size !== 5) throw new Error(`размер словаря ${vocab.size}, а ждали 5`);
+  // «▁» — это пробел, служебные <...> в текст не попадают
+  const text = parakeet.joinTokens(vocab, [0, 1, 2, 0, 3, 4]);
+  if (text !== 'hello world hello') throw new Error(`собралось «${text}»`);
+});
+
+await check('TDT-декодирование: пропуск кадров и порядок токенов', async () => {
+  const parakeet = require(path.resolve('electron/parakeet.cjs'));
+  const vocab = parakeet.parseVocabulary(
+    ['\u2581hello 0', '\u2581world 1', '\u2581 2', '<blk> 3'].join('\n') + '\n',
+  );
+  const session = (run) => ({ run });
+  // Первый кадр: «hello» и пропуск трёх кадров. Третий: «world» и ещё пропуск.
+  // Если движок не умеет TDT, он застрянет на первом кадре и потеряет второе слово.
+  const plan = { 0: { token: 0, step: 3 }, 3: { token: 1, step: 3 } };
+  const seenFrames = [];
+  const sessions = {
+    vocab,
+    state: { layers: 2, size: 4 },
+    preprocessor: session(async (feeds) => {
+      const frames = Math.max(1, Math.floor(feeds.waveforms.data.length / 10));
+      return {
+        features: { data: new Float32Array(128 * frames), dims: [1, 128, frames], get: () => frames },
+        features_lens: { data: BigInt64Array.from([BigInt(frames)]), dims: [1], get: () => frames },
+      };
+    }),
+    encoder: session(async (feeds) => {
+      const frames = feeds.audio_signal.dims[2];
+      return {
+        // в первом значении кадра лежит его номер — по нему план и срабатывает
+        outputs: {
+          data: new Float32Array(4 * frames).map((_, i) => i % frames),
+          dims: [1, 4, frames],
+          get: () => 0,
+        },
+        encoded_lengths: { data: BigInt64Array.from([BigInt(frames)]), dims: [1], get: () => frames },
+      };
+    }),
+    decoderJoint: session(async (feeds) => {
+      const frameNumber = Math.round(feeds.encoder_outputs.data[0]);
+      seenFrames.push(frameNumber);
+      const step = plan[frameNumber];
+      // Пять значений после словаря — это «сколько кадров пропустить».
+      const logits = new Float32Array(4 + 5).fill(-1);
+      logits[step ? step.token : 3] = 5;
+      logits[4 + (step ? step.step : 0)] = 5;
+      const state = new Float32Array(8);
+      return {
+        outputs: { data: logits, dims: [1, 1, 9], get: () => 0 },
+        output_states_1: { data: state, dims: [2, 1, 4], get: () => 0 },
+        output_states_2: { data: state, dims: [2, 1, 4], get: () => 0 },
+      };
+    }),
+  };
+  parakeet.setTestDeps({ sessions, files: [] });
+  try {
+    const pcm = Buffer.alloc(16000 * 2);
+    for (let i = 0; i < 16000; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 8) * 8000), i * 2);
+    const result = await parakeet.transcribe(pcm, { sampleRate: 16000 });
+    if (!result.ok) throw new Error(`движок отказал: ${result.reason}`);
+    if (result.text !== 'hello world') throw new Error(`получилось «${result.text}»`);
+    // пропуски действительно были: без них движок перебрал бы все кадры подряд
+    // пропуск действительно был: после «hello» движок перескочил кадры 1 и 2
+    if (!seenFrames.includes(3)) throw new Error('второй кадр по плану не посчитан');
+    if (seenFrames.includes(1) || seenFrames.includes(2)) throw new Error('кадры не пропускались');
+
+    // движок обязан отказать на чужой частоте, а не молча пересчитать неправильно
+    const wrongRate = await parakeet.transcribe(pcm, { sampleRate: 48000 });
+    if (wrongRate.ok || !/16 кГц/.test(wrongRate.reason)) throw new Error('чужая частота принята молча');
+  } finally {
+    parakeet.reset();
+  }
+});
+
+await check('движок выбирается по языку: русский, европейские, остальные', async () => {
+  const { chooseEngine } = require(path.resolve('electron/sttEngine.cjs'));
+  const parakeet = require(path.resolve('electron/parakeet.cjs'));
+  const ready = { available: true, reason: '', languages: parakeet.LANGUAGES };
+  const russian = { available: true, reason: '' };
+  const cases = [
+    [{ language: 'ru', gigaam: russian, parakeet: ready, seconds: 4 }, 'gigaam'],
+    [{ language: 'en', gigaam: russian, parakeet: ready, seconds: 4 }, 'parakeet'],
+    [{ language: 'de-DE', gigaam: russian, parakeet: ready, seconds: 4 }, 'parakeet'],
+    [{ language: 'uk', gigaam: russian, parakeet: ready, seconds: 4 }, 'parakeet'],
+    // модель не скачана — прежний движок и честная причина
+    [{ language: 'en', gigaam: russian, parakeet: { available: false, reason: 'модель не скачана' }, seconds: 4 }, 'whisper'],
+    // язык, которого модель не знает: китайский остаётся на прежнем движке
+    [{ language: 'zh', gigaam: russian, parakeet: ready, seconds: 4 }, 'whisper'],
+    [{ language: 'ja', gigaam: russian, parakeet: ready, seconds: 4 }, 'whisper'],
+    // короткая запись — прежний движок
+    [{ language: 'en', gigaam: russian, parakeet: ready, seconds: 0.4 }, 'whisper'],
+  ];
+  for (const [input, expected] of cases) {
+    const got = chooseEngine(input);
+    if (got.engine !== expected) {
+      throw new Error(`для ${JSON.stringify(input.language)} ждали ${expected}, вышло ${got.engine} (${got.why})`);
+    }
+  }
+  const why = chooseEngine({ language: 'en', parakeet: { available: false, reason: 'нет модуля расчёта', languages: parakeet.LANGUAGES } });
+  if (!why.why.includes('нет модуля')) throw new Error('причина отказа потерялась');
 });
 
 console.log(`\nOK (${ok.length}):`);

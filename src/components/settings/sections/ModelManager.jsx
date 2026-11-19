@@ -95,13 +95,22 @@ export default function ModelManager() {
         }
         if (p.ok) {
           push({
-            title: p.id === 'engine' ? 'Движок установлен' : p.id === 'russian' ? 'Русская модель готова' : 'Модель скачана',
+            title:
+              p.id === 'engine'
+                ? 'Движок установлен'
+                : p.id === 'russian'
+                  ? 'Русская модель готова'
+                  : p.id === 'european'
+                    ? 'Модель европейских языков готова'
+                    : 'Модель скачана',
             description:
               p.id === 'engine'
                 ? 'движок распознавания готов к работе'
                 : p.id === 'russian'
                   ? 'теперь русский текст распознаётся точнее — с запятыми и заглавными'
-                  : 'Скачано, диктовка работает на новом режиме',
+                  : p.id === 'european'
+                    ? 'английский, немецкий, французский, испанский и украинский — быстрее и точнее'
+                    : 'Скачано, диктовка работает на новом режиме',
             tone: 'success',
           });
         } else {
@@ -168,6 +177,35 @@ export default function ModelManager() {
     if (!res?.ok) {
       setBusy(null);
       pushOnce('Не удалось скачать русскую модель', res?.reason, 'warn');
+    }
+  };
+
+  /**
+   * Модель европейских языков — второй отдельный движок, как русская модель.
+   * Человек тоже не выбирает её в обычной жизни: она включается сама, когда
+   * он диктует по-английски (или на другом европейском языке из списка).
+   */
+  const downloadEuropean = async () => {
+    if (!bridge?.downloadEuropeanModel) {
+      push({
+        title: 'Скачивание доступно в приложении',
+        description: 'В браузере моделями управляет установленная версия на Windows.',
+        tone: 'warn',
+      });
+      return;
+    }
+    setBusy('european');
+    setProgress((prev) => ({ ...prev, european: 0 }));
+    let res;
+    try {
+      res = await bridge.downloadEuropeanModel();
+    } catch (err) {
+      res = { ok: false, reason: String(err?.message || err) };
+    }
+    await refresh();
+    if (!res?.ok) {
+      setBusy(null);
+      pushOnce('Не удалось скачать модель европейских языков', res?.reason, 'warn');
     }
   };
 
@@ -467,6 +505,46 @@ export default function ModelManager() {
             disabled={Boolean(busy)}
           >
             {busy === 'russian' ? `${progress.russian || 0}%` : status?.russian?.missing?.length < 4 ? 'Продолжить' : 'Скачать'}
+          </Button>
+        )}
+      </div>
+
+      {/* Европейские языки — тоже отдельный движок: своя модель, свой размер
+          и своё правило включения (английский, немецкий, французский,
+          испанский, украинский). Русский сюда не входит. */}
+      <div className={`model-card model-card--european ${status?.european?.available ? 'is-active' : ''}`}>
+        <div className="grow" style={{ textAlign: 'left' }}>
+          <div className="model-card__name">
+            Европейские языки
+            {status?.european?.available ? <span className="model-badge">скачано</span> : null}
+          </div>
+          <div className="model-card__meta">
+            {status?.european?.bytes ? `${Math.round(status.european.bytes / 1024 / 1024)} МБ` : '640 МБ'} · быстрее
+            прежнего движка · запятые и заглавные ставит сам
+          </div>
+          <div className="model-card__desc">
+            {status?.european?.available
+              ? 'Включается сама, когда вы диктуете по-английски, по-немецки, по-французски, по-испански или по-украински. Русский остаётся на русской модели, остальные языки — на прежнем движке.'
+              : status?.european?.missing?.length && status.european.reason.includes('не полностью')
+                ? 'Прошлое скачивание не закончилось — нажмите «Продолжить», файлы докачаются.'
+                : 'Скачать один раз: английский, немецкий, французский, испанский и украинский распознаются быстрее и точнее. Китайский, японский, турецкий и казахский эта модель не знает — они остаются на прежнем движке.'}
+          </div>
+        </div>
+        {status?.european?.available ? (
+          <Check size={13} style={{ color: 'var(--green)' }} aria-label="Модель европейских языков скачана" />
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={busy === 'european' ? <Loader size={12} /> : <Download size={12} />}
+            onClick={() => downloadEuropean()}
+            disabled={Boolean(busy)}
+          >
+            {busy === 'european'
+              ? `${progress.european || 0}%`
+              : status?.european?.missing?.length < 4
+                ? 'Продолжить'
+                : 'Скачать'}
           </Button>
         )}
       </div>
