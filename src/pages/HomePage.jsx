@@ -11,7 +11,7 @@ import { VOICE_COMMAND_TIP } from '../lib/voiceCommands.js';
 import { AUDIO_ACCEPT, progressLabel } from '../lib/recognition/audioFile.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
 import { APP, WHY_BETTER } from '../lib/config.js';
-import { hasRawText } from '../lib/historyRaw.js';
+import { diffWords, hasRawText } from '../lib/historyRaw.js';
 import Icon from '../components/ui/Icon.jsx';
 import EditDictationModal from '../components/modals/EditDictationModal.jsx';
 import { Button, SearchInput } from '../components/ui/Controls.jsx';
@@ -58,6 +58,18 @@ export default function HomePage() {
   const [showAll, setShowAll] = useState(false);
   const [hoverId, setHoverId] = useState(null);
   const [snippet, setSnippet] = useState(null);
+  // Слова, которые приложение изменило после распознавания: считаем один раз
+  // на открытую запись, а не на каждый рендер.
+  const changedWords = useMemo(
+    () =>
+      snippet && hasRawText(snippet)
+        ? diffWords(snippet.rawText, snippet.text)
+            .filter((part) => part.changed)
+            .map((part) => part.text.trim())
+            .filter(Boolean)
+        : [],
+    [snippet],
+  );
   const [editing, setEditing] = useState(null);
   // Готовность диктовки: «Всё готово» не должно быть обещанием на пустой
   // установке без модели whisper. В браузере опираемся на Web Speech.
@@ -523,6 +535,18 @@ export default function HomePage() {
               <div className="snippet__raw">
                 <div className="snippet__raw-title">Как распозналось</div>
                 <p className="snippet__raw-text">{snippet.rawText}</p>
+                {/* Что именно изменило приложение: подсвечены слова, которых в
+                    услышанном не было. Искать глазами разницу человек не должен. */}
+                {changedWords.length ? (
+                  <p className="snippet__diff">
+                    <span className="snippet__diff-label">Приложение изменило:</span>{' '}
+                    {changedWords.map((word, i) => (
+                      <span key={`${word}-${i}`} className="snippet__diff-word">
+                        {word}
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
                 <button
                   type="button"
                   className="link-btn"

@@ -1148,6 +1148,64 @@ async function scenarioAppFormat(browser) {
   await code.close();
 }
 
+/**
+ * Язык под активное окно: правило человека должно доехать до движка, а не
+ * остаться строкой в настройках. Проверяем по-настоящему: патчим активное окно,
+ * диктуем и смотрим, с каким языком ушёл звук и что попало в историю.
+ */
+async function scenarioAppLanguage(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: {
+      aiDictationRewrite: false,
+      language: 'ru',
+      appProfiles: [{ id: 'app-vs', match: 'Visual Studio Code', language: 'en' }],
+    },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'add a null check' },
+  });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.zspeakly.native.insertTarget = async () => ({
+      own: false,
+      app: 'Code',
+      title: 'main.js — Visual Studio Code',
+    });
+  });
+  await clickText(page, 'Начать диктовку');
+  await sleep(1100);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2400);
+  const result = await page.evaluate(() => {
+    const call = window.__e2e.last('stt:transcribe-pcm');
+    const list = window.__e2e.read('zs.dictations') || [];
+    const toast = [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | ');
+    return {
+      lang: call?.args?.[0]?.lang || '',
+      savedLang: list[0]?.language || '',
+      text: list[0]?.text || '',
+      toast,
+    };
+  });
+  record(
+    'сценарии',
+    'язык под окно: звук уходит в движок на языке правила',
+    result.lang === 'en' && result.savedLang === 'en',
+    `движок=${result.lang || '—'} история=${result.savedLang || '—'}`,
+  );
+  record(
+    'сценарии',
+    'язык под окно: приложение говорит, почему диктует не на общем языке',
+    /Английский/.test(result.toast) && /Visual Studio Code/.test(result.toast),
+    result.toast.slice(0, 90) || 'тоста нет',
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'язык под окно: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Пустой результат распознавания — самое непонятное состояние: человек
 // говорил, а в поле ничего и ни слова объяснения. Теперь приложение говорит,
 // что именно случилось: молчал микрофон или движок не разобрал слова.
@@ -2541,6 +2599,70 @@ async function scenarioEditSnippet(browser) {
   await page.close();
 }
 
+async function scenarioAppRulesUi(browser) {
+  // Правило добавляется человеком, а не только приходит из профиля: поле,
+  // язык и кнопка должны работать, а лишнее — удаляться.
+  const page = await openPage(browser, '#/settings?section=features', { settle: 400 });
+  takeErrors(page);
+  const input = await page.$('input[aria-label="Приложение или часть заголовка окна"]');
+  if (!input) throw new Error('нет поля «приложение или часть заголовка»');
+  await input.type('Telegram');
+  await page.evaluate(() => {
+    const row = document.querySelector('.app-rule--new');
+    row?.querySelector('.select__btn')?.click();
+  });
+  await sleep(250);
+  const pickedLanguage = await page.evaluate(() => {
+    const option = [...document.querySelectorAll('.select__item')].find((o) => /Английский/.test(o.innerText));
+    if (!option) return false;
+    option.click();
+    return true;
+  });
+  await sleep(250);
+  await page.evaluate(() => {
+    const row = document.querySelector('.app-rule--new');
+    const btn = [...(row?.querySelectorAll('button') || [])].find((b) => /Добавить/.test(b.textContent || ''));
+    btn?.click();
+  });
+  await sleep(450);
+  const added = await page.evaluate(() => {
+    const stored = window.__e2e.read('zs.settings') || {};
+    const rules = Array.isArray(stored.appProfiles) ? stored.appProfiles : [];
+    const row = [...document.querySelectorAll('.app-rules .app-rule')][0];
+    return {
+      count: rules.length,
+      rule: rules[0] || null,
+      rowText: row?.innerText.replace(/\n/g, ' ') || '',
+    };
+  });
+  record(
+    'сценарии',
+    'настройки: правило «приложение → язык» добавляется и сохраняется',
+    pickedLanguage && added.count === 1 && added.rule?.match === 'Telegram' && added.rule?.language === 'en',
+    `правило: ${added.rowText || '—'}`,
+  );
+  const removed = await page.evaluate(() => {
+    const btn = document.querySelector('.app-rules .app-rule .icon-btn--danger');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(400);
+  const afterRemove = await page.evaluate(() => {
+    const stored = window.__e2e.read('zs.settings') || {};
+    return (stored.appProfiles || []).length;
+  });
+  record(
+    'сценарии',
+    'настройки: правило удаляется и больше не применяется',
+    removed && afterRemove === 0,
+    `правил осталось: ${afterRemove}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'настройки: правила под окно без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioRawText(browser) {
   // «Как распозналось»: приложение правило текст после распознавания, и это
   // видно — вместе с возможностью вернуть то, что услышал движок.
@@ -2549,8 +2671,8 @@ async function scenarioRawText(browser) {
       'zs.dictations': [
         {
           id: 'raw-1',
-          text: 'Привет, как дела.',
-          rawText: 'привет как дела',
+          text: 'Привет, ZSpeakly.',
+          rawText: 'привет зи спикли',
           createdAt: Date.now() - 60_000,
           durationMs: 2000,
           words: 3,
@@ -2568,11 +2690,18 @@ async function scenarioRawText(browser) {
     title: document.querySelector('.snippet__raw-title')?.textContent || '',
     raw: document.querySelector('.snippet__raw-text')?.textContent || '',
     actions: [...document.querySelectorAll('.snippet button')].map((b) => b.innerText),
+    changed: [...document.querySelectorAll('.snippet__diff-word')].map((w) => w.textContent.trim()),
   }));
   record(
     'сценарии',
+    'история: видно, какое слово приложение исправило',
+    shown.changed.join(',') === 'ZSpeakly',
+    `подсвечено: ${shown.changed.join(', ') || '—'}`,
+  );
+  record(
+    'сценарии',
     'история: видно, как распозналось, и чем это отличается от готового текста',
-    tag && shown.block && /Как распозналось/.test(shown.title) && shown.raw === 'привет как дела',
+    tag && shown.block && /Как распозналось/.test(shown.title) && shown.raw === 'привет зи спикли',
     `метка=${tag} текст=${shown.raw.slice(0, 24)}`,
   );
   const restored = await page.evaluate(() => {
@@ -2591,7 +2720,7 @@ async function scenarioRawText(browser) {
   record(
     'сценарии',
     'история: «вернуть как распозналось» ставит текст движка и убирает сырой',
-    restored === true && after.text === 'привет как дела' && !after.block && !after.stored.rawText,
+    restored === true && after.text === 'привет зи спикли' && !after.block && !after.stored.rawText,
     `нажата=${restored} текст=${after.text.slice(0, 24)} · сырой=${after.stored.rawText ? 'остался' : 'убран'}`,
   );
   const errors = takeErrors(page);
@@ -4044,10 +4173,19 @@ async function scenarioNetwork(browser) {
   record('сценарии', 'сеть: проверка дергает http:get и показывает результат', check && calls.includes('http:get') && /доступна|недоступна|моделей/i.test(body));
   // Адрес и имя модели больше не поля ввода: приложение спрашивает список у
   // локального сервера и показывает найденную модель само.
-  const auto = await page.evaluate(() => ({
-    inputs: document.querySelectorAll('.settings-main input').length,
-    text: document.querySelector('.settings-main')?.innerText || '',
-  }));
+  // Считаем поля только в группе локальной модели: «Сеть» с 1.8.0 живёт внутри
+  // «Диктовки», и в разделе есть другие поля (правила «под активное окно») —
+  // проверка про модель не должна на них спотыкаться.
+  const auto = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) =>
+      /Проверить соединение/.test(b.innerText),
+    );
+    const group = btn?.closest('.settings-group');
+    return {
+      inputs: group ? group.querySelectorAll('input').length : -1,
+      text: group?.innerText || '',
+    };
+  });
   record(
     'сценарии',
     'сеть: модель находится сама, без ручного адреса и имени',
@@ -5525,6 +5663,7 @@ async function main() {
       ['диктовка', scenarioDictation],
       ['голосовые команды', scenarioVoiceCommands],
       ['оформление под окно', scenarioAppFormat],
+      ['язык под окно', scenarioAppLanguage],
       ['быстрые блоки', scenarioSnippets],
       ['файл в текст', scenarioAudioFile],
       ['команда голосом', scenarioVoiceCommand],
@@ -5555,6 +5694,7 @@ async function main() {
       ['поиск по настройкам', scenarioSettingsSearch],
       ['правка расшифровки', scenarioEditSnippet],
       ['как распозналось', scenarioRawText],
+      ['правила под окно', scenarioAppRulesUi],
       ['AI-инструкция', scenarioAiInstruction],
       ['мост', scenarioBridgeWiring],
       ['палитра команд', scenarioCommandPalette],

@@ -1,7 +1,11 @@
-import { Select } from '../../ui/Controls.jsx';
+import { useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
+import { Button, Select } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { LANGUAGES } from '../../../lib/config.js';
+import { APP_PROFILE_LIMITS, sanitizeAppProfiles } from '../../../lib/appProfiles.js';
+import { uid } from '../../../lib/utils.js';
 import { hasNativeStt } from '../../../lib/recognition/engine.js';
 import { resolveLiveDraft } from '../../../lib/liveDraftPolicy.js';
 import ModelManager from './ModelManager.jsx';
@@ -21,6 +25,26 @@ const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1) : '')
 
 export default function FeaturesSection() {
   const { settings, updateSettings } = useAppData();
+  // черновик нового правила под окно: приложение и язык
+  const [appMatch, setAppMatch] = useState('');
+  const [appLang, setAppLang] = useState(settings.language || 'ru');
+  const appRules = sanitizeAppProfiles(settings.appProfiles);
+  const rulesFull = appRules.length >= APP_PROFILE_LIMITS.rules;
+
+  const addAppRule = () => {
+    const match = appMatch.trim();
+    if (!match || rulesFull) return;
+    updateSettings({
+      appProfiles: sanitizeAppProfiles([
+        ...appRules,
+        { id: uid('app'), match, language: appLang },
+      ]),
+    });
+    setAppMatch('');
+  };
+  const removeAppRule = (id) => {
+    updateSettings({ appProfiles: appRules.filter((rule) => rule.id !== id) });
+  };
   const live = resolveLiveDraft({
     setting: settings.liveWhisper,
     model: settings.whisperModel,
@@ -101,6 +125,78 @@ export default function FeaturesSection() {
             {live.enabled ? 'включена' : 'выключена'}
           </span>
         </div>
+      </div>
+
+      {/* Язык под активное окно. Один и тот же человек пишет в мессенджере
+          по-русски, а в редакторе кода — по-английски; переключать язык перед
+          каждой фразой — это та работа, из-за которой диктовкой перестают
+          пользоваться. */}
+      <div className="settings-group">
+        <div className="settings-group__title">Под активное окно</div>
+        <div className="settings-group__desc">
+          В каком приложении на каком языке диктовать. Правило ищется по имени программы
+          («Telegram») или по части заголовка окна («Visual Studio Code»). Нет правила — работает
+          язык, выбранный выше.
+        </div>
+        {appRules.length ? (
+          <div className="app-rules">
+            {appRules.map((rule) => (
+              <div key={rule.id} className="app-rule">
+                <span className="app-rule__match">{rule.match}</span>
+                <span className="app-rule__lang">
+                  {LANGUAGES.find((l) => l.id === rule.language)?.native || rule.language}
+                </span>
+                <button
+                  type="button"
+                  className="icon-btn icon-btn--sm icon-btn--danger"
+                  aria-label={`Удалить правило для «${rule.match}»`}
+                  onClick={() => removeAppRule(rule.id)}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="settings-note">
+            Пока правил нет — язык один, тот, что выбран выше. Пример: «Visual Studio Code» →
+            Английский, и в редакторе можно диктовать код, не трогая настройки.
+          </div>
+        )}
+        <div className="app-rule app-rule--new">
+          <input
+            className="input"
+            value={appMatch}
+            maxLength={APP_PROFILE_LIMITS.match}
+            placeholder="Telegram или Visual Studio Code"
+            aria-label="Приложение или часть заголовка окна"
+            onChange={(e) => setAppMatch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addAppRule();
+            }}
+          />
+          <Select
+            value={appLang}
+            onChange={setAppLang}
+            options={LANGUAGES.map((l) => ({ value: l.id, label: l.native }))}
+            width={150}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Plus size={13} />}
+            disabled={!appMatch.trim() || rulesFull}
+            onClick={addAppRule}
+          >
+            Добавить
+          </Button>
+        </div>
+        {rulesFull ? (
+          <div className="settings-note">
+            Правил уже {APP_PROFILE_LIMITS.rules} — это предел: больше похоже на справочник, чем на
+            профиль. Удалите лишнее.
+          </div>
+        ) : null}
       </div>
 
       <ModelManager />

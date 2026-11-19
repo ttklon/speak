@@ -469,6 +469,27 @@
   overflow-y: auto;
 }
 
+/* Слова, которые приложение изменило после распознавания: видно, что именно
+   исправил словарь или чистка, — без похода в сырой текст. */
+.snippet__diff {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-4);
+}
+
+.snippet__diff-label {
+  color: var(--text-5);
+}
+
+.snippet__diff-word {
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(217, 163, 58, 0.16);
+  color: var(--amber);
+}
+
 .recent__tag--edited {
   color: var(--amber);
 }

@@ -32,6 +32,7 @@ import {
 } from '../lib/sanitize.js';
 import { SNIPPET_LIMITS, normalizePhrase, sanitizeSnippets } from '../lib/snippets.js';
 import { countDictionaryUsage, rankDictionary } from '../lib/dictionary/rank.js';
+import { sanitizeAppProfiles } from '../lib/appProfiles.js';
 
 const AppDataContext = createContext(null);
 
@@ -149,7 +150,12 @@ export function AppDataProvider({ children }) {
     // src/lib/settingsMigration.js и покрыта тестами — здесь только вызов.
     // 1.6.0: значения, которые раньше были тумблерами (VAD, «держать модель в
     // памяти», лимиты истории, способ вставки), приложение выбирает само.
-    setSettings((prev) => tuneSettings(migrateSettings(prev, DEFAULT_SETTINGS)));
+    setSettings((prev) => {
+      const merged = tuneSettings(migrateSettings(prev, DEFAULT_SETTINGS));
+      // правила под окно могли прийти из старого профиля или из резервной копии:
+      // неизвестный язык или пустое совпадение не должны попасть в работу
+      return { ...merged, appProfiles: sanitizeAppProfiles(merged.appProfiles) };
+    });
     setMerged(true);
   }, [merged, setSettings]);
 

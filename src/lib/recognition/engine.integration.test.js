@@ -143,6 +143,36 @@ describe('диктовка целиком: что получает челове�
     expect(ends[0].spoken).toBeCloseTo(14, 0);
   });
 
+  it('язык берётся из активного окна один раз и не меняется посреди фразы', async () => {
+    // Окно узнаётся через доли секунды после старта, а первый проход движка
+    // бывает позже. Язык решается при первом обращении — и дальше заморожен:
+    // иначе куски одной фразы ушли бы в движок на разных языках.
+    answers = [{ ok: true, text: 'Раз.', ms: 50 }];
+    const getLang = vi.fn(() => 'en');
+    const recognizer = createRecognizer({ lang: 'ru', getLang, onEnd: () => {} });
+    await recognizer.start();
+    await speak(0, 2000);
+    await recognizer.stop();
+    expect(getLang).toHaveBeenCalledTimes(1);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c.lang === 'en')).toBe(true);
+  });
+
+  it('если правило языка сломалось, остаётся общий язык настроек', async () => {
+    answers = [{ ok: true, text: 'Раз.', ms: 50 }];
+    const recognizer = createRecognizer({
+      lang: 'ru',
+      getLang: () => {
+        throw new Error('окно не ответило');
+      },
+      onEnd: () => {},
+    });
+    await recognizer.start();
+    await speak(0, 2000);
+    await recognizer.stop();
+    expect(calls.every((c) => c.lang === 'ru')).toBe(true);
+  });
+
   it('на холодном движке (whisper-cli) запись не режется — иначе загрузка весов на каждый кусок', async () => {
     answers = [{ ok: true, text: 'Раз.', ms: 100, mode: 'cli' }, { ok: true, text: 'Два.', ms: 100, mode: 'cli' }];
     let recognizer = createRecognizer({ lang: 'ru', onEnd: () => {} });

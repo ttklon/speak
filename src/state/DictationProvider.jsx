@@ -31,6 +31,8 @@ import { runInstruction } from '../lib/ai/instructions.js';
 import { dropSelfCorrections } from '../lib/ai/selfCorrect.js';
 import { rawTextFor } from '../lib/historyRaw.js';
 import { textPolicy } from '../lib/textPolicy.js';
+import { languageForTarget, matchAppProfile } from '../lib/appProfiles.js';
+import { LANGUAGES } from '../lib/config.js';
 import {
   COMMAND_ERRORS,
   commandInstruction,
@@ -157,6 +159,10 @@ export function DictationProvider({ children }) {
   const recRef = useRef(null);
   // сторож тишины текущей записи (только для режима «переключатель»)
   const silenceRef = useRef(null);
+  // Язык этой записи: решается один раз по активному окну. Общий язык из
+  // настроек — запасной вариант, если правила для окна нет.
+  const langRef = useRef('');
+  const appToastRef = useRef('');
   // как начата запись: удержание клавиши или переключатель
   const modeRef = useRef('hold');
   // stop нужен внутри обработчика уровня, а объявлен ниже — держим ссылку
@@ -203,6 +209,17 @@ export function DictationProvider({ children }) {
   // берём готовый ответ — иначе ожидание вставки выросло бы на запрос к окну,
   // а обещание «20 секунд речи за 5 секунд» ломается на ровном месте.
   const targetRef = useRef(null);
+  /** Язык этой записи: правило для активного окна или общий язык настроек. */
+  const resolveSessionLang = useCallback(() => {
+    if (!langRef.current) {
+      langRef.current = languageForTarget(
+        targetRef.current || {},
+        settingsRef.current?.appProfiles || [],
+        settingsRef.current?.language || 'ru',
+      );
+    }
+    return langRef.current;
+  }, []);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -524,7 +541,7 @@ export function DictationProvider({ children }) {
         createdAt: Date.now(),
         // id нужен, чтобы «эффект печати» точно понял, что пришёл новый текст
         id: `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        language: settingsRef.current.language,
+        language: resolveSessionLang(),
         source: 'dictation',
         // сколько заняло распознавание (только для whisper.cpp) — видно в диагностике
         sttMs: sttMs || undefined,
@@ -850,6 +867,7 @@ export function DictationProvider({ children }) {
       pausedAt.current = 0;
       setElapsed(0);
       setState('listening');
+      langRef.current = '';
       if (opts.mode) setMode(opts.mode);
       modeRef.current = opts.mode || 'hold';
       // В режиме удержания стоп даёт клавиша — сторож не нужен и только мешал бы
@@ -867,7 +885,28 @@ export function DictationProvider({ children }) {
       targetRef.current = null;
       Promise.resolve(window.zspeakly?.native?.insertTarget?.())
         .then((info) => {
-          if (info && typeof info === 'object') targetRef.current = info;
+          if (!info || typeof info !== 'object') return;
+          targetRef.current = info;
+          // Окно известно: если для него есть правило, язык решаем сразу.
+          const rule = matchAppProfile(info, settingsRef.current.appProfiles || []);
+          if (!rule) return;
+          langRef.current = rule.language;
+          diag.info('stt', 'Язык по активному окну', {
+            window: info.app || info.title || '',
+            match: rule.match,
+            language: rule.language,
+          });
+          // Один раз за запись и один раз на приложение: иначе тост повторялся
+          // бы на каждой фразе и превратился в шум.
+          if (rule.language !== settingsRef.current.language && appToastRef.current !== rule.match) {
+            appToastRef.current = rule.match;
+            const label = LANGUAGES.find((l) => l.id === rule.language)?.native || rule.language;
+            pushToast({
+              title: `Язык этого окна: ${label}`,
+              description: `Так настроено для «${rule.match}». Поменять — «Настройки → Диктовка → Под активное окно».`,
+              ttl: 7000,
+            });
+          }
         })
         .catch(() => {});
       // «диктовка с учётом экрана»: один снимок экрана, чтобы подсказать
@@ -931,7 +970,11 @@ export function DictationProvider({ children }) {
       // предролл забираем один раз: иначе звук прошлой диктовки попадёт в новую
       const preroll = micWarm.current?.take?.() || null;
       const recognizer = createRecognizer({
+        // Запасной вариант для браузерного распознавания: оно берёт язык один
+        // раз при создании. Нативные движки спрашивают getLang лениво — тогда
+        // окно уже известно, и правило человека успевает сработать.
         lang: langTag(settingsRef.current.language),
+        getLang: resolveSessionLang,
         deviceId: settingsRef.current.audioDeviceId,
         preroll,
         model: settingsRef.current.whisperModel,

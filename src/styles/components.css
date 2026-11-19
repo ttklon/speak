@@ -824,6 +824,49 @@
   color: var(--text);
 }
 
+/* Правила «под активное окно»: строка = приложение → язык. Без карточек и
+   рамок: это список, а не ещё одна настройка внутри настройки. */
+.app-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 8px;
+}
+
+.app-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+}
+
+.app-rule:hover {
+  background: rgba(var(--overlay-rgb), 0.04);
+}
+
+.app-rule__match {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-rule__lang {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.app-rule--new {
+  padding: 0;
+  margin-top: 6px;
+  gap: 8px;
+}
+
 /* «Микрофон молчит»: запись идёт, но звука нет. Тёплый цвет вместо красного —
    это подсказка посмотреть на устройство, а не сообщение о сбое. */
 .hud[data-quiet='1'] .hud__title {

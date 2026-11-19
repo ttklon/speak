@@ -107,6 +107,25 @@ const SHOTS = [
     },
   },
   {
+    // Язык под активное окно: без прокрутки группа уезжает за нижний край, а
+    // снимок должен показывать то, о чём говорит подпись.
+    file: '07c-settings-app-profiles.png',
+    hash: '#/settings?section=features&from=home',
+    scope: 'viewport',
+    before: async (page) => {
+      await page.evaluate(() => {
+        const main = document.querySelector('.settings-main');
+        if (!main) return;
+        const title = [...document.querySelectorAll('.settings-group__title')].find((el) =>
+          /Под активное окно/.test(el.textContent || ''),
+        );
+        const group = title?.closest('.settings-group');
+        if (group) main.scrollTop = Math.max(0, group.offsetTop - 110);
+      });
+      await pause(300);
+    },
+  },
+  {
     file: '08-settings-diagnostics.png',
     hash: '#/settings?section=diagnostics&from=home',
     scope: 'viewport',

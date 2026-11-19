@@ -155,6 +155,24 @@ export function createRecognizer(opts = {}) {
     onNotice,
   } = opts;
 
+  // Язык может зависеть от активного окна («в редакторе — английский»). Окно
+  // узнаётся через доли секунды после старта записи, а первый проход движка
+  // случается позже — на паузе или на остановке. Поэтому язык решаем один раз
+  // при первом обращении: иначе куски одной фразы распознали бы разными
+  // языками, и склейка превратилась бы в кашу.
+  let resolvedLang = '';
+  const langCode = () => {
+    if (resolvedLang) return resolvedLang;
+    let picked = '';
+    try {
+      picked = typeof opts.getLang === 'function' ? opts.getLang() : lang;
+    } catch {
+      picked = lang;
+    }
+    resolvedLang = String(picked || lang || 'ru').slice(0, 2);
+    return resolvedLang;
+  };
+
   // 1) Нативный whisper.cpp: пишем PCM в рендерере → main → whisper-cli.exe
   if (hasNativeStt()) {
     const native = window.zspeakly.native;
@@ -212,7 +230,7 @@ export function createRecognizer(opts = {}) {
         const res = await native.transcribePcm?.({
           pcm: snap.pcm,
           durationMs: snap.durationMs,
-          lang: String(lang || 'ru').slice(0, 2),
+          lang: langCode(),
           model: opts.model || 'small',
           // словарь и экранный контекст — только для итогового прохода:
           // иначе промежуточный текст будет «умнее» финального
@@ -256,7 +274,7 @@ export function createRecognizer(opts = {}) {
           const res = await native.transcribePcm?.({
             pcm: snap.pcm,
             durationMs: snap.durationMs,
-            lang: String(lang || 'ru').slice(0, 2),
+            lang: langCode(),
             model: opts.model || 'small',
             // Словарь и экранный контекст — только для хвоста: на куске они
             // подсказывают движку то, чего в этом куске ещё не сказано.
@@ -397,7 +415,7 @@ export function createRecognizer(opts = {}) {
           res = await native.transcribePcm?.({
             pcm: tailPcm,
             durationMs: tailMs || durationMs,
-            lang: String(lang || 'ru').slice(0, 2),
+            lang: langCode(),
             model: opts.model || 'small',
             // тумблер «Применять словарь при диктовке» управляет и подсказкой
             // whisper'у, и заменой слов в готовом тексте

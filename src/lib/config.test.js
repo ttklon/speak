@@ -14,7 +14,12 @@ describe('настройки по умолчанию', () => {
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
       const type = Array.isArray(value) ? 'array' : typeof value;
       expect(['string', 'number', 'boolean', 'array'], `настройка ${key}`).toContain(type);
-      if (type === 'array') expect(value.length, `настройка ${key}`).toBeGreaterThan(0);
+      // Пустой список — это законный ответ: «правил под окно нет». Такие
+      // настройки перечислены явно, чтобы пустота не пряталась по умолчанию.
+      const emptyByDesign = new Set(['appProfiles']);
+      if (type === 'array' && !emptyByDesign.has(key)) {
+        expect(value.length, `настройка ${key}`).toBeGreaterThan(0);
+      }
     }
   });
 
