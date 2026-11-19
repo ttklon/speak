@@ -249,21 +249,57 @@ function updateTrayTooltip() {
   }
 }
 
-/** Склеивает куски подсказки через запятую, убирая повторы (без учёта регистра). */
-function mergePromptParts(...parts) {
+/**
+ * Пределы подсказки распознаванию.
+ *
+ * whisper читает начало подсказки как текст и обрезает её по размеру окна
+ * модели, причём берёт ПОСЛЕДНИЕ токены. Поэтому обрезать «с хвоста» нельзя:
+ * именно в хвосте стоят слова словаря — они и нужны. Режем с начала и по
+ * целым словам.
+ */
+const STT_PROMPT_LIMIT = 500;
+const STT_CONTEXT_LIMIT = 180;
+const STT_DICT_LIMIT = 320;
+
+/**
+ * Подсказка движку: термины с экрана + словарь.
+ *
+ * Раньше словарь брался «первые 40 слов» и обрезался вместе со всей строкой до
+ * 500 символов — то есть при длинном контексте экрана половина словаря молча
+ * отваливалась, и человек удивлялся, почему новые слова «не работают».
+ * Теперь у контекста и словаря отдельные бюджеты, слова идут целыми, а
+ * лишнее отрезается с начала (где стоит подсказка с экрана, её легче потерять,
+ * чем термины, которые человек вносил руками).
+ */
+function buildSttPrompt({ context = '', dictionary = [] } = {}) {
+  const ctx = String(context || '').trim().slice(0, STT_CONTEXT_LIMIT);
   const seen = new Set();
-  const words = [];
-  for (const part of parts) {
-    for (const raw of String(part || '').split(',')) {
-      const word = raw.trim();
-      if (!word) continue;
-      const key = word.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      words.push(word);
-    }
+  for (const raw of ctx.split(',')) {
+    const word = raw.trim().toLowerCase();
+    if (word) seen.add(word);
   }
-  return words.join(', ');
+  const words = [];
+  let used = 0;
+  for (const entry of Array.isArray(dictionary) ? dictionary : []) {
+    const word = String(entry && typeof entry === 'object' ? entry.word || '' : entry || '').trim();
+    if (word.length < 2) continue;
+    const key = word.toLowerCase();
+    if (seen.has(key)) continue;
+    const cost = word.length + (words.length ? 2 : 0);
+    if (used + cost > STT_DICT_LIMIT) break;
+    seen.add(key);
+    words.push(word);
+    used += cost;
+  }
+  const dict = words.join(', ');
+  let prompt = [ctx, dict].filter(Boolean).join(', ');
+  if (prompt.length > STT_PROMPT_LIMIT) {
+    // режем с начала по целым словам: хвост (словарь) важнее
+    const list = prompt.split(',').map((w) => w.trim()).filter(Boolean);
+    while (list.length > 1 && list.join(', ').length > STT_PROMPT_LIMIT) list.shift();
+    prompt = list.join(', ');
+  }
+  return { prompt, contextChars: ctx.length, dictionaryWords: words.length };
 }
 
 function buildTrayMenu() {
@@ -1304,17 +1340,23 @@ function registerIpc() {
     // Подсказка движку: термины с экрана (если локальная модель их назвала) +
     // словарь. Словарь не передаём, когда тумблер «Применять словарь при
     // диктовке» выключен: настройка должна работать целиком.
-    const context = String(payload?.contextPrompt || '').trim().slice(0, 300);
-    const dictionaryPrompt =
-      payload?.useDictionary === false
-        ? ''
-        : (store?.get('zs:dictionary') || [])
-            .map((d) => d.word)
-            .slice(0, 40)
-            .join(', ');
-    // Склейка без дублей: «Атлас» из словаря и «Атлас» с экрана — одно слово,
-    // иначе подсказка раздувается и вытесняет полезные термины за лимит.
-    const prompt = mergePromptParts(context, dictionaryPrompt).slice(0, 500);
+    const seenPrompt = buildSttPrompt({
+      context: String(payload?.contextPrompt || '').trim(),
+      // Словарь не передаём, когда тумблер «Применять словарь при диктовке»
+      // выключен: настройка должна работать целиком.
+      dictionary: payload?.useDictionary === false ? [] : store?.get('zs:dictionary') || [],
+    });
+    const prompt = seenPrompt.prompt;
+    if (prompt) {
+      // Видно в журнале: сколько слов словаря реально ушло движку. Без этого
+      // «добавил слово, а оно не распознаётся» невозможно объяснить.
+      logger.info('stt', 'Подсказка распознаванию', {
+        keep: true,
+        chars: prompt.length,
+        dictionaryWords: seenPrompt.dictionaryWords,
+        contextChars: seenPrompt.contextChars,
+      });
+    }
     try {
       const started = Date.now();
       const sttSettings = store?.get('zs:settings') || {};

@@ -1327,6 +1327,33 @@ await check('подсказка не разрастается: не больше
   if (!prompt.startsWith('О')) throw new Error('контекст экрана потерялся при обрезке');
 });
 
+await check('подсказка: словарь не вытесняется контекстом экрана', async () => {
+  await handlers.get('store:set')(
+    {},
+    'zs:dictionary',
+    Array.from({ length: 120 }, (_, i) => ({ word: `Термин${i}` })),
+  );
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(500),
+    durationMs: 500,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+    // контекст экрана огромный: раньше он съедал лимит, и словарь отваливался
+    contextPrompt: 'К'.repeat(900),
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const prompt = call.args[call.args.indexOf('--prompt') + 1];
+  if (prompt.length > 500) throw new Error(`подсказка ${prompt.length} символов`);
+  if (!prompt.includes('Термин')) throw new Error('словарь потерялся в подсказке');
+  // whisper берёт последние токены: словарь обязан стоять в хвосте и не рваться
+  if (!/Термин\d+$/.test(prompt)) throw new Error(`словарь обрезан посреди слова: ${prompt.slice(-40)}`);
+  const words = prompt.split(',').length;
+  if (words < 20) throw new Error(`слов в подсказке мало: ${words}`);
+});
+
 await check('whisper получает все ядра и -sns против галлюцинаций', async () => {
   runWhisper('текст');
   spawnCalls.length = 0;

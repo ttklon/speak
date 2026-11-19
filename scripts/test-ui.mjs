@@ -974,6 +974,59 @@ async function scenarioVoiceCommand(browser) {
 }
 
 /**
+ * Одна строка правды на первом экране: чем мы отличаемся от встроенной
+ * диктовки Windows. В приложении она есть, в браузерном превью — нет: там
+ * распознавание идёт через системный движок, и «офлайн» было бы ложью.
+ */
+async function scenarioWhyBetter(browser) {
+  const page = await openPage(browser, '#/home', { settle: 700 });
+  takeErrors(page);
+  const shown = await page.evaluate(() => {
+    const block = document.querySelector('.hero__why');
+    return {
+      text: block ? block.innerText.replace(/\n+/g, ' · ') : '',
+      items: block ? block.querySelectorAll('.hero__why-item').length : 0,
+    };
+  });
+  record(
+    'сценарии',
+    'первый экран: сказано, чем мы отличаемся от встроенной диктовки',
+    shown.items === 3 && /бесплатно/i.test(shown.text) && /офлайн|не уходит в облако/i.test(shown.text) && /Win\+H/.test(shown.text),
+    shown.text.slice(0, 140) || 'строки нет',
+  );
+  // Технических имён, которых человек не знает, на первом экране быть не должно
+  record(
+    'сценарии',
+    'первый экран: без технических имён в этой строке',
+    !/Web Speech|ONNX|Ollama|q5_1|GigaAM|int8/i.test(shown.text),
+    shown.text.slice(0, 80),
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'первый экран: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+
+  // Превью без моста: там движок — системный, обещать офлайн нельзя
+  const preview = await browser.newPage();
+  await preview.evaluateOnNewDocument(() => {
+    localStorage.setItem(
+      'zs.settings',
+      JSON.stringify({ onboarded: true, userName: 'Максим', theme: 'dark', language: 'ru' }),
+    );
+  });
+  await preview.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await preview.waitForSelector('.app-window', { timeout: 15000 });
+  await sleep(500);
+  const inPreview = await preview.evaluate(() => Boolean(document.querySelector('.hero__why')));
+  record(
+    'сценарии',
+    'превью: строка про офлайн не показывается, обещание не врёт',
+    inPreview === false,
+    inPreview ? 'строка есть и в превью' : 'строки нет — верно',
+  );
+  await preview.close();
+}
+
+/**
  * Оговорки: человек поправил себя на полуслове — в тексте остаётся то, что он
  * имел в виду. Проверяем и обратное: уточнение («то есть убери воду») не
  * выкидывается.
@@ -5318,6 +5371,7 @@ async function main() {
       ['файл в текст', scenarioAudioFile],
       ['команда голосом', scenarioVoiceCommand],
       ['оговорки', scenarioSelfCorrection],
+      ['первый экран', scenarioWhyBetter],
       ['пустой результат', scenarioEmptyResult],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],

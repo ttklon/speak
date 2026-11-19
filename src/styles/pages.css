@@ -46,6 +46,34 @@
   max-width: 660px;
 }
 
+/* Чем мы лучше встроенной диктовки: три короткие фразы одной строкой.
+   Точки в конце не ставим — это не абзац, а три факта подряд. */
+.hero__why {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 12px 0 0;
+  max-width: 720px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3, var(--text-4));
+}
+
+.hero__why-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hero__why-item::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent, #6ea8fe);
+  opacity: 0.7;
+}
+
 .hero__note {
   margin: 14px 0 0;
   padding: 8px 12px;

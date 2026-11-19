@@ -10,7 +10,7 @@ import { engineName, hasNativeStt, hasWebSpeech } from '../lib/recognition/engin
 import { VOICE_COMMAND_TIP } from '../lib/voiceCommands.js';
 import { AUDIO_ACCEPT, progressLabel } from '../lib/recognition/audioFile.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
-import { APP } from '../lib/config.js';
+import { APP, WHY_BETTER } from '../lib/config.js';
 import Icon from '../components/ui/Icon.jsx';
 import EditDictationModal from '../components/modals/EditDictationModal.jsx';
 import { Button, SearchInput } from '../components/ui/Controls.jsx';
@@ -199,6 +199,19 @@ export default function HomePage() {
         </p>
         {/* Голосовая пунктуация: о ней нельзя догадаться, а без неё человек
             диктует «запятая» словами и правит текст руками. */}
+        {/* Чем мы отличаемся от встроенной диктовки — одной строкой и только в
+            приложении: в браузерном превью распознавание идёт через системный
+            движок, и обещание «офлайн» там было бы ложью. */}
+        {hasNativeStt() ? (
+          <p className="hero__why" title={WHY_BETTER.more}>
+            {WHY_BETTER.items.map((item) => (
+              <span key={item} className="hero__why-item">
+                {item}
+              </span>
+            ))}
+          </p>
+        ) : null}
+
         <p className="hero__hint">{VOICE_COMMAND_TIP}</p>
 
         <div className={`hero__stats ${dictations.length ? '' : 'hero__stats--empty'}`}>

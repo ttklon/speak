@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import pkg from '../../package.json';
-import { APP, NAV, LANGUAGES, MODELS, STORAGE_KEYS, DEFAULT_SETTINGS, DEFAULT_VOICE_HOTKEYS, DEFAULT_AI_PRESETS } from './config.js';
+import { APP, NAV, LANGUAGES, MODELS, STORAGE_KEYS, DEFAULT_SETTINGS, DEFAULT_VOICE_HOTKEYS, DEFAULT_AI_PRESETS, WHY_BETTER } from './config.js';
 import { PAGES } from './router.js';
 
 const unique = (arr) => new Set(arr).size === arr.length;
@@ -77,6 +77,32 @@ describe('справочники', () => {
     for (const preset of DEFAULT_AI_PRESETS) {
       expect(preset.title).toBeTruthy();
       expect(preset.prompt.length).toBeGreaterThan(10);
+    }
+  });
+});
+
+describe('чем мы отличаемся от встроенной диктовки', () => {
+  it('три коротких факта, а не абзац', () => {
+    expect(WHY_BETTER.items.length).toBe(3);
+    for (const item of WHY_BETTER.items) {
+      // одна строка на экране: длиннее — уже не читают
+      expect(item.length).toBeLessThanOrEqual(110);
+      expect(item.endsWith('.')).toBe(false);
+    }
+  });
+
+  it('сказано про офлайн, бесплатность и Win+H', () => {
+    const all = WHY_BETTER.items.join(' ');
+    expect(all).toMatch(/бесплатно/i);
+    expect(all).toMatch(/офлайн|не уходит в облако/i);
+    expect(all).toMatch(/Win\+H/);
+    expect(all).toMatch(/интернет/i);
+  });
+
+  it('никаких технических имён, которых человек не знает', () => {
+    const all = `${WHY_BETTER.items.join(' ')} ${WHY_BETTER.more}`;
+    for (const banned of ['Web Speech', 'ONNX', 'Ollama', 'q5_1', 'int8', 'GigaAM', 'realtime', 'RAM']) {
+      expect(all.includes(banned)).toBe(false);
     }
   });
 });

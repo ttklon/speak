@@ -9,13 +9,31 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.16.0',
+  version: '1.17.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
   freeNote: 'Всё локально: без облака, подписки и лимитов слов.',
   description:
     'Нажмите клавишу — запись начнётся, нажмите ещё раз — текст вставится. Двойное нажатие открывает режим агента.',
+};
+
+/**
+ * Одна строка правды на первом экране: чем мы отличаемся от встроенной
+ * диктовки Windows. У Handy, SweetWhisper и OpenWhispr это написано прямо в
+ * README, а у нас человек должен был догадаться сам.
+ *
+ * Коротко и проверяемо: бесплатность, офлайн и разница с Win+H. Формулировки
+ * про Win+H совпадают с docs/13-LIMITATIONS.md — одно утверждение в одном виде.
+ */
+export const WHY_BETTER = {
+  items: [
+    'Бесплатно, без подписки и аккаунта',
+    'Русский распознаётся на этом компьютере: звук не уходит в облако',
+    'Встроенная диктовка Windows (Win+H) отправляет звук в Microsoft — для русского ей нужен интернет',
+  ],
+  /** Подробнее — в «О программе», но и здесь хватает одной строки. */
+  more: 'История, словарь и быстрые блоки тоже лежат на диске, а не в чужом сервисе.',
 };
 
 export const NAV = [
@@ -285,6 +303,7 @@ export default {
   CLIPBOARD_TABS,
   LANGUAGES,
   LOG_ENDPOINT,
+  WHY_BETTER,
   DEFAULT_VOICE_HOTKEYS,
   DEFAULT_AI_PRESETS,
   CLIPBOARD_HOTKEYS,
