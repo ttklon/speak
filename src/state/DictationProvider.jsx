@@ -11,7 +11,7 @@ import { resolveLiveDraft } from '../lib/liveDraftPolicy.js';
 // иначе забытая запись тянет минуты пустого звука в распознавание
 import { AUTO_STOP_IDLE_MS, autoStopNotice, createSilenceWatch } from '../lib/autoStop.js';
 import { createMicWarm } from '../lib/audio/micWarm.js';
-import { applyDictionary, formatK, words } from '../lib/utils.js';
+import { applyDictionary, formatK, truncate, words } from '../lib/utils.js';
 // Вставка в поле самого приложения: если человек диктует, стоя курсором в
 // поиске или заметке, текст должен попасть туда, а не в предыдущее окно.
 import { insertIntoFocusedField } from '../lib/insertLocal.js';
@@ -25,6 +25,13 @@ import { formatForApp, resolveAppStyle } from '../lib/appFormat.js';
 import { expandSnippet } from '../lib/snippets.js';
 import { createPolishGate } from '../lib/ai/polishGate.js';
 import { decodeAudioFile } from '../lib/audio/decodeFile.js';
+import { readSelectionText, writeSelectionText } from '../lib/hotkeys/selection.js';
+import { runInstruction } from '../lib/ai/instructions.js';
+import {
+  COMMAND_ERRORS,
+  commandInstruction,
+  commandTitle,
+} from '../lib/voiceCommandMode.js';
 import {
   FILE_ERRORS,
   fileTitle,
@@ -167,6 +174,10 @@ export function DictationProvider({ children }) {
   const finishing = useRef(false);
   // опции текущей диктовки (нужны при остановке: вставлять текст или нет)
   const sessionOpts = useRef({});
+  // Командный режим: выделенный текст, к которому применится сказанное.
+  // Читаем его на нажатии — к моменту остановки записи выделение в чужом окне
+  // уже может быть снято (клик по плашке, переключение окна).
+  const commandRef = useRef('');
   // кадр экрана для «диктовки с учётом экрана» (в памяти, не на диске)
   const screenContextRef = useRef(null);
   // термины, которые локальная модель разглядела на экране: уходят в whisper
@@ -265,6 +276,89 @@ export function DictationProvider({ children }) {
           });
         }
       }
+      // ── Командный режим ───────────────────────────────────────────────
+      // Сказанное здесь — не текст для вставки, а указание к выделению.
+      // Поэтому обычный путь диктовки (сниппеты, оформление под окно,
+      // полировка, вставка) не выполняется вовсе: иначе команда «сократи»
+      // вставилась бы в чужое окно словом «сократи».
+      if (sessionOpts.current.command) {
+        sessionOpts.current.command = false;
+        const selection = String(commandRef.current || '').trim();
+        commandRef.current = '';
+        const instruction = commandInstruction(cleaned);
+        setDraft('');
+        draftRef.current = '';
+        finalRef.current = '';
+        if (!selection || !instruction) {
+          const reason = !selection ? COMMAND_ERRORS['no-selection'] : COMMAND_ERRORS['empty-command'];
+          pushToast({
+            title: reason.title,
+            description: reason.message || reason.description,
+            tone: 'warn',
+            ttl: 9000,
+          });
+          diag.warn('stt', 'Команда голосом не выполнена', {
+            selection: selection.length,
+            command: cleaned.length,
+          });
+          setState('idle');
+          release();
+          return null;
+        }
+        setState('processing');
+        const commandStart = Date.now();
+        let result = '';
+        let note = '';
+        try {
+          const answer = await runInstruction(instruction, selection, settingsRef.current);
+          result = typeof answer === 'string' ? answer : String(answer?.text || '');
+          note = typeof answer === 'object' && answer ? String(answer.note || '') : '';
+        } catch (err) {
+          diag.warn('stt', 'Команда голосом: модель не ответила', { reason: String(err?.message || err) });
+        }
+        if (!result || result.trim() === selection.trim()) {
+          pushToast({
+            title: COMMAND_ERRORS['no-change'].title,
+            description: note || COMMAND_ERRORS['no-change'].description,
+            tone: 'warn',
+          });
+          diag.info('stt', 'Команда голосом без изменений', { command: cleaned });
+          setState('idle');
+          release();
+          return null;
+        }
+        const placed = await writeSelectionText(result);
+        const item = {
+          text: result,
+          durationMs: Math.max(400, Date.now() - startedAt.current),
+          words: words(result),
+          createdAt: Date.now(),
+          id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          language: settingsRef.current.language,
+          source: 'command',
+          command: cleaned,
+          sttMs: sttMs || undefined,
+        };
+        addDictation(item);
+        recordWords(item.words, 0);
+        diag.info('stt', 'Команда голосом выполнена', {
+          command: cleaned,
+          chars: result.length,
+          ms: Date.now() - commandStart,
+          placed,
+        });
+        pushToast({
+          title: placed === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${commandTitle(cleaned)}`,
+          description: [truncate(result, 90), note].filter(Boolean).join(' — '),
+          tone: placed === 'failed' || note ? 'warn' : 'success',
+          ttl: 8000,
+        });
+        setState('done');
+        setTimeout(() => setState((s) => (s === 'done' ? 'idle' : s)), 2200);
+        release();
+        return item;
+      }
+
       // Куда и как вставляем — решаем один раз: этот же стиль нужен и позднему
       // ответу модели (он приходит уже после вставки и обновляет историю),
       // иначе в истории оказался бы текст с точкой, которой в окне нет.
@@ -1026,6 +1120,38 @@ export function DictationProvider({ children }) {
   }, [start, stop]);
 
   /**
+   * Командный режим: выделил текст — сказал, что с ним сделать.
+   *
+   * Выделение забираем сразу при нажатии: пока идёт запись, человек может
+   * переключить окно или кликнуть по плашке, и выделения уже не будет.
+   * Если выделения нет — говорим об этом до записи, а не после: незачем
+   * заставлять человека говорить в пустоту.
+   */
+  const startCommand = useCallback(async () => {
+    if (recRef.current) {
+      stop();
+      return;
+    }
+    let selection = '';
+    try {
+      selection = String((await readSelectionText()) || '').trim();
+    } catch {
+      selection = '';
+    }
+    if (!selection) {
+      pushToast({
+        title: COMMAND_ERRORS['no-selection'].title,
+        description: COMMAND_ERRORS['no-selection'].message,
+        tone: 'warn',
+        ttl: 9000,
+      });
+      return;
+    }
+    commandRef.current = selection;
+    start({ mode: 'toggle', command: true });
+  }, [start, stop, pushToast]);
+
+  /**
    * Пауза диктовки. Раньше её не было вовсе: остановить запись можно было
    * только целиком, а потом начинать заново. Теперь звук просто перестаёт
    * копиться — уже сказанное остаётся, микрофон не переоткрывается.
@@ -1126,8 +1252,10 @@ export function DictationProvider({ children }) {
       }
       if (payload?.type === 'up') stop();
       if (payload?.type === 'toggle') {
+        // командный режим: сказанное применится к выделению, а не вставится
+        if (payload.command) startCommand();
         // «диктовка с учётом экрана» на своём сочетании тоже переключатель
-        if (payload.screenAware && !recRef.current) start({ mode: 'toggle', screenAware: true });
+        else if (payload.screenAware && !recRef.current) start({ mode: 'toggle', screenAware: true });
         else toggle();
       }
       // «Агент» по двойному нажатию: начатая диктовка отменяется, а не
@@ -1136,7 +1264,7 @@ export function DictationProvider({ children }) {
       if (payload?.type === 'agent') askAgent();
     });
     return off;
-  }, [start, stop, toggle, cancel, askAgent]);
+  }, [start, stop, toggle, cancel, askAgent, startCommand]);
 
   // Локальный хоткей браузера: Alt+D — старт/стоп (для dev-preview)
   useEffect(() => {
@@ -1328,6 +1456,9 @@ export function DictationProvider({ children }) {
       error: error?.title || '',
       hint: hintFull,
       hintFull,
+      // командный режим: плашка обязана сказать, что слушает команду, а не
+      // диктовку, — иначе человек ждёт вставки вместо правки выделения
+      command: Boolean(sessionOpts.current.command),
     });
   }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, paused, processingMs]);
 

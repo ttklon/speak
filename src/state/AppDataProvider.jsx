@@ -24,6 +24,7 @@ import {
   sanitizeClipboard,
   sanitizeDictations,
   sanitizeDictionary,
+  mergeNewHotkeys,
   sanitizeHotkeys,
   sanitizeInstructions,
   sanitizePresets,
@@ -103,7 +104,11 @@ export function AppDataProvider({ children }) {
   const [voiceHotkeys, setVoiceHotkeys] = usePersistentState(
     STORAGE_KEYS.hotkeys,
     () => DEFAULT_VOICE_HOTKEYS,
-    { sanitize: sanitizeHotkeys },
+    {
+      // Новые сочетания доезжают и до тех, кто обновляется: иначе новая
+      // функция есть, а включить её в профиле прошлой версии нечем.
+      sanitize: (stored, fallback) => mergeNewHotkeys(sanitizeHotkeys(stored, fallback), DEFAULT_VOICE_HOTKEYS),
+    },
   );
   const [presets, setPresets] = usePersistentState(STORAGE_KEYS.presets, () => DEFAULT_AI_PRESETS, {
     sanitize: sanitizePresets,

@@ -872,6 +872,108 @@ async function scenarioAudioFile(browser) {
 }
 
 /**
+ * Командный режим: выделил текст — сказал, что с ним сделать.
+ *
+ * Проверяем живой путь целиком: выделение читается на нажатии, речь уходит в
+ * движок, сказанное применяется к выделению и заменяет его. В окно при этом
+ * не вставляется ничего: «сократи» — это указание, а не текст.
+ */
+async function scenarioVoiceCommand(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, aiProcessing: true },
+    storeSeed: {
+      'zs.dictations': [],
+      'zs.mockSttText': 'сократи вдвое',
+    },
+    settle: 700,
+  });
+  takeErrors(page);
+  await page.evaluate(() => window.__e2e.resetCalls());
+
+  // 1) Нажали сочетание — приложение забирает выделение ДО записи
+  await emit(page, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(1200);
+  const reading = await page.evaluate(() => ({
+    read: (window.__bridgeCalls || []).some((c) => c.channel === 'text:read-selection'),
+    listening: /Слушаю/i.test(document.body.innerText),
+  }));
+  record(
+    'сценарии',
+    'команда голосом: выделение читается сразу, запись идёт',
+    reading.read && reading.listening,
+    `выделение: ${reading.read}, запись: ${reading.listening}`,
+  );
+
+  // 2) Второе нажатие — стоп и применение команды
+  await emit(page, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(2600);
+  const result = await page.evaluate(() => {
+    const calls = window.__bridgeCalls || [];
+    const replaced = calls.filter((c) => c.channel === 'text:replace-selection').map((c) => String(c.args?.[0] || ''));
+    const inserted = calls.filter((c) => c.channel === 'text:insert').map((c) => String(c.args?.[0] || ''));
+    const list = window.__e2e.read('zs.dictations');
+    const first = Array.isArray(list) && list[0] ? list[0] : null;
+    return {
+      replaced: replaced[0] || '',
+      inserted: inserted[0] || '',
+      source: first ? String(first.source || '') : '',
+      command: first ? String(first.command || '') : '',
+      rows: [...document.querySelectorAll('.recent__row')].map((el) => el.innerText.replace(/\n+/g, ' ')),
+      toasts: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+    };
+  });
+  record(
+    'сценарии',
+    'команда голосом: готовый текст заменил выделение',
+    result.replaced.length > 0 && result.inserted === '',
+    result.replaced.slice(0, 60) || 'замены не было',
+  );
+  record(
+    'сценарии',
+    'команда голосом: сказанное не вставилось как диктовка',
+    result.inserted === '',
+    result.inserted ? `вставлено: ${result.inserted}` : 'вставок нет',
+  );
+  record(
+    'сценарии',
+    'команда голосом: в истории видно, что это команда',
+    result.source === 'command' && /сократи/i.test(result.command),
+    `${result.source}: ${result.command}`,
+  );
+  record(
+    'сценарии',
+    'команда голосом: человеку сказано, что именно сделано',
+    /Готово: сократить/i.test(result.toasts),
+    result.toasts.slice(0, 100) || 'тоста нет',
+  );
+
+  // 3) Без выделения — приложение говорит об этом до записи, а не после
+  const empty = await openPage(browser, '#/home', {
+    storeSeed: { 'zs.mockSelection': '' },
+    settle: 800,
+  });
+  takeErrors(empty);
+  await emit(empty, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(1100);
+  const noSelection = await empty.evaluate(() => ({
+    say: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' ;; '),
+    listening: /Слушаю/i.test(document.body.innerText),
+    asked: (window.__bridgeCalls || []).some((c) => c.channel === 'text:read-selection'),
+  }));
+  record(
+    'сценарии',
+    'команда голосом: без выделения запись не начинается, причина названа',
+    /Нет выделенного текста/i.test(noSelection.say) && !noSelection.listening,
+    `${noSelection.say.slice(0, 90) || 'молча'} · спросили выделение: ${noSelection.asked} · запись: ${noSelection.listening}`,
+  );
+
+  const errors = [...takeErrors(page), ...takeErrors(empty)];
+  record('сценарии', 'команда голосом: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await empty.close();
+  await page.close();
+}
+
+/**
  * Оформление под окно: одна и та же диктовка в мессенджер и в редактор кода.
  * Проверяем через настоящий проход (мок движка, живая цепочка), а не только
  * юнит-тестом правила: важно, что текст и в истории, и на вставке одинаковый.
@@ -5160,6 +5262,7 @@ async function main() {
       ['оформление под окно', scenarioAppFormat],
       ['быстрые блоки', scenarioSnippets],
       ['файл в текст', scenarioAudioFile],
+      ['команда голосом', scenarioVoiceCommand],
       ['пустой результат', scenarioEmptyResult],
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],

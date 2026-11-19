@@ -215,6 +215,17 @@ export function installMockBridge() {
     // как настоящий main: строка, а не объект
     readSelection: async () => {
       record('text:read-selection');
+      // Сценарий может подставить своё выделение (в том числе пустое):
+      // иначе случай «ничего не выделено» нечем проверить.
+      const custom = localStorage.getItem('mockstore:zs.mockSelection');
+      if (custom !== null) {
+        try {
+          const parsed = JSON.parse(custom);
+          return typeof parsed === 'string' ? parsed : String(parsed ?? '');
+        } catch {
+          return String(custom);
+        }
+      }
       return 'выделенный текст со страницы';
     },
     replaceSelection: ok('text:replace-selection'),

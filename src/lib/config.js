@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.14.0',
+  version: '1.15.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -93,6 +93,20 @@ export const DEFAULT_VOICE_HOTKEYS = [
     mode: 'hold',
     enabled: true,
     icon: 'monitor',
+    tone: 'blue',
+    isNew: true,
+  },
+  {
+    id: 'voice-command',
+    title: 'Команда голосом',
+    // Не диктовка: сказанное — указание к уже написанному тексту. Выделение
+    // читается на нажатии (пока оно ещё цело), а сказанное применяется к нему.
+    description:
+      'Выделите текст в любом приложении, нажмите и скажите, что с ним сделать: «сократи», «переведи на английский», «исправь ошибки». Готовый текст заменит выделение.',
+    keys: ['Ctrl', 'Alt', 'C'],
+    mode: 'toggle',
+    enabled: true,
+    icon: 'sparkles',
     tone: 'blue',
     isNew: true,
   },

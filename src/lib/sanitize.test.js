@@ -5,6 +5,7 @@ import {
   sanitizeDictionary,
   sanitizeClipboard,
   sanitizeHotkeys,
+  mergeNewHotkeys,
   sanitizePresets,
   sanitizeInstructions,
   sanitizeStats,
@@ -96,5 +97,32 @@ describe('очистка сохранённых данных', () => {
       sessions: 1,
     });
     expect(sanitizeStats({ wordsTotal: 120, secondsTotal: 60, sessions: 3 }).wordsTotal).toBe(120);
+  });
+});
+
+describe('новые сочетания в профиле прошлой версии', () => {
+  const defaults = [
+    { id: 'dictation', title: 'Диктовка', keys: ['Ctrl', 'Alt', 'Space'], enabled: true },
+    { id: 'voice-command', title: 'Команда голосом', keys: ['Ctrl', 'Alt', 'C'], enabled: true },
+  ];
+
+  it('недостающее сочетание дописывается, существующие не трогаются', () => {
+    const stored = [{ id: 'dictation', title: 'Диктовка', keys: ['Ctrl', 'Alt', 'Q'], enabled: false }];
+    const merged = mergeNewHotkeys(stored, defaults);
+    expect(merged.map((h) => h.id)).toEqual(['dictation', 'voice-command']);
+    // выбор человека (другие клавиши, выключено) сохраняется
+    expect(merged[0].keys).toEqual(['Ctrl', 'Alt', 'Q']);
+    expect(merged[0].enabled).toBe(false);
+  });
+
+  it('когда всё уже есть — список не меняется и не дублируется', () => {
+    const stored = defaults.map((h) => ({ ...h }));
+    expect(mergeNewHotkeys(stored, defaults)).toHaveLength(2);
+  });
+
+  it('мусор вместо списка не ломает загрузку', () => {
+    expect(mergeNewHotkeys(null, defaults)).toHaveLength(2);
+    expect(mergeNewHotkeys([null, 'x'], defaults).filter(Boolean)).toHaveLength(2);
+    expect(mergeNewHotkeys([], [])).toEqual([]);
   });
 });

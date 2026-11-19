@@ -708,6 +708,18 @@ function registerVoiceHotkeys(settings = {}) {
         },
         info,
       );
+    } else if (hk.id === 'voice-command') {
+      // Командный режим: выделение забирается на нажатии, речь — сама команда.
+      // Переключатель, как у «свободных рук»: глобальные сочетания не дают
+      // события отпускания клавиши.
+      registerAccel(
+        accel,
+        () => {
+          showWindowForDictation();
+          mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle', command: true });
+        },
+        info,
+      );
     } else if (hk.id === 'agent') {
       // двойное нажатие = «агент», одиночное = обычная диктовка
       let lastAt = 0;

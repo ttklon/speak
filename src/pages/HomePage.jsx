@@ -395,11 +395,18 @@ export default function HomePage() {
               }}
             >
               <span className="recent__time">{timeHM(item.createdAt)}</span>
-              {/* Откуда текст: из файла или из диктовки. Без пометки человек не
-                  понимает, почему запись появилась сама. */}
-              {item.source === 'file' ? (
-                <span className="recent__tag" title={item.fileName || 'Расшифровка файла'}>
-                  файл
+              {/* Откуда текст: из файла, из команды голосом или из диктовки.
+                  Без пометки человек не понимает, почему запись появилась сама. */}
+              {item.source === 'file' || item.source === 'command' ? (
+                <span
+                  className="recent__tag"
+                  title={
+                    item.source === 'file'
+                      ? item.fileName || 'Расшифровка файла'
+                      : `Команда: ${item.command || ''}`
+                  }
+                >
+                  {item.source === 'file' ? 'файл' : 'команда'}
                 </span>
               ) : null}
               <span className="recent__text">{truncate(item.text, 108)}</span>

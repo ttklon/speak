@@ -102,6 +102,20 @@ export function sanitizeHotkeys(stored, fallback = []) {
   );
 }
 
+/**
+ * Новые сочетания, которых не было в профиле: диктовка «команда голосом»
+ * появилась в 1.15.0, и у человека с прошлой версией её просто не было бы в
+ * списке — функция есть, а включить нечего. Дописываем недостающие по id,
+ * не трогая выбор и клавиши уже существующих.
+ */
+export function mergeNewHotkeys(stored = [], defaults = []) {
+  // без id запись бесполезна: её нельзя ни показать, ни включить
+  const list = Array.isArray(stored) ? stored.filter((item) => item && item.id) : [];
+  const ids = new Set(list.map((item) => item.id));
+  const added = (Array.isArray(defaults) ? defaults : []).filter((item) => item && item.id && !ids.has(item.id));
+  return added.length ? [...list, ...added.map((item) => ({ ...item }))] : list;
+}
+
 export function sanitizePresets(stored, fallback = []) {
   return asList(
     stored,
