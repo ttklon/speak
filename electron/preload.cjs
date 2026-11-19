@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     onSttProgress: (cb) => on('stt:progress', cb),
     onAutoTune: (cb) => on('stt:auto-tune', cb),
     insertText: (text) => ipcRenderer.invoke('text:insert', text),
+    // «Отмени»: убрать последнюю вставку из активного окна
+    undoLastInsert: () => ipcRenderer.invoke('text:undo-last'),
     // куда попадёт текст: { own, app, title } — видно человеку до вставки
     insertTarget: () => ipcRenderer.invoke('text:target'),
     inputStatus: () => ipcRenderer.invoke('input:status'),

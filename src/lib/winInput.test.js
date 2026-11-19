@@ -91,6 +91,14 @@ describe('исходник помощника (собрать C# здесь не
     expect(HELPER_SOURCE).toMatch(/VK_CONTROL/);
   });
 
+  it('умеет стирать вставленное: Backspace ровно N раз', () => {
+    // «Отмени» стирает по символу: при наборе SendInput Ctrl+Z снял бы
+    // только последнюю букву, а Backspace убирает весь вставленный хвост
+    expect(HELPER_SOURCE).toMatch(/VK_BACK/);
+    expect(HELPER_SOURCE).toMatch(/command == "erase"/);
+    expect(HELPER_SOURCE).toMatch(/static int Erase\(int count\)/);
+  });
+
   it('умеет Enter и Tab как настоящие клавиши', () => {
     expect(HELPER_SOURCE).toMatch(/VK_RETURN/);
     expect(HELPER_SOURCE).toMatch(/VK_TAB/);

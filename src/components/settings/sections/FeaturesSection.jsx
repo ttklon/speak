@@ -95,6 +95,21 @@ export default function FeaturesSection() {
             onChange={(v) => updateSettings({ preserveText: v })}
           />
         </div>
+        {/* «Отмени» — слово, которое убирает последнюю вставку. Выключатель
+            нужен тем, кто диктует само слово «отмени» как текст. */}
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Команда «отмени»
+            <div className="setting-row__desc">
+              Скажите «отмени» — уберу последнюю вставку из того же окна, если прошло не больше
+              двух минут. Текст останется в истории. Выключите, если диктуете это слово как текст.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.undoCommand !== false}
+            onChange={(v) => updateSettings({ undoCommand: v })}
+          />
+        </div>
         <div className="setting-row">
           <div className="setting-row__label">
             Умная полировка

@@ -31,6 +31,7 @@ import { runInstruction } from '../lib/ai/instructions.js';
 import { dropSelfCorrections } from '../lib/ai/selfCorrect.js';
 import { rawTextFor } from '../lib/historyRaw.js';
 import { textPolicy } from '../lib/textPolicy.js';
+import { isUndoCommand, undoFailureText } from '../lib/undoCommand.js';
 import { languageForTarget, matchAppProfile } from '../lib/appProfiles.js';
 import { LANGUAGES } from '../lib/config.js';
 import {
@@ -404,6 +405,75 @@ export function DictationProvider({ children }) {
         setTimeout(() => setState((s) => (s === 'done' ? 'idle' : s)), 2200);
         release();
         return item;
+      }
+
+      // ── «Отмени» ──────────────────────────────────────────────────────
+      // Сказал одно слово — последняя вставка убирается из чужого окна.
+      // Это команда, а не текст: ни истории, ни вставки, ни обучения словаря.
+      // Проверяем после голосовых команд (они могли расставить знаки) и до
+      // полировки: модель не должна «улучшать» команду.
+      if (
+        spoken &&
+        insert &&
+        sessionOpts.current.insert !== false &&
+        settingsRef.current.undoCommand !== false &&
+        isUndoCommand(cleaned)
+      ) {
+        const native = window.zspeakly?.native;
+        setDraft('');
+        draftRef.current = '';
+        finalRef.current = '';
+        diag.info('stt', 'Команда «отмени»', { text: cleaned });
+        if (!native?.undoLastInsert) {
+          pushToast({
+            title: 'Убрать вставку можно только в приложении',
+            description:
+              'В браузере приложение не видит чужих окон и не может нажать Backspace в них. Текст последней диктовки есть в истории.',
+            tone: 'warn',
+            ttl: 9000,
+          });
+          setState('idle');
+          release();
+          return null;
+        }
+        setState('processing');
+        let res = null;
+        try {
+          res = await native.undoLastInsert();
+        } catch (err) {
+          res = { ok: false, reason: String(err?.message || err) };
+        }
+        if (res?.ok) {
+          const undoneId = lastItemId.current;
+          if (undoneId && updateDictation) updateDictation(undoneId, { undone: true });
+          lastItemId.current = '';
+          diag.info('stt', 'Последняя вставка убрана', {
+            chars: res.chars || 0,
+            window: res.window || '',
+            ms: res.ms || 0,
+          });
+          pushToast({
+            title: 'Убрал последнюю вставку',
+            description: res.preview
+              ? `Из «${res.window || 'активного окна'}»: ${truncate(res.preview, 70)}. Текст остался в истории.`
+              : 'Текст остался в истории — если понадобится, скопируйте оттуда.',
+            tone: 'success',
+            ttl: 7000,
+          });
+          setState('done');
+          setTimeout(() => setState((s) => (s === 'done' ? 'idle' : s)), 1800);
+        } else {
+          diag.warn('stt', 'Убрать вставку не удалось', { reason: String(res?.reason || '') });
+          pushToast({
+            title: 'Убирать не стал',
+            description: undoFailureText(res?.reason || ''),
+            tone: 'warn',
+            ttl: 9000,
+          });
+          setState('idle');
+        }
+        release();
+        return null;
       }
 
       // Куда и как вставляем — решаем один раз: этот же стиль нужен и позднему

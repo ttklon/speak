@@ -316,7 +316,7 @@ await check('main загружается без реального Electron', ()
 });
 await check('IPC-каналы зарегистрированы', () => {
   const need = [
-    'stt:transcribe-pcm', 'text:insert', 'text:paste', 'text:read-selection',
+    'stt:transcribe-pcm', 'text:insert', 'text:undo-last', 'text:paste', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
     'models:status', 'models:download', 'models:download-engine', 'models:cancel', 'models:delete',
     'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',
@@ -577,6 +577,13 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
   } finally {
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   }
+});
+
+await check('«Отмени» отказывает с причиной, а не молча', async () => {
+  const res = await handlers.get('text:undo-last')({});
+  if (!res || typeof res !== 'object') throw new Error(`не объект: ${JSON.stringify(res)}`);
+  if (res.ok !== false) throw new Error(`убрал то, чего не вставлял: ${JSON.stringify(res)}`);
+  if (!res.reason) throw new Error('отказ без причины — человеку нечего делать');
 });
 
 await check('неудачная вставка оставляет текст в буфере — как обещает тост', async () => {

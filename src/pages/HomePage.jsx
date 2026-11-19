@@ -436,6 +436,16 @@ export default function HomePage() {
                 </span>
               ) : null}
               <span className="recent__text">{truncate(item.text, 108)}</span>
+              {/* Вставку убрали командой «отмени»: без пометки запись в
+                  истории выглядит так, будто текст остался в чужом окне. */}
+              {item.undone ? (
+                <span
+                  className="recent__tag"
+                  title="Эту вставку убрали из окна командой «отмени» — текст остался здесь"
+                >
+                  убрано
+                </span>
+              ) : null}
               {/* Приложение правило текст после распознавания. Раньше это было
                   невидимо: человек не понимал, движок ошибся или приложение. */}
               {hasRawText(item) ? (
@@ -531,6 +541,12 @@ export default function HomePage() {
               </button>
             </div>
             <p className="snippet__text">{snippet.text}</p>
+            {snippet.undone ? (
+              <p className="snippet__note">
+                Эту вставку убрали из окна командой «отмени». Здесь текст остался — можно
+                скопировать или вставить снова.
+              </p>
+            ) : null}
             {hasRawText(snippet) ? (
               <div className="snippet__raw">
                 <div className="snippet__raw-title">Как распозналось</div>

@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.22.0',
+  version: '1.23.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -202,6 +202,9 @@ export const DEFAULT_SETTINGS = {
   // Правила «в этом приложении диктуем на этом языке»: [{ id, match, language }].
   // Пусто — один общий язык, как раньше.
   appProfiles: [],
+  // «Отмени» голосом убирает последнюю вставку (две минуты, то же окно).
+  // Выключатель нужен, если человек диктует слово «отмени» как текст.
+  undoCommand: true,
   aiEndpoint: 'http://localhost:11434', // Ollama, опционально
   // вторая стадия чистки диктовки моделью: 1.6.0 — включена по умолчанию
   // (ждём её не дольше aiPolishBudgetMs, дальше текст вставляется без неё)

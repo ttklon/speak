@@ -196,6 +196,20 @@ export function installMockBridge() {
       record('text:insert', [text]);
       return { ok: true, method: 'win-input', ms: 12 };
     },
+    // «Отмени»: main отвечает объектом — сколько символов стёрли и из какого
+    // окна. Сценарий может подставить отказ через zs.mockUndo.
+    undoLastInsert: async () => {
+      record('text:undo-last');
+      const custom = localStorage.getItem('mockstore:zs.mockUndo');
+      if (custom !== null) {
+        try {
+          return JSON.parse(custom);
+        } catch {
+          return { ok: false, reason: String(custom) };
+        }
+      }
+      return { ok: true, chars: 11, window: 'Telegram', preview: 'привет, мир', ms: 30 };
+    },
     // состояние помощника ввода — для «Диагностики»
     inputStatus: async () => {
       record('input:status');

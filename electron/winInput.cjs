@@ -35,7 +35,7 @@ const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
 
 /** Версия помощника: меняем текст программы — меняем версию. */
-const HELPER_VERSION = '3';
+const HELPER_VERSION = '4';
 
 // C# под .NET Framework 4 (csc.exe — это C# 5): без интерполяции строк и
 // прочих новых возможностей, иначе старый компилятор не поймёт.
@@ -86,6 +86,7 @@ public static class ZsInput
   const ushort VK_RETURN = 0x0D;
   const ushort VK_TAB = 0x09;
   const ushort VK_V = 0x56;
+  const ushort VK_BACK = 0x08;
 
   static INPUT Unicode(ushort scan, bool up)
   {
@@ -160,6 +161,22 @@ public static class ZsInput
     return Send(combo);
   }
 
+  // «Отмени»: стереть ровно столько символов, сколько вставили.
+  // Backspace, а не Ctrl+Z: при наборе по одному символу отмена в чужом
+  // приложении снимает по символу, а Backspace убирает вставленный хвост целиком.
+  static int Erase(int count)
+  {
+    int erased = 0;
+    for (int i = 0; i < count; i++)
+    {
+      bool ok = Send(new INPUT[] { Virtual(VK_BACK, false), Virtual(VK_BACK, true) });
+      if (!ok) break;
+      erased++;
+      Thread.Sleep(2);
+    }
+    return erased;
+  }
+
   static string Title()
   {
     StringBuilder buffer = new StringBuilder(512);
@@ -201,6 +218,19 @@ public static class ZsInput
         bool ok = Paste();
         Console.WriteLine(ok ? "{\"ok\":true}" : "{\"ok\":false,\"reason\":\"sendinput-failed\"}");
         return ok ? 0 : 1;
+      }
+      if (command == "erase")
+      {
+        int count = 0;
+        if (args.Length > 1) int.TryParse(args[1], out count);
+        if (count <= 0)
+        {
+          Console.WriteLine("{\"ok\":false,\"reason\":\"nothing-to-erase\"}");
+          return 1;
+        }
+        int erased = Erase(count);
+        Console.WriteLine("{\"ok\":" + (erased == count ? "true" : "false") + ",\"erased\":" + erased + ",\"total\":" + count + "}");
+        return erased == count ? 0 : 1;
       }
       if (command == "type")
       {
@@ -408,6 +438,12 @@ function createWinInput({ baseDir, platform = process.platform, exists = fs.exis
     },
     /** Нажать Ctrl+V в активном окне (текст уже должен быть в буфере). */
     paste: () => run(['paste']),
+    /** Стереть последние count символов в активном окне («Отмени»). */
+    erase(count) {
+      const value = Math.max(0, Math.min(4000, Math.round(Number(count) || 0)));
+      if (!value) return Promise.resolve({ ok: false, reason: 'nothing-to-erase' });
+      return run(['erase', String(value)]);
+    },
     /** Заголовок активного окна — чтобы показать, куда попадёт текст. */
     target: () => run(['target']),
     ping: () => run(['ping']),

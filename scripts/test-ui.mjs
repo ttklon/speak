@@ -1206,6 +1206,104 @@ async function scenarioAppLanguage(browser) {
   await page.close();
 }
 
+// «Отмени»: сказал одно слово — последняя вставка ушла из окна.
+// Сценарий подставляет ответ main и проверяет три вещи: что стирание вообще
+// попросили, что человек увидел объяснение и что история не притворяется,
+// будто текст остался в чужом окне.
+async function scenarioUndoCommand(browser) {
+  // Настоящая последовательность: сначала диктовка, потом слово «отмени».
+  // Так проверяется и то, что marked именно та запись, которую вставляли.
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.mockSttText': 'привет, мир' },
+  });
+  takeErrors(page);
+  const dictate = async () => {
+    await clickText(page, 'Начать диктовку');
+    await sleep(1000);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await sleep(2000);
+  };
+  await dictate();
+  const before = await page.evaluate(() => (window.__e2e.read('zs.dictations') || []).length);
+  await page.evaluate(() => window.__e2e.resetCalls());
+  // Следующая фраза — уже команда: так её «слышит» движок.
+  await page.evaluate(() => localStorage.setItem('mockstore:zs.mockSttText', JSON.stringify('Отмени.')));
+  await dictate();
+  const result = await page.evaluate(() => {
+    const list = window.__e2e.read('zs.dictations') || [];
+    const toast = [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | ');
+    return {
+      undo: window.__e2e.countOf('text:undo-last'),
+      insert: window.__e2e.countOf('text:insert'),
+      count: list.length,
+      undone: list[0]?.undone === true,
+      undoWord: list.some((d) => /отмени/i.test(d.text || '')),
+      toast,
+    };
+  });
+  record(
+    'сценарии',
+    '«отмени»: стирает последнюю вставку, а не вставляет слово «отмени»',
+    result.undo === 1 && result.insert === 0 && !result.undoWord,
+    `отмена=${result.undo} вставок=${result.insert}`,
+  );
+  record(
+    'сценарии',
+    '«отмени»: человек видит, что убрали и что текст остался в истории',
+    /Убрал последнюю вставку/.test(result.toast) && /истории/.test(result.toast),
+    result.toast.slice(0, 110) || 'тоста нет',
+  );
+  record(
+    'сценарии',
+    '«отмени»: команда не попадает в историю, а убранная запись помечена',
+    result.count === before && result.undone,
+    `записей ${before} → ${result.count}, пометка=${result.undone}`,
+  );
+  const tag = await page.evaluate(() => document.querySelector('.recent__tag')?.textContent || '');
+  record('сценарии', '«отмени»: в истории видно «убрано»', /убрано/.test(tag), tag || 'метки нет');
+  const errors = takeErrors(page);
+  record('сценарии', '«отмени»: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Когда убирать нечего или окно уже другое, приложение не стирает наугад и
+// говорит причину словами человека, а не кодом из main-процесса.
+async function scenarioUndoRefusal(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: {
+      'zs.mockSttText': 'Отмени.',
+      'zs.mockUndo': { ok: false, reason: 'текст был в «Telegram», сейчас «Code»' },
+    },
+  });
+  takeErrors(page);
+  await clickText(page, 'Начать диктовку');
+  await sleep(1100);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2200);
+  const toast = await page.evaluate(() =>
+    [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+  );
+  record(
+    'сценарии',
+    '«отмени»: в другом окне не стирает наугад и объясняет почему',
+    /Убирать не стал/.test(toast) && /окно уже другое/i.test(toast),
+    toast.slice(0, 120) || 'тоста нет',
+  );
+  const errors = takeErrors(page);
+  record('сценарии', '«отмени» без вставки: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Пустой результат распознавания — самое непонятное состояние: человек
 // говорил, а в поле ничего и ни слова объяснения. Теперь приложение говорит,
 // что именно случилось: молчал микрофон или движок не разобрал слова.
@@ -5664,6 +5762,8 @@ async function main() {
       ['голосовые команды', scenarioVoiceCommands],
       ['оформление под окно', scenarioAppFormat],
       ['язык под окно', scenarioAppLanguage],
+      ['команда «отмени»', scenarioUndoCommand],
+      ['«отмени» в другом окне', scenarioUndoRefusal],
       ['быстрые блоки', scenarioSnippets],
       ['файл в текст', scenarioAudioFile],
       ['команда голосом', scenarioVoiceCommand],

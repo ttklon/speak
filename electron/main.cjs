@@ -19,6 +19,7 @@ const { sendUnicodeText } = require('./sendInput.cjs');
 // вставку — иначе диктовка ждёт компиляцию C# дважды подряд.
 const { host: inputHost } = require('./inputHost.cjs');
 const { createWinInput } = require('./winInput.cjs');
+const { planUndo } = require('./undoLast.cjs');
 const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
@@ -87,6 +88,10 @@ const getWinInput = () => {
 let lastInsertInfo = { at: 0, ok: null, method: '', ms: 0, reason: '' };
 let lastInsertedText = '';
 let lastInsertedAt = 0;
+// Куда ушла последняя вставка и через сколько её ещё можно убрать.
+// «Отмени» стирает вслепую, поэтому перед стиранием сверяем окно: иначе в
+// другом приложении пропали бы слова, которые человек туда написал сам.
+let lastInsertTarget = { app: '', title: '', at: 0 };
 // Свою же вставку считаем «своей» только пару секунд: иначе человек,
 // скопировавший ту же фразу позже, не увидел бы её в истории буфера.
 const OWN_TEXT_TTL = 2000;
@@ -1671,6 +1676,18 @@ function registerIpc() {
     if (!value) return { ok: false, reason: 'пустой текст' };
     lastInsertedText = value;
     lastInsertedAt = Date.now();
+    // Окно запоминаем до того, как спрятать своё: после вставки фокус уже
+    // может уехать, а «Отмени» нужно знать, куда именно мы печатали.
+    try {
+      if (process.platform === 'win32' && !mainWindow?.isFocused?.()) {
+        const at = await foregroundWindow();
+        if (at && (at.app || at.title)) {
+          lastInsertTarget = { app: at.app || '', title: at.title || '', at: Date.now() };
+        }
+      }
+    } catch {
+      /* не смогли узнать окно — отмена просто не сработает, вставка важнее */
+    }
     const started = Date.now();
     const input = getWinInput();
     const known = input.status();
@@ -1775,6 +1792,66 @@ function registerIpc() {
     lastInsertInfo = { at: Date.now(), ok: true, method, ms: Date.now() - started, reason: '' };
     return { ok: true, method, ms: Date.now() - started };
   });
+  // «Отмени»: убрать последнюю вставку из активного окна.
+  //
+  // Стирание — Backspace на каждый вставленный символ: при наборе по одному
+  // символу Ctrl+Z в чужом приложении снял бы только последнюю букву. Правила
+  // осторожные, потому что назад дороги нет: только Windows, только две минуты
+  // после вставки и только то же приложение на переднем плане.
+  ipcMain.handle('text:undo-last', async () => {
+    let fg = null;
+    try {
+      fg = await foregroundWindow();
+    } catch {
+      fg = null;
+    }
+    // Все «нельзя» собраны в electron/undoLast.cjs — их можно проверить без
+    // Windows: план говорит, сколько символов стирать или почему нет.
+    const plan = planUndo({
+      text: lastInsertedText,
+      at: lastInsertedAt,
+      platform: process.platform,
+      own: Boolean(mainWindow?.isFocused?.()),
+      targetApp: lastInsertTarget.app,
+      currentApp: fg?.app || '',
+    });
+    if (!plan.ok) return plan;
+    const chars = plan.chars;
+    const input = getWinInput();
+    if (!input.status().ready) await input.ensure();
+    if (!input.status().ready) {
+      return { ok: false, reason: `помощник ввода не готов: ${input.status().reason}` };
+    }
+    const started = Date.now();
+    const res = await input.erase(chars);
+    if (!res?.ok) {
+      return {
+        ok: false,
+        reason: res?.reason || `стёрто ${res?.erased ?? 0} из ${chars}`,
+      };
+    }
+    const removed = lastInsertedText;
+    const windowName = lastInsertTarget.app || '';
+    lastInsertedText = '';
+    lastInsertedAt = 0;
+    lastInsertTarget = { app: '', title: '', at: 0 };
+    // Свой же Backspace не должен попасть в историю буфера как «копирование».
+    lastClipboardText = clipboard.readText() || '';
+    logger.info('insert', 'Последняя вставка убрана', {
+      keep: true,
+      chars,
+      window: windowName,
+      ms: Date.now() - started,
+    });
+    return {
+      ok: true,
+      chars,
+      window: windowName,
+      preview: removed.slice(0, 120),
+      ms: Date.now() - started,
+    };
+  });
+
   // Состояние вставки: чем вставляем, что было в прошлый раз и почему не
   // вышло. Без этого «текст не вставляется» — неразрешимая жалоба.
   ipcMain.handle('input:status', async () => {
