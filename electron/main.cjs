@@ -21,7 +21,14 @@ const { host: inputHost } = require('./inputHost.cjs');
 const { createWinInput } = require('./winInput.cjs');
 const { planUndo } = require('./undoLast.cjs');
 const audioPrep = require('./audioPrep.cjs');
-const { judgeText, betterText } = require('./textQuality.cjs');
+const {
+  judgeText,
+  betterText,
+  stripPromptEcho,
+  tailForPrompt,
+  shouldRetry,
+} = require('./textQuality.cjs');
+const { decodePlan } = require('./adaptiveDecode.cjs');
 const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
@@ -94,6 +101,12 @@ let lastInsertedAt = 0;
 // «Отмени» стирает вслепую, поэтому перед стиранием сверяем окно: иначе в
 // другом приложении пропали бы слова, которые человек туда написал сам.
 let lastInsertTarget = { app: '', title: '', at: 0 };
+// Сколько времени движок тратит на секунду речи — по этим замерам решается,
+// можно ли считать сразу «честным» проходом на этой машине.
+const decodeHistory = [];
+// Хвост прошлой фразы для подсказки движку: отдельно по языкам, чтобы русская
+// фраза не подсказывала английскую.
+const promptTailByLang = {};
 // Свою же вставку считаем «своей» только пару секунд: иначе человек,
 // скопировавший ту же фразу позже, не увидел бы её в истории буфера.
 const OWN_TEXT_TTL = 2000;
@@ -267,8 +280,10 @@ function updateTrayTooltip() {
  * целым словам.
  */
 const STT_PROMPT_LIMIT = 500;
-const STT_CONTEXT_LIMIT = 180;
+const STT_CONTEXT_LIMIT = 120;
 const STT_DICT_LIMIT = 320;
+// Хвост прошлой фразы: коротко — иначе модель начнёт повторять подсказку
+const STT_TAIL_LIMIT = 60;
 
 /**
  * Подсказка движку: термины с экрана + словарь.
@@ -280,8 +295,11 @@ const STT_DICT_LIMIT = 320;
  * лишнее отрезается с начала (где стоит подсказка с экрана, её легче потерять,
  * чем термины, которые человек вносил руками).
  */
-function buildSttPrompt({ context = '', dictionary = [] } = {}) {
+function buildSttPrompt({ context = '', dictionary = [], tail = '' } = {}) {
   const ctx = String(context || '').trim().slice(0, STT_CONTEXT_LIMIT);
+  // хвост прошлой фразы — первым: он ближе всего к тому, что человек скажет
+  // сейчас, и не должен вытесняться словарём при обрезке
+  const lastTail = tailForPrompt(tail, STT_TAIL_LIMIT);
   const seen = new Set();
   for (const raw of ctx.split(',')) {
     const word = raw.trim().toLowerCase();
@@ -313,14 +331,32 @@ function buildSttPrompt({ context = '', dictionary = [] } = {}) {
     used += cost;
   }
   const dict = words.join(', ');
-  let prompt = [ctx, dict].filter(Boolean).join(', ');
+  // Порядок: контекст экрана, словарь, хвост прошлой фразы. Хвост в конце —
+  // модель продолжает с конца подсказки, и ей ближе всего то, что человек уже
+  // сказал. Режем наоборот: сначала хвост, потом контекст, потом словарь.
+  let prompt = [ctx, dict, lastTail].filter(Boolean).join(', ');
   if (prompt.length > STT_PROMPT_LIMIT) {
-    // режем с начала по целым словам: хвост (словарь) важнее
-    const list = prompt.split(',').map((w) => w.trim()).filter(Boolean);
-    while (list.length > 1 && list.join(', ').length > STT_PROMPT_LIMIT) list.shift();
-    prompt = list.join(', ');
+    const parts = { ctx, dict, tail: lastTail };
+    if (parts.tail) {
+      prompt = [parts.ctx, parts.dict].filter(Boolean).join(', ');
+      parts.tail = '';
+    }
+    if (prompt.length > STT_PROMPT_LIMIT && parts.ctx) {
+      prompt = [parts.dict].filter(Boolean).join(', ');
+    }
+    if (prompt.length > STT_PROMPT_LIMIT) {
+      // последнее средство — режем словарь с конца по целым словам
+      const list = parts.dict.split(', ');
+      while (list.length > 1 && list.join(', ').length > STT_PROMPT_LIMIT) list.pop();
+      prompt = list.join(', ');
+    }
   }
-  return { prompt, contextChars: ctx.length, dictionaryWords: words.length };
+  return {
+    prompt,
+    contextChars: ctx.length,
+    dictionaryWords: words.length,
+    tailChars: lastTail.length,
+  };
 }
 
 function buildTrayMenu() {
@@ -1420,8 +1456,15 @@ function registerIpc() {
     // Подсказка движку: термины с экрана (если локальная модель их назвала) +
     // словарь. Словарь не передаём, когда тумблер «Применять словарь при
     // диктовке» выключен: настройка должна работать целиком.
+    const lang = payload?.lang || 'ru';
+    const tail = promptTailByLang[lang] || '';
     const seenPrompt = buildSttPrompt({
       context: String(payload?.contextPrompt || '').trim(),
+      // Хвост прошлой фразы: маленькая модель не помнит имена и пишет их
+      // «на слух», а подсказка возвращает привычные слова без затрат CPU.
+      // При выключенном словаре подсказок движку не даём вовсе: настройка
+      // «применять словарь при диктовке» означает «не подсказывать ничего».
+      tail: payload?.useDictionary === false ? '' : tail,
       // Словарь не передаём, когда тумблер «Применять словарь при диктовке»
       // выключен: настройка должна работать целиком.
       dictionary: payload?.useDictionary === false ? [] : store?.get('zs:dictionary') || [],
@@ -1435,6 +1478,7 @@ function registerIpc() {
         chars: prompt.length,
         dictionaryWords: seenPrompt.dictionaryWords,
         contextChars: seenPrompt.contextChars,
+        tailChars: seenPrompt.tailChars || 0,
       });
     }
     try {
@@ -1482,6 +1526,18 @@ function registerIpc() {
           /* окно уже закрыто */
         }
       };
+      // Сколько точности можно позволить: решают замеры прошлых проходов, а
+      // не «железо вообще». На слабой машине остаётся быстрый путь, на быстрой
+      // сразу считаем честно — иначе запас простаивал бы.
+      const plan = decodePlan(decodeHistory, { seconds: spokenSeconds });
+      if (plan.factor !== null) {
+        logger.info('stt', 'Режим распознавания', {
+          keep: true,
+          thorough: plan.thorough,
+          factor: Math.round((plan.factor || 0) * 100) / 100,
+          why: plan.reason,
+        });
+      }
       let res;
       if (chunks.length > 1) {
         // Части длинной записи считаем параллельно, если прогретый сервер сам
@@ -1503,6 +1559,7 @@ function registerIpc() {
               prompt,
               keepLoaded,
               useVad,
+              thorough: plan.thorough,
             });
             done += 1;
             reportProgress(done);
@@ -1553,13 +1610,28 @@ function registerIpc() {
         }
       } else {
         reportProgress(1);
-        res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded, useVad });
+        res = await whisper.transcribe(wav, {
+          lang: payload?.lang || 'ru',
+          model,
+          prompt,
+          keepLoaded,
+          useVad,
+          thorough: plan.thorough,
+        });
         // Второй, честный проход — только если первый вышел подозрительным:
         // пусто, два слова на десять секунд, заглушка или зацикливание.
         // Облачные сервисы перебирают варианты всегда; мы платим временем
         // только за те фразы, где точность действительно потерялась.
         const judge = judgeText(res?.text || '', { seconds: spokenSeconds });
-        if (payload?.partial !== true && spokenSeconds >= 1.2 && judge.unsure && !res?.code) {
+        if (
+          shouldRetry({
+            judge,
+            plan,
+            partial: payload?.partial === true,
+            seconds: spokenSeconds,
+            code: res?.code || '',
+          })
+        ) {
           logger.warn('stt', 'Текст вышел подозрительным — второй проход', {
             keep: true,
             why: judge.why,
@@ -1606,6 +1678,22 @@ function registerIpc() {
             loop: looksLikeLoop(res.text),
           });
           res = { ...res, text: collapsed };
+        }
+      }
+      // Замер для адаптивного режима: сколько стоил этот проход на секунду речи
+      if (res?.ok && spokenSeconds > 0.5) {
+        decodeHistory.push({ ms: ms, seconds: spokenSeconds });
+        if (decodeHistory.length > 8) decodeHistory.shift();
+      }
+      // Хвост этой фразы подскажет слова следующей: имена и термины не будут
+      // каждый раз «на слух». Только для настоящей диктовки, не для черновика.
+      if (res?.ok && res.text && payload?.partial !== true) {
+        const echoFree = stripPromptEcho(res.text, tail);
+        promptTailByLang[lang] = tailForPrompt(echoFree, STT_TAIL_LIMIT);
+        // Если после вырезания подсказки не осталось текста, значит человек
+        // просто повторил те же слова — это не эхо, и выбрасывать их нельзя.
+        if (echoFree !== res.text && echoFree.trim().length >= 2) {
+          res = { ...res, text: echoFree };
         }
       }
       // whisper иногда «дослышит» фразу, которой не было (тишина, музыка).

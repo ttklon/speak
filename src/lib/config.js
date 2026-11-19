@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.24.0',
+  version: '1.25.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',

@@ -77,4 +77,80 @@ function betterText(first, second) {
   return b >= Math.max(a + 2, Math.round(a * 1.3));
 }
 
-module.exports = { judgeText, betterText, FILLERS };
+/**
+ * Хвост прошлой фразы как подсказка движку.
+ *
+ * Зачем: маленькая модель не помнит, как человек называл вещи в прошлой фразе,
+ * и пишет «зум» вместо «Zoom», «телеграм» вместо «Telegram». Подсказка из
+ * предыдущего текста возвращает эти слова без всякой нейросети и без трат CPU.
+ *
+ * Берём только конец — он ближе к тому, что человек скажет дальше, — и режем по
+ * границе слова. Пунктуацию убираем: модель иначе повторяет её в начале.
+ */
+function tailForPrompt(text, limit = 80) {
+  const clean = String(text || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!clean) return '';
+  const max = Math.max(20, Number(limit) || 80);
+  let tail = clean.slice(-max);
+  if (tail.length === max) {
+    // обрезали посреди слова — начинаем со следующего
+    const space = tail.indexOf(' ');
+    if (space >= 0) tail = tail.slice(space + 1);
+  }
+  return tail.replace(/[.,!?;:…]+$/g, '').trim();
+}
+
+/**
+ * Движок иногда повторяет подсказку в начале ответа — целиком или её хвостом.
+ * Вырезаем повтор, иначе человек увидит в тексте дважды одну и ту же фразу.
+ */
+function stripPromptEcho(text, tail) {
+  const value = String(text || '');
+  const hint = String(tail || '').trim();
+  if (!value || !hint) return value;
+  if (value.trimStart().toLowerCase().startsWith(hint.toLowerCase())) {
+    return value.trimStart().slice(hint.length).replace(/^[\s.,!?;:—-]+/, '');
+  }
+  // частичное совпадение по словам: ищем самый длинный хвост подсказки,
+  // с которого начинается ответ (минимум три слова — иначе это совпадение)
+  const hintWords = hint.toLowerCase().split(/\s+/).filter(Boolean);
+  const outWords = value.trimStart().split(/\s+/).filter(Boolean);
+  const norm = (w) => w.toLowerCase().replace(/[.,!?;:…]/g, '');
+  for (let take = Math.min(hintWords.length, outWords.length); take >= 3; take -= 1) {
+    const part = hintWords.slice(-take).map((w) => w.replace(/[.,!?;:…]/g, ''));
+    const head = outWords.slice(0, take).map(norm);
+    if (part.every((w, i) => w === head[i])) {
+      return outWords.slice(take).join(' ');
+    }
+  }
+  return value;
+}
+
+/**
+ * Нужен ли второй проход — решение в одном месте, чтобы его можно было
+ * проверить без движка и без Windows.
+ *
+ * Повтор оправдан только когда первый проход был быстрым (у него не было
+ * перебора температур) и результат вышел подозрительным. Если машина уже
+ * считала «честно» с первого раза, тот же проход второй раз даст тот же текст.
+ */
+function shouldRetry({ judge = {}, plan = {}, partial = false, seconds = 0, code = '' } = {}) {
+  if (partial) return false;
+  if (code) return false;
+  if (!judge || judge.unsure !== true) return false;
+  if (Number(seconds) < 1.2) return false;
+  if (plan && plan.thorough === true) return false;
+  return true;
+}
+
+module.exports = {
+  judgeText,
+  betterText,
+  stripPromptEcho,
+  tailForPrompt,
+  shouldRetry,
+  FILLERS,
+};

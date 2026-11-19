@@ -2032,7 +2032,7 @@ await check('длинная диктовка без прогретого сер�
   if (runs.length !== 1) throw new Error(`движок запускался ${runs.length} раз — веса грузятся повторно`);
 });
 
-await check('подозрительный текст переспрашивают один раз, а не всегда', async () => {
+await check('подозрительный текст не выдают за нормальный, а лишних проходов нет', async () => {
   // «Продолжение следует» на пяти секундах — заглушка, которой whisper
   // закрывает тишину. Такой текст нельзя вставлять человеку: делаем второй
   // проход с перебором температур и берём его, только если слов стало больше.
@@ -2045,11 +2045,16 @@ await check('подозрительный текст переспрашиваю�
     lang: 'ru',
   });
   const runs = spawnCalls.filter((c) => String(c.file).includes('whisper'));
-  if (runs.length !== 2) throw new Error(`проходов ${runs.length}, ожидался второй`);
-  // второй запуск должен быть «честным»: без -nf и с более широким перебором
-  const second = runs[1].args.join(' ');
-  if (second.includes('-nf')) throw new Error('второй проход без перебора температур');
-  if (!second.includes('-bs 5')) throw new Error('во втором проходе нет -bs 5');
+  // На быстрой машине первый проход уже «честный» (-bs 5, без -nf): второй
+  // такой же ничего не изменит, поэтому лишнего запуска быть не должно.
+  if (runs.length !== 1) throw new Error(`проходов ${runs.length}, ожидался один`);
+  const args = runs[0].args.join(' ');
+  if (args.includes('-nf')) throw new Error('быстрый проход остался быстрым на быстрой машине');
+  if (!args.includes('-bs 5')) throw new Error('нет широкого перебора вариантов');
+  if (!args.includes('-et 2.4') || !args.includes('-lpt -1.0')) {
+    throw new Error('нет порогов, по которым whisper решает «нужен повтор»');
+  }
+  if (!args.includes('-nth 0.6')) throw new Error('нет порога «здесь нет речи»');
   if (once?.ok) throw new Error('заглушка выдана за нормальный текст');
   spawnPlan.answer = null;
 
