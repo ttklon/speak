@@ -8,6 +8,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 import { MODELS } from '../../../lib/config.js';
 import { MODEL_TIERS, tierForModel } from '../../../lib/modelTiers.js';
 import { pickCompareModels, runModelComparison } from '../../../lib/modelCompare.js';
+import { DECODE_MODES, describeMeasured, normalizeDecodeMode } from '../../../lib/decodeMode.js';
 
 /**
  * Модель распознавания: три режима вместо каталога из десяти моделей.
@@ -31,6 +32,9 @@ export default function ModelManager() {
   // Сравнение моделей на одной записи: пишем 5 секунд и прогоняем через все
   // скачанные модели. Победителя называем только по словам словаря.
   const [compare, setCompare] = useState(null); // { stage, rows, summary, error }
+  // Замеры этой машины: «счёт занимает N % от длительности речи». Нужны, чтобы
+  // «Авто» не было чёрным ящиком, а «Точно»/«Быстро» — осознанным выбором.
+  const [decodeStats, setDecodeStats] = useState(null);
   const [compareLevel, setCompareLevel] = useState(0);
   const [progress, setProgress] = useState({}); // id → percent
   const [busy, setBusy] = useState(null);
@@ -84,6 +88,21 @@ export default function ModelManager() {
   useEffect(() => {
     refresh();
   }, []);
+
+  // Замеры режима — отдельным запросом: без них карточка «Скорость и точность»
+  // говорила бы «решает приложение» и не показывала ни одного числа.
+  useEffect(() => {
+    let alive = true;
+    bridge
+      ?.decodeStats?.()
+      ?.then((res) => {
+        if (alive) setDecodeStats(res || null);
+      })
+      ?.catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [bridge]);
 
   useEffect(() => {
     if (!bridge?.onModelProgress) return undefined;
@@ -354,6 +373,14 @@ export default function ModelManager() {
         .filter(([, info]) => info?.downloaded)
         .map(([id]) => id)
     : [];
+  const mode = normalizeDecodeMode(settings.decodeMode);
+  const modeNote = describeMeasured({
+    factor: decodeStats?.factor ?? null,
+    samples: decodeStats?.samples ?? 0,
+    mode,
+    thorough: decodeStats?.thorough === true,
+  });
+
   // Сравнение — это не только текст на экране: если модель услышала лучше,
   // её можно сразу поставить основной, не ища переключатель выше.
   const applyCompared = (row) => {
@@ -661,6 +688,38 @@ export default function ModelManager() {
           {compare.summary ? <div className="compare__summary">{compare.summary}</div> : null}
         </div>
       ) : null}
+
+      <div className="setting-row setting-row--stack">
+        <div className="setting-row__label">
+          Скорость против точности
+          <div className="setting-row__desc">
+            {DECODE_MODES.find((m) => m.id === mode)?.hint}
+          </div>
+        </div>
+        <div className="decode-mode" role="group" aria-label="Режим распознавания">
+          {DECODE_MODES.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className={`decode-mode__btn ${option.id === mode ? 'is-active' : ''}`}
+              aria-pressed={option.id === mode}
+              onClick={async () => {
+                updateSettings({ decodeMode: option.id });
+                const fresh = await bridge?.decodeStats?.().catch(() => null);
+                if (fresh) setDecodeStats(fresh);
+                push({
+                  title: `Режим «${option.label}»`,
+                  description: option.hint,
+                  tone: 'success',
+                });
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="settings-note decode-mode__note">{modeNote}</div>
 
       <div className="setting-row">
         <div className="setting-row__label">

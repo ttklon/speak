@@ -40,17 +40,59 @@ function averageFactor(passes = []) {
 }
 
 /**
- * @param {Array<{ms:number, seconds:number}>} passes прошлые проходы
- * @param {{seconds?: number}} opts сколько длится текущая запись
- * @returns {{thorough: boolean, factor: number|null, reason: string, slow: boolean}}
+ * Режимы, которые человек может выбрать сам:
+ *  - auto — решают замеры (поведение по умолчанию);
+ *  - fast — только быстрый проход, второй лишь когда текста нет совсем;
+ *  - accurate — честный проход всегда.
  */
-function decodePlan(passes = [], { seconds = 0 } = {}) {
+const DECODE_MODES = ['auto', 'fast', 'accurate'];
+
+const normalizeMode = (mode) => (DECODE_MODES.includes(mode) ? mode : 'auto');
+
+/**
+ * @param {Array<{ms:number, seconds:number}>} passes прошлые проходы
+ * @param {{seconds?: number, mode?: 'auto'|'fast'|'accurate'}} opts запись и выбор человека
+ * @returns {{thorough: boolean, factor: number|null, reason: string, slow: boolean, mode: string, skipRetry: boolean}}
+ */
+function decodePlan(passes = [], { seconds = 0, mode = 'auto' } = {}) {
   const valid = (Array.isArray(passes) ? passes : []).filter(
     (p) => realtimeFactor(p?.ms, p?.seconds) !== null,
   );
   const factor = averageFactor(valid);
+  const chosen = normalizeMode(mode);
+  // Явный выбор человека сильнее замеров: «Точно» не должно «оптимизироваться»
+  // до быстрого прохода на медленной машине, иначе человек не поверит кнопке.
+  if (chosen === 'accurate') {
+    return {
+      thorough: true,
+      factor,
+      reason: 'выбран режим «Точно» — честный проход всегда',
+      slow: false,
+      mode: chosen,
+      skipRetry: false,
+    };
+  }
+  if (chosen === 'fast') {
+    return {
+      thorough: false,
+      factor,
+      reason: 'выбран режим «Быстро» — только быстрый проход',
+      slow: false,
+      mode: chosen,
+      // «Быстро» — это обещание скорости: второй проход только когда текста
+      // не получилось совсем (это решает main, а не этот модуль).
+      skipRetry: true,
+    };
+  }
   if (factor === null || valid.length < 2) {
-    return { thorough: false, factor, reason: 'нет замеров — начинаем с быстрого прохода', slow: false };
+    return {
+      thorough: false,
+      factor,
+      reason: 'нет замеров — начинаем с быстрого прохода',
+      slow: false,
+      mode: chosen,
+      skipRetry: false,
+    };
   }
   // Совсем короткая запись: полное окно энкодера всё равно стоит столько же,
   // сколько быстрый путь с урезанным, — выигрыша в скорости нет.
@@ -60,6 +102,8 @@ function decodePlan(passes = [], { seconds = 0 } = {}) {
       factor,
       reason: `движок успевает (${Math.round(factor * 100)} % от длительности записи) — считаем честно с первого раза`,
       slow: false,
+      mode: chosen,
+      skipRetry: false,
     };
   }
   return {
@@ -70,11 +114,14 @@ function decodePlan(passes = [], { seconds = 0 } = {}) {
         ? `движку тяжело (${Math.round(factor * 100)} %): быстрый проход, второй — только если текст подозрительный`
         : `запас небольшой (${Math.round(factor * 100)} %): быстрый проход`,
     slow: factor > SLOW_FACTOR,
+    mode: chosen,
+    skipRetry: false,
   };
 }
 
 module.exports = {
   ADAPTIVE_WINDOW,
+  DECODE_MODES,
   THOROUGH_FACTOR,
   SLOW_FACTOR,
   realtimeFactor,

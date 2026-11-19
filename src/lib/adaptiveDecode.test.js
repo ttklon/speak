@@ -83,6 +83,49 @@ describe('decodePlan', () => {
     expect(decodePlan([{ ms: 500, seconds: 5 }], { seconds: 3 }).thorough).toBe(false);
   });
 
+  it('«Точно» сильнее замеров: честный проход даже на медленной машине', () => {
+    const passes = [
+      { ms: 4000, seconds: 2 },
+      { ms: 4200, seconds: 2 },
+    ];
+    const plan = decodePlan(passes, { seconds: 2, mode: 'accurate' });
+    expect(plan.thorough).toBe(true);
+    expect(plan.mode).toBe('accurate');
+    expect(plan.reason).toMatch(/Точно/);
+    // замеры никуда не деваются: их всё ещё показываем в интерфейсе
+    expect(plan.factor).toBeGreaterThan(1.9);
+  });
+
+  it('«Точно» не платит за замеры, даже когда их нет', () => {
+    expect(decodePlan([], { seconds: 3, mode: 'accurate' }).thorough).toBe(true);
+  });
+
+  it('«Быстро» не делает честный проход, даже если машина быстрая', () => {
+    const passes = [
+      { ms: 500, seconds: 4 },
+      { ms: 600, seconds: 4 },
+    ];
+    const plan = decodePlan(passes, { seconds: 3, mode: 'fast' });
+    expect(plan.thorough).toBe(false);
+    expect(plan.skipRetry).toBe(true);
+    expect(plan.reason).toMatch(/Быстро/);
+  });
+
+  it('«Авто» остаётся прежним: решают замеры', () => {
+    const passes = [
+      { ms: 500, seconds: 4 },
+      { ms: 600, seconds: 4 },
+    ];
+    const plan = decodePlan(passes, { seconds: 3, mode: 'auto' });
+    expect(plan.mode).toBe('auto');
+    expect(plan.thorough).toBe(true);
+    expect(plan.skipRetry).toBe(false);
+  });
+
+  it('незнакомый режим — это «Авто», а не поломка', () => {
+    expect(decodePlan([{ ms: 500, seconds: 4 }], { seconds: 3, mode: 'турбо' }).mode).toBe('auto');
+  });
+
   it('короткие записи не ломают расчёт', () => {
     const passes = [
       { ms: 500, seconds: 0 }, // запись без длительности — мимо

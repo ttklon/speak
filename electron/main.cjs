@@ -28,7 +28,7 @@ const {
   tailForPrompt,
   shouldRetry,
 } = require('./textQuality.cjs');
-const { decodePlan } = require('./adaptiveDecode.cjs');
+const { averageFactor, decodePlan } = require('./adaptiveDecode.cjs');
 const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
@@ -1558,7 +1558,8 @@ function registerIpc() {
       // Человек может попросить честный проход сам — кнопкой «Переспросить
       // точно»: тот же звук, но с широким перебором. Замеры здесь не решают:
       // это его время и его выбор.
-      const auto = decodePlan(decodeHistory, { seconds: spokenSeconds });
+      const decodeMode = (store?.get('zs:settings') || {}).decodeMode || 'auto';
+      const auto = decodePlan(decodeHistory, { seconds: spokenSeconds, mode: decodeMode });
       const plan =
         payload?.thorough === true ? { ...auto, thorough: true, reason: 'по просьбе человека' } : auto;
       if (plan.factor !== null) {
@@ -1654,7 +1655,12 @@ function registerIpc() {
         // Облачные сервисы перебирают варианты всегда; мы платим временем
         // только за те фразы, где точность действительно потерялась.
         const judge = judgeText(res?.text || '', { seconds: spokenSeconds });
+        // «Быстро» — обещание скорости: второй проход только когда текста нет
+        // совсем. Пустой текст — это не «подозрительно», это провал, его надо
+        // спасать даже в быстром режиме.
+        const retryAllowed = !plan.skipRetry || !String(res?.text || '').trim();
         if (
+          retryAllowed &&
           shouldRetry({
             judge,
             plan,
@@ -2449,6 +2455,22 @@ function registerIpc() {
   // прогоняем её через скачанные модели и отдаём текст, время и попадания в
   // словарь. Победителя объявляет интерфейс и только по словарю — приложение
   // не знает, что человек сказал, и не имеет права решать за него.
+  // Что приложение знает о скорости этой машины: коэффициент, режим и что из
+  // этого следует. Без этого «Слабая машина» была бы словами без цифр.
+  ipcMain.handle('stt:decode-stats', async () => {
+    const mode = (store?.get('zs:settings') || {}).decodeMode || 'auto';
+    const factor = averageFactor(decodeHistory);
+    const plan = decodePlan(decodeHistory, { seconds: 0, mode });
+    return {
+      mode,
+      factor: factor === null ? null : Math.round(factor * 100) / 100,
+      samples: decodeHistory.length,
+      thorough: plan.thorough,
+      reason: plan.reason,
+      slow: plan.slow === true,
+    };
+  });
+
   ipcMain.handle('models:compare', async (_e, payload) => {
     const pcmView = payload?.pcm;
     const raw =

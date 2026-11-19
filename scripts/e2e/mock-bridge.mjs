@@ -152,6 +152,19 @@ export function installMockBridge() {
       record('models:prepare');
       return { ok: true };
     },
+    // замеры скорости машины: карточка «Скорость и точность» показывает их
+    // человеку, поэтому мок обязан их отдавать в той же форме, что main
+    decodeStats: async () => {
+      record('stt:decode-stats');
+      let mode = 'auto';
+      try {
+        mode = JSON.parse(localStorage.getItem('mockstore:zs.settings') || '{}').decodeMode || 'auto';
+      } catch {
+        mode = 'auto';
+      }
+      return { mode, factor: 0.58, samples: 4, thorough: mode !== 'fast', reason: 'мок замера', slow: false };
+    },
+
     transcribePcm: async (payload) => {
       // Что «услышал» движок. По умолчанию — проверочная фраза, но сценарий
       // может подставить свою (голосовые команды, длинные тексты): иначе

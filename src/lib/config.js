@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.29.0',
+  version: '1.30.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -237,6 +237,11 @@ export const DEFAULT_SETTINGS = {
   // переключается на быструю модель и говорит об этом. Человеку не нужно
   // разбираться в каталоге моделей, чтобы диктовка перестала тормозить.
   autoOptimize: true,
+  // Скорость против точности: 'auto' — решают замеры (electron/adaptiveDecode.cjs),
+  // 'fast' — только быстрый проход, 'accurate' — честный проход всегда.
+  // Явный выбор человека сильнее замеров: иначе кнопка «Точно» на медленной
+  // машине молча превращалась бы в «Быстро».
+  decodeMode: 'auto',
   audioDeviceId: 'default',
   // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
   // 1.6.0: включён по умолчанию — скорость важнее, тумблер остался в «Функциях →

@@ -79,6 +79,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     modelsStatus: () => ipcRenderer.invoke('models:status'),
     // сравнить модели на одной записи: { pcm, sampleRate, lang, models }
     compareModels: (payload) => ipcRenderer.invoke('models:compare', payload),
+    // замеры скорости машины и выбранный режим — для карточки «Скорость и точность»
+    decodeStats: () => ipcRenderer.invoke('stt:decode-stats'),
     modelsCancel: () => ipcRenderer.invoke('models:cancel'),
     // русская модель (GigaAM v3): скачивается отдельно от whisper-моделей
     downloadRussianModel: () => ipcRenderer.invoke('models:download-russian'),

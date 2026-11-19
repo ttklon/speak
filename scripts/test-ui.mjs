@@ -3927,6 +3927,65 @@ async function scenarioRetryLast(browser) {
   await page.close();
 }
 
+/**
+ * «Скорость против точности»: три режима и замер этой машины.
+ *
+ * Проверяем то, ради чего карточка сделана: выбор виден целиком, сохраняется,
+ * и рядом написано числом, что происходит на этой машине, — иначе «Авто»
+ * остаётся чёрным ящиком.
+ */
+async function scenarioDecodeMode(browser) {
+  const page = await openPage(browser, '#/settings?section=dictation&from=home', { settle: 700 });
+  takeErrors(page);
+  const card = await page.evaluate(() => ({
+    buttons: [...document.querySelectorAll('.decode-mode__btn')].map((b) => b.innerText.trim()),
+    active: document.querySelector('.decode-mode__btn.is-active')?.innerText.trim() || '',
+    note: document.querySelector('.decode-mode__note')?.innerText || '',
+    called: Boolean(window.__e2e.last('stt:decode-stats')),
+  }));
+  record(
+    'сценарии',
+    'режим распознавания: три варианта видны целиком, а не спрятаны в списке',
+    card.buttons.join(',') === 'Авто,Быстро,Точно' && card.active === 'Авто',
+    `${card.buttons.join(', ')} · активен «${card.active}»`,
+  );
+  record(
+    'сценарии',
+    'режим распознавания: рядом замер этой машины, а не «решает приложение»',
+    card.called && /%/.test(card.note),
+    card.note || 'замера нет',
+  );
+
+  const clicked = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.decode-mode__btn')].find((b) => b.innerText.trim() === 'Точно');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(600);
+  const after = await page.evaluate(() => ({
+    saved: (window.__e2e.read('zs.settings') || {}).decodeMode || '',
+    active: document.querySelector('.decode-mode__btn.is-active')?.innerText.trim() || '',
+    note: document.querySelector('.decode-mode__note')?.innerText || '',
+    toasts: [...document.querySelectorAll('.toast__title')].map((n) => n.innerText).join(' | '),
+  }));
+  record(
+    'сценарии',
+    'режим распознавания: «Точно» сохраняется и честно объясняет, что теперь всегда',
+    clicked && after.saved === 'accurate' && after.active === 'Точно' && /независимо от замеров/.test(after.note),
+    `сохранено «${after.saved}» · ${after.note}`,
+  );
+  record(
+    'сценарии',
+    'режим распознавания: о смене сказано словами',
+    /Режим «Точно»/.test(after.toasts),
+    after.toasts || 'тоста нет',
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'режим распознавания: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioClearDictations(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
   takeErrors(page);
@@ -5993,6 +6052,7 @@ async function main() {
       ['самопроверка диктовки', scenarioSelfTest],
       ['сравнение моделей', scenarioModelCompare],
       ['переспросить точно', scenarioRetryLast],
+      ['режим распознавания', scenarioDecodeMode],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

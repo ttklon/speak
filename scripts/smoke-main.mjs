@@ -1448,6 +1448,40 @@ await check('«переспросить точно»: честный прохо�
   if (/\s-nf(\s|$)/.test(args)) throw new Error('честный проход запретил повтор температур');
 });
 
+await check('режим «Точно» сильнее замеров: честный проход даже на медленной машине', async () => {
+  // Замеры «движку тяжело» есть, но человек выбрал «Точно» — значит считаем честно.
+  await handlers.get('store:set')({}, 'zs:settings', { decodeMode: 'accurate' });
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(600), durationMs: 600, lang: 'ru', model: 'small', useDictionary: false });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const args = call.args.join(' ');
+  if (!/\s-bs 5(\s|$)/.test(args)) throw new Error(`режим «Точно» не дал честный проход: ${args}`);
+  if (/\s-nf(\s|$)/.test(args)) throw new Error('режим «Точно» запретил повтор температур');
+});
+
+await check('режим «Быстро» не делает честный проход', async () => {
+  await handlers.get('store:set')({}, 'zs:settings', { decodeMode: 'fast' });
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(600), durationMs: 600, lang: 'ru', model: 'small', useDictionary: false });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const args = call.args.join(' ');
+  if (/\s-bs 5(\s|$)/.test(args)) throw new Error('режим «Быстро» всё равно считал честно');
+  if (!/\s-nf(\s|$)/.test(args)) throw new Error('нет -nf в быстром режиме');
+  await handlers.get('store:set')({}, 'zs:settings', { decodeMode: 'auto' });
+});
+
+await check('замеры скорости отдаются интерфейсу словами и числом', async () => {
+  // Смысл: карточка «Скорость и точность» должна показывать реальный
+  // коэффициент, а не «решает приложение».
+  const stats = await handlers.get('stt:decode-stats')({});
+  if (!stats || typeof stats !== 'object') throw new Error('нет ответа');
+  if (!(typeof stats.factor === 'number' || stats.factor === null)) throw new Error(`factor: ${stats.factor}`);
+  if (!Number.isInteger(stats.samples)) throw new Error(`samples: ${stats.samples}`);
+  if (!['auto', 'fast', 'accurate'].includes(stats.mode)) throw new Error(`mode: ${stats.mode}`);
+});
+
 await check('whisper получает все ядра и -sns против галлюцинаций', async () => {
   runWhisper('текст');
   spawnCalls.length = 0;
