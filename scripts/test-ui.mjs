@@ -4988,7 +4988,7 @@ async function scenarioDictationModes(browser) {
   await sleep(2600);
   const hands = await page.evaluate(() => ({
     inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
-    idle: !/Слушаю|Транскрибирую/i.test(document.body.innerText),
+    idle: !/Слушаю|Распознаю|Транскрибирую/i.test(document.body.innerText),
   }));
   record('режимы', '«свободные руки»: второе нажатие останавливает запись', listening && hands.inserts === 1 && hands.idle, `вставок: ${hands.inserts}`);
 
@@ -5179,7 +5179,7 @@ async function scenarioScreenAware(browser) {
   await sleep(2400);
   const toggledOff = await page3.evaluate(() => ({
     inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
-    idle: !/Слушаю|Транскрибирую/i.test(document.body.innerText),
+    idle: !/Слушаю|Распознаю|Транскрибирую/i.test(document.body.innerText),
   }));
   record('экран', 'своё сочетание screen-aware работает переключателем', toggledOn.listening && toggledOn.captured && toggledOff.inserts === 1 && toggledOff.idle, `вставок: ${toggledOff.inserts}`);
   await page3.close();

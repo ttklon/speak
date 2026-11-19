@@ -224,9 +224,13 @@
       playIcon.hidden = true;
       pauseBtn.appendChild(playIcon);
 
+      // Состояния — словами, которые человек говорит сам. Процесс в плашке
+      // называется «Распознаю»: без терминов из мира движков, к которым надо
+      // привыкать, и без официального «распознавание записи».
       const STATE_TITLE = {
         listening: 'Слушаю…',
-        processing: 'Транскрибирую…',
+        processing: 'Распознаю…',
+        done: 'Готово',
         idle: 'Запись остановлена',
         error: 'Не получилось',
       };
@@ -242,18 +246,23 @@
         hud.title = [p.error, p.hintFull || p.hint].filter(Boolean).join(' — ') || 'ZSpeakly';
         const seconds = Math.max(0, (p.elapsed || 0) / 1000);
         const procSeconds = Math.max(0, (p.processingMs || 0) / 1000);
+        // Долгая запись режется на куски: «фрагмент 2 из 4» честнее, чем
+        // секунды счёта без конца — иначе плашка выглядит зависшей.
+        const parts = p.parts && Number(p.parts.total) > 1 ? p.parts : null;
         timeEl.textContent =
-          state === 'idle' || state === 'error'
+          state === 'idle' || state === 'error' || state === 'done'
             ? ''
             : state === 'processing'
-              ? `распознаю ${procSeconds.toFixed(0)} с`
+              ? parts
+                ? `фрагмент ${parts.done} из ${parts.total}`
+                : `распознаю ${procSeconds.toFixed(0)} с`
               : `${p.paused ? 'пауза · ' : ''}${seconds.toFixed(1)} с`;
         if (state === 'listening' && p.paused) titleEl.textContent = 'Пауза';
         // Командный режим: сказанное применится к выделению, а не вставится
         // текстом. Без этой строки плашка обещала бы диктовку.
         const isCommand = Boolean(p.command);
         if (state === 'listening' && isCommand && !p.paused) titleEl.textContent = 'Слушаю команду…';
-        if (state === 'processing') titleEl.textContent = p.error ? p.error : 'Транскрибирую…';
+        if (state === 'processing') titleEl.textContent = p.error ? p.error : 'Распознаю…';
         const draft = (p.draft || '').trim();
         // У whisper.cpp текст по умолчанию появляется после остановки. Если
         // включена живая расшифровка (p.live), обещание другое — и оно правдиво.
@@ -266,7 +275,8 @@
         textEl.textContent =
           state === 'error'
             ? p.hint || 'Проверьте микрофон и движок в настройках'
-            : draft || (state === 'processing' ? 'Распознаю запись…' : idleHint);
+            : draft ||
+              (state === 'processing' ? 'Распознаю запись…' : state === 'done' ? 'Готово' : idleHint);
         // кнопки: пауза — только во время записи, отмена — только при распознавании
         stopBtn.hidden = state !== 'listening';
         pauseBtn.hidden = state !== 'listening';

@@ -1030,7 +1030,7 @@ export function DictationProvider({ children }) {
     setState('processing');
     setLevel(0);
     if (rec && settingsRef.current.soundFeedback !== false) playCue('stop');
-    // записи нет — нечего останавливать: иначе плашка «Транскрибирую…» висела
+    // записи нет — нечего останавливать: иначе плашка «Распознаю…» висела
     // до 90-секундного сторожа
     if (!rec) {
       setState('idle');
@@ -1464,6 +1464,9 @@ export function DictationProvider({ children }) {
       engine,
       // а этот флаг — когда живой текст действительно включён
       live: liveText,
+      // Длинная запись считается кусками: плашка говорит «фрагмент 2 из 4»,
+      // иначе «распознаю 8 с» выглядит как зависание.
+      parts: sttProgress,
       error: error?.title || '',
       hint: hintFull,
       hintFull,
@@ -1471,7 +1474,7 @@ export function DictationProvider({ children }) {
       // диктовку, — иначе человек ждёт вставки вместо правки выделения
       command: Boolean(sessionOpts.current.command),
     });
-  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, paused, processingMs]);
+  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, paused, processingMs, sttProgress]);
 
   // Сообщаем main, что реально происходит: от этого зависят пункт
   // «Остановить диктовку» в трее и поведение глобального сочетания.

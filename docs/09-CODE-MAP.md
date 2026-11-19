@@ -56,7 +56,7 @@
 | Файл | Что делает |
 | --- | --- |
 | `main.cjs` | Всё ядро: окно 1020×680 без рамки, отдельное окно индикатора диктовки (`createHudWindow` — 268×92, `frame:false`, `transparent`, `alwaysOnTop: 'screen-saver'`, `focusable:false`, `showInactive`, низ экрана по центру) и каналы `hud:show/hide/update/stop/close/status`, трей и меню, `globalShortcut`, мониторинг буфера (900 мс), активное окно через PowerShell+C# (`GetForegroundWindow` + `GetWindowThreadProcessId`), вставка `^v` через `SendKeys`, чтение и замена выделения, скриншоты `desktopCapturer`, `setDisplayMediaRequestHandler` с loopback-звуком, регистрация всех IPC с учётом занятых сочетаний (`registerAccel` + `hotkey:conflict`), различение одиночного и двойного нажатия диктовки для «агента», инициализация журнала, тихая проверка обновлений |
-| `hud.html` | Само окно индикатора: пульс уровня (`--level`), «Слушаю… / Транскрибирую… / Запись остановлена», таймер, живой текст, кнопки «Пауза/Продолжить», «Остановить запись», «Скрыть индикатор» и «Отменить распознавание» (во время обработки). Своих скриптов вне файла нет, стили внутри |
+| `hud.html` | Само окно индикатора: пульс уровня (`--level`), «Слушаю… / Распознаю… / Запись остановлена / Готово», «фрагмент 2 из 4» на длинной записи, таймер, живой текст, кнопки «Пауза/Продолжить», «Остановить запись», «Скрыть индикатор» и «Отменить распознавание» (во время обработки). Своих скриптов вне файла нет, стили внутри |
 | `hud-preload.cjs` | Мост окна индикатора: `window.hudBridge = { stop, close, onState }` — ничего больше |
 | `preload.cjs` | `contextBridge.exposeInMainWorld('zspeakly', …)`: `store`, `window`, `native` (включая `hudShow/hudHide/hudUpdate/hudStatus`, `onDictationStop`, `onHudClosed`), `clipboard`, подписки `onHotkey/onTextAction/onCommand/onClipboard/onClipboardAction/onModelProgress/onUpdateStatus/onHotkeyConflict`, `onNavigate`, `setZoom` |
 | `store.cjs` | `JsonStore`: `%APPDATA%\ZSpeakly\profile.json`, кэш в памяти, `scheduleFlush` 180 мс, атомарная запись `.tmp` → `rename`, `sizeSync()` |
@@ -181,7 +181,7 @@ Ctrl+Alt+Space (глобальный хоткей)
   перезапускать вручную;
 - при отсутствии движка показывается честная ошибка с путём в настройки, а не
   выдуманный текст;
-- «сторож» на 90 с не даёт плашке «Транскрибирую…» висеть вечно;
+- «сторож» на 90 с не даёт плашке «Распознаю…» висеть вечно;
 - в браузере (превью) распознаёт Web Speech; если его нет — понятная ошибка, а не выдуманный текст.
 
 ## 4. Поток AI-инструкции

@@ -6,7 +6,7 @@ import { useDictation } from '../../state/DictationProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 
 export default function DictationHUD() {
-  const { state, draft, level, elapsed, stop, setHudOpen, error, nativeHud } = useDictation();
+  const { state, draft, level, elapsed, stop, setHudOpen, error, nativeHud, sttProgress } = useDictation();
   const { settings } = useAppData();
   // настройка «Плавающий индикатор записи»: выключили — плашки нет,
   // но ошибки показываем всегда, иначе человек не поймёт, почему тишина
@@ -28,7 +28,11 @@ export default function DictationHUD() {
   // вторую плашку внутри окна не рисуем, чтобы не было двух «Слушаю…».
   if (nativeHud) return null;
   const seconds = (elapsed / 1000).toFixed(1);
-  const idle = state !== 'listening' && state !== 'processing';
+  // «Готово» — отдельное состояние: после команды голосом запись уже кончилась,
+  // и «Запись остановлена» звучит как отказ, а не как «всё сделано».
+  const done = state === 'done';
+  const idle = state !== 'listening' && state !== 'processing' && !done;
+  const title = done ? 'Готово' : idle ? 'Запись остановлена' : state === 'processing' ? 'Распознаю…' : 'Слушаю…';
 
   return (
     <div className="hud" role="status" aria-live="polite">
@@ -39,15 +43,26 @@ export default function DictationHUD() {
       </div>
       <div className="hud__body">
         <div className="hud__title">
-          {idle ? 'Запись остановлена' : state === 'processing' ? 'Транскрибирую…' : 'Слушаю…'}
-          {idle ? null : <span className="hud__time">{seconds} с</span>}
+          {title}
+          {idle || done ? null : (
+            <span className="hud__time">
+              {/* долгая запись считается кусками — видно, что работа идёт */}
+              {state === 'processing' && sttProgress && sttProgress.total > 1
+                ? `фрагмент ${sttProgress.done} из ${sttProgress.total}`
+                : `${seconds} с`}
+            </span>
+          )}
         </div>
         <div className="hud__text">
           {draft ? (
             <span className="hud__draft">{draft}</span>
           ) : (
             <span className="hud__hint">
-              {idle ? 'Причина — ниже. Запись не идёт.' : 'Говорите — текст появится здесь'}
+              {done
+                ? 'Текст готов и уже вставлен'
+                : idle
+                  ? 'Причина — ниже. Запись не идёт.'
+                  : 'Говорите — текст появится здесь'}
             </span>
           )}
         </div>
