@@ -626,6 +626,15 @@ export function DictationProvider({ children }) {
         sttPreParts: sttMeta?.timeline?.preParts > 0 ? sttMeta.timeline.preParts : undefined,
         sttModel: sttMeta?.model || undefined,
         sttWarm: typeof sttMeta?.timeline?.warm === 'boolean' ? sttMeta.timeline.warm : undefined,
+        // что приложение сделало со звуком: усиление и сжатые паузы. Без этих
+        // чисел «почему так распозналось» остаётся догадкой
+        sttGainDb: Number(sttMeta?.gainDb ?? sttMeta?.timeline?.gainDb) > 0 ? Number(sttMeta?.gainDb ?? sttMeta.timeline.gainDb) : undefined,
+        sttPausesMs:
+          Number(sttMeta?.pausesMs ?? sttMeta?.timeline?.pausesMs) > 0
+            ? Number(sttMeta?.pausesMs ?? sttMeta.timeline.pausesMs)
+            : undefined,
+        sttThorough: sttMeta?.thorough === true ? true : undefined,
+        sttSecondPass: sttMeta?.secondPass === true ? true : undefined,
         // Отпустил клавишу → текст готов. Включает распознавание, чистку и
         // вставку, поэтому именно это число сравнивается с обещанными пятью
         // секундами (у старых записей его нет — считаем по sttMs).
@@ -1133,7 +1142,7 @@ export function DictationProvider({ children }) {
             setLevel(0);
           }
         },
-        onEnd: async ({ text, ms, spoken, mode, parts, timeline, model }) => {
+        onEnd: async ({ text, ms, spoken, mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs }) => {
           recRef.current = null;
           setState('processing');
           setLevel(0);
@@ -1143,7 +1152,7 @@ export function DictationProvider({ children }) {
           const item = await finish(text, {
             sttMs: ms,
             spokenSeconds: spoken || 0,
-            sttMeta: { mode, parts, timeline, model },
+            sttMeta: { mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs },
           });
           if (opts.onResult) opts.onResult(item);
         },

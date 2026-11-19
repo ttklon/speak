@@ -458,6 +458,10 @@ export function createRecognizer(opts = {}) {
               tailMs: Math.round(tailMs),
             },
             model: res.model || '',
+            thorough: res.thorough === true,
+            secondPass: res.secondPass === true,
+            gainDb: Number(res.audio?.gainDb) || 0,
+            pausesMs: Number(res.audio?.pausesMs) || 0,
           });
         } else if (preText) {
           // Хвост не распознался (шум, обрывок), но заранее посчитанное уже

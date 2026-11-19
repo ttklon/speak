@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { TARGET_DBFS, MAX_GAIN_DB, measurePcm, highPass, normalize, preparePcm } = require('../../electron/audioPrep.cjs');
+const { TARGET_DBFS, MAX_GAIN_DB, measurePcm, highPass, normalize, compactSilence, preparePcm } = require('../../electron/audioPrep.cjs');
 
 const RATE = 16000;
 
@@ -106,5 +106,52 @@ describe('preparePcm', () => {
     const out = preparePcm(normal);
     expect(out.after.peak).toBeLessThanOrEqual(32767);
     expect(out.pcm.length).toBe(normal.length);
+  });
+});
+
+describe('compactSilence', () => {
+  /** Речь (тон) + тишина: [speechMs, pauseMs, speechMs, ...] */
+  function speechWithPauses(parts) {
+    const chunks = [];
+    parts.forEach((ms, i) => {
+      const samples = Math.round((RATE * ms) / 1000);
+      const buf = Buffer.alloc(samples * 2);
+      for (let k = 0; k < samples; k += 1) {
+        buf.writeInt16LE(i % 2 === 0 ? Math.round(6000 * Math.sin((2 * Math.PI * 220 * k) / RATE)) : 0, k * 2);
+      }
+      chunks.push(buf);
+    });
+    return Buffer.concat(chunks);
+  }
+
+  it('длинную паузу сжимает, речь оставляет', () => {
+    const input = speechWithPauses([1000, 3000, 1000]);
+    const { pcm, removedMs } = compactSilence(input);
+    const seconds = pcm.length / 2 / RATE;
+    expect(removedMs).toBeGreaterThan(2000);
+    expect(seconds).toBeLessThan(3.2); // было 5 с
+    expect(seconds).toBeGreaterThan(2.2); // речь и запас на месте
+  });
+
+  it('короткие паузы между словами не трогает', () => {
+    const input = speechWithPauses([400, 200, 400, 200, 400]);
+    const { pcm, removedMs } = compactSilence(input);
+    expect(removedMs).toBe(0);
+    expect(pcm.length).toBe(input.length);
+  });
+
+  it('запись без пауз не меняет', () => {
+    const input = speechWithPauses([1500]);
+    const { pcm, removedMs } = compactSilence(input);
+    expect(removedMs).toBe(0);
+    expect(pcm.equals(input)).toBe(true);
+  });
+
+  it('громкость речи после сжатия не меняется', () => {
+    const input = speechWithPauses([1000, 2000, 1000]);
+    const { pcm } = compactSilence(input);
+    const before = measurePcm(input.subarray(0, RATE * 2));
+    const after = measurePcm(pcm.subarray(0, RATE * 2));
+    expect(Math.abs(after.rms - before.rms)).toBeLessThan(500);
   });
 });

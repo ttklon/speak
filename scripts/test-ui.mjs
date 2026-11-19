@@ -2775,6 +2775,10 @@ async function scenarioRawText(browser) {
           durationMs: 2000,
           words: 3,
           source: 'dictation',
+          sttThorough: true,
+          sttGainDb: 12,
+          sttPausesMs: 2400,
+          sttModel: 'ggml-small-q5_1.bin',
         },
       ],
     },
@@ -2795,6 +2799,13 @@ async function scenarioRawText(browser) {
     'история: видно, какое слово приложение исправило',
     shown.changed.join(',') === 'ZSpeakly',
     `подсвечено: ${shown.changed.join(', ') || '—'}`,
+  );
+  const how = await page.evaluate(() => document.querySelector('.snippet__meta')?.textContent || '');
+  record(
+    'сценарии',
+    'история: видно, как считалось — честный проход, усиление, сжатые паузы',
+    /честный проход/.test(how) && /\+12 дБ/.test(how) && /паузы сжаты/.test(how),
+    how.replace(/\s+/g, ' ').slice(0, 110) || 'строка пустая',
   );
   record(
     'сценарии',

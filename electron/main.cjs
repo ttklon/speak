@@ -1343,13 +1343,26 @@ function registerIpc() {
       });
     }
     const prepped = prepared.pcm;
+    // Внутренние паузы сжимаем: длинная тишина посреди фразы и время ест, и
+    // даёт модели повод «додумать» текст. Края обрежем следом.
+    const compacted = audioPrep.compactSilence(prepped, { sampleRate: payload?.sampleRate || 16000 });
+    if (compacted.removedMs > 300) {
+      logger.info('stt', 'Сжатие пауз', {
+        keep: true,
+        removedMs: Math.round(compacted.removedMs),
+        beforeMs: Math.round((prepped.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+        afterMs: Math.round((compacted.pcm.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+      });
+    }
+    const pausesMs = Math.round(compacted.removedMs);
     // Паузы по краям записи убираем: whisper точнее на коротком чистом фрагменте.
     const trimStarted = Date.now();
-    const trimmed = whisper.trimSilence?.(prepped, payload?.sampleRate || 16000) || prepped;
+    const trimmed =
+      whisper.trimSilence?.(compacted.pcm, payload?.sampleRate || 16000) || compacted.pcm;
     const trimMs = Date.now() - trimStarted;
     logger.info('stt', 'Обрезка тишины', {
       keep: true,
-      beforeMs: Math.round((prepped.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+      beforeMs: Math.round((compacted.pcm.length / 2 / (payload?.sampleRate || 16000)) * 1000),
       afterMs: Math.round((trimmed.length / 2 / (payload?.sampleRate || 16000)) * 1000),
     });
     // Русская модель: решение принимает политика (electron/sttEngine.cjs), а не
@@ -1391,7 +1404,7 @@ function registerIpc() {
           mode: 'gigaam',
           model: 'gigaam-v3',
           parts: resGiga.chunks,
-          timeline: { total: Date.now() - gigaStarted },
+          timeline: { total: Date.now() - gigaStarted, pausesMs, gainDb: prepared.gainDb },
         };
       }
       // Не получилось — говорим об этом в журнал и распознаём прежним движком:
@@ -1430,7 +1443,7 @@ function registerIpc() {
           mode: 'parakeet',
           model: 'parakeet-tdt-0.6b-v3',
           parts: resPara.chunks,
-          timeline: { total: Date.now() - paraStarted },
+          timeline: { total: Date.now() - paraStarted, pausesMs, gainDb: prepared.gainDb },
         };
       }
       // Не получилось — говорим об этом в журнал и распознаём прежним движком:
@@ -1712,6 +1725,8 @@ function registerIpc() {
         mode: res?.mode || 'cli',
         warm: wasWarm,
         model,
+        pausesMs,
+        gainDb: prepared.gainDb,
       };
       logger[res?.ok ? 'info' : 'error']('stt', res?.ok ? 'Распознавание завершено' : 'Распознавание не удалось', {
         keep: true,
@@ -1750,8 +1765,18 @@ function registerIpc() {
         // а диагностика — ещё и сколько стоила подготовка звука
         timeline,
         model,
+        // как считали: сразу честно или вторым проходом после подозрительного
+        thorough: plan.thorough === true,
+        secondPass: res?.secondPass === true,
         autoTunedTo: autoTunedTo || undefined,
-        audio: audio ? { seconds: Math.round(audio.seconds * 10) / 10, rms: audio.rms } : undefined,
+        audio: audio
+          ? {
+              seconds: Math.round(audio.seconds * 10) / 10,
+              rms: audio.rms,
+              gainDb: prepared.gainDb,
+              pausesMs,
+            }
+          : undefined,
         chunks: totalParts > 1 ? totalParts : undefined,
       };
     } catch (err) {

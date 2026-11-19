@@ -28,6 +28,21 @@ function HeroStat({ value, unit, label }) {
   );
 }
 
+/**
+ * «Как считалось»: одной строкой то, что приложение сделало со звуком и как
+ * его считало. Нужна для разбора «почему распозналось плохо» — по числам видно,
+ * был ли микрофон тихим, сжимались ли паузы и шёл ли честный проход.
+ */
+function howItRan(item) {
+  const bits = [];
+  if (item.sttSecondPass) bits.push('второй проход (перебор вариантов)');
+  else if (item.sttThorough) bits.push('честный проход сразу');
+  if (item.sttGainDb) bits.push(`+${item.sttGainDb} дБ громкости`);
+  if (item.sttPausesMs) bits.push(`паузы сжаты на ${(item.sttPausesMs / 1000).toFixed(1).replace('.', ',')} с`);
+  if (item.sttModel) bits.push(item.sttModel.replace(/^ggml-/, '').replace(/\.bin$/, ''));
+  return bits.join(' · ');
+}
+
 export default function HomePage() {
   const { dictations, voiceHotkeys, settings, deleteDictation, addDictation, updateDictation } = useAppData();
   const {
@@ -534,6 +549,7 @@ export default function HomePage() {
                 </div>
                 <div className="snippet__meta">
                   {snippet.words} слов · {formatSeconds(snippet.durationMs)}
+                  {howItRan(snippet) ? ` · ${howItRan(snippet)}` : ''}
                 </div>
               </div>
               <button type="button" className="icon-btn icon-btn--sm" onClick={() => setSnippet(null)}>

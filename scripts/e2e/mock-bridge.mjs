@@ -186,6 +186,11 @@ export function installMockBridge() {
         text: custom === null ? 'Проверка диктовки: раз, два, три.' : custom,
         engine: 'whisper',
         ms: 1400,
+        // как настоящий main: рассказываем, что сделали со звуком и как считали
+        thorough: true,
+        secondPass: false,
+        audio: { seconds: 1.4, rms: 820, gainDb: 9, pausesMs: 1200 },
+        model: 'ggml-small-q5_1.bin',
       };
     },
 

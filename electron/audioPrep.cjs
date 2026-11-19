@@ -101,6 +101,79 @@ function normalize(pcm, { targetDbfs = TARGET_DBFS, maxGainDb = MAX_GAIN_DB, pea
 }
 
 /**
+ * Сжатие внутренних пауз.
+ *
+ * Длинная пауза посреди фразы — это не только лишние секунды счёта: whisper
+ * режет звук на 30-секундные окна, и окно, начавшееся с трёх секунд тишины,
+ * легко «додумывает» текст. Облачные сервисы присылают уже нарезанный звук по
+ * речи; мы делаем то же локально, без нейросетей.
+ *
+ * Пауза длиннее minPauseMs сжимается до pauseMs, вокруг речи остаётся запас:
+ * модель слышит, что фраза кончилась, но не получает секунды пустоты.
+ */
+function compactSilence(
+  pcm,
+  { sampleRate = 16000, pauseMs = 350, minPauseMs = 600, threshold = 160, frameMs = 20 } = {},
+) {
+  const total = Math.floor((pcm?.length || 0) / 2);
+  const frame = Math.max(1, Math.round((sampleRate * frameMs) / 1000));
+  if (!total || total < frame * 2) return { pcm, removedMs: 0 };
+  const frames = Math.floor(total / frame);
+  const voiced = new Array(frames);
+  for (let f = 0; f < frames; f += 1) {
+    const start = f * frame;
+    let peak = 0;
+    for (let i = start; i < start + frame; i += 1) {
+      const abs = Math.abs(pcm.readInt16LE(i * 2));
+      if (abs > peak) peak = abs;
+    }
+    voiced[f] = peak > threshold;
+  }
+  const minFrames = Math.round(minPauseMs / frameMs);
+  const keepFrames = Math.round(pauseMs / frameMs);
+  // собираем куски речи вместе с паузами, которые короче порога
+  const parts = [];
+  let runStart = 0;
+  let silence = 0;
+  let removed = 0;
+  for (let f = 0; f <= frames; f += 1) {
+    const isVoiced = f < frames ? voiced[f] : true; // край считаем речью: хвост не режем
+    if (isVoiced) {
+      if (silence >= minFrames && runStart < f - silence) {
+        // длинная пауза внутри записи: оставляем только keepFrames кадров
+        const speechEnd = f - silence;
+        parts.push([runStart, speechEnd]);
+        removed += (silence - keepFrames) * frameMs;
+        runStart = speechEnd + (silence - keepFrames);
+      }
+      silence = 0;
+    } else {
+      silence += 1;
+    }
+  }
+  if (!parts.length) return { pcm, removedMs: 0 };
+  parts.push([runStart, frames]);
+  // склеиваем: речевые куски + короткий «хвост» паузы между ними
+  const pieces = [];
+  let prevEnd = 0;
+  for (const [from, to] of parts) {
+    const startSample = Math.max(0, from * frame);
+    const endSample = Math.min(total, to * frame);
+    if (startSample > prevEnd) {
+      // между кусками оставляем keepFrames тишины из исходника
+      const gapFrom = Math.max(prevEnd, startSample - keepFrames * frame);
+      if (gapFrom < startSample) {
+        pieces.push(pcm.subarray(gapFrom * 2, startSample * 2));
+      }
+    }
+    if (endSample > startSample) pieces.push(pcm.subarray(startSample * 2, endSample * 2));
+    prevEnd = endSample;
+  }
+  if (pieces.length < 2) return { pcm, removedMs: 0 };
+  return { pcm: Buffer.concat(pieces), removedMs: Math.max(0, removed) };
+}
+
+/**
  * Полная подготовка: убрать гул, выровнять громкость.
  * Тишину не трогаем вовсе — её отсекает analysePcm до нас, а усиление шума
  * только добавило бы модели работы.
@@ -121,5 +194,6 @@ module.exports = {
   measurePcm,
   highPass,
   normalize,
+  compactSilence,
   preparePcm,
 };
