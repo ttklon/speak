@@ -2132,7 +2132,7 @@ async function scenarioDictionary(browser) {
 
   // удаление первой строки
   const removed = await page.evaluate(() => {
-    const btn = document.querySelector('.dict-row button[aria-label], .dict-row .icon-btn');
+    const btn = document.querySelector('.dict-row button[aria-label="Удалить"]');
     if (!btn) return false;
     btn.click();
     return true;
@@ -2152,7 +2152,48 @@ async function scenarioDictionary(browser) {
   const afterUndo = await page.evaluate(() => document.querySelectorAll('.dict-row').length);
   record('сценарии', 'словарь: удалённое слово возвращается', undoWord && afterUndo === afterDelete + 1, `${afterDelete} → ${afterUndo}`);
   // возвращаем список в прежнее состояние, чтобы не ломать следующие проверки
-  await page.evaluate(() => document.querySelector('.dict-row .icon-btn')?.click());
+  await page.evaluate(() => document.querySelector('.dict-row button[aria-label="Удалить"]')?.click());
+  await sleep(350);
+
+  // Закрепление: слово важно человеку и должно попасть в короткую подсказку
+  // движку раньше остальных. Берём последнюю строку — так видно, что дело
+  // именно в звёздочке, а не в том, что слово и так стояло первым.
+  const pinBefore = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.dict-row')];
+    const target = rows.at(-1);
+    if (!target) return null;
+    const word = target.querySelector('.dict-row__word')?.textContent || '';
+    target.querySelector('.dict-row__pin')?.click();
+    return { word, count: rows.length };
+  });
+  await sleep(450);
+  const pinAfter = await page.evaluate((word) => {
+    const rows = [...document.querySelectorAll('.dict-row')];
+    const first = rows[0];
+    const stored = window.__e2e.read('zs.dictionary') || [];
+    const item = stored.find((w) => w.word === word);
+    return {
+      firstWord: first?.querySelector('.dict-row__word')?.textContent || '',
+      pinned: Boolean(item?.pinned),
+      starOn: first?.querySelector('.dict-row__pin')?.getAttribute('data-on'),
+      aria: first?.querySelector('.dict-row__pin')?.getAttribute('aria-pressed'),
+      firstHits: item?.hits,
+    };
+  }, pinBefore?.word || '');
+  record(
+    'сценарии',
+    'словарь: звёздочка закрепляет слово и поднимает его первым',
+    Boolean(pinBefore?.word) && pinAfter.pinned && pinAfter.firstWord === pinBefore.word && pinAfter.starOn === '1',
+    `слово=${pinAfter.firstWord} pinned=${pinAfter.pinned}`,
+  );
+  record(
+    'сценарии',
+    'словарь: у закреплённого слова кнопка честно говорит «открепить»',
+    pinAfter.aria === 'true' && pinAfter.firstHits === 0,
+    `aria=${pinAfter.aria}`,
+  );
+  // возвращаем закрепление обратно: следующие проверки должны видеть обычный список
+  await page.evaluate(() => document.querySelector('.dict-row .dict-row__pin')?.click());
   await sleep(350);
 
   // повторное добавление того же слова не плодит копии и честно говорит «обновлено»

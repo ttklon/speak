@@ -60,7 +60,20 @@ export function sanitizeDictionary(stored, fallback = []) {
       if (!item || typeof item !== 'object') return null;
       const word = typeof item.word === 'string' ? item.word.trim() : '';
       if (!word) return null;
-      return { ...item, id: item.id || fallbackId('w'), word };
+      // Закрепление и частота появились позже первых профилей: у старых записей
+      // их нет, и это нормально — слово просто незакреплённое и «ни разу не
+      // встретилось». Мусор в поле (строка, отрицательное число) выправляем,
+      // иначе сортировка словаря вела бы себя непредсказуемо.
+      const hits = Number(item.hits);
+      const lastUsedAt = Number(item.lastUsedAt);
+      return {
+        ...item,
+        id: item.id || fallbackId('w'),
+        word,
+        pinned: item.pinned === true,
+        hits: Number.isFinite(hits) && hits > 0 ? Math.floor(hits) : 0,
+        lastUsedAt: Number.isFinite(lastUsedAt) && lastUsedAt > 0 ? lastUsedAt : 0,
+      };
     },
     fallback,
   );

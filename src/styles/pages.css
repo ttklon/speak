@@ -486,6 +486,41 @@
   min-width: 160px;
 }
 
+/* Звёздочка закрепления: тусклая у обычных слов, заметная у закреплённых.
+   Слева от слова — там, где её ищут, а не в конце строки рядом с удалением. */
+.dict-row__pin {
+  color: var(--text-5);
+  flex: 0 0 auto;
+}
+
+.dict-row__pin:hover {
+  color: var(--text-2);
+}
+
+.dict-row__pin[data-on='1'] {
+  color: var(--amber);
+}
+
+.dict-row__hits {
+  min-width: 26px;
+  text-align: right;
+  font-size: 9.5px;
+  color: var(--text-5);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Подпись о порядке — не панель с настройкой, а пояснение к списку: без
+   рамки и заливки, иначе она перетягивает внимание с самих слов. */
+.dict-order-note {
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-5);
+}
+
 .dict-row__pron {
   flex: 1;
   font-size: 11px;

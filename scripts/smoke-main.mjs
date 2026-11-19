@@ -1190,6 +1190,32 @@ await check('пропуск движка: whisper получает --prompt со
   if (res?.text !== 'Проверка диктовки') throw new Error(`текст не вернулся: ${JSON.stringify(res)}`);
 });
 
+await check('порядок в подсказке: закреплённое и частое — раньше новых', async () => {
+  // Подсказка короткая, и всё, что не влезло, движок не увидит. Значит порядок
+  // слов в ней должен совпадать с важностью, а не с датой добавления.
+  await handlers.get('store:set')({}, 'zs:dictionary', [
+    { word: 'СвежееСлово', createdAt: 900 },
+    { word: 'ЧастоеСлово', hits: 12, createdAt: 100 },
+    { word: 'ЗакреплённоеСлово', pinned: true, hits: 0, createdAt: 1 },
+  ]);
+  runWhisper('Проверка порядка');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(500),
+    durationMs: 500,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const i = call.args.indexOf('--prompt');
+  if (i < 0) throw new Error('--prompt не передан');
+  const prompt = call.args[i + 1];
+  const order = ['ЗакреплённоеСлово', 'ЧастоеСлово', 'СвежееСлово'].map((w) => prompt.indexOf(w));
+  if (order.some((pos) => pos < 0)) throw new Error(`слова потерялись: ${prompt}`);
+  if (!(order[0] < order[1] && order[1] < order[2])) throw new Error(`порядок неверный: ${prompt}`);
+});
+
 // ── VAD: длинная диктовка режется по паузам ─────────────────────────────────
 const silencePcm = (ms = 500) => new Uint8Array(Math.round((16000 * ms) / 1000) * 2);
 

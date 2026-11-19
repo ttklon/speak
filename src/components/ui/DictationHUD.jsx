@@ -6,7 +6,7 @@ import { useDictation } from '../../state/DictationProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 
 export default function DictationHUD() {
-  const { state, draft, level, elapsed, stop, setHudOpen, error, nativeHud, sttProgress } = useDictation();
+  const { state, draft, level, elapsed, stop, setHudOpen, error, nativeHud, sttProgress, micQuiet } = useDictation();
   const { settings } = useAppData();
   // настройка «Плавающий индикатор записи»: выключили — плашки нет,
   // но ошибки показываем всегда, иначе человек не поймёт, почему тишина
@@ -32,10 +32,21 @@ export default function DictationHUD() {
   // и «Запись остановлена» звучит как отказ, а не как «всё сделано».
   const done = state === 'done';
   const idle = state !== 'listening' && state !== 'processing' && !done;
-  const title = done ? 'Готово' : idle ? 'Запись остановлена' : state === 'processing' ? 'Распознаю…' : 'Слушаю…';
+  // «Микрофон молчит» — не ошибка и не отказ: запись идёт, просто в неё не
+  // попадает звук. Об этом говорим сразу, пока человек ещё говорит.
+  const quiet = state === 'listening' && micQuiet;
+  const title = done
+    ? 'Готово'
+    : idle
+      ? 'Запись остановлена'
+      : state === 'processing'
+        ? 'Распознаю…'
+        : quiet
+          ? 'Микрофон молчит'
+          : 'Слушаю…';
 
   return (
-    <div className="hud" role="status" aria-live="polite">
+    <div className="hud" role="status" aria-live="polite" data-quiet={quiet ? '1' : '0'}>
       <div className="hud__pulse" ref={meterRef}>
         <span className="hud__ring" />
         <span className="hud__ring hud__ring--2" />
@@ -62,7 +73,9 @@ export default function DictationHUD() {
                 ? 'Текст готов и уже вставлен'
                 : idle
                   ? 'Причина — ниже. Запись не идёт.'
-                  : 'Говорите — текст появится здесь'}
+                  : quiet
+                    ? 'Проверьте устройство в «Настройки → Приложение»'
+                    : 'Говорите — текст появится здесь'}
             </span>
           )}
         </div>

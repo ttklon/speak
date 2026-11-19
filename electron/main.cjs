@@ -282,7 +282,19 @@ function buildSttPrompt({ context = '', dictionary = [] } = {}) {
   }
   const words = [];
   let used = 0;
-  for (const entry of Array.isArray(dictionary) ? dictionary : []) {
+  // Порядок решает: подсказка короткая, и всё, что не влезло, движок не
+  // увидит. Поэтому закреплённое и часто диктуемое — вперёд, новые — в конце.
+  // Сортируем здесь, а не только в интерфейсе: профиль мог быть записан
+  // прошлой версией, а после перезапуска main читает его напрямую.
+  const ordered = [...(Array.isArray(dictionary) ? dictionary : [])].sort((a, b) => {
+    const field = (item, key) => (item && typeof item === 'object' ? item[key] : undefined);
+    return (
+      Number(field(b, 'pinned') === true) - Number(field(a, 'pinned') === true) ||
+      Number(field(b, 'hits') || 0) - Number(field(a, 'hits') || 0) ||
+      Number(field(b, 'lastUsedAt') || 0) - Number(field(a, 'lastUsedAt') || 0)
+    );
+  });
+  for (const entry of ordered) {
     const word = String(entry && typeof entry === 'object' ? entry.word || '' : entry || '').trim();
     if (word.length < 2) continue;
     const key = word.toLowerCase();

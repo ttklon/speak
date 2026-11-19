@@ -31,6 +31,7 @@ import {
   sanitizeStats,
 } from '../lib/sanitize.js';
 import { SNIPPET_LIMITS, normalizePhrase, sanitizeSnippets } from '../lib/snippets.js';
+import { countDictionaryUsage, rankDictionary } from '../lib/dictionary/rank.js';
 
 const AppDataContext = createContext(null);
 
@@ -171,7 +172,9 @@ export function AppDataProvider({ children }) {
     const bridge = typeof window !== 'undefined' ? window.zspeakly?.store : null;
     if (!bridge?.set) return;
     try {
-      bridge.set('zs:dictionary', dictionary);
+      // Порядок важен: main обрезает подсказку до лимита, и в неё должны
+      // попасть закреплённые и часто диктуемые слова, а не самые новые.
+      bridge.set('zs:dictionary', rankDictionary(dictionary));
     } catch (err) {
       console.warn('[dictionary] не удалось передать словарь в главный процесс', err);
     }
@@ -225,7 +228,7 @@ export function AppDataProvider({ children }) {
   );
 
   const addDictionaryWord = useCallback(
-    (word, pronunciation) => {
+    (word, pronunciation, { pinned = false } = {}) => {
       const clean = String(word || '').trim();
       if (!clean) return null;
       const entry = {
@@ -233,6 +236,9 @@ export function AppDataProvider({ children }) {
         word: clean,
         pronunciation: String(pronunciation || '').trim(),
         createdAt: Date.now(),
+        pinned: pinned === true,
+        hits: 0,
+        lastUsedAt: 0,
       };
       // то же слово (без учёта регистра) не дублируем, а обновляем: иначе список
       // рос бы копиями, а whisper получал бы один и тот же термин дважды
@@ -244,6 +250,28 @@ export function AppDataProvider({ children }) {
 
   const removeDictionaryWord = useCallback(
     (id) => setDictionary((prev) => prev.filter((w) => w.id !== id)),
+    [setDictionary],
+  );
+
+  /** Закрепить/открепить слово: закреплённые идут первыми в подсказке движку. */
+  const toggleDictionaryPin = useCallback(
+    (id) =>
+      setDictionary((prev) => prev.map((w) => (w.id === id ? { ...w, pinned: !w.pinned } : w))),
+    [setDictionary],
+  );
+
+  /**
+   * После удачной диктовки отмечаем слова, которые в ней действительно
+   * прозвучали. Это не статистика ради статистики: по этим счётчикам словарь
+   * сортируется, и в короткую подсказку движку попадают нужные термины.
+   */
+  const noteDictionaryUsage = useCallback(
+    (text) => {
+      setDictionary((prev) => {
+        const { list, changed } = countDictionaryUsage(prev, text);
+        return changed.length ? list : prev;
+      });
+    },
     [setDictionary],
   );
 
@@ -494,6 +522,8 @@ export function AppDataProvider({ children }) {
       dictionary,
       addDictionaryWord,
       removeDictionaryWord,
+      toggleDictionaryPin,
+      noteDictionaryUsage,
       snippets,
       addSnippet,
       removeSnippet,
@@ -526,8 +556,16 @@ export function AppDataProvider({ children }) {
     [
       exportBackup, importBackup,
       settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, clearDictations,
-      dictionary, addDictionaryWord, removeDictionaryWord, snippets, addSnippet, removeSnippet,
-    clipboard, addClipboardItem,
+      dictionary,
+      addDictionaryWord,
+      removeDictionaryWord,
+      toggleDictionaryPin,
+      noteDictionaryUsage,
+      snippets,
+      addSnippet,
+      removeSnippet,
+      clipboard,
+      addClipboardItem,
       removeClipboardItem, updateClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,
       updateHotkey, resetHotkeys, presets, togglePreset, updatePresetKeys, instructions, addInstruction,
       removeInstruction, updateInstruction, stats, recordWords, profile, setProfile, resetAll, bytes,

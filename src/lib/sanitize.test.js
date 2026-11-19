@@ -43,6 +43,23 @@ describe('очистка сохранённых данных', () => {
     expect(clean[0].id).toMatch(/^w-/);
   });
 
+  it('словарь: старые записи получают закрепление и частоту по умолчанию', () => {
+    // Закрепление и счётчик появились позже первых профилей. Старое слово —
+    // не «сломанное»: оно просто незакреплённое и ни разу не встретилось.
+    const clean = sanitizeDictionary([{ word: 'старое' }, { word: 'живое', pinned: true, hits: 5, lastUsedAt: 10 }]);
+    expect(clean[0]).toMatchObject({ pinned: false, hits: 0, lastUsedAt: 0 });
+    expect(clean[1]).toMatchObject({ pinned: true, hits: 5, lastUsedAt: 10 });
+  });
+
+  it('словарь: мусор в частоте не ломает сортировку', () => {
+    const clean = sanitizeDictionary([
+      { word: 'а', pinned: 'да', hits: 'много', lastUsedAt: -5 },
+      { word: 'б', hits: 3.7, lastUsedAt: 100 },
+    ]);
+    expect(clean[0]).toMatchObject({ pinned: false, hits: 0, lastUsedAt: 0 });
+    expect(clean[1]).toMatchObject({ hits: 3, lastUsedAt: 100 });
+  });
+
   it('буфер: текст или картинка, иначе запись не нужна', () => {
     const clean = sanitizeClipboard([
       { text: 'скопированный текст' },

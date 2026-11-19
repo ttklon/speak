@@ -34,6 +34,14 @@ describe('окно индикатора диктовки', () => {
     expect(html).toContain('фрагмент ${parts.done} из ${parts.total}');
   });
 
+  it('предупреждает о молчащем микрофоне ещё во время записи', () => {
+    // Раньше о тишине говорили только после остановки: человек проговаривал
+    // минуту в выключенный микрофон и узнавал об этом из ошибки.
+    expect(html).toContain('Микрофон молчит');
+    expect(html).toContain('p.quiet');
+    expect(html).toContain('hud.dataset.quiet');
+  });
+
   it('даёт кнопку «стоп» и кнопку «скрыть» с доступными именами', () => {
     expect(html).toMatch(/id="stop"[^>]*aria-label="Остановить запись"/);
     expect(html).toMatch(/id="close"[^>]*aria-label="Скрыть индикатор"/);

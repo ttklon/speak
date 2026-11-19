@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Plus, Search, Trash2 } from 'lucide-react';
+import { Plus, Search, Star, Trash2 } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
 import { Button, SearchInput, Tabs } from '../components/ui/Controls.jsx';
@@ -7,16 +7,27 @@ import Modal from '../components/ui/Modal.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import { dayLabel } from '../lib/utils.js';
 import { SNIPPET_LIMITS, snippetExamples } from '../lib/snippets.js';
+import { rankDictionary } from '../lib/dictionary/rank.js';
 
 export default function DictionaryPage() {
-  const { dictionary, addDictionaryWord, removeDictionaryWord, snippets, addSnippet, removeSnippet, settings, updateSettings } =
-    useAppData();
+  const {
+    dictionary,
+    addDictionaryWord,
+    removeDictionaryWord,
+    toggleDictionaryPin,
+    snippets,
+    addSnippet,
+    removeSnippet,
+    settings,
+    updateSettings,
+  } = useAppData();
   const { push } = useToast();
   const [tab, setTab] = useState('all');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [word, setWord] = useState('');
   const [pron, setPron] = useState('');
+  const [pin, setPin] = useState(false);
   // Быстрые блоки: фраза-триггер и текст, который вместо неё вставляется.
   const [snipOpen, setSnipOpen] = useState(false);
   const [snipTrigger, setSnipTrigger] = useState('');
@@ -24,7 +35,9 @@ export default function DictionaryPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list = dictionary;
+    // Тот же порядок, в котором слова уходят в подсказку движку: список в
+    // интерфейсе не должен врать о том, что модель увидит первым.
+    let list = rankDictionary(dictionary);
     if (q) list = list.filter((d) => d.word.toLowerCase().includes(q));
     if (tab === 'with-pron') list = list.filter((d) => d.pronunciation);
     if (tab === 'without-pron') list = list.filter((d) => !d.pronunciation);
@@ -34,7 +47,7 @@ export default function DictionaryPage() {
   const submit = () => {
     // слово уже есть — добавление заменит его, поэтому и сообщение другое
     const exists = dictionary.some((w) => w.word.toLowerCase() === word.trim().toLowerCase());
-    const entry = addDictionaryWord(word, pron);
+    const entry = addDictionaryWord(word, pron, { pinned: pin });
     if (entry) {
       push({
         title: exists ? 'Слово обновлено' : 'Слово добавлено',
@@ -43,6 +56,7 @@ export default function DictionaryPage() {
       });
       setWord('');
       setPron('');
+      setPin(false);
       setOpen(false);
     }
   };
@@ -102,6 +116,14 @@ export default function DictionaryPage() {
       </div>
       ) : null}
 
+      {/* Порядок списка — не декорация: подсказка движку короткая, и в неё
+          попадают первые слова. Об этом лучше сказать словами. */}
+      {dictionary.length ? (
+        <p className="settings-note dict-order-note">
+          Порядок подсказки движку: закреплённые, затем часто диктуемые, затем новые.
+        </p>
+      ) : null}
+
       {filtered.length === 0 ? (
         <div className="dict-empty">
           <p>Пока пусто. Добавьте имя или термин — и он перестанет распознаваться неправильно.</p>
@@ -112,9 +134,31 @@ export default function DictionaryPage() {
       ) : (
         <div className="dict-list">
           {filtered.map((entry) => (
-            <div key={entry.id} className="dict-row">
+            <div key={entry.id} className="dict-row" data-pinned={entry.pinned ? '1' : '0'}>
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm dict-row__pin"
+                data-on={entry.pinned ? '1' : '0'}
+                aria-pressed={Boolean(entry.pinned)}
+                aria-label={
+                  entry.pinned ? `Открепить «${entry.word}»` : `Закрепить «${entry.word}»: будет первым в подсказке`
+                }
+                title={
+                  entry.pinned
+                    ? 'Закреплено: слово всегда идёт первым в подсказке движку'
+                    : 'Закрепить: слово важнее остальных и всегда попадёт в подсказку'
+                }
+                onClick={() => toggleDictionaryPin(entry.id)}
+              >
+                <Star size={12} fill={entry.pinned ? 'currentColor' : 'none'} />
+              </button>
               <span className="dict-row__word">{entry.word}</span>
               <span className="dict-row__pron">{entry.pronunciation || '—'}</span>
+              {/* Частота — не украшение: по ней словарь сортируется, когда
+                  закреплённых нет. «0» не показываем: это шум. */}
+              <span className="dict-row__hits" title="Сколько раз слово встретилось в распознанном тексте">
+                {entry.hits > 0 ? `${entry.hits}×` : ''}
+              </span>
               <span className="dict-row__date">{dayLabel(entry.createdAt)}</span>
               <button
                 type="button"
@@ -129,7 +173,8 @@ export default function DictionaryPage() {
                     ttl: 8000,
                     action: {
                       label: 'Вернуть',
-                      onClick: () => addDictionaryWord(entry.word, entry.pronunciation),
+                      onClick: () =>
+                        addDictionaryWord(entry.word, entry.pronunciation, { pinned: entry.pinned }),
                     },
                   });
                 }}
@@ -307,6 +352,15 @@ export default function DictionaryPage() {
               onChange={(e) => setPron(e.target.value)}
             />
             <span className="field__hint">Помогает распознаванию, если слово звучит иначе, чем пишется.</span>
+          </div>
+          <div className="setting-row">
+            <div className="setting-row__label">
+              Закрепить
+              <div className="setting-row__desc">
+                Важное слово всегда будет первым в подсказке, даже если слов в словаре много.
+              </div>
+            </div>
+            <Toggle checked={pin} onChange={setPin} />
           </div>
         </div>
       </Modal>

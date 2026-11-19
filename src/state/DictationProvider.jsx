@@ -10,6 +10,7 @@ import { resolveLiveDraft } from '../lib/liveDraftPolicy.js';
 // авто-стоп: в режиме «переключатель» запись завершается сама после тишины,
 // иначе забытая запись тянет минуты пустого звука в распознавание
 import { AUTO_STOP_IDLE_MS, autoStopNotice, createSilenceWatch } from '../lib/autoStop.js';
+import { createQuietWatch, QUIET_HINT } from '../lib/liveSilence.js';
 import { createMicWarm } from '../lib/audio/micWarm.js';
 import { applyDictionary, formatK, truncate, words } from '../lib/utils.js';
 // Вставка в поле самого приложения: если человек диктует, стоя курсором в
@@ -104,11 +105,22 @@ function speak(text, language = 'ru', voiceURI = '', onFail = null) {
 const DictationContext = createContext(null);
 
 export function DictationProvider({ children }) {
-  const { settings, dictionary, snippets, addDictation, recordWords, updateSettings, updateDictation } =
-    useAppData();
+  const {
+    settings,
+    dictionary,
+    snippets,
+    addDictation,
+    recordWords,
+    updateSettings,
+    updateDictation,
+    noteDictionaryUsage,
+  } = useAppData();
   const [state, setState] = useState('idle'); // idle | listening | processing | done
   const [draft, setDraft] = useState(''); // живой текст
   const [level, setLevel] = useState(0);
+  // «Микрофон молчит»: предупреждаем во время записи, а не после неё
+  const [micQuiet, setMicQuiet] = useState(false);
+  const quietRef = useRef(null);
   const [error, setError] = useState(null);
   const [last, setLast] = useState(null); // {text, createdAt, words, durationMs}
   const [mode, setMode] = useState('hold');
@@ -541,6 +553,9 @@ export function DictationProvider({ children }) {
         lastItemId.current = item.id;
         addDictation(item);
         recordWords(item.words, durationMs);
+        // словарь учится на том, что человек реально диктует: это меняет
+        // порядок подсказки движку, а не только вид списка
+        noteDictionaryUsage(cleaned);
         // Вставка в активное окно. Раньше она жила только в onEnd движка,
         // и при остановке через кнопку или отпускание хоткея текст молча
         // оставался в истории — в приложении он не появлялся.
@@ -622,7 +637,7 @@ export function DictationProvider({ children }) {
       release();
       return item;
     },
-    [addDictation, recordWords],
+    [addDictation, noteDictionaryUsage, recordWords],
   );
 
   /**
@@ -748,6 +763,7 @@ export function DictationProvider({ children }) {
         sttParts: windows.length > 1 ? windows.length : undefined,
       };
       addDictation(item);
+      noteDictionaryUsage(text);
       // Слова считаем в общую статистику, секунды — нет: это не продиктованная
       // речь, и «речи продиктовано» не должно расти от чужой записи.
       recordWords(item.words, 0);
@@ -767,7 +783,7 @@ export function DictationProvider({ children }) {
       });
       return item;
     },
-    [addDictation, recordWords, pushToast],
+    [addDictation, noteDictionaryUsage, recordWords, pushToast],
   );
 
   const cancelFile = useCallback(() => {
@@ -830,6 +846,10 @@ export function DictationProvider({ children }) {
         modeRef.current === 'toggle'
           ? createSilenceWatch({ idleMs: AUTO_STOP_IDLE_MS, now: Date.now() })
           : null;
+      // сторож «микрофон молчит» нужен в любом режиме: человек, который держит
+      // клавишу и говорит в выключенный микрофон, ждёт текста, а не тишины
+      quietRef.current = createQuietWatch();
+      setMicQuiet(false);
       setHudOpen(true);
       // Активное окно — заранее и не дожидаясь: к остановке ответ уже есть.
       targetRef.current = null;
@@ -927,6 +947,14 @@ export function DictationProvider({ children }) {
         },
         onLevel: (v) => {
           setLevel(v);
+          // Раннее предупреждение: пять секунд тишины подряд при живой записи.
+          // Сказать об этом один раз за участок тишины — помощь, а не шум.
+          const quiet = quietRef.current;
+          if (quiet && recRef.current && !pausedAt.current && quiet.feed(v, Date.now())) {
+            setMicQuiet(true);
+            diag.info('stt', 'Микрофон не слышит звук во время записи');
+            pushToast({ title: 'Микрофон молчит', description: QUIET_HINT, tone: 'warn', ttl: 7000 });
+          }
           // Авто-стоп по тишине. Считаем только пока идёт запись и только в
           // переключателе; на паузе тишина — это норма, а не конец диктовки.
           const watch = silenceRef.current;
@@ -1022,6 +1050,8 @@ export function DictationProvider({ children }) {
 
   const stop = useCallback(async () => {
     silenceRef.current = null;
+    quietRef.current = null;
+    setMicQuiet(false);
     const rec = recRef.current;
     // Отсюда и до готового текста — то время, которое человек реально ждёт.
     // Отчёт о скорости раньше судил только счёт движка и потому мог говорить
@@ -1186,6 +1216,8 @@ export function DictationProvider({ children }) {
     }
     // снятие с паузы — не конец диктовки: отсчёт тишины начинается заново
     silenceRef.current?.reset(Date.now());
+    quietRef.current?.reset();
+    setMicQuiet(false);
     setPaused(false);
   }, []);
 
@@ -1462,6 +1494,8 @@ export function DictationProvider({ children }) {
       draft,
       // движок нужен плашке, чтобы не обещать живой текст там, где его нет
       engine,
+      // плашка говорит «микрофон молчит», не дожидаясь остановки
+      quiet: micQuiet,
       // а этот флаг — когда живой текст действительно включён
       live: liveText,
       // Длинная запись считается кусками: плашка говорит «фрагмент 2 из 4»,
@@ -1474,7 +1508,7 @@ export function DictationProvider({ children }) {
       // диктовку, — иначе человек ждёт вставки вместо правки выделения
       command: Boolean(sessionOpts.current.command),
     });
-  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, paused, processingMs, sttProgress]);
+  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, micQuiet, paused, processingMs, sttProgress]);
 
   // Сообщаем main, что реально происходит: от этого зависят пункт
   // «Остановить диктовку» в трее и поведение глобального сочетания.
@@ -1540,6 +1574,8 @@ export function DictationProvider({ children }) {
       elapsed,
       hudOpen,
       paused,
+      // запись идёт, но в микрофоне тишина — интерфейс говорит об этом сразу
+      micQuiet,
       processingMs,
       sttProgress,
       nativeHud: hudAllowed && hudNativeOn,
@@ -1565,7 +1601,7 @@ export function DictationProvider({ children }) {
       askAgent,
     }),
     [
-      state, draft, level, error, last, mode, elapsed, hudOpen, paused, processingMs, sttProgress,
+      state, draft, level, error, last, mode, elapsed, hudOpen, paused, micQuiet, processingMs, sttProgress,
       hudAllowed, hudNativeOn, engine, micWarmState, start, stop, toggle, pause, resume, cancelProcessing, finish, askAgent,
       fileJob, transcribeFile, cancelFile,
     ],

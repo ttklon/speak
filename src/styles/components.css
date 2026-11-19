@@ -824,6 +824,16 @@
   color: var(--text);
 }
 
+/* «Микрофон молчит»: запись идёт, но звука нет. Тёплый цвет вместо красного —
+   это подсказка посмотреть на устройство, а не сообщение о сбое. */
+.hud[data-quiet='1'] .hud__title {
+  color: var(--amber);
+}
+
+.hud[data-quiet='1'] .hud__hint {
+  color: var(--amber);
+}
+
 .hud__time {
   font-size: 9.5px;
   color: var(--text-5);
