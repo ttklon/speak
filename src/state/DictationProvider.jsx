@@ -904,6 +904,7 @@ export function DictationProvider({ children }) {
     const warm = createMicWarm({
       prerollMs: 600,
       deviceId: settingsRef.current?.audioDeviceId || 'default',
+      cleanupAudio: settingsRef.current?.micCleanup === true,
     });
     micWarm.current = warm;
     setMicWarmState('opening');
@@ -1046,6 +1047,9 @@ export function DictationProvider({ children }) {
         lang: langTag(settingsRef.current.language),
         getLang: resolveSessionLang,
         deviceId: settingsRef.current.audioDeviceId,
+        // обработку «для звонков» включаем только по просьбе человека:
+        // по умолчанию звук сырой, громкость выравнивает main-процесс
+        micCleanup: settingsRef.current.micCleanup === true,
         preroll,
         model: settingsRef.current.whisperModel,
         // словарь идёт в whisper как подсказка только если тумблер включён

@@ -192,6 +192,7 @@ function cliArgs({
   noContext = true,
   beamSize = 3,
   audioCtx = 0,
+  fallback = false,
 } = {}) {
   const args = [
     '-m', String(modelPath || ''),
@@ -207,11 +208,14 @@ function cliArgs({
   ];
   if (noContext) args.push('-mc', '0');
   if (Number(beamSize) > 0) args.push('-bs', String(Number(beamSize)));
-  // -nf (--no-fallback): без «второго прохода похуже». Если декодер не уверен
+  // -nf (--no-fallback): без «второго прохода похуже».
+  // fallback=true означает второй, честный проход: он нужен, когда первый
+  // вышел подозрительным (см. electron/textQuality.cjs) — платим временем за
+  // точность только там, где она потерялась. Если декодер не уверен
   // в тексте, whisper повторяет весь 30-секундный проход с другой температурой
   // — это ровно двойное время ожидания на ровном месте. Для диктовки лучше
   // отдать то, что получилось, и дать человеку поправить слово, чем ждать.
-  args.push('-nf');
+  if (!fallback) args.push('-nf');
   // -ac: сколько кадров энкодера считать. По умолчанию модель всегда считает
   // 1500 кадров (30 секунд), даже если человек сказал три слова — именно
   // поэтому короткая фраза «думала» секунды. Для короткой записи окно
@@ -587,8 +591,13 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
       // (examples/server/server.cpp) и без них берёт свои значения по
       // умолчанию — с перебором вариантов и контекстом прошлых фраз.
       max_context: '0',
-      beam_size: '1',
-      best_of: '1',
+      // Раньше здесь стояли 1/1: прогретый сервер отвечал быстрее CLI, но
+      // заметно хуже — жадное декодирование берёт первое правдоподобное слово.
+      // Теперь у сервера те же три варианта, что у CLI, и разрешён повтор с
+      // другой температурой: иначе «быстрый путь» тихо портил текст.
+      beam_size: '3',
+      best_of: '3',
+      temperature_inc: '0.2',
       // -ac: для короткой фразы считаем меньше кадров энкодера — это и есть
       // та самая разница «0,7 с против 2,5 с» на замерах с whisper-cli.
       ...(audioCtx > 0 ? { audio_ctx: String(audioCtx) } : {}),
@@ -659,7 +668,10 @@ function cancel(reason = 'распознавание отменено') {
  * Транскрипция wav-файла (16 kHz mono PCM).
  * Возвращает { ok, text, segments }.
  */
-function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeout = 120000, keepLoaded = false, vad = '', useVad = true } = {}) {
+function transcribe(
+  wavPath,
+  { lang = 'ru', model = 'small', prompt = '', timeout = 120000, keepLoaded = false, vad = '', useVad = true, thorough = false } = {},
+) {
   return new Promise((resolve) => {
     const callStarted = Date.now();
     const bin = findBinary();
@@ -697,7 +709,9 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
     // Набор флагов живёт в cliArgs(): его проверяют тесты, а не «на глаз».
     // -np: без служебного вывода, -sns: подавляем токены «не речь».
     const vadModel = useVad === false ? '' : vad || findVadModel() || '';
-    const audioCtx = computeAudioCtx(wavPath);
+    // thorough — второй проход: перебор вариантов шире, окно энкодера полное,
+    // повтор с другой температурой разрешён. Дороже, поэтому только по нужде.
+    const audioCtx = thorough ? 0 : computeAudioCtx(wavPath);
     const args = cliArgs({
       modelPath,
       wavPath,
@@ -706,6 +720,8 @@ function transcribe(wavPath, { lang = 'ru', model = 'small', prompt = '', timeou
       prompt,
       vadModel,
       audioCtx,
+      beamSize: thorough ? 5 : 3,
+      fallback: thorough,
       outBase: `${wavPath}.out`,
     });
 

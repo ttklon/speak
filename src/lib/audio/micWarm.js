@@ -1,3 +1,5 @@
+import { micConstraints } from './micConstraints.js';
+
 /**
  * «Горячий микрофон»: поток открыт заранее, звук лежит в кольцевом буфере.
  *
@@ -20,7 +22,7 @@ const pickAudioContext = () =>
  * @param {string} opts.deviceId   id микрофона ('default' — системный)
  * @param {number} opts.prerollMs  сколько последних миллисекунд отдавать
  */
-export function createMicWarm({ deviceId = 'default', prerollMs = 600 } = {}) {
+export function createMicWarm({ deviceId = 'default', prerollMs = 600, cleanupAudio = false } = {}) {
   let stream = null;
   let ctx = null;
   let source = null;
@@ -67,12 +69,7 @@ export function createMicWarm({ deviceId = 'default', prerollMs = 600 } = {}) {
       if (!Ctx || !navigator.mediaDevices?.getUserMedia) {
         throw new Error('Микрофон недоступен в этом окружении');
       }
-      const constraints = {
-        audio:
-          deviceId && deviceId !== 'default'
-            ? { deviceId: { exact: deviceId }, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-            : { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      };
+      const constraints = micConstraints({ deviceId, cleanup: cleanupAudio });
       let media;
       try {
         media = await navigator.mediaDevices.getUserMedia(constraints);
@@ -83,9 +80,7 @@ export function createMicWarm({ deviceId = 'default', prerollMs = 600 } = {}) {
           deviceId !== 'default' &&
           ['OverconstrainedError', 'NotFoundError', 'DevicesNotFoundError'].includes(err?.name);
         if (!missing) throw err;
-        media = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-        });
+        media = await navigator.mediaDevices.getUserMedia(micConstraints({ cleanup: cleanupAudio }));
       }
       stream = media;
       // Та же частота, что у самой записи: предролл ложится в буфер без

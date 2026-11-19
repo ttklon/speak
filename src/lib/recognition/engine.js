@@ -304,6 +304,8 @@ export function createRecognizer(opts = {}) {
         try {
           recorder = await startPcmRecording({
             deviceId: opts.deviceId || 'default',
+            // сырой звук или «шумоподавление Windows» — решает настройка
+            cleanupAudio: opts.micCleanup === true,
             onLevel: (v) => {
               onLevel?.(v);
               // Уровень микрофона — единственный сигнал, по которому видно

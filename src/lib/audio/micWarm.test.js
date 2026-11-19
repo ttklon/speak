@@ -81,7 +81,13 @@ describe('горячий микрофон', () => {
     await warm.open();
     expect(getUserMedia).toHaveBeenCalledTimes(1);
     const constraints = getUserMedia.mock.calls[0][0].audio;
-    expect(constraints).toMatchObject({ channelCount: 1, echoCancellation: true, noiseSuppression: true });
+    // Сырой звук по умолчанию: обработка «для звонков» срезает окончания слов
+    expect(constraints).toMatchObject({
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
     expect(constraints.deviceId).toBeUndefined();
     warm.close();
     expect(warm.opened).toBe(false);

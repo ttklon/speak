@@ -1998,7 +1998,11 @@ await check('двадцать секунд речи — один проход д
   // должно считаться за один проход.
   await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false });
   spawnCalls.length = 0;
-  spawnPlan.answer = 'диктовка на двадцать секунд';
+  // Ответ должен быть правдоподобным: на четыре слова за двадцать секунд
+  // приложение честно делает второй проход (см. electron/textQuality.cjs).
+  spawnPlan.answer =
+    'диктовка на двадцать секунд звучит как обычная речь, и слов в ней достаточно, ' +
+    'чтобы движку не пришлось переспрашивать себя второй раз';
   await handlers.get('stt:transcribe-pcm')({}, {
     pcm: pcmWithPause([5000, 1000, 5000, 1000, 5000, 1000, 5000]),
     durationMs: 20000,
@@ -2014,7 +2018,9 @@ await check('длинная диктовка без прогретого сер�
   // whisper-cli сам режет файл на 30-секундные окна внутри одного процесса.
   await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false });
   spawnCalls.length = 0;
-  spawnPlan.answer = 'длинная диктовка целиком';
+  spawnPlan.answer =
+    'длинная диктовка целиком укладывается в одно окно движка, поэтому веса модели ' +
+    'загружаются один раз, а не для каждого куска отдельно';
   // 40 секунд: пять речевых кусков по 6 с с паузами по секунде
   await handlers.get('stt:transcribe-pcm')({}, {
     pcm: pcmWithPause([6000, 1000, 6000, 1000, 6000, 1000, 6000, 1000, 6000]),
@@ -2024,6 +2030,41 @@ await check('длинная диктовка без прогретого сер�
   spawnPlan.answer = null;
   const runs = spawnCalls.filter((c) => String(c.file).includes('whisper'));
   if (runs.length !== 1) throw new Error(`движок запускался ${runs.length} раз — веса грузятся повторно`);
+});
+
+await check('подозрительный текст переспрашивают один раз, а не всегда', async () => {
+  // «Продолжение следует» на пяти секундах — заглушка, которой whisper
+  // закрывает тишину. Такой текст нельзя вставлять человеку: делаем второй
+  // проход с перебором температур и берём его, только если слов стало больше.
+  await handlers.get('store:set')({}, 'zs:settings', { whisperModel: 'small', keepModelLoaded: false });
+  spawnCalls.length = 0;
+  spawnPlan.answer = 'Продолжение следует...';
+  const once = await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: pcmWithPause([2000, 1000, 2000]),
+    durationMs: 5000,
+    lang: 'ru',
+  });
+  const runs = spawnCalls.filter((c) => String(c.file).includes('whisper'));
+  if (runs.length !== 2) throw new Error(`проходов ${runs.length}, ожидался второй`);
+  // второй запуск должен быть «честным»: без -nf и с более широким перебором
+  const second = runs[1].args.join(' ');
+  if (second.includes('-nf')) throw new Error('второй проход без перебора температур');
+  if (!second.includes('-bs 5')) throw new Error('во втором проходе нет -bs 5');
+  if (once?.ok) throw new Error('заглушка выдана за нормальный текст');
+  spawnPlan.answer = null;
+
+  // А нормальный текст второго прохода не требует: за точность платим только
+  // там, где она потерялась.
+  spawnCalls.length = 0;
+  spawnPlan.answer = 'позвони Пете и скажи, что встреча в три часа дня';
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: pcmWithPause([2000, 500, 2000]),
+    durationMs: 4500,
+    lang: 'ru',
+  });
+  spawnPlan.answer = null;
+  const normal = spawnCalls.filter((c) => String(c.file).includes('whisper'));
+  if (normal.length !== 1) throw new Error(`нормальную фразу переспросили: ${normal.length} проходов`);
 });
 
 await check('сервер распознавания поднимается с поиском по вариантам и без контекста', async () => {

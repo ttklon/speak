@@ -6,6 +6,7 @@
  */
 
 import { TARGET_RATE, createAudioContext, resampleAudio } from './context.js';
+import { micConstraints } from './micConstraints.js';
 
 const pickAudioContext = () =>
   (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) || null;
@@ -26,18 +27,13 @@ function toInt16(float32) {
  * @param {{samples: Float32Array, sampleRate: number}} [opts.preroll]
  *   звук, записанный «горячим микрофоном» до нажатия хоткея
  */
-export async function startPcmRecording({ deviceId = 'default', onLevel, preroll = null } = {}) {
+export async function startPcmRecording({ deviceId = 'default', onLevel, preroll = null, cleanupAudio = false } = {}) {
   const Ctx = pickAudioContext();
   if (!Ctx || !navigator.mediaDevices?.getUserMedia) {
     throw new Error('Микрофон недоступен в этом окружении');
   }
 
-  const constraints = {
-    audio:
-      deviceId && deviceId !== 'default'
-        ? { deviceId: { exact: deviceId }, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-        : { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  };
+  const constraints = micConstraints({ deviceId, cleanup: cleanupAudio });
 
   // Микрофон из настроек мог исчезнуть (наушники отключили, USB выдернули).
   // Тогда getUserMedia падает с OverconstrainedError, и диктовка «не работает»
@@ -52,9 +48,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
       deviceId !== 'default' &&
       ['OverconstrainedError', 'NotFoundError', 'DevicesNotFoundError'].includes(err?.name);
     if (!missingDevice) throw err;
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
+    stream = await navigator.mediaDevices.getUserMedia(micConstraints({ cleanup: cleanupAudio }));
     fellBack = true;
   }
   // Просим 16 кГц сразу: тогда ресемплинг делает движок с фильтром. Если

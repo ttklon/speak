@@ -20,6 +20,8 @@ const { sendUnicodeText } = require('./sendInput.cjs');
 const { host: inputHost } = require('./inputHost.cjs');
 const { createWinInput } = require('./winInput.cjs');
 const { planUndo } = require('./undoLast.cjs');
+const audioPrep = require('./audioPrep.cjs');
+const { judgeText, betterText } = require('./textQuality.cjs');
 const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
@@ -1287,13 +1289,31 @@ function registerIpc() {
       bytes: raw.length,
       seconds: payload?.durationMs ? Math.round(payload.durationMs / 100) / 10 : undefined,
     });
+    // Подготовка звука: убрать гул и постоянную составляющую, выровнять
+    // громкость до −18 dBFS. Облачные сервисы делают это до модели; без этого
+    // тихий микрофон для whisper — шум, и текст выходит «кашей».
+    const prepared = audioPrep.preparePcm(raw, {
+      sampleRate: payload?.sampleRate || 16000,
+      silentRms: 40,
+    });
+    if (prepared.gainDb > 0 || prepared.skipped) {
+      logger.info('stt', 'Подготовка звука', {
+        keep: true,
+        gainDb: prepared.gainDb,
+        rmsBefore: prepared.before.rms,
+        rmsAfter: prepared.after.rms,
+        peakAfter: prepared.after.peak,
+        skipped: prepared.skipped || '',
+      });
+    }
+    const prepped = prepared.pcm;
     // Паузы по краям записи убираем: whisper точнее на коротком чистом фрагменте.
     const trimStarted = Date.now();
-    const trimmed = whisper.trimSilence?.(raw, payload?.sampleRate || 16000) || raw;
+    const trimmed = whisper.trimSilence?.(prepped, payload?.sampleRate || 16000) || prepped;
     const trimMs = Date.now() - trimStarted;
     logger.info('stt', 'Обрезка тишины', {
       keep: true,
-      beforeMs: Math.round((raw.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+      beforeMs: Math.round((prepped.length / 2 / (payload?.sampleRate || 16000)) * 1000),
       afterMs: Math.round((trimmed.length / 2 / (payload?.sampleRate || 16000)) * 1000),
     });
     // Русская модель: решение принимает политика (electron/sttEngine.cjs), а не
@@ -1534,6 +1554,42 @@ function registerIpc() {
       } else {
         reportProgress(1);
         res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt, keepLoaded, useVad });
+        // Второй, честный проход — только если первый вышел подозрительным:
+        // пусто, два слова на десять секунд, заглушка или зацикливание.
+        // Облачные сервисы перебирают варианты всегда; мы платим временем
+        // только за те фразы, где точность действительно потерялась.
+        const judge = judgeText(res?.text || '', { seconds: spokenSeconds });
+        if (payload?.partial !== true && spokenSeconds >= 1.2 && judge.unsure && !res?.code) {
+          logger.warn('stt', 'Текст вышел подозрительным — второй проход', {
+            keep: true,
+            why: judge.why,
+            chars: (res?.text || '').length,
+            seconds: Math.round(spokenSeconds * 10) / 10,
+          });
+          const again = await whisper.transcribe(wav, {
+            lang: payload?.lang || 'ru',
+            model,
+            prompt,
+            keepLoaded: false,
+            useVad,
+            thorough: true,
+          });
+          if (again?.ok && betterText(res?.text || '', again.text || '')) {
+            logger.info('stt', 'Второй проход дал больше текста', {
+              keep: true,
+              before: (res?.text || '').length,
+              after: again.text.length,
+              ms: again.ms || 0,
+            });
+            res = { ...again, secondPass: true };
+          } else {
+            logger.info('stt', 'Второй проход не улучшил текст — оставлен первый', {
+              keep: true,
+              first: (res?.text || '').length,
+              second: (again?.text || '').length,
+            });
+          }
+        }
       }
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
       const ms = Date.now() - started;
