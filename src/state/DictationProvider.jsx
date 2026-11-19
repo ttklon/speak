@@ -29,6 +29,8 @@ import { decodeAudioFile } from '../lib/audio/decodeFile.js';
 import { readSelectionText, writeSelectionText } from '../lib/hotkeys/selection.js';
 import { runInstruction } from '../lib/ai/instructions.js';
 import { dropSelfCorrections } from '../lib/ai/selfCorrect.js';
+import { rawTextFor } from '../lib/historyRaw.js';
+import { textPolicy } from '../lib/textPolicy.js';
 import {
   COMMAND_ERRORS,
   commandInstruction,
@@ -263,7 +265,12 @@ export function DictationProvider({ children }) {
       // Тумблер «Постобработка текста» в настройках раньше только сохранялся:
       // чистка шла всегда. Теперь выключенный тумблер оставляет текст как есть,
       // а включённый убирает паразитов и расставляет пунктуацию.
-      const polishing = settingsRef.current.aiProcessing !== false;
+      // «Не трогать мой текст» — сильнее: выключает и чистку, и оговорки, и
+      // оформление под окно, и переписывание моделью. Словарь, голосовые
+      // команды и быстрые блоки остаются: это прямые указания человека.
+      const policy = textPolicy(settingsRef.current);
+      const preserve = policy.preserve;
+      const polishing = policy.clean;
       // Голосовые знаки и команды: «запятая», «с новой строки», «удалить
       // последнее слово». Раньше они попадали в текст словами — человеку
       // приходилось бросать диктовку и править руками.
@@ -277,7 +284,7 @@ export function DictationProvider({ children }) {
       // Оговорки: «встреча в четыре… то есть в три» — в тексте остаётся то,
       // что человек имел в виду. Правило осторожное: убираем только когда
       // замена очевидна (число, имя, день недели), уточнение не трогаем.
-      if (spoken && cleaned) {
+      if (spoken && cleaned && policy.fixSelfCorrections) {
         const fixed = dropSelfCorrections(cleaned);
         if (fixed.fixes > 0) {
           cleaned = fixed.text;
@@ -385,16 +392,18 @@ export function DictationProvider({ children }) {
       // Куда и как вставляем — решаем один раз: этот же стиль нужен и позднему
       // ответу модели (он приходит уже после вставки и обновляет историю),
       // иначе в истории оказался бы текст с точкой, которой в окне нет.
+      // При «не трогать мой текст» окно не влияет на знаки: приложение не
+      // решает за человека, где ставить точку.
       const where =
-        insert && sessionOpts.current.insert !== false
+        policy.formatForApp && insert && sessionOpts.current.insert !== false
           ? resolveAppStyle(targetRef.current || {})
-          : { style: 'neutral', why: '', label: '' };
+          : { style: 'neutral', why: preserve ? 'текст не трогаем: оформление выключено' : '', label: '' };
       // Вторая стадия («Переписывать диктовку моделью»): офлайн-правила уже
       // дали текст, локальная модель доводит формулировки. Модель может
       // не ответить — тогда остаётся результат правил, диктовка не ломается.
       // Развёрнутый блок моделью не переписываем: это авторский текст, а не
       // расшифровка, — правки в подписи или реквизитах были бы порчей.
-      if (polishing && cleaned && !snippetHit && settingsRef.current.aiDictationRewrite === true) {
+      if (policy.rewriteWithModel && cleaned && !snippetHit) {
         setState('processing');
         const before = cleaned.length;
         // Бюджет полировки. Раньше здесь стояло «ждём до 6 секунд» — и человек
@@ -507,6 +516,9 @@ export function DictationProvider({ children }) {
       };
       const item = {
         text: cleaned,
+        // «как распозналось» до правок приложения: видно, что именно изменила
+        // чистка, словарь и оформление, и это можно вернуть одним нажатием
+        rawText: spoken ? rawTextFor(raw, cleaned) : undefined,
         durationMs,
         words: words(cleaned),
         createdAt: Date.now(),

@@ -36,6 +36,17 @@ describe('очистка сохранённых данных', () => {
     expect(clean).toEqual([{ ok: true }]);
   });
 
+  it('история: «как распозналось» остаётся только при реальной разнице', () => {
+    const clean = sanitizeDictations([
+      { text: 'Привет.', rawText: ' привет ' },
+      { text: 'Привет.', rawText: 'Привет.' },
+      { text: 'Привет.', rawText: 42 },
+    ]);
+    expect(clean[0].rawText).toBe('привет');
+    expect(clean[1].rawText).toBeUndefined();
+    expect(clean[2].rawText).toBeUndefined();
+  });
+
   it('словарь: пустые слова выбрасываются, пробелы обрезаются', () => {
     const clean = sanitizeDictionary([{ word: '  whisper ' }, { word: '' }, { word: 7 }]);
     expect(clean).toHaveLength(1);

@@ -9,7 +9,7 @@ import { MODEL_TIERS } from './modelTiers.js';
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.20.0',
+  version: '1.21.0',
   build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
@@ -195,6 +195,10 @@ export const DEFAULT_SETTINGS = {
   dictationKey: 'Control+Alt+Space',
   translateTarget: 'en',
   aiProcessing: true,
+  // «Не трогать мой текст»: приложение не чистит, не оформляет под окно и не
+  // переписывает моделью. Словарь, голосовые команды и быстрые блоки остаются:
+  // это прямые указания человека, а не догадки приложения.
+  preserveText: false,
   aiEndpoint: 'http://localhost:11434', // Ollama, опционально
   // вторая стадия чистки диктовки моделью: 1.6.0 — включена по умолчанию
   // (ждём её не дольше aiPolishBudgetMs, дальше текст вставляется без неё)

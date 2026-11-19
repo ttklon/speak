@@ -11,6 +11,7 @@ import { VOICE_COMMAND_TIP } from '../lib/voiceCommands.js';
 import { AUDIO_ACCEPT, progressLabel } from '../lib/recognition/audioFile.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
 import { APP, WHY_BETTER } from '../lib/config.js';
+import { hasRawText } from '../lib/historyRaw.js';
 import Icon from '../components/ui/Icon.jsx';
 import EditDictationModal from '../components/modals/EditDictationModal.jsx';
 import { Button, SearchInput } from '../components/ui/Controls.jsx';
@@ -28,7 +29,7 @@ function HeroStat({ value, unit, label }) {
 }
 
 export default function HomePage() {
-  const { dictations, voiceHotkeys, settings, deleteDictation, addDictation } = useAppData();
+  const { dictations, voiceHotkeys, settings, deleteDictation, addDictation, updateDictation } = useAppData();
   const {
     state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress,
     cancelProcessing, fileJob, transcribeFile, cancelFile,
@@ -423,6 +424,16 @@ export default function HomePage() {
                 </span>
               ) : null}
               <span className="recent__text">{truncate(item.text, 108)}</span>
+              {/* Приложение правило текст после распознавания. Раньше это было
+                  невидимо: человек не понимал, движок ошибся или приложение. */}
+              {hasRawText(item) ? (
+                <span
+                  className="recent__tag recent__tag--edited"
+                  title="Приложение изменило текст после распознавания — откройте запись, чтобы увидеть как"
+                >
+                  правлено
+                </span>
+              ) : null}
               {/* Сколько заняло распознавание: видно, что движок работал, и
                   сразу понятно, если на этой машине он медленный. */}
               {item.sttMs ? (
@@ -508,6 +519,29 @@ export default function HomePage() {
               </button>
             </div>
             <p className="snippet__text">{snippet.text}</p>
+            {hasRawText(snippet) ? (
+              <div className="snippet__raw">
+                <div className="snippet__raw-title">Как распозналось</div>
+                <p className="snippet__raw-text">{snippet.rawText}</p>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => {
+                    const restored = snippet.rawText;
+                    updateDictation(snippet.id, { text: restored, rawText: undefined });
+                    setSnippet({ ...snippet, text: restored, rawText: undefined });
+                    push({
+                      title: 'Вернули как распозналось',
+                      description: 'Дальше правьте руками — приложение этот текст больше не меняло.',
+                      tone: 'success',
+                      ttl: 7000,
+                    });
+                  }}
+                >
+                  Вернуть как распозналось
+                </button>
+              </div>
+            ) : null}
             <div className="snippet__actions">
               <Button variant="ghost" size="sm" icon={<Copy size={13} />} onClick={() => copyText(snippet.text)}>
                 Копировать

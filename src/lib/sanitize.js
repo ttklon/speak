@@ -40,10 +40,15 @@ export function sanitizeDictations(stored, fallback = []) {
       if (!item || typeof item !== 'object') return null;
       const text = typeof item.text === 'string' ? item.text : '';
       if (!text.trim()) return null;
+      // «как распозналось» показываем только когда оно действительно другое:
+      // копия того же текста в профиле — лишний вес и путаница в интерфейсе
+      const raw = typeof item.rawText === 'string' ? item.rawText.trim() : '';
+      const keepRaw = Boolean(raw) && raw !== text.trim();
       return {
         ...item,
         id: item.id || fallbackId('d'),
         text,
+        rawText: keepRaw ? raw : undefined,
         createdAt: Number(item.createdAt) || Date.now(),
         durationMs: Number(item.durationMs) || 0,
         words: Number(item.words) || 0,

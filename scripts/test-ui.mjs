@@ -2464,6 +2464,47 @@ async function scenarioSettingsSearch(browser) {
     tailWord && byDescRules,
     `кнопки ${tailWord ? 'да' : 'нет'} · правила ${byDescRules ? 'да' : 'нет'}`,
   );
+  // «Не трогать мой текст» — один тумблер вместо пяти: он выключает правки и
+  // делает бессмысленной «Умную полировку», поэтому её тумблер гаснет.
+  await page.evaluate(() => {
+    location.hash = '#/settings?section=features';
+  });
+  await sleep(500);
+  const togglePreserve = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.setting-row')].find((r) =>
+      /Не трогать мой текст/.test(r.innerText),
+    );
+    const btn = row?.querySelector('.toggle');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(450);
+  const preserveState = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.setting-row')];
+    const preserveRow = rows.find((r) => /Не трогать мой текст/.test(r.innerText));
+    const polishRow = rows.find((r) => /Умная полировка/.test(r.innerText));
+    const stored = window.__e2e.read('zs.settings') || {};
+    return {
+      on: preserveRow?.querySelector('.toggle')?.classList.contains('is-on') || false,
+      polishDisabled: polishRow?.querySelector('.toggle')?.classList.contains('is-disabled') || false,
+      stored: stored.preserveText === true,
+    };
+  });
+  record(
+    'сценарии',
+    'настройки: «не трогать мой текст» выключает полировку и сохраняется',
+    togglePreserve && preserveState.on && preserveState.stored && preserveState.polishDisabled,
+    `включено=${preserveState.on} сохранено=${preserveState.stored} полировка=${preserveState.polishDisabled ? 'погашена' : 'активна'}`,
+  );
+  // возвращаем как было: следующие сценарии должны видеть обычную диктовку
+  await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.setting-row')].find((r) =>
+      /Не трогать мой текст/.test(r.innerText),
+    );
+    row?.querySelector('.toggle')?.click();
+  });
+  await sleep(350);
   await page.close();
 }
 
@@ -2497,6 +2538,64 @@ async function scenarioEditSnippet(browser) {
   await sleep(400);
   const body = await page.evaluate(() => document.body.innerText);
   record('сценарии', 'правка расшифровки сохраняется', /Исправленный текст для теста/.test(body));
+  await page.close();
+}
+
+async function scenarioRawText(browser) {
+  // «Как распозналось»: приложение правило текст после распознавания, и это
+  // видно — вместе с возможностью вернуть то, что услышал движок.
+  const page = await openPage(browser, '#/home', {
+    storeSeed: {
+      'zs.dictations': [
+        {
+          id: 'raw-1',
+          text: 'Привет, как дела.',
+          rawText: 'привет как дела',
+          createdAt: Date.now() - 60_000,
+          durationMs: 2000,
+          words: 3,
+          source: 'dictation',
+        },
+      ],
+    },
+  });
+  takeErrors(page);
+  const tag = await page.evaluate(() => Boolean(document.querySelector('.recent__tag--edited')));
+  await page.evaluate(() => document.querySelector('.recent__row')?.click());
+  await sleep(350);
+  const shown = await page.evaluate(() => ({
+    block: Boolean(document.querySelector('.snippet__raw')),
+    title: document.querySelector('.snippet__raw-title')?.textContent || '',
+    raw: document.querySelector('.snippet__raw-text')?.textContent || '',
+    actions: [...document.querySelectorAll('.snippet button')].map((b) => b.innerText),
+  }));
+  record(
+    'сценарии',
+    'история: видно, как распозналось, и чем это отличается от готового текста',
+    tag && shown.block && /Как распозналось/.test(shown.title) && shown.raw === 'привет как дела',
+    `метка=${tag} текст=${shown.raw.slice(0, 24)}`,
+  );
+  const restored = await page.evaluate(() => {
+    const all = [...document.querySelectorAll('.snippet button')];
+    const btn = all.find((b) => /Вернуть как распозналось/.test(b.textContent || ''));
+    if (!btn) return all.length === 0 ? 'нет кнопок' : 'кнопка не найдена';
+    btn.click();
+    return true;
+  });
+  await sleep(450);
+  const after = await page.evaluate(() => ({
+    text: document.querySelector('.snippet__text')?.textContent || '',
+    block: Boolean(document.querySelector('.snippet__raw')),
+    stored: (window.__e2e.read('zs.dictations') || [])[0] || {},
+  }));
+  record(
+    'сценарии',
+    'история: «вернуть как распозналось» ставит текст движка и убирает сырой',
+    restored === true && after.text === 'привет как дела' && !after.block && !after.stored.rawText,
+    `нажата=${restored} текст=${after.text.slice(0, 24)} · сырой=${after.stored.rawText ? 'остался' : 'убран'}`,
+  );
+  const errors = takeErrors(page);
+  record('сценарии', 'история: «как распозналось» без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
@@ -5455,6 +5554,7 @@ async function main() {
       ['темы', scenarioTheme],
       ['поиск по настройкам', scenarioSettingsSearch],
       ['правка расшифровки', scenarioEditSnippet],
+      ['как распозналось', scenarioRawText],
       ['AI-инструкция', scenarioAiInstruction],
       ['мост', scenarioBridgeWiring],
       ['палитра команд', scenarioCommandPalette],

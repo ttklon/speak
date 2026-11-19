@@ -53,6 +53,24 @@ export default function FeaturesSection() {
             width={190}
           />
         </div>
+        {/* Одна кнопка вместо пяти: «не трогай мой текст» выключает чистку,
+            оговорки, оформление под окно и переписывание моделью. Словарь,
+            голосовые команды и быстрые блоки остаются — это прямые указания
+            человека, а не догадки приложения. */}
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Не трогать мой текст
+            <div className="setting-row__desc">
+              Приложение вставит ровно то, что услышало: без чистки, без правки знаков под окно и
+              без переписывания моделью. Словарь, голосовые команды и быстрые блоки продолжат
+              работать — это ваши прямые указания.
+            </div>
+          </div>
+          <Toggle
+            checked={settings.preserveText === true}
+            onChange={(v) => updateSettings({ preserveText: v })}
+          />
+        </div>
         <div className="setting-row">
           <div className="setting-row__label">
             Умная полировка
@@ -63,6 +81,7 @@ export default function FeaturesSection() {
           <Toggle
             checked={Boolean(settings.aiDictationRewrite)}
             onChange={(v) => updateSettings({ aiDictationRewrite: v })}
+            disabled={settings.preserveText === true}
           />
         </div>
         {/* Тумблера больше нет: черновик по ходу речи — это лишний проход

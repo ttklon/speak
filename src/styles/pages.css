@@ -441,6 +441,38 @@
   overflow-y: auto;
 }
 
+/* «Как распозналось»: сырой текст движка — приглушённый и с ограничением
+   высоты, чтобы окно записи не вырастало на весь экран. */
+.snippet__raw {
+  margin: -2px 0 14px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(var(--overlay-rgb), 0.03);
+}
+
+.snippet__raw-title {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-5);
+}
+
+.snippet__raw-text {
+  margin: 4px 0 6px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+  user-select: text;
+  max-height: 90px;
+  overflow-y: auto;
+}
+
+.recent__tag--edited {
+  color: var(--amber);
+}
+
 .snippet__actions {
   display: flex;
   justify-content: flex-end;
