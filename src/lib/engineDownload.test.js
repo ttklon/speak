@@ -220,6 +220,15 @@ describe('подготовка движка Whisper', () => {
     expect(readdirSync(join(dir, 'bin')).sort()).toEqual(['whisper-cli.exe', 'whisper-server.exe']);
   }, 60000);
 
+  it.skipIf(process.platform !== 'win32')('настоящий PowerShell сообщает о повреждённом архиве и сохраняет прежний движок', async () => {
+    archive = Buffer.from('это не архив');
+    const result = await models.downloadEngine(undefined, { force: true });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/не удалось распаковать/);
+    expect(readdirSync(join(dir, 'bin'))).toEqual(['whisper-cli.exe']);
+    expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
+  }, 60000);
+
   it('не принимает архив без программы распознавания', async () => {
     fakeUnpack({ includeCli: false });
     const result = await bounded(models.downloadEngine(undefined, { force: true }));
