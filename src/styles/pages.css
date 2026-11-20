@@ -593,6 +593,13 @@
   font-style: italic;
 }
 
+/* Известное произношение (не записанное человеком): подсказка, а не факт
+   ввода — поэтому тише по цвету, но не «серым по серому». */
+.dict-row__pron.is-known {
+  color: var(--text-5);
+  font-style: italic;
+}
+
 .dict-row__date {
   font-size: 9.5px;
   color: var(--text-5);

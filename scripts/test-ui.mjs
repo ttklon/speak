@@ -3986,6 +3986,72 @@ async function scenarioDecodeMode(browser) {
   await page.close();
 }
 
+/**
+ * Словарь и кириллица: человек говорит «зум», движок пишет «зум», а в словаре
+ * записано Zoom. Раньше такая пара не срабатывала — заменять было нечего.
+ */
+async function scenarioDictionaryAliases(browser) {
+  const seeded = {
+    'zs.dictionary': [
+      { id: 'w1', word: 'Zoom', createdAt: Date.now() },
+      { id: 'w2', word: 'Telegram', createdAt: Date.now() },
+      { id: 'w3', word: 'Алтайтара', createdAt: Date.now() },
+    ],
+  };
+  const page = await openPage(browser, '#/dictionary', { storeSeed: seeded, settle: 600 });
+  takeErrors(page);
+  const pron = await page.evaluate(() =>
+    [...document.querySelectorAll('.dict-row')].map((row) => ({
+      word: row.querySelector('.dict-row__word')?.innerText || '',
+      pron: row.querySelector('.dict-row__pron')?.innerText || '',
+      known: Boolean(row.querySelector('.dict-row__pron.is-known')),
+    })),
+  );
+  const zoom = pron.find((r) => /Zoom/i.test(r.word)) || {};
+  record(
+    'сценарии',
+    'словарь: известное произношение видно, вписывать руками не нужно',
+    zoom.pron === 'зум' && zoom.known === true,
+    `Zoom → «${zoom.pron}»${zoom.known ? ' (известное)' : ''}`,
+  );
+  await page.close();
+
+  const dictate = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false },
+    storeSeed: { ...seeded, 'zs.dictations': [], 'zs.mockSttText': 'открой зум и телеграм' },
+    settle: 600,
+  });
+  takeErrors(dictate);
+  await clickText(dictate, 'Начать диктовку');
+  await sleep(1100);
+  await dictate.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2300);
+  const saved = await dictate.evaluate(() => {
+    const item = (window.__e2e.read('zs.dictations') || [])[0] || {};
+    const insert = (window.__bridgeCalls || []).find((c) => c.channel === 'text:insert');
+    return { text: String(item.text || ''), inserted: String(insert?.args?.[0] || '') };
+  });
+  record(
+    'сценарии',
+    'словарь: «зум» и «телеграм» в тексте становятся Zoom и Telegram',
+    /Zoom/.test(saved.text) && /Telegram/.test(saved.text) && !/зум|телеграм/.test(saved.text),
+    saved.text,
+  );
+  record(
+    'сценарии',
+    'словарь: заменённое слово уходит в окно, а не только в историю',
+    saved.inserted === saved.text,
+    saved.inserted,
+  );
+  const errors = takeErrors(dictate);
+  record('сценарии', 'словарь: кириллица без ошибок консоли', errors.length === 0, errors[0] || '');
+  await dictate.close();
+}
+
 async function scenarioClearDictations(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
   takeErrors(page);
@@ -6053,6 +6119,7 @@ async function main() {
       ['сравнение моделей', scenarioModelCompare],
       ['переспросить точно', scenarioRetryLast],
       ['режим распознавания', scenarioDecodeMode],
+      ['словарь: кириллица', scenarioDictionaryAliases],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

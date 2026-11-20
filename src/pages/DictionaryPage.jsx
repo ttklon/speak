@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Plus, Search, Star, Trash2 } from 'lucide-react';
+import { knownAliases } from '../lib/dictionary/aliases.js';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
 import { Button, SearchInput, Tabs } from '../components/ui/Controls.jsx';
@@ -153,7 +154,19 @@ export default function DictionaryPage() {
                 <Star size={12} fill={entry.pinned ? 'currentColor' : 'none'} />
               </button>
               <span className="dict-row__word">{entry.word}</span>
-              <span className="dict-row__pron">{entry.pronunciation || '—'}</span>
+              {/* Известное произношение подставляется в текст и без записи:
+                  «зум» → Zoom, «телеграм» → Telegram. Показываем его, чтобы
+                  человек не вписывал руками то, что приложение уже знает. */}
+              <span
+                className={`dict-row__pron ${entry.pronunciation ? '' : 'is-known'}`}
+                title={
+                  entry.pronunciation
+                    ? 'Своё произношение: им заменяется слово в распознанном тексте'
+                    : 'Известное произношение: подставляется в текст автоматически'
+                }
+              >
+                {entry.pronunciation || knownAliases(entry.word)[0] || '—'}
+              </span>
               {/* Частота — не украшение: по ней словарь сортируется, когда
                   закреплённых нет. «0» не показываем: это шум. */}
               <span className="dict-row__hits" title="Сколько раз слово встретилось в распознанном тексте">

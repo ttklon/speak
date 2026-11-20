@@ -1,5 +1,7 @@
 /** Хелперы: форматирование, склонения, работа с клавишами и текстом. */
 
+import { termVariants } from './dictionary/aliases.js';
+
 export function plural(n, one, few, many) {
   const abs = Math.abs(n) % 100;
   const n1 = abs % 10;
@@ -156,16 +158,18 @@ export function applyDictionary(text, entries = []) {
     if (!entry || !entry.word) continue;
     const word = entry.word.trim();
     if (!word) continue;
-    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const variants = [escaped];
-    if (entry.pronunciation) {
-      variants.push(entry.pronunciation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    }
+    // Написания: сам термин, произношение человека и известные пары
+    // («зум» → Zoom, «телеграм» → Telegram). Без последнего словарь работал
+    // только на бумаге: движок пишет кириллицей, а в словаре латиница.
+    const variants = termVariants(entry).map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (!variants.length) continue;
     const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${variants.join('|')})(?=$|[^\\p{L}\\p{N}])`, 'giu');
-    out = out.replace(re, (m, pre, _hit, offset) => {
-      // сохраняем заглавную букву в начале предложения
-      const startsUpper = /[A-ZА-ЯЁ]/.test(_hit[0]);
-      const replacement = startsUpper ? word[0].toUpperCase() + word.slice(1) : word;
+    out = out.replace(re, (m, pre, hit, offset) => {
+      // Заглавную поднимаем только в начале предложения: иначе «созвонились в
+      // Zoom» превращалось в «созвонились в Зум» — заглавная посреди фразы.
+      const startsSentence = offset === 0 || /[.!?…]\s*$/.test(out.slice(0, offset));
+      const capitalizedInText = /[A-ZА-ЯЁ]/.test(hit[0]);
+      const replacement = startsSentence && capitalizedInText ? word[0].toUpperCase() + word.slice(1) : word;
       return `${pre}${replacement}`;
     });
   }

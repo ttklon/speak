@@ -13,6 +13,13 @@
  */
 
 import { startPcmRecording } from './audio/pcmRecorder.js';
+import { termVariants } from './dictionary/aliases.js';
+
+/** Вариант может быть из нескольких слов («эс кью эл») — тогда ищем фразу целиком. */
+function matchesVariant(variant, tokens, haystack) {
+  if (variant.includes(' ')) return ` ${haystack} `.includes(` ${variant} `);
+  return tokens.has(variant);
+}
 import { tierForModel } from './modelTiers.js';
 
 /** Больше трёх моделей сравнивать бессмысленно: это минуты счёта на слабом CPU. */
@@ -50,15 +57,20 @@ export function pickCompareModels({ downloaded = [], current = '', order = [] } 
 
 /** Сколько слов из словаря реально попало в текст (по целым словам). */
 export function scoreTerms(text, words = []) {
-  const tokens = new Set(norm(text).split(' ').filter(Boolean));
+  const haystack = norm(text);
+  const tokens = new Set(haystack.split(' ').filter(Boolean));
   const seen = new Set();
   const matched = [];
   for (const raw of words || []) {
     const word = norm(typeof raw === 'object' && raw ? raw.word : raw);
     if (!word || seen.has(word)) continue;
     seen.add(word);
+    // Считаем попаданием любое известное написание: модель услышала «зум»,
+    // а в словаре записано Zoom — это попадание, а не промах. Иначе сравнение
+    // моделей штрафовало бы их за то, что они пишут кириллицей.
+    const variants = termVariants(raw).map(norm).filter(Boolean);
     // только целое слово: «зуммер» — это не «зум», иначе счёт врал бы в плюс
-    if (tokens.has(word)) matched.push(word);
+    if (variants.some((variant) => matchesVariant(variant, tokens, haystack))) matched.push(word);
   }
   const total = seen.size;
   return { matched, total, ratio: total ? matched.length / total : 0 };

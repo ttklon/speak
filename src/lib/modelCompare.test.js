@@ -94,4 +94,10 @@ describe('describeComparison', () => {
     const res = describeComparison([{ model: 'base', ok: true, text: 'привет' }, { model: 'small', ok: false }]);
     expect(res.summary).toMatch(/нечего/);
   });
+  it('попаданием считается и известное русское произношение термина', () => {
+    // Модель написала «зум» и «телеграм» — это те же слова из словаря.
+    const res = scoreTerms('открой зум и телеграм', [{ word: 'Zoom' }, { word: 'Telegram' }, { word: 'Docker' }]);
+    expect(res.matched).toEqual(['zoom', 'telegram']);
+    expect(res.total).toBe(3);
+  });
 });
