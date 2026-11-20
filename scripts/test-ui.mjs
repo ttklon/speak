@@ -3593,6 +3593,58 @@ async function scenarioEngineCancel(browser) {
   } finally { await page.close(); }
 }
 
+// Повтор подключения вручную после конкурирующей фоновой загрузки и отмены выбора файла.
+async function scenarioImportModelRetry(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 600,
+    patchNative: () => {
+      let attempts = 0;
+      window.zspeakly.native.importModel = async () => {
+        window.__bridgeCalls.push({ channel: 'models:import', args: [] });
+        attempts++;
+        if (attempts === 1) return { ok: false, reason: 'другая загрузка уже выполняется' };
+        if (attempts === 2) return { ok: false, canceled: true };
+        if (attempts === 3) return { ok: false, canceled: true, reason: 'скачивание отменено' };
+        return { ok: true, id: 'base-q5_1', sizeMb: 60 };
+      };
+    },
+  });
+  try {
+    takeErrors(page);
+    const initial = await page.evaluate(() => window.__e2e.read('zs.settings')?.whisperModel);
+    const first = await clickIn(page, '', 'Указать файл модели');
+    await sleep(250);
+    const conflict = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      model: window.__e2e.read('zs.settings')?.whisperModel,
+    }));
+    record('сценарии', 'импорт модели: конфликт показан и прежний выбор сохранён', first && /другая загрузка уже выполняется/.test(conflict.toast) && conflict.model === initial, conflict.toast);
+    await clickIn(page, '', 'Указать файл модели');
+    await sleep(250);
+    const cancelled = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      model: window.__e2e.read('zs.settings')?.whisperModel,
+    }));
+    record('сценарии', 'импорт модели: отмена выбора не меняет модель', /Файл не выбран/.test(cancelled.toast) && cancelled.model === initial, cancelled.toast);
+    await clickIn(page, '', 'Указать файл модели');
+    await sleep(250);
+    const cancelledImport = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      model: window.__e2e.read('zs.settings')?.whisperModel,
+    }));
+    record('сценарии', 'импорт модели: отмена подключения не меняет модель', /Подключение отменено/.test(cancelledImport.toast) && cancelledImport.model === initial, cancelledImport.toast);
+    await clickIn(page, '', 'Указать файл модели');
+    await sleep(400);
+    const done = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      model: window.__e2e.read('zs.settings')?.whisperModel,
+      calls: window.__bridgeCalls.filter((c) => c.channel === 'models:import').length,
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'импорт модели: повтор подключает выбранную модель', done.calls === 4 && done.model === 'base-q5_1' && /Модель подключена/.test(done.toast) && errors.length === 0, `${done.model} | ${done.toast}`);
+  } finally { await page.close(); }
+}
+
 // На русской и европейской модели main отклоняет запрос при отмене,
 // не отправляя отдельное событие завершения: проверяем именно этот путь.
 async function scenarioSpecialModelCancel(browser) {
@@ -6720,6 +6772,7 @@ async function main() {
       ['параллельные события модели', scenarioModelConcurrentProgress],
       ['непринятая отмена модели', scenarioCancelNotAccepted],
       ['отмена загрузки движка', scenarioEngineCancel],
+      ['повтор импорта модели', scenarioImportModelRetry],
       ['отмена отдельных моделей', scenarioSpecialModelCancel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],

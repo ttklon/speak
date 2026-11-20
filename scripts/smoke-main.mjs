@@ -1644,7 +1644,7 @@ await check('импорт модели: чужой файл не подключ�
   // whisper.cpp пишет 0x67676d6c как little-endian: первые байты — lmgg,
   // как у официальной модели for-tests-ggml-tiny.bin.
   fs.writeFileSync(good, Buffer.concat([Buffer.from([0x6c, 0x6d, 0x67, 0x67]), Buffer.alloc(21 * 1024 * 1024)]));
-  const ok = await modelsMod.importModel(good);
+  const ok = await handlers.get('models:import')({}, good);
   if (!ok.ok || ok.id !== 'large-v3-turbo') throw new Error(JSON.stringify(ok));
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

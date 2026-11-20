@@ -296,7 +296,7 @@ export default function ModelManager() {
         tone: 'success',
       });
     } else if (res?.canceled) {
-      push({ title: 'Файл не выбран', tone: 'warn' });
+      push({ title: res.reason ? 'Подключение отменено' : 'Файл не выбран', tone: 'warn' });
     } else {
       push({ title: 'Не удалось подключить модель', description: res?.reason, tone: 'warn' });
     }

@@ -13,6 +13,7 @@ const Module = require('node:module');
 const https = require('node:https');
 const http = require('node:http');
 const cp = require('node:child_process');
+const fs = require('node:fs');
 let dir;
 const originalLoad = Module._load;
 Module._load = function (name, ...args) {
@@ -167,6 +168,81 @@ describe('подготовка движка Whisper', () => {
     expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
     fakeUnpack();
     expect((await bounded(models.downloadEngine(undefined, { force: true }))).ok).toBe(true);
+  });
+
+  it('ошибка копирования не оставляет смешанные версии движка', async () => {
+    const oldServer = 'старый сервер';
+    writeFileSync(join(dir, 'bin', 'whisper-server.exe'), oldServer);
+    fakeUnpack();
+    const originalCopy = fs.copyFileSync;
+    fs.copyFileSync = (source, destination, ...args) => {
+      if (String(destination).endsWith('whisper-server.exe')) throw new Error('нет места');
+      return originalCopy(source, destination, ...args);
+    };
+    try {
+      const result = await bounded(models.downloadEngine(undefined, { force: true }));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/нет места/);
+      expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
+      expect(readFileSync(join(dir, 'bin', 'whisper-server.exe'), 'utf8')).toBe(oldServer);
+      expect(readdirSync(join(dir, 'bin')).sort()).toEqual(['whisper-cli.exe', 'whisper-server.exe']);
+    } finally { fs.copyFileSync = originalCopy; }
+  });
+
+  it('при ошибке замены возвращает уже заменённые файлы', async () => {
+    writeFileSync(join(dir, 'bin', 'whisper-server.exe'), 'старый сервер');
+    fakeUnpack();
+    const originalRename = fs.renameSync;
+    fs.renameSync = (source, destination) => {
+      if (String(destination) === join(dir, 'bin', 'whisper-server.exe')) throw new Error('файл занят');
+      return originalRename(source, destination);
+    };
+    try {
+      const result = await bounded(models.downloadEngine(undefined, { force: true }));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/файл занят/);
+      expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
+      expect(readFileSync(join(dir, 'bin', 'whisper-server.exe'), 'utf8')).toBe('старый сервер');
+      expect(readdirSync(join(dir, 'bin')).sort()).toEqual(['whisper-cli.exe', 'whisper-server.exe']);
+    } finally { fs.renameSync = originalRename; }
+  });
+
+  it('сохраняет резервную копию и сообщает её путь, если восстановление не удалось', async () => {
+    writeFileSync(join(dir, 'bin', 'whisper-server.exe'), 'старый сервер');
+    fakeUnpack();
+    const originalRename = fs.renameSync;
+    fs.renameSync = (source, destination) => {
+      if (String(destination) === join(dir, 'bin', 'whisper-server.exe') ||
+          (String(source).includes(`${require('node:path').sep}backup${require('node:path').sep}`) && String(destination) === join(dir, 'bin', 'whisper-cli.exe'))) {
+        throw new Error('файл занят');
+      }
+      return originalRename(source, destination);
+    };
+    try {
+      const result = await bounded(models.downloadEngine(undefined, { force: true }));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/не удалось восстановить/);
+      const recovery = readdirSync(join(dir, 'bin')).find((name) => name.startsWith('.engine-update-'));
+      expect(recovery).toBeTruthy();
+      const backup = join(dir, 'bin', recovery, 'backup');
+      expect(result.reason).toContain(backup);
+      expect(readFileSync(join(backup, 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
+      expect(readFileSync(join(dir, 'bin', 'whisper-server.exe'), 'utf8')).toBe('старый сервер');
+    } finally { fs.renameSync = originalRename; }
+  });
+
+  it('не устанавливает архив с одинаковыми именами из разных папок', async () => {
+    const ready = fakeUnpack();
+    const task = models.downloadEngine(undefined, { force: true });
+    await bounded(ready);
+    const nested = join(dir, 'bin', '_unpacked', 'another');
+    mkdirSync(nested);
+    writeFileSync(join(nested, 'WHISPER-CLI.EXE'), 'другой файл');
+    const result = await bounded(task);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/повторяется файл/);
+    expect(readdirSync(join(dir, 'bin'))).toEqual(['whisper-cli.exe']);
+    expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
   });
 
   it('устанавливает файлы после распаковки и очищает временные', async () => {

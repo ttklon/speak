@@ -253,14 +253,14 @@ async function downloadEngine(onProgress, { force = false } = {}) {
           for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) walk(full);
-            else if (/\.(exe|dll)$/i.test(entry.name)) files.push(full);
+            else if (entry.isFile() && /\.(exe|dll)$/i.test(entry.name)) files.push(full);
           }
         };
         walk(out);
         if (!files.some((file) => /^(whisper-cli|whisper|main)\.exe$/i.test(path.basename(file)))) {
           throw new Error('в архиве нет программы распознавания');
         }
-        for (const file of files) fs.copyFileSync(file, path.join(d.bin, path.basename(file)));
+        require('./installEngine.cjs').installEngineFiles(files, d.bin);
         onProgress?.(100);
         const after = modelStatus();
         return { ok: true, path: d.bin, bin: after.bin, server: after.server };
@@ -279,9 +279,9 @@ async function downloadEngine(onProgress, { force = false } = {}) {
  * Копируем в userData\models под правильным именем ggml-*.bin.
  */
 async function importModel(sourcePath, onProgress) {
-  const { dialog } = require('electron');
   let file = sourcePath;
   if (!file) {
+    const { dialog } = require('electron');
     const picked = await dialog.showOpenDialog({
       title: 'Выберите файл модели ggml',
       properties: ['openFile'],
@@ -291,53 +291,80 @@ async function importModel(sourcePath, onProgress) {
     file = picked.filePaths[0];
   }
 
-  let stat;
   try {
-    stat = fs.statSync(file);
-  } catch (err) {
-    return { ok: false, reason: `файл не читается: ${err.message}` };
-  }
-  if (stat.size < 20 * 1024 * 1024) {
-    return { ok: false, reason: 'это не похоже на модель whisper.cpp (меньше 20 МБ)' };
-  }
+    return await runExclusive(async ({ signal }) => {
+      let stat;
+      try {
+        stat = fs.statSync(file);
+      } catch (err) {
+        return { ok: false, reason: `файл не читается: ${err.message}` };
+      }
+      if (stat.size < 20 * 1024 * 1024) {
+        return { ok: false, reason: 'это не похоже на модель whisper.cpp (меньше 20 МБ)' };
+      }
 
-  // whisper.cpp записывает 0x67676d6c в порядке little-endian, то есть «lmgg».
-  // Это только проверка заголовка, а не доказательство целостности всей модели.
-  try {
-    const head = Buffer.alloc(4);
-    const fd = fs.openSync(file, 'r');
-    fs.readSync(fd, head, 0, 4, 0);
-    fs.closeSync(fd);
-    const magic = head.toString('latin1');
-    if (magic !== 'lmgg') {
-      return {
-        ok: false,
-        reason: 'файл не в формате ggml — скачайте модель ggml-*.bin (whisper.cpp / Hugging Face)',
-      };
-    }
-  } catch (err) {
-    return { ok: false, reason: `не удалось прочитать начало файла: ${err.message}` };
-  }
+      // whisper.cpp записывает 0x67676d6c в порядке little-endian, то есть «lmgg».
+      // Это только проверка заголовка, а не доказательство целостности всей модели.
+      try {
+        const head = Buffer.alloc(4);
+        const fd = fs.openSync(file, 'r');
+        try { fs.readSync(fd, head, 0, 4, 0); }
+        finally { fs.closeSync(fd); }
+        const magic = head.toString('latin1');
+        if (magic !== 'lmgg') {
+          return {
+            ok: false,
+            reason: 'файл не в формате ggml — скачайте модель ggml-*.bin (whisper.cpp / Hugging Face)',
+          };
+        }
+      } catch (err) {
+        return { ok: false, reason: `не удалось прочитать начало файла: ${err.message}` };
+      }
 
-  // Имя берём из названия файла, если оно совпадает с известной моделью,
-  // иначе — по размеру (размеры различаются в разы, спутать сложно).
-  const mb = stat.size / (1024 * 1024);
-  const byName = /ggml-([a-z0-9._-]+)\.bin$/i.exec(path.basename(file));
-  const known = byName && MODELS[byName[1]] ? byName[1] : '';
-  const guess =
-    known ||
-    Object.entries(MODELS)
-      .map(([id, meta]) => ({ id, diff: Math.abs(meta.mb - mb) }))
-      .sort((a, b) => a.diff - b.diff)[0].id;
-  const target = path.join(ensureDirs().models, `ggml-${guess}.bin`);
+      // Имя берём из названия файла, если оно совпадает с известной моделью,
+      // иначе — по размеру (размеры различаются в разы, спутать сложно).
+      const mb = stat.size / (1024 * 1024);
+      const byName = /ggml-([a-z0-9._-]+)\.bin$/i.exec(path.basename(file));
+      const known = byName && MODELS[byName[1]] ? byName[1] : '';
+      const guess =
+        known ||
+        Object.entries(MODELS)
+          .map(([id, meta]) => ({ id, diff: Math.abs(meta.mb - mb) }))
+          .sort((a, b) => a.diff - b.diff)[0].id;
+      const target = path.join(ensureDirs().models, `ggml-${guess}.bin`);
 
-  try {
-    fs.copyFileSync(file, target);
+      try {
+        // Тот же файл уже лежит на месте — не копируем гигабайты сами в себя.
+        const canonical = (p) => {
+          const real = fs.realpathSync(p);
+          return process.platform === 'win32' ? real.toLowerCase() : real;
+        };
+        if (!fs.existsSync(target) || canonical(file) !== canonical(target)) {
+          // Сначала копия на том же диске; старая модель не затрагивается, пока
+          // полная копия не готова. Импорт и загрузка используют общую блокировку.
+          const staging = fs.mkdtempSync(path.join(path.dirname(target), '.import-'));
+          try {
+            const temporary = path.join(staging, 'model.bin');
+            // Копирование больших моделей выполняется вне главного потока.
+            // Операцию копирования нельзя прервать, но после отмены её результат
+            // не заменит прежнюю модель.
+            await fs.promises.copyFile(file, temporary);
+            if (signal.aborted) throw new Error('скачивание отменено');
+            fs.renameSync(temporary, target);
+          } finally {
+            fs.rmSync(staging, { recursive: true, force: true });
+          }
+        }
+      } catch (err) {
+        if (signal.aborted) throw err;
+        return { ok: false, reason: `не удалось скопировать: ${err.message}` };
+      }
+      onProgress?.(100);
+      return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
+    });
   } catch (err) {
-    return { ok: false, reason: `не удалось скопировать: ${err.message}` };
+    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
-  onProgress?.(100);
-  return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
 }
 
 module.exports = { modelStatus, downloadModel, downloadVad, downloadEngine, deleteModel, importModel, cancelDownload, MODELS, VAD };
