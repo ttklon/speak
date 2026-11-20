@@ -1901,6 +1901,44 @@ await check('подготовка распознавания: канал models:
   if (!res || typeof res.ok !== 'boolean') throw new Error(`странный ответ: ${JSON.stringify(res)}`);
 });
 
+await check('автоподготовка: файлы в комплекте работают без скачивания', async () => {
+  const models = require(path.resolve('electron/models.cjs'));
+  const resourcesBefore = process.resourcesPath;
+  const resources = path.join(userData, 'test-resources');
+  const saved = { engine: models.downloadEngine, vad: models.downloadVad, model: models.downloadModel };
+  const settingsBefore = handlers.get('store:get')({}, 'zs:settings');
+  const parked = path.join(userData, 'parked-models');
+  fs.mkdirSync(parked, { recursive: true });
+  const savedFiles = fs.readdirSync(path.join(userData, 'models')).filter((name) => /^ggml-.*\.bin$/i.test(name));
+  for (const name of savedFiles) fs.renameSync(path.join(userData, 'models', name), path.join(parked, name));
+  try {
+    process.resourcesPath = resources;
+    fs.mkdirSync(path.join(resources, 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(resources, 'models'), { recursive: true });
+    for (const f of ['whisper-cli.exe', 'whisper-server.exe']) fs.writeFileSync(path.join(resources, 'bin', f), 'fixture');
+    for (const f of ['ggml-silero-v6.2.0.bin', 'ggml-base-q5_1.bin']) fs.writeFileSync(path.join(resources, 'models', f), 'fixture');
+    await handlers.get('store:set')({}, 'zs:settings', { ...settingsBefore, whisperModel: 'base-q5_1' });
+    models.downloadEngine = models.downloadVad = models.downloadModel = async () => { throw new Error('неожиданная загрузка'); };
+    const status = await handlers.get('models:status')({});
+    if (!status.bin || !status.server || !status.vad || !status.models['base-q5_1'].available || status.active !== 'base-q5_1') throw new Error(`статус: ${JSON.stringify(status)}`);
+    const result = await handlers.get('models:prepare')({});
+    if (!result.ok || !result.already) throw new Error(`подготовка: ${JSON.stringify(result)}`);
+    fs.renameSync(path.join(resources, 'models', 'ggml-base-q5_1.bin'), path.join(resources, 'models', 'ggml-large-v3.bin'));
+    const legacyStatus = await handlers.get('models:status')({});
+    const legacyResult = await handlers.get('models:prepare')({});
+    if (!legacyStatus.availableModel || legacyStatus.active !== 'large-v3' || !legacyResult.ok || !legacyResult.already) {
+      throw new Error(`старая модель: ${JSON.stringify({ legacyStatus, legacyResult })}`);
+    }
+  } finally {
+    if (resourcesBefore === undefined) delete process.resourcesPath; else process.resourcesPath = resourcesBefore;
+    models.downloadEngine = saved.engine; models.downloadVad = saved.vad; models.downloadModel = saved.model;
+    for (const name of savedFiles) fs.renameSync(path.join(parked, name), path.join(userData, 'models', name));
+    fs.rmSync(parked, { recursive: true, force: true });
+    fs.rmSync(resources, { recursive: true, force: true });
+    await handlers.get('store:set')({}, 'zs:settings', settingsBefore);
+  }
+});
+
 await check('автоподготовка: отмена VAD останавливает цепочку, повтор запускается', async () => {
   const models = require(path.resolve('electron/models.cjs'));
   const hardware = require(path.resolve('electron/hardware.cjs'));

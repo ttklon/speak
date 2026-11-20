@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const https = require('node:https');
 const { app } = require('electron');
+const whisper = require('./whisper.cjs');
 
 // Реальные файлы из ggml-org/whisper.cpp на Hugging Face (те же имена, что в
 // официальном download-ggml-model.sh). mb — ожидаемый размер для прогресса.
@@ -67,33 +68,34 @@ function modelStatus() {
       path: p,
       sizeMb: meta.mb,
       downloaded: exists,
+      // В комплекте тоже может быть модель. Удаление доступно только для
+      // файла профиля, но распознавание может использовать оба расположения.
+      available: Boolean(whisper.findExactModel(id)),
       actualMb: exists ? Math.round(fs.statSync(p).size / (1024 * 1024)) : 0,
     };
   }
-  const bin = ['whisper-cli.exe', 'whisper.exe', 'main.exe', 'whisper-cli'].some((n) =>
-    fs.existsSync(path.join(d.bin, n)),
-  );
-  // Сервер распознавания держит модель в памяти между диктовками: без него
-  // каждая фраза начинается с холодной загрузки весов. Старые сборки клали
-  // в комплект только whisper-cli — такой случай надо видеть и лечить.
-  const server = ['whisper-server.exe', 'whisper-server'].some((n) =>
-    fs.existsSync(path.join(d.bin, n)),
-  );
-  const vadPath = path.join(d.models, VAD.file);
-  const vad = fs.existsSync(vadPath);
-  return { models: out, bin, server, vad, vadPath: vad ? vadPath : '', vadSizeMb: VAD.mb };
+  // Используем те же пути, что и реальное распознавание: в том числе
+  // resources установщика и PATH, а не только скачанное в профиль.
+  const bin = Boolean(whisper.findBinary());
+  const server = whisper.serverStatus().available;
+  const vadPath = whisper.findVadModel() || '';
+  const availableModel = Object.values(out).some((model) => model.available) || Boolean(whisper.findModel(''));
+  return { models: out, availableModel, bin, server, vad: Boolean(vadPath), vadPath, vadSizeMb: VAD.mb };
 }
 
 // Одна подготовка Whisper/VAD/движка; блокировка включает поиск и распаковку.
 const { createDownloadManager, removeTemporary } = require('./whisperDownload.cjs');
-const { download, cancelDownload, runExclusive } = createDownloadManager();
+const { download, cancelDownload, runExclusive, isBusy } = createDownloadManager();
+const busyResult = () => ({ ok: false, reason: 'другая операция подготовки уже выполняется' });
 
 async function downloadModel(id, onProgress) {
   const meta = MODELS[id];
   if (!meta) return { ok: false, reason: `неизвестная модель ${id}` };
+  if (isBusy()) return busyResult();
   const d = ensureDirs();
   const dest = path.join(d.models, meta.file);
-  if (fs.existsSync(dest)) return { ok: true, already: true, path: dest };
+  const existing = whisper.findExactModel(id);
+  if (existing) return { ok: true, already: true, path: existing };
   const url = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${meta.file}`;
   try {
     await download(url, dest, onProgress);
@@ -111,6 +113,9 @@ async function downloadModel(id, onProgress) {
 function deleteModel(id) {
   const meta = MODELS[id];
   if (!meta) return { ok: false, reason: `неизвестная модель ${id}` };
+  // Проверка и удаление синхронны, поэтому другая операция не успеет
+  // захватить блокировку между ними в главном потоке.
+  if (isBusy()) return busyResult();
   const d = ensureDirs();
   const file = path.join(d.models, meta.file);
   if (!fs.existsSync(file)) return { ok: false, reason: 'модель не скачана' };
@@ -129,9 +134,11 @@ function deleteModel(id) {
  * прогресса — файл настолько мал, что проценты только мешают.
  */
 async function downloadVad() {
+  if (isBusy()) return busyResult();
   const d = ensureDirs();
   const dest = path.join(d.models, VAD.file);
-  if (fs.existsSync(dest)) return { ok: true, already: true, path: dest };
+  const existing = whisper.findVadModel();
+  if (existing) return { ok: true, already: true, path: existing };
   try {
     await download(VAD.url, dest, undefined);
     return { ok: true, path: dest };
@@ -211,9 +218,11 @@ function unpackArchive(zip, out, signal) {
 }
 
 async function downloadEngine(onProgress, { force = false } = {}) {
+  if (isBusy()) return busyResult();
   const d = ensureDirs();
   // force — «движок есть, но сервера распознавания в нём нет».
-  if (modelStatus().bin && !force) return { ok: true, already: true, path: d.bin };
+  const existing = whisper.findBinary();
+  if (existing && !force) return { ok: true, already: true, path: path.dirname(existing) };
 
   try {
     return await runExclusive(async ({ signal, download: downloadArchive }) => {

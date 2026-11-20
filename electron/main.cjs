@@ -1280,7 +1280,7 @@ function registerIpc() {
 
   function downloadedModels() {
     const st = models.modelStatus();
-    return Object.keys(st.models || {}).filter((id) => st.models[id]?.downloaded);
+    return Object.keys(st.models || {}).filter((id) => (st.models[id]?.available || st.models[id]?.downloaded));
   }
 
   function maybeAutoTune(ms, seconds, model) {
@@ -1358,7 +1358,7 @@ function registerIpc() {
       const settings = store?.get('zs:settings') || {};
       const current = settings.whisperModel || 'base';
       const st = models.modelStatus();
-      const downloaded = Object.keys(st.models || {}).filter((id) => st.models[id]?.downloaded);
+      const downloaded = Object.keys(st.models || {}).filter((id) => (st.models[id]?.available || st.models[id]?.downloaded));
       const decision = hardware.plan({
         ...hardware.thisMachine(),
         current,
@@ -2379,7 +2379,7 @@ function registerIpc() {
         engine: st.bin ? 'есть' : 'нет',
         vad: Boolean(st.vad),
         model,
-        modelDownloaded: Boolean(st.models?.[model]?.downloaded),
+        modelDownloaded: Boolean(st.models?.[model]?.available || st.models?.[model]?.downloaded),
         hotkeys: [...usedAccels],
         insertMethod: s.insertMethod === 'sendinput' ? 'sendinput' : 'clipboard',
         insertSupported: process.platform === 'win32',
@@ -2771,8 +2771,8 @@ function registerIpc() {
           if (vadRes.canceled || vadRes.cleanupFailed) return vadRes;
         }
         st = models.modelStatus();
-        const downloaded = Object.values(st.models).filter((m) => m.downloaded);
-        if (downloaded.length) return { ok: true, already: true };
+        const downloaded = Object.values(st.models).filter((m) => m.available || m.downloaded);
+        if (downloaded.length || st.availableModel) return { ok: true, already: true };
         // Модели нет вообще: берём ту, что подходит железу, а не «base для всех».
         const settings0 = store?.get('zs:settings') || {};
         const hw = hardware.thisMachine();
@@ -2805,7 +2805,7 @@ function registerIpc() {
         // не задерживает.
         if (res.ok) {
           const lighter = hardware.lighterModel(id);
-          if (lighter && !models.modelStatus().models?.[lighter]?.downloaded) {
+          if (lighter && !(models.modelStatus().models?.[lighter]?.available || models.modelStatus().models?.[lighter]?.downloaded)) {
             setTimeout(() => {
               models
                 .downloadModel(lighter, (percent) => push({ id: lighter, percent }))

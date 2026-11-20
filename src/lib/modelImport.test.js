@@ -110,7 +110,13 @@ describe('безопасное подключение модели Whisper', () 
     const task = models.importModel(source);
     try {
       await ready;
-      // Другая операция может обратиться к менеджеру, пока копирование ждёт.
+      // Во время импорта нельзя удалить или объявить старую модель готовой.
+      const deletion = models.deleteModel('tiny');
+      expect(deletion.ok).toBe(false);
+      expect(deletion.reason).toMatch(/уже выполняется/);
+      const sameDownload = await models.downloadModel('tiny');
+      expect(sameDownload.ok).toBe(false);
+      expect(sameDownload.reason).toMatch(/уже выполняется/);
       const conflict = await models.downloadModel('base');
       expect(conflict.reason).toMatch(/уже выполняется/);
       expect(models.cancelDownload().ok).toBe(true);
@@ -118,6 +124,8 @@ describe('безопасное подключение модели Whisper', () 
       expect(await task).toMatchObject({ ok: false, canceled: true });
       expect(readFileSync(target, 'utf8')).toBe('старая модель');
       expect(readdirSync(join(dir, 'models'))).toEqual(['ggml-tiny.bin']);
+      expect(models.deleteModel('tiny')).toMatchObject({ ok: true, id: 'tiny' });
+      expect(readdirSync(join(dir, 'models'))).toEqual([]);
     } finally { release(); await task; }
   });
 

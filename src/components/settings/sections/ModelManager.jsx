@@ -365,7 +365,7 @@ export default function ModelManager() {
     });
   };
 
-  const downloaded = status?.models ? Object.values(status.models).filter((m) => m.downloaded).length : 0;
+  const downloaded = status?.models ? Object.values(status.models).filter((m) => m.available || m.downloaded).length : 0;
   const activeTier = tierForModel(settings.whisperModel);
   // Старых имён моделей здесь больше нет: `lib/settingsMigration.js` переводит
   // их на ближайший режим ещё при загрузке настроек. Держать в интерфейсе
@@ -395,7 +395,7 @@ export default function ModelManager() {
   // какие модели вообще можно сравнить: только скачанные, текущая первой
   const downloadedModels = status?.models
     ? Object.entries(status.models)
-        .filter(([, info]) => info?.downloaded)
+        .filter(([, info]) => info?.available || info?.downloaded)
         .map(([id]) => id)
     : [];
   const fit = fitVerdict({
@@ -464,7 +464,7 @@ export default function ModelManager() {
       <div className="settings-group__title">Модель распознавания</div>
       <div className="settings-group__desc">
         {/* на свежей установке движка и модели нет — говорим об этом прямо */}
-        {status && (!status.bin || !Object.values(status.models || {}).some((m) => m.downloaded)) ? (
+        {status && (!status.bin || !(status.availableModel || Object.values(status.models || {}).some((m) => m.available || m.downloaded))) ? (
           <span className="model-setup-note">
             Для офлайн-диктовки нужны две вещи: движок whisper.cpp (≈20 МБ) и модель (60–550 МБ).
             Скачиваются сюда же, один раз — дальше всё работает без интернета.
@@ -518,6 +518,7 @@ export default function ModelManager() {
 
       {MODELS.map((m) => {
         const info = status?.models?.[m.id];
+        const available = Boolean(info?.available || info?.downloaded);
         const pct = progress[m.id];
         const active = activeTier.id === m.tier;
         const tier = MODEL_TIERS.find((t) => t.id === m.tier);
@@ -529,7 +530,7 @@ export default function ModelManager() {
               onClick={() => {
                 // выбор режима без скачанного файла оставил бы диктовку без
                 // движка, поэтому «не скачано» = «скачать и включить»
-                if (info?.downloaded) {
+                if (available) {
                   updateSettings({ whisperModel: m.id });
                   push({
                     title: `Режим «${tier?.label.toLowerCase() || m.label}»`,
@@ -540,16 +541,14 @@ export default function ModelManager() {
                 }
                 download(m.id);
               }}
-              title={info?.downloaded ? 'Работать в этом режиме' : 'Скачать и включить этот режим'}
+              title={available ? 'Работать в этом режиме' : 'Скачать и включить этот режим'}
             >
               <div className="grow" style={{ textAlign: 'left' }}>
                 <div className="model-card__name">
                   {tier?.label || m.label}
                   {tier?.recommended ? <span className="model-badge model-badge--pick">ставится само</span> : null}
-                  {info?.downloaded ? (
-                    // просто «скачано»: размер уже стоит строкой ниже, а два
-                    // разных числа в одной карточке читались как ошибка
-                    <span className="model-badge">скачано</span>
+                  {available ? (
+                    <span className="model-badge">{info?.downloaded ? 'скачано' : 'доступно'}</span>
                   ) : null}
                 </div>
                 <div className="model-card__meta">
@@ -575,7 +574,7 @@ export default function ModelManager() {
               >
                 <Trash2 size={13} />
               </Button>
-            ) : (
+            ) : !available ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -585,7 +584,7 @@ export default function ModelManager() {
               >
                 {busy === m.id ? `${pct || 0}%` : 'Скачать'}
               </Button>
-            )}
+            ) : null}
           </div>
         );
       })}

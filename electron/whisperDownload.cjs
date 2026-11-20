@@ -94,7 +94,7 @@ function createDownloadManager() {
 
   // Для движка блокировка занимает и поиск релиза, и распаковку, а не только сеть.
   async function runExclusive(work) {
-    if (active) throw new Error('другая загрузка уже выполняется');
+    if (active) throw new Error('другая операция подготовки уже выполняется');
     const operation = { controller: new AbortController() };
     active = operation;
     const signal = operation.controller.signal;
@@ -125,7 +125,7 @@ function createDownloadManager() {
     return runExclusive((operation) => operation.download(url, dest, onProgress));
   }
 
-  return { download, cancelDownload, runExclusive };
+  return { download, cancelDownload, runExclusive, isBusy: () => Boolean(active) };
 }
 
 module.exports = { createDownloadManager, removeTemporary };

@@ -3610,7 +3610,7 @@ async function scenarioImportModelRetry(browser) {
       window.zspeakly.native.importModel = async () => {
         window.__bridgeCalls.push({ channel: 'models:import', args: [] });
         attempts++;
-        if (attempts === 1) return { ok: false, reason: 'другая загрузка уже выполняется' };
+        if (attempts === 1) return { ok: false, reason: 'другая операция подготовки уже выполняется' };
         if (attempts === 2) return { ok: false, canceled: true };
         if (attempts === 3) return { ok: false, canceled: true, reason: 'скачивание отменено' };
         if (attempts === 4) return { ok: false, reason: 'не удалось удалить временные данные: .import-123: файл занят' };
@@ -3627,7 +3627,7 @@ async function scenarioImportModelRetry(browser) {
       toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
       model: window.__e2e.read('zs.settings')?.whisperModel,
     }));
-    record('сценарии', 'импорт модели: конфликт показан и прежний выбор сохранён', first && /другая загрузка уже выполняется/.test(conflict.toast) && conflict.model === initial, conflict.toast);
+    record('сценарии', 'импорт модели: конфликт показан и прежний выбор сохранён', first && /другая операция подготовки уже выполняется/.test(conflict.toast) && conflict.model === initial, conflict.toast);
     await clickIn(page, '', 'Указать файл модели');
     await sleep(250);
     const cancelled = await page.evaluate(() => ({
@@ -3713,10 +3713,52 @@ async function scenarioSpecialModelCancel(browser) {
   }
 }
 
+// Модель в комплекте доступна для выбора, но не удаляется из профиля и не качается заново.
+async function scenarioBundledModel(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 600,
+    patchNative: () => {
+      const native = window.zspeakly.native;
+      const original = native.modelsStatus;
+      native.modelsStatus = async () => {
+        const status = await original();
+        return { ...status, models: { ...status.models, 'small-q5_1': { id: 'small-q5_1', downloaded: false, available: true } } };
+      };
+    },
+  });
+  try {
+    takeErrors(page);
+    const card = await page.evaluate(() => {
+      const item = [...document.querySelectorAll('.model-card')].find((node) => /^Сбалансированно/.test(node.querySelector('.model-card__name')?.innerText || ''));
+      return { text: item?.innerText || '', pick: Boolean(item?.querySelector('.model-card__pick')), trash: Boolean(item?.querySelector('[aria-label^="Удалить модель"]')), download: [...(item?.querySelectorAll('button') || [])].some((b) => b.innerText.trim() === 'Скачать') };
+    });
+    record('сценарии', 'модель из комплекта доступна без скачивания и удаления', card.pick && /доступно/.test(card.text) && !card.trash && !card.download, card.text);
+    const selected = await page.evaluate(() => {
+      const item = [...document.querySelectorAll('.model-card')].find((node) => /^Сбалансированно/.test(node.querySelector('.model-card__name')?.innerText || ''));
+      item?.querySelector('.model-card__pick')?.click();
+      return Boolean(item);
+    });
+    await sleep(350);
+    const state = await page.evaluate(() => ({ model: window.__e2e.read('zs.settings')?.whisperModel, calls: window.__bridgeCalls.filter((c) => c.channel === 'models:download').length }));
+    record('сценарии', 'модель из комплекта выбирается без сети', selected && state.model === 'small-q5_1' && state.calls === 0 && takeErrors(page).length === 0, JSON.stringify(state));
+  } finally { await page.close(); }
+}
+
 // Удалению модели раньше не было кнопки вовсе: скачал несколько — старые
 // лежали гигабайтами и убрать их было нечем.
 async function scenarioModelDelete(browser) {
-  const page = await openPage(browser, '#/settings?section=features&from=home', { settle: 600 });
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 600,
+    patchNative: () => {
+      const native = window.zspeakly.native;
+      const original = native.deleteModel;
+      let attempts = 0;
+      native.deleteModel = async (...args) => {
+        if (++attempts === 1) return { ok: false, reason: 'другая операция подготовки уже выполняется' };
+        return original(...args);
+      };
+    },
+  });
   takeErrors(page);
   const trash = await page.evaluate(() => {
     const btn = [...document.querySelectorAll('button[aria-label^="Удалить модель"]')].find((b) =>
@@ -3740,13 +3782,29 @@ async function scenarioModelDelete(browser) {
     btn.click();
     return true;
   });
+  await sleep(400);
+  const conflict = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+  record('сценарии', 'модели: конфликт удаления объясняется и доступен повтор', confirmed && /Модель не удалилась/.test(conflict) && /другая операция подготовки уже выполняется/.test(conflict), conflict);
+  const retry = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button[aria-label^="Удалить модель"]')].find((b) => /сбалансированно/.test(b.getAttribute('aria-label')));
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(200);
+  const confirmedRetry = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => (b.innerText || '').replace(/\s+/g, ' ').trim() === 'Удалить модель');
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  });
   await sleep(900);
   const calls = await bridgeCalls(page);
   const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
   record(
     'сценарии',
     'модели: удаление уходит в main и объясняет, сколько освободилось',
-    confirmed && calls.includes('models:delete') && /199\s*МБ/.test(toast) && /быстр/.test(toast),
+    retry && confirmedRetry && calls.includes('models:delete') && /199\s*МБ/.test(toast) && /быстр/.test(toast),
     `${calls.filter((c) => c.startsWith('models')).join(',')} | ${toast}`.slice(0, 160),
   );
   const errors = takeErrors(page);
@@ -6790,6 +6848,7 @@ async function main() {
       ['отмена загрузки движка', scenarioEngineCancel],
       ['повтор импорта модели', scenarioImportModelRetry],
       ['отмена отдельных моделей', scenarioSpecialModelCancel],
+      ['модель из комплекта', scenarioBundledModel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
       ['старое имя модели', scenarioOldModelName],

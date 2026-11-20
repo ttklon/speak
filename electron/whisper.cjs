@@ -29,7 +29,7 @@ function findBinary(names = BIN_NAMES) {
   const roots = candidates(
     process.resourcesPath && path.join(process.resourcesPath, 'bin'),
     path.join(app.getPath('userData'), 'bin'),
-    path.join(app.getAppPath(), 'bin'),
+    app.getAppPath?.() && path.join(app.getAppPath(), 'bin'),
   );
   for (const dir of roots) {
     for (const name of names) {
@@ -57,33 +57,44 @@ function findBinary(names = BIN_NAMES) {
 const FALLBACK_ORDER = [
   'large-v3-turbo',
   'large-v3-turbo-q5_0',
+  'large-v3-turbo-q8_0',
   'small',
+  'small-q5_1',
   'base',
+  'base-q5_1',
   'tiny',
+  'tiny-q5_1',
   'medium',
   'large-v3',
 ];
 
-function findModel(preferred = 'small') {
-  const dirs = candidates(
-    process.resourcesPath && path.join(process.resourcesPath, 'models'),
+function modelDirs() {
+  return candidates(
+    // Подключённая пользователем модель должна перекрывать одноимённую из комплекта.
     path.join(app.getPath('userData'), 'models'),
-    path.join(app.getAppPath(), 'models'),
+    process.resourcesPath && path.join(process.resourcesPath, 'models'),
+    app.getAppPath?.() && path.join(app.getAppPath(), 'models'),
   );
+}
+
+function findExactModel(id) {
+  if (typeof id !== 'string' || !/^[a-z0-9._-]+$/i.test(id)) return null;
+  const name = `ggml-${id}.bin`;
+  return modelDirs().map((dir) => path.join(dir, name)).find((p) => fs.existsSync(p)) || null;
+}
+
+function findModel(preferred = 'small') {
   const wanted = [];
   const push = (id) => {
-    const name = `ggml-${id}.bin`;
-    if (!wanted.includes(name)) wanted.push(name);
+    if (!wanted.includes(id)) wanted.push(id);
   };
   if (preferred) push(preferred);
   // выбранная модель может быть не скачана — тогда берём любую подходящую,
   // иначе диктовка «молча не работает» при наличии рабочей модели на диске
   FALLBACK_ORDER.forEach(push);
-  for (const dir of dirs) {
-    for (const name of wanted) {
-      const p = path.join(dir, name);
-      if (fs.existsSync(p)) return p;
-    }
+  for (const id of wanted) {
+    const found = findExactModel(id);
+    if (found) return found;
   }
   return null;
 }
@@ -96,12 +107,7 @@ function findModel(preferred = 'small') {
 const VAD_NAMES = ['ggml-silero-v6.2.0.bin', 'ggml-silero-v5.1.2.bin', 'for-tests-silero-v6.2.0-ggml.bin'];
 
 function findVadModel() {
-  const dirs = candidates(
-    process.resourcesPath && path.join(process.resourcesPath, 'models'),
-    path.join(app.getPath('userData'), 'models'),
-    path.join(app.getAppPath(), 'models'),
-  );
-  for (const dir of dirs) {
+  for (const dir of modelDirs()) {
     for (const name of VAD_NAMES) {
       const p = path.join(dir, name);
       try {
@@ -1020,6 +1026,7 @@ module.exports = {
   isBusy,
   findBinary,
   findModel,
+  findExactModel,
   analysePcm,
   trimSilence,
   splitBySilence,
