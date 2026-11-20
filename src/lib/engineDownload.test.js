@@ -196,7 +196,7 @@ describe('подготовка движка Whisper', () => {
     expect((await bounded(models.downloadEngine(undefined, { force: true }))).ok).toBe(true);
   });
 
-  it.skipIf(process.platform !== 'win32')('распаковывает архив настоящим PowerShell при апострофе в пути', async () => {
+  it.skipIf(process.platform !== 'win32').each([1, 2, 3])('распаковывает архив настоящим PowerShell при апострофе в пути — проверка %i', async () => {
     const source = join(dir, 'source');
     const fixture = join(dir, 'fixture.zip');
     mkdirSync(source);
