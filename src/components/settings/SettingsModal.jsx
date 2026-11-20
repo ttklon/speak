@@ -1,18 +1,22 @@
-import { useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Bug, LayoutGrid, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
-import { Button, Select } from '../ui/Controls.jsx';
-import { Toggle } from '../ui/Toggle.jsx';
-import AccountSection from './sections/AccountSection.jsx';
-import AppSection from './sections/AppSection.jsx';
-import FeaturesSection from './sections/FeaturesSection.jsx';
-import DataSection from './sections/DataSection.jsx';
-import DiagnosticsSection from './sections/DiagnosticsSection.jsx';
-import NetworkSection from './sections/NetworkSection.jsx';
-import AboutSection from './sections/AboutSection.jsx';
+import { Button } from '../ui/Controls.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { SETTING_ENTRIES } from './settingsIndex.js';
 import { SETTINGS_SECTIONS, resolveSection } from '../../lib/settingsSections.js';
+import { observeSettingRow } from './observeSettingRow.js';
+
+// Секции настроек грузятся по требованию: на старте приложения они не нужны,
+// а тянут за собой диагностику, сравнение моделей и менеджер моделей.
+// Они не входят в начальный файл интерфейса.
+const AccountSection = lazy(() => import('./sections/AccountSection.jsx'));
+const AppSection = lazy(() => import('./sections/AppSection.jsx'));
+const FeaturesSection = lazy(() => import('./sections/FeaturesSection.jsx'));
+const DataSection = lazy(() => import('./sections/DataSection.jsx'));
+const DiagnosticsSection = lazy(() => import('./sections/DiagnosticsSection.jsx'));
+const NetworkSection = lazy(() => import('./sections/NetworkSection.jsx'));
+const AboutSection = lazy(() => import('./sections/AboutSection.jsx'));
 
 // Названия разделов живут в lib/settingsSections.js: по ним же проверяются
 // подсказки «Настройки → Раздел» в ошибках и тостах.
@@ -27,6 +31,9 @@ const SECTIONS = SETTINGS_SECTIONS.map((section) => ({ ...section, icon: SECTION
 export default function SettingsModal({ open, section, onSectionChange, onClose }) {
   const { settings } = useAppData();
   const [query, setQuery] = useState('');
+  const [pendingJump, setPendingJump] = useState(null);
+  const mainRef = useRef(null);
+  const active = SECTIONS.find((s) => s.id === resolveSection(section)) || SECTIONS[0];
 
   // поиск ищет и по названиям разделов, и по конкретным строкам внутри них:
   // раньше запрос «звук» давал пустой экран
@@ -61,21 +68,39 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
     return SECTIONS.filter((s) => s.label.toLowerCase().includes(q) || withHits.has(s.id));
   }, [query, matches]);
 
-  // переход к найденной строке: открываем раздел и подсвечиваем совпадение
+  useEffect(() => {
+    if (!open) setPendingJump(null);
+  }, [open]);
+
+  // Следим за появлением строки после загрузки раздела. При закрытии,
+  // переходе в другой раздел или новом поиске наблюдатель отменяется.
+  useEffect(() => {
+    if (!open || !pendingJump || resolveSection(pendingJump.section) !== active.id || !mainRef.current) return undefined;
+    let target;
+    let timer;
+    const stop = observeSettingRow(mainRef.current, pendingJump.title, (row) => {
+      target = row;
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.classList.add('is-highlight');
+      timer = setTimeout(() => row.classList.remove('is-highlight'), 1600);
+    });
+    return () => {
+      stop();
+      clearTimeout(timer);
+      target?.classList.remove('is-highlight');
+    };
+  }, [open, pendingJump, active.id]);
+
   const jumpTo = (entry) => {
+    setPendingJump({ ...entry });
     onSectionChange(entry.section);
     setQuery('');
-    setTimeout(() => {
-      const target = [...document.querySelectorAll('.settings-main .setting-row')].find((row) =>
-        row.textContent.toLowerCase().includes(entry.title.toLowerCase()),
-      );
-      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      target?.classList.add('is-highlight');
-      setTimeout(() => target?.classList.remove('is-highlight'), 1600);
-    }, 120);
   };
 
-  const active = SECTIONS.find((s) => s.id === resolveSection(section)) || SECTIONS[0];
+  const changeSection = (id) => {
+    setPendingJump(null);
+    onSectionChange(id);
+  };
 
   // Четыре раздела вместо семи: смежное стоит рядом, а не за отдельной вкладкой.
   // «Сеть» — это настройки локальной модели, значит место ей в «Диктовке»;
@@ -94,7 +119,7 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
         <AboutSection />
       </>
     ),
-    data: <DataSection onOpenSection={onSectionChange} />,
+    data: <DataSection onOpenSection={changeSection} />,
     diagnostics: <DiagnosticsSection />,
   }[active.id];
 
@@ -140,7 +165,7 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
                   key={s.id}
                   type="button"
                   className={`settings-nav ${active.id === s.id ? 'is-active' : ''}`}
-                  onClick={() => onSectionChange(s.id)}
+                  onClick={() => changeSection(s.id)}
                 >
                   <IconCmp size={14} strokeWidth={1.7} />
                   <span>{s.label}</span>
@@ -149,14 +174,16 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
             })}
           </nav>
         </div>
-        <div className="settings-main">
+        <div className="settings-main" ref={mainRef}>
           {/* Один заголовок на вкладку: раньше внутри «Приложения» стояли три
               одинаковых по весу заголовка, и было непонятно, где что. */}
           <header className="settings-main__head">
             <h2 className="settings-section__title">{active.label}</h2>
             <p className="settings-section__desc">{active.desc}</p>
           </header>
-          {body}
+          <Suspense key={active.id} fallback={<p className="settings-loading" role="status">Загрузка раздела…</p>}>
+            {body}
+          </Suspense>
         </div>
       </div>
       <div className="settings-footer">

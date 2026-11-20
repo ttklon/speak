@@ -92,6 +92,29 @@ describe('восстановление сохранённого размера',
     expect(r).toMatchObject({ x: 2400, y: 200, restored: true });
   });
 
+  it('на маленьком дополнительном мониторе учитывает его рабочую область', () => {
+    const second = { x: 1920, y: 0, width: 800, height: 500 };
+    const r = resolveWindowBounds({ x: 1920, y: 0, width: 1000, height: 680 }, { displays: [primary, second], primary });
+    expect(r).toMatchObject({ x: 1920, y: 0, width: 800, height: 500, restored: true });
+  });
+
+  it('на большом дополнительном мониторе не ограничивается маленьким основным', () => {
+    const second = { x: 1024, y: 0, width: 1920, height: 1040 };
+    const r = resolveWindowBounds({ x: 1200, y: 50, width: 1000, height: 680 }, { displays: [small, second], primary: small });
+    expect(r).toMatchObject({ x: 1200, y: 50, width: 1000, height: 680, restored: true });
+  });
+
+  it('на экране меньше минимума оставляет заголовок видимым', () => {
+    const tiny = { x: 1920, y: 0, width: 640, height: 400 };
+    const r = resolveWindowBounds({ x: 1920, y: 0, width: 720, height: 480 }, { displays: [primary, tiny], primary });
+    expect(r).toMatchObject({ x: 1920, y: 0, width: 720, height: 480, restored: true });
+  });
+
+  it('округляет дробные размеры и координаты из профиля', () => {
+    const r = resolveWindowBounds({ x: 100.3, y: 50.7, width: 899.7, height: 600.2 }, { displays: [primary], primary });
+    expect(r).toMatchObject({ x: 100, y: 51, width: 900, height: 600 });
+  });
+
   it('не доверяет мусору в профиле', () => {
     expect(resolveWindowBounds({ width: 'ой', height: null }, { displays: [primary], primary }).restored).toBe(false);
   });

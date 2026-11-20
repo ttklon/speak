@@ -9,7 +9,7 @@
  *
  * Правила простые и проверяемые:
  *  - меньше 720×480 окно не открываем (проверено аудитом интерфейса);
- *  - больше рабочего стола — не открываем, иначе край с кнопками уедет за экран;
+ *  - ограничиваем размер рабочим столом, если он не меньше минимума;
  *  - если сохранённая позиция больше не существует (отключили второй монитор),
  *    окно открывается по центру основного, а не в пустоте;
  *  - сохранённый размер применяем, только если он не меньше минимума.
@@ -33,9 +33,8 @@ function defaultBounds(workArea, gap = 60) {
 }
 
 /**
- * Помещается ли прямоугольник в рабочий стол хотя бы наполовину.
- * Именно наполовину: окно, у которого виден только заголовок, человек не
- * подвинет — он его не найдёт.
+ * Видна ли хотя бы половина ширины и половина высоты окна на рабочем столе.
+ * Окно, у которого виден только заголовок, человек может не заметить.
  */
 function mostlyVisible(bounds, area) {
   const ax1 = area.x;
@@ -67,26 +66,30 @@ function resolveWindowBounds(saved, { displays = [], primary } = {}) {
 
   if (!num(saved.width) || !num(saved.height)) return fallback;
 
-  // Размер из прошлого раза, но не больше основного экрана: сменили монитор на
-  // маленький — окно не должно висеть шире рабочего стола.
-  const width = Math.max(MIN_WIDTH, Math.min(Math.max(MIN_WIDTH, main.width), MAX_WIDTH, num(saved.width)));
-  const height = Math.max(MIN_HEIGHT, Math.min(Math.max(MIN_HEIGHT, main.height), MAX_HEIGHT, num(saved.height)));
-  const withSize = { width, height, maximized: saved.maximized === true, restored: true, reason: 'как в прошлый раз' };
-
   const x = num(saved.x);
   const y = num(saved.y);
-  if (x === null || y === null) return withSize;
+  const desiredWidth = Math.round(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, saved.width)));
+  const desiredHeight = Math.round(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, saved.height)));
+  // Сначала ищем монитор по сохранённому месту, затем ограничиваем размер
+  // именно его рабочей областью, а не областью основного монитора.
+  const area = x === null || y === null ? null : areas.find((a) =>
+    mostlyVisible({ x, y, width: desiredWidth, height: desiredHeight }, a),
+  );
+  const screen = area || main;
+  const width = Math.min(desiredWidth, Math.max(MIN_WIDTH, screen.width));
+  const height = Math.min(desiredHeight, Math.max(MIN_HEIGHT, screen.height));
+  const withSize = { width, height, maximized: saved.maximized === true, restored: true, reason: 'как в прошлый раз' };
 
-  const area = areas.find((a) => mostlyVisible({ x, y, width, height }, a));
+  if (x === null || y === null) return withSize;
   if (!area) {
     // Второй монитор отключили или сменили масштаб: размер помним, а место — нет.
     return { ...withSize, restored: false, reason: 'прошлое место больше не на экране' };
   }
 
-  // Прижимаем к рабочему столу: человек мог сохранить окно, вылезшее за край
-  // при смене масштаба (125 % → 150 %).
-  const fitX = Math.min(Math.max(x, area.x), area.x + area.width - width);
-  const fitY = Math.min(Math.max(y, area.y), area.y + area.height - height);
+  // На экране меньше минимального размера окно неизбежно выходит за край;
+  // оставляем заголовок у верхнего левого угла, а не за пределами экрана.
+  const fitX = Math.max(area.x, Math.min(x, area.x + area.width - width));
+  const fitY = Math.max(area.y, Math.min(y, area.y + area.height - height));
   return { ...withSize, x: Math.round(fitX), y: Math.round(fitY) };
 }
 

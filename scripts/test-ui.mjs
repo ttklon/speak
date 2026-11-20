@@ -132,6 +132,7 @@ const SEED_SETTINGS = {
 
 async function openPage(browser, route = '#/home', opts = {}) {
   const page = await browser.newPage();
+  page.__delayedRequests = 0;
   const errors = [];
   // Предупреждения React (ключи в списках, controlled/uncontrolled, act)
   // ошибками не считаются, но это будущие ошибки — их тоже собираем.
@@ -156,8 +157,11 @@ async function openPage(browser, route = '#/home', opts = {}) {
   page.on('request', (req) => {
     const url = req.url();
     const local = url.startsWith(BASE) || url.startsWith('data:') || url.startsWith('blob:');
-    if (local) req.continue();
-    else req.abort();
+    if (!local) req.abort();
+    else if (opts.delaySection && url.includes(opts.delaySection)) {
+      page.__delayedRequests += 1;
+      setTimeout(() => req.continue().catch(() => {}), opts.delaySectionMs || 0);
+    } else req.continue();
   });
 
   // Загрузка файла (резервная копия, отчёт) в headless-режиме может увести
@@ -2662,6 +2666,61 @@ async function scenarioSettingsSearch(browser) {
   });
   await sleep(350);
   await page.close();
+}
+
+// Задерживаем загрузку раздела дольше прежнего таймера перехода.
+async function scenarioSlowSettingsSearch(browser) {
+  const page = await openPage(browser, '#/settings?section=app&from=home', {
+    settle: 400,
+    delaySection: '/sections/DataSection.jsx',
+    delaySectionMs: 3200,
+  });
+  try {
+    const input = await page.$('.settings-side input');
+    await input.type('микрофон');
+    await page.waitForSelector('.settings-search-hit');
+    const clickedAt = Date.now();
+    await page.click('.settings-search-hit');
+    await page.waitForSelector('.settings-loading', { timeout: 2000 });
+    record('сценарии', 'медленная загрузка настроек: есть сообщение об ожидании', true);
+    await page.waitForSelector('.setting-row.is-highlight', { timeout: 10000 });
+    const found = await page.evaluate(() => ({
+      text: document.querySelector('.setting-row.is-highlight')?.textContent || '',
+      tab: document.querySelector('.settings-nav.is-active')?.textContent || '',
+    }));
+    record('сценарии', 'медленная загрузка настроек: поиск подсвечивает нужную строку',
+      page.__delayedRequests > 0 && Date.now() - clickedAt >= 2500 && /^\s*Микрофон/i.test(found.text) && /Данные/i.test(found.tab),
+      `задержано запросов: ${page.__delayedRequests}; ожидание ${Date.now() - clickedAt} мс; ${found.text.slice(0, 100)}`);
+    const errors = takeErrors(page);
+    record('сценарии', 'медленная загрузка настроек: без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally {
+    await page.close();
+  }
+
+  const cancelled = await openPage(browser, '#/settings?section=app&from=home', {
+    settle: 400,
+    delaySection: '/sections/DataSection.jsx',
+    delaySectionMs: 3200,
+  });
+  try {
+    await cancelled.type('.settings-side input', 'микрофон');
+    await cancelled.waitForSelector('.settings-search-hit');
+    await cancelled.click('.settings-search-hit');
+    await cancelled.waitForSelector('.settings-loading', { timeout: 2000 });
+    await cancelled.evaluate(() => {
+      [...document.querySelectorAll('.settings-nav')].find((button) => /Приложение/.test(button.textContent))?.click();
+    });
+    await sleep(3700);
+    const result = await cancelled.evaluate(() => ({
+      tab: document.querySelector('.settings-nav.is-active')?.textContent || '',
+      highlighted: document.querySelectorAll('.setting-row.is-highlight').length,
+    }));
+    record('сценарии', 'медленная загрузка настроек: переход отменяется при выборе другого раздела',
+      cancelled.__delayedRequests > 0 && /Приложение/.test(result.tab) && result.highlighted === 0,
+      JSON.stringify(result));
+  } finally {
+    await cancelled.close();
+  }
 }
 
 async function scenarioEditSnippet(browser) {
@@ -6429,6 +6488,7 @@ async function main() {
       ['разделы настроек', scenarioSettingsSections],
       ['темы', scenarioTheme],
       ['поиск по настройкам', scenarioSettingsSearch],
+      ['медленная загрузка настроек', scenarioSlowSettingsSearch],
       ['правка расшифровки', scenarioEditSnippet],
       ['как распозналось', scenarioRawText],
       ['правила под окно', scenarioAppRulesUi],

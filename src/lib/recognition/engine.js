@@ -43,10 +43,6 @@ export function lastRecordedAudio() {
   return lastAudio;
 }
 
-export function clearLastRecordedAudio() {
-  lastAudio = null;
-}
-
 function rememberRecordedAudio(pcm, durationMs, lang) {
   if (!pcm?.length || !(durationMs >= 350) || durationMs > LAST_AUDIO_LIMIT_MS) {
     lastAudio = null;

@@ -16,9 +16,6 @@
  * ровно то, что сказал.
  */
 
-/** Куда вставляем. */
-export const APP_STYLES = ['chat', 'code', 'mail', 'doc', 'neutral'];
-
 /**
  * Известные окна. Сравнение — по подстроке в имени программы или заголовке:
  * «Telegram Desktop», «WhatsApp», «Slack | general» — всё это чат.
