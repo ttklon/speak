@@ -6,6 +6,7 @@ import { useAppData } from '../../state/AppDataProvider.jsx';
 import { SETTING_ENTRIES } from './settingsIndex.js';
 import { SETTINGS_SECTIONS, resolveSection } from '../../lib/settingsSections.js';
 import { observeSettingRow } from './observeSettingRow.js';
+import SectionErrorBoundary from './SectionErrorBoundary.jsx';
 
 // Секции настроек грузятся по требованию: на старте приложения они не нужны,
 // а тянут за собой диагностику, сравнение моделей и менеджер моделей.
@@ -181,9 +182,11 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
             <h2 className="settings-section__title">{active.label}</h2>
             <p className="settings-section__desc">{active.desc}</p>
           </header>
-          <Suspense key={active.id} fallback={<p className="settings-loading" role="status">Загрузка раздела…</p>}>
-            {body}
-          </Suspense>
+          <SectionErrorBoundary key={active.id}>
+            <Suspense fallback={<p className="settings-loading" role="status">Загрузка раздела…</p>}>
+              {body}
+            </Suspense>
+          </SectionErrorBoundary>
         </div>
       </div>
       <div className="settings-footer">

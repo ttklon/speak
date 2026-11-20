@@ -1618,6 +1618,12 @@
   font-size: 13px;
 }
 
+.settings-section-error {
+  margin: 18px 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
 .settings-section__title {
   margin: 0 0 4px;
   font-size: 16px;

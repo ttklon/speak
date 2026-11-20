@@ -133,6 +133,7 @@ const SEED_SETTINGS = {
 async function openPage(browser, route = '#/home', opts = {}) {
   const page = await browser.newPage();
   page.__delayedRequests = 0;
+  page.__failedSectionRequests = 0;
   const errors = [];
   // Предупреждения React (ключи в списках, controlled/uncontrolled, act)
   // ошибками не считаются, но это будущие ошибки — их тоже собираем.
@@ -158,7 +159,10 @@ async function openPage(browser, route = '#/home', opts = {}) {
     const url = req.url();
     const local = url.startsWith(BASE) || url.startsWith('data:') || url.startsWith('blob:');
     if (!local) req.abort();
-    else if (opts.delaySection && url.includes(opts.delaySection)) {
+    else if (opts.failSection && url.includes(opts.failSection) && page.__failedSectionRequests === 0) {
+      page.__failedSectionRequests += 1;
+      req.abort();
+    } else if (opts.delaySection && url.includes(opts.delaySection)) {
       page.__delayedRequests += 1;
       setTimeout(() => req.continue().catch(() => {}), opts.delaySectionMs || 0);
     } else req.continue();
@@ -2720,6 +2724,45 @@ async function scenarioSlowSettingsSearch(browser) {
       JSON.stringify(result));
   } finally {
     await cancelled.close();
+  }
+}
+
+// Прерываем загрузку модуля: настройки не должны ронять всё приложение.
+async function scenarioSettingsSectionFailure(browser) {
+  const page = await openPage(browser, '#/settings?section=app&from=home', {
+    settle: 400,
+    failSection: '/DataSection',
+  });
+  try {
+    await page.evaluate(() => localStorage.setItem('e2e-section-recovery', 'сохранено'));
+    await page.evaluate(() => [...document.querySelectorAll('.settings-nav')].find((b) => /Данные/.test(b.textContent))?.click());
+    await page.waitForSelector('.settings-section-error', { timeout: 10000 });
+    const state = await page.evaluate(() => ({
+      message: document.querySelector('.settings-section-error')?.textContent || '',
+      app: Boolean(document.querySelector('.app-window')),
+      crash: Boolean(document.querySelector('.crash')),
+    }));
+    record('сценарии', 'ошибка раздела: сообщение вместо падения приложения',
+      page.__failedSectionRequests === 1 && state.app && !state.crash && /Перезагрузить окно/.test(state.message), JSON.stringify(state));
+    await page.evaluate(() => [...document.querySelectorAll('.settings-nav')].find((b) => /Приложение/.test(b.textContent))?.click());
+    await page.waitForFunction(() => document.querySelector('.settings-nav.is-active')?.textContent.includes('Приложение') && !document.querySelector('.settings-section-error'));
+    record('сценарии', 'ошибка раздела: другой раздел открывается', Boolean(await page.$('.settings-main .setting-row')));
+    await page.evaluate(() => [...document.querySelectorAll('.settings-nav')].find((b) => /Данные/.test(b.textContent))?.click());
+    await page.waitForSelector('.settings-section-error', { timeout: 10000 });
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
+      page.evaluate(() => [...document.querySelectorAll('.settings-section-error button')].find((b) => /Перезагрузить окно/.test(b.textContent)).click()),
+    ]);
+    await page.waitForSelector('.app-window');
+    await page.evaluate(() => { location.hash = '#/settings?section=data&from=home'; });
+    await page.waitForFunction(() => document.querySelector('.settings-nav.is-active')?.textContent.includes('Данные') && document.querySelector('.settings-main .setting-row'), { timeout: 10000 });
+    const after = await page.evaluate(() => ({ preserved: localStorage.getItem('e2e-section-recovery'), error: Boolean(document.querySelector('.settings-section-error')) }));
+    record('сценарии', 'ошибка раздела: после перезагрузки раздел доступен, контрольная запись сохранена', after.preserved === 'сохранено' && !after.error, JSON.stringify(after));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.settings-modal'));
+    record('сценарии', 'ошибка раздела: настройки закрываются, приложение доступно', Boolean(await page.$('.app-window')));
+  } finally {
+    await page.close();
   }
 }
 
@@ -6489,6 +6532,7 @@ async function main() {
       ['темы', scenarioTheme],
       ['поиск по настройкам', scenarioSettingsSearch],
       ['медленная загрузка настроек', scenarioSlowSettingsSearch],
+      ['ошибка раздела настроек', scenarioSettingsSectionFailure],
       ['правка расшифровки', scenarioEditSnippet],
       ['как распозналось', scenarioRawText],
       ['правила под окно', scenarioAppRulesUi],
