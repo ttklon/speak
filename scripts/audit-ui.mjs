@@ -96,14 +96,14 @@ async function auditNames(page) {
   });
 }
 
-async function openPage(browser, hash) {
+async function openPage(browser, hash, { viewport = { width: 1280, height: 900 } } = {}) {
   const page = await browser.newPage();
   const errors = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error' && !/favicon/i.test(msg.text())) errors.push(msg.text().slice(0, 300));
   });
   page.on('pageerror', (err) => errors.push(`pageerror: ${String(err?.message || err).slice(0, 300)}`));
-  await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 1 });
+  await page.setViewport({ ...viewport, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(installMockBridge);
   await page.evaluateOnNewDocument(
     ([seed, dictations, clipboard, dictionary]) => {
@@ -238,6 +238,43 @@ async function auditRoute(browser, route) {
   return { route, total, findings, errors, names };
 }
 
+/**
+ * Узкое окно: 760×560 — это окно приложения, сжатое почти до предела (минимальный
+ * размер окна теперь 720×480), и так же выглядят экраны 1024×600 и ноутбуки с
+ * масштабом 150 %. Проверяем не «красиво ли», а две вещи, которые ломают работу:
+ * горизонтальную прокрутку всей страницы и элементы, уехавшие за правый край
+ * (до них не добраться ни мышью, ни клавиатурой).
+ */
+const NARROW_VIEWPORT = {
+  width: Number(process.env.ZS_NARROW_WIDTH) || 760,
+  height: Number(process.env.ZS_NARROW_HEIGHT) || 560,
+};
+
+async function auditNarrow(browser, route) {
+  const page = await openPage(browser, route.hash, { viewport: NARROW_VIEWPORT });
+  await sleep(500);
+  const res = await page.evaluate(() => {
+    const doc = document.documentElement;
+    const overflow = Math.max(0, doc.scrollWidth - doc.clientWidth);
+    const nodes = [...document.querySelectorAll('button, input, select, textarea, [role="switch"]')];
+    const escaped = nodes
+      .filter((el) => {
+        if (el.offsetParent === null) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.right > window.innerWidth + 1;
+      })
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        return `${(el.innerText || el.getAttribute('aria-label') || el.tagName).replace(/\s+/g, ' ').trim().slice(0, 40)} (right ${Math.round(r.right)} > ${window.innerWidth})`;
+      });
+    return { overflow, escaped };
+  });
+  const errors = [];
+  page.on('pageerror', (err) => errors.push(String(err?.message || err)));
+  await page.close();
+  return { ...res, errors };
+}
+
 const browser = await puppeteer.launch({
   executablePath: EXE,
   headless: 'new',
@@ -254,6 +291,24 @@ let silent = 0;
 let broken = 0;
 let unnamed = 0;
 let unlabeled = 0;
+
+// Сначала узкое окно: если что-то уехало за край, дальше смотреть незачем.
+let narrowIssues = 0;
+for (const route of process.env.ZS_SKIP_NARROW === '1' ? [] : ROUTES) {
+  const narrow = await auditNarrow(browser, route);
+  const bad = narrow.overflow || narrow.escaped.length || narrow.errors.length;
+  if (!bad) continue;
+  console.log(`\nУзкое окно ${NARROW_VIEWPORT.width}×${NARROW_VIEWPORT.height} — ${route.name}: прокрутка ${narrow.overflow} px, за краем ${narrow.escaped.length}`);
+  if (narrow.overflow) narrowIssues += 1;
+  for (const el of narrow.escaped) {
+    console.log(`  · за краем: ${el}`);
+    narrowIssues += 1;
+  }
+  for (const e of narrow.errors) {
+    console.log(`  ! ошибка консоли: ${e}`);
+    narrowIssues += 1;
+  }
+}
 for (const route of ROUTES) {
   const res = await auditRoute(browser, route);
   const head = `${route.name} — элементов: ${res.total}, без видимой реакции: ${res.findings.length}`;
@@ -278,6 +333,7 @@ for (const route of ROUTES) {
 
 console.log(
   `\nИтого: элементов без видимой реакции — ${silent}, ошибок консоли — ${broken}, ` +
-    `кнопок без подписи — ${unnamed}, полей без подписи — ${unlabeled}`,
+    `кнопок без подписи — ${unnamed}, полей без подписи — ${unlabeled}, ` +
+    `проблем в узком окне — ${narrowIssues}`,
 );
 await browser.close();

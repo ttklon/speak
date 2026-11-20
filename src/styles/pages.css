@@ -1276,6 +1276,7 @@
 .clip-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -1297,6 +1298,10 @@
   gap: 3px;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Лента вкладок должна ужиматься: без min-width: 0 она не сжимается ниже
+     своих кнопок и в окне 760 px «Пароли» уезжали за правый край. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .clip-toolbar__tabs::-webkit-scrollbar {
@@ -1553,14 +1558,6 @@
      почти всю высоту, как и положено настройкам. */
   height: min(760px, calc(100vh - 72px));
   background: var(--bg-elevated);
-}
-
-.settings-layout {
-  display: grid;
-  grid-template-columns: 190px 1fr;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
 }
 
 .settings-side {
@@ -1965,10 +1962,27 @@
 
 .settings-shell {
   display: grid;
-  grid-template-columns: 190px 1fr;
+  /* minmax(0, 1fr) — не придирка: с «1fr» колонка не может стать уже своего
+     содержимого, и в окне 760×560 кнопки («Готово», «Скачать», переключатели)
+     уезжали за правый край и были недоступны мышью. */
+  grid-template-columns: 190px minmax(0, 1fr);
   min-height: 0;
   flex: 1;
   overflow: hidden;
+}
+
+@media (max-width: 860px) {
+  .settings-shell {
+    grid-template-columns: 150px minmax(0, 1fr);
+  }
+
+  .settings-main {
+    padding: 14px 14px 16px;
+  }
+
+  .settings-modal {
+    width: min(760px, calc(100vw - 24px));
+  }
 }
 
 .settings-side {
@@ -1985,10 +1999,6 @@
   margin-bottom: 8px;
 }
 
-.settings-close {
-  display: none;
-}
-
 .settings-modal .modal__body {
   display: flex;
   flex-direction: column;
@@ -2002,11 +2012,8 @@
   padding: 16px 20px 18px;
   overflow-y: auto;
   min-height: 0;
-}
-
-.settings-close {
-  align-self: flex-end;
-  margin: 8px 0 2px;
+  /* содержимое не должно расширять колонку: иначе на узком окне всё уезжает */
+  min-width: 0;
 }
 
 .settings-side {
@@ -2103,11 +2110,15 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
 }
 
 .hk-toolbar .tabs {
-  flex: 1;
+  /* min-width: 0 — иначе лента вкладок не сжимается и поиск уезжает за край
+     при окне 640 px (маленький ноутбук с масштабом 125 %) */
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .hk-toolbar .search-input {

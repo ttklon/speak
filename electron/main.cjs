@@ -143,11 +143,18 @@ let warmMs = 0;
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
+  // Старые ноутбуки и нетбуки: 1024×600, 1366×768 с масштабом 150 % дают
+  // рабочий стол шириной ~910. Раньше окно стартовало на 860 px и не давало
+  // себя сузить — на таких экранах правый край с кнопками уезжал за границу.
+  // Интерфейс проверен аудитом на 640×440, поэтому потолок опускаем до 720.
+  const initialWidth = Math.min(1020, Math.max(720, width - 60));
+  const initialHeight = Math.min(680, Math.max(480, height - 60));
+
   mainWindow = new BrowserWindow({
-    width: Math.min(1020, width - 60),
-    height: Math.min(680, height - 60),
-    minWidth: 860,
-    minHeight: 560,
+    width: initialWidth,
+    height: initialHeight,
+    minWidth: 720,
+    minHeight: 480,
     backgroundColor: '#1e1e1e',
     show: false,
     frame: false,

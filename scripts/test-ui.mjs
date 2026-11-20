@@ -4215,6 +4215,93 @@ async function scenarioHardwareFit(browser) {
   await strong.close();
 }
 
+/**
+ * Узкое окно: маленькие ноутбуки и масштаб 150 %. Раньше окно настроек было
+ * жёстко 780 px и в окне приложения 860 px всё помещалось, а на экране
+ * 1024×600 — уже нет: правый край с кнопками уезжал за границу.
+ */
+async function scenarioNarrowWindow(browser) {
+  const escapedOn = async (hash, viewport) => {
+    const page = await openPage(browser, hash, { viewport, settle: 650 });
+    const errors = takeErrors(page);
+    const res = await page.evaluate(() => {
+      const doc = document.documentElement;
+      const escaped = [...document.querySelectorAll('button, input, select, textarea, [role="switch"]')]
+        .filter((el) => el.offsetParent !== null)
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.right > window.innerWidth + 1;
+        })
+        .map((el) => `${(el.innerText || el.getAttribute('aria-label') || el.tagName).replace(/\s+/g, ' ').trim().slice(0, 30)} right ${Math.round(el.getBoundingClientRect().right)}`);
+      return { escaped, overflow: Math.max(0, doc.scrollWidth - doc.clientWidth), width: window.innerWidth };
+    });
+    await page.close();
+    return { ...res, errors };
+  };
+
+  const settings = await escapedOn('#/settings?section=dictation&from=home', { width: 760, height: 560 });
+  record(
+    'сценарии',
+    'узкое окно 760×560: в настройках всё влезает в окно',
+    settings.escaped.length === 0 && settings.overflow === 0,
+    settings.escaped.length ? settings.escaped.slice(0, 3).join(', ') : 'за краем ничего',
+  );
+
+  // «Закрыть» и «Готово» — самые правые кнопки: раньше именно они уезжали.
+  const closeIn = await (async () => {
+    const page = await openPage(browser, '#/settings?section=app&from=home', {
+      viewport: { width: 720, height: 480 },
+      settle: 650,
+    });
+    takeErrors(page);
+    const res = await page.evaluate(() => {
+      const btn = document.querySelector('.modal__head .icon-btn');
+      const done = [...document.querySelectorAll('.settings-footer button')].pop();
+      const fits = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return r.right <= window.innerWidth && r.left >= 0;
+      };
+      return { close: fits(btn), done: fits(done), modal: Math.round(document.querySelector('.modal').getBoundingClientRect().right) };
+    });
+    await page.close();
+    return res;
+  })();
+  record(
+    'сценарии',
+    'узкое окно 720×480: «Закрыть» и «Готово» доступны',
+    closeIn.close && closeIn.done && closeIn.modal <= 720,
+    `модалка до ${closeIn.modal} px`,
+  );
+
+  const clipboard = await escapedOn('#/clipboard', { width: 760, height: 560 });
+  record(
+    'сценарии',
+    'узкое окно: вкладки буфера не уезжают за край',
+    clipboard.escaped.length === 0 && clipboard.overflow === 0,
+    clipboard.escaped.length ? clipboard.escaped.slice(0, 3).join(', ') : 'за краем ничего',
+  );
+
+  const instructions = await escapedOn('#/instructions', { width: 640, height: 440 });
+  record(
+    'сценарии',
+    'узкое окно 640×440: поиск по инструкциям влезает',
+    instructions.escaped.length === 0 && instructions.overflow === 0,
+    instructions.escaped.length ? instructions.escaped.slice(0, 2).join(', ') : 'за краем ничего',
+  );
+
+  const home = await escapedOn('#/home', { width: 720, height: 480 });
+  record(
+    'сценарии',
+    'узкое окно: на главной нет горизонтальной прокрутки',
+    home.overflow === 0 && home.escaped.length === 0,
+    `прокрутка ${home.overflow} px`,
+  );
+
+  const errors = [...settings.errors, ...clipboard.errors, ...instructions.errors, ...home.errors];
+  record('сценарии', 'узкое окно: без ошибок консоли', errors.length === 0, errors[0] || '');
+}
+
 async function scenarioClearDictations(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
   takeErrors(page);
@@ -6285,6 +6372,7 @@ async function main() {
       ['словарь: кириллица', scenarioDictionaryAliases],
       ['разбор точности', scenarioQualityReport],
       ['совет по модели', scenarioHardwareFit],
+      ['узкое окно', scenarioNarrowWindow],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

@@ -92,7 +92,11 @@ export default function Modal({
     >
       <div
         className={`modal ${className}`}
-        style={{ width }}
+        /* Ширина не должна вылезать за окно: у настроек она задана числом (780),
+           и в окне 760×560 половина кнопок уезжала за правый край — до неё было
+           не добраться ни мышью, ни клавиатурой. Потолок ставим здесь, чтобы
+           защита работала для любой модалки, а не только для настроек. */
+        style={{ width, maxWidth: 'calc(100vw - 48px)', maxHeight: 'calc(100vh - 48px)' }}
         ref={ref}
         role="dialog"
         aria-modal="true"

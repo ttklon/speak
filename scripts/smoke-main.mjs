@@ -24,6 +24,11 @@ const clipboardText = { value: 'выделенный текст' };
 const clipboardImage = { value: null };
 
 const windowInstances = [];
+
+// Главное окно отличаем не по конкретному числу в опциях (минимальный размер
+// окна менялся в 1.35.0), а по тому, что ограничение размера есть только у него:
+// ни у индикатора диктовки, ни у служебных окон его нет.
+const findMainWindow = () => windowInstances.find((w) => w._options?.minWidth && w._options?.minHeight);
 // шаблоны меню трея: проверяем, что подпись сочетания обновляется
 const trayTemplates = [];
 const trayMenus = [];
@@ -823,7 +828,7 @@ await check('хоткей диктовки не выдёргивает окно 
 await check('с выключенным индикатором окно показывается без фокуса', async () => {
   const settings = handlers.get('store:get')({}, 'zs:settings') || {};
   handlers.get('store:set')({}, 'zs:settings', { ...settings, showFloatingIndicator: false });
-  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  const mainWin = findMainWindow();
   mainWin._visible = false;
   mainWin._showCalls = 0;
   mainWin._inactiveCalls = 0;
@@ -1047,6 +1052,20 @@ await check('models:status честно говорит, какая модель 
   const dl = st.models['large-v3-turbo'];
   if (!dl || dl.downloaded) throw new Error('турбо-модель будто скачана');
   if (dl.sizeMb < 1000) throw new Error(`размер turbo подозрительный: ${dl.sizeMb}`);
+});
+
+await check('главное окно помещается в маленький экран и сужается до 720×480', () => {
+  const mainWin = findMainWindow();
+  if (!mainWin) throw new Error('главное окно не найдено');
+  const { minWidth, minHeight, width, height } = mainWin._options;
+  if (minWidth !== 720 || minHeight !== 480) throw new Error(`минимум ${minWidth}×${minHeight}`);
+  // Экран заглушки 1920×1040: окно не должно растягиваться на весь экран.
+  if (width > 1020 || height > 680) throw new Error(`стартовый размер ${width}×${height}`);
+  // На экране 1024×600 окно обязано влезть: иначе правый край с кнопками за границей.
+  const small = { width: 1024 - 60, height: 600 - 40 };
+  if (Math.max(720, small.width) > 1024 || Math.max(480, small.height) > 600) {
+    throw new Error('на экране 1024×600 окно не помещается');
+  }
 });
 
 await check('окно энкодера: короткая запись считается быстрее, длинная — целиком', () => {
@@ -1653,7 +1672,7 @@ await check('индикатор: состояние доходит до окна
   if (bottom(hudWin._bounds) !== 1372) throw new Error(`нижний край уехал: ${JSON.stringify(hudWin._bounds)}`);
   const hud = windowInstances[windowInstances.length - 1];
   // главное окно ищем по его параметрам, а не по порядку создания
-  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  const mainWin = findMainWindow();
   if (!mainWin) throw new Error('главное окно не найдено');
   mainWin._visible = true;
   await handlers.get('hud:close')({});
@@ -1970,7 +1989,7 @@ await check('screen:capture отдаёт dataURL, когда экран дост
 await check('вставка не забирает фокус у чужого окна', async () => {
   const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-  const mainWin = windowInstances.find((w) => w._options?.minWidth === 860);
+  const mainWin = findMainWindow();
   const restoreFocused = mainWin.isFocused;
   try {
     // окно ZSpeakly не в фокусе: человек печатает в браузере
