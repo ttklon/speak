@@ -85,7 +85,8 @@ function modelStatus() {
 }
 
 // Одна подготовка Whisper/VAD/движка; блокировка включает поиск и распаковку.
-const { download, cancelDownload, runExclusive } = require('./whisperDownload.cjs').createDownloadManager();
+const { createDownloadManager, removeTemporary } = require('./whisperDownload.cjs');
+const { download, cancelDownload, runExclusive } = createDownloadManager();
 
 async function downloadModel(id, onProgress) {
   const meta = MODELS[id];
@@ -98,7 +99,7 @@ async function downloadModel(id, onProgress) {
     await download(url, dest, onProgress);
     return { ok: true, path: dest };
   } catch (err) {
-    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
+    return { ok: false, reason: err.message, ...(err.cleanupFailed ? { cleanupFailed: true } : {}), ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
 }
 
@@ -135,7 +136,7 @@ async function downloadVad() {
     await download(VAD.url, dest, undefined);
     return { ok: true, path: dest };
   } catch (err) {
-    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
+    return { ok: false, reason: err.message, ...(err.cleanupFailed ? { cleanupFailed: true } : {}), ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
 }
 
@@ -234,7 +235,10 @@ async function downloadEngine(onProgress, { force = false } = {}) {
       const out = path.join(d.bin, '_unpacked');
       try {
         try { await downloadArchive(asset.browser_download_url, zip, (p) => onProgress?.(Math.round(p * 0.7)), { maxBytes: asset.size }); }
-        catch (err) { throw new Error(`не скачался архив: ${err.message}`); }
+        catch (err) {
+          if (err.cleanupFailed) throw err;
+          throw new Error(`не скачался архив: ${err.message}`);
+        }
         if (fs.statSync(zip).size !== asset.size) throw new Error('неверный размер архива');
         if (asset.digest) {
           // Хеш получен из ответа GitHub, а не из закреплённого манифеста.
@@ -265,12 +269,14 @@ async function downloadEngine(onProgress, { force = false } = {}) {
         const after = modelStatus();
         return { ok: true, path: d.bin, bin: after.bin, server: after.server };
       } finally {
-        fs.rmSync(out, { recursive: true, force: true });
-        fs.rmSync(zip, { force: true });
+        removeTemporary([
+          [out, { recursive: true, force: true }],
+          [zip, { force: true }],
+        ]);
       }
     });
   } catch (err) {
-    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
+    return { ok: false, reason: err.message, ...(err.cleanupFailed ? { cleanupFailed: true } : {}), ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
 }
 
@@ -352,18 +358,18 @@ async function importModel(sourcePath, onProgress) {
             if (signal.aborted) throw new Error('скачивание отменено');
             fs.renameSync(temporary, target);
           } finally {
-            fs.rmSync(staging, { recursive: true, force: true });
+            removeTemporary([[staging, { recursive: true, force: true }]]);
           }
         }
       } catch (err) {
-        if (signal.aborted) throw err;
+        if (signal.aborted || err.cleanupFailed) throw err;
         return { ok: false, reason: `не удалось скопировать: ${err.message}` };
       }
       onProgress?.(100);
       return { ok: true, id: guess, path: target, sizeMb: Math.round(mb) };
     });
   } catch (err) {
-    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
+    return { ok: false, reason: err.message, ...(err.cleanupFailed ? { cleanupFailed: true } : {}), ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
 }
 

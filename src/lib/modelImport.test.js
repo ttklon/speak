@@ -24,6 +24,7 @@ let source, target;
 const originalCopy = fs.copyFileSync;
 const originalAsyncCopy = fs.promises.copyFile;
 const originalRename = fs.renameSync;
+const originalRemove = fs.rmSync;
 const originalGet = https.get;
 
 beforeEach(() => {
@@ -47,6 +48,7 @@ afterEach(() => {
   fs.copyFileSync = originalCopy;
   fs.promises.copyFile = originalAsyncCopy;
   fs.renameSync = originalRename;
+  fs.rmSync = originalRemove;
   https.get = originalGet;
   rmSync(dir, { recursive: true, force: true });
 });
@@ -117,6 +119,32 @@ describe('безопасное подключение модели Whisper', () 
       expect(readFileSync(target, 'utf8')).toBe('старая модель');
       expect(readdirSync(join(dir, 'models'))).toEqual(['ggml-tiny.bin']);
     } finally { release(); await task; }
+  });
+
+  it('при отмене сообщает, если не удалось удалить временную копию', async () => {
+    writeFileSync(target, 'старая модель');
+    let started, release;
+    const ready = new Promise((resolve) => { started = resolve; });
+    const pause = new Promise((resolve) => { release = resolve; });
+    fs.promises.copyFile = async (_source, destination) => {
+      writeFileSync(destination, 'часть'); started(); await pause;
+    };
+    const task = models.importModel(source);
+    try {
+      await ready;
+      fs.rmSync = (file, ...args) => {
+        if (String(file).includes('.import-')) throw new Error('файл занят');
+        return originalRemove(file, ...args);
+      };
+      expect(models.cancelDownload().ok).toBe(true);
+      release();
+      const result = await task;
+      expect(result.ok).toBe(false);
+      expect(result.canceled).not.toBe(true);
+      expect(result.cleanupFailed).toBe(true);
+      expect(result.reason).toMatch(/не удалось удалить.*файл занят/);
+      expect(readFileSync(target, 'utf8')).toBe('старая модель');
+    } finally { release(); await task; fs.rmSync = originalRemove; }
   });
 
   it('не перезаписывает модель во время другой подготовки', async () => {

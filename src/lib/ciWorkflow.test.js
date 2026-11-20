@@ -9,6 +9,8 @@ describe('проверка настоящего движка в CI', () => {
     expect(step).toBeTruthy();
     expect(step).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
     expect(step).toContain('npm run test:whisper');
+    expect(step).toContain('if ! url=$(curl -fsS --retry 3');
+    expect(step).toContain('if [ -z "$url" ]; then');
     expect(step).toContain('code=${PIPESTATUS[0]}');
     expect(step).toContain('exit "$code"');
     const disable = step.lastIndexOf('set +e', step.indexOf('npm run test:whisper'));

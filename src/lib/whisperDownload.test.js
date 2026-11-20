@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
+const fs = require('node:fs');
 const { createDownloadManager } = require('../../electron/whisperDownload.cjs');
 let dir, server, base, manager, dest;
 
@@ -81,6 +82,25 @@ describe('загрузка Whisper', () => {
     expect(manager.cancelDownload().ok).toBe(true);
     await result;
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('не скрывает ошибку удаления временного файла при отмене', async () => {
+    let cancel;
+    const started = new Promise((resolve) => { cancel = resolve; });
+    const task = manager.download(`${base}/stall`, dest, () => cancel());
+    const original = fs.rmSync;
+    const result = withTimeout(task).then(() => null, (err) => err);
+    try {
+      await started;
+      fs.rmSync = (file, ...args) => {
+        if (String(file) === `${dest}.part`) throw new Error('файл занят');
+        return original(file, ...args);
+      };
+      expect(manager.cancelDownload().ok).toBe(true);
+      const error = await result;
+      expect(error.message).toMatch(/не удалось удалить.*файл занят/);
+      expect(existsSync(`${dest}.part`)).toBe(true);
+    } finally { fs.rmSync = original; }
   });
 
   it('не позволяет второй загрузке перезаписать активную и отменить её работу', async () => {

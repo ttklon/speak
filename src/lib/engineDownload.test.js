@@ -152,6 +152,30 @@ describe('подготовка движка Whisper', () => {
     expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
   });
 
+  it('при отмене загрузки архива сообщает о неудачной очистке .part', async () => {
+    behavior = 'archive-wait';
+    let started;
+    const ready = new Promise((resolve) => { started = resolve; });
+    const task = models.downloadEngine(() => started(), { force: true });
+    const original = fs.rmSync;
+    try {
+      await bounded(ready);
+      const part = join(dir, 'bin', 'whisper-bin-x64.zip.part');
+      await bounded((async () => { while (!existsSync(part)) await wait(5); })());
+      fs.rmSync = (file, ...args) => {
+        if (String(file) === part) throw new Error('файл занят');
+        return original(file, ...args);
+      };
+      expect(models.cancelDownload().ok).toBe(true);
+      const result = await bounded(task);
+      expect(result.ok).toBe(false);
+      expect(result.canceled).not.toBe(true);
+      expect(result.cleanupFailed).toBe(true);
+      expect(result.reason).toMatch(/не удалось удалить.*файл занят/);
+      expect(existsSync(join(dir, 'bin', 'whisper-bin-x64.zip.part'))).toBe(true);
+    } finally { fs.rmSync = original; }
+  });
+
   it('после отмены распаковки ждёт закрытия процесса и освобождает файлы', async () => {
     const ready = fakeUnpack({ delayedClose: true });
     const task = models.downloadEngine(undefined, { force: true });
@@ -168,6 +192,27 @@ describe('подготовка движка Whisper', () => {
     expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe(oldEngine);
     fakeUnpack();
     expect((await bounded(models.downloadEngine(undefined, { force: true }))).ok).toBe(true);
+  });
+
+  it('при отмене не скрывает ошибку очистки распаковки и пытается удалить архив', async () => {
+    const ready = fakeUnpack({ delayedClose: true });
+    const task = models.downloadEngine(undefined, { force: true });
+    const original = fs.rmSync;
+    try {
+      await bounded(ready);
+      fs.rmSync = (file, ...args) => {
+        if (String(file) === join(dir, 'bin', '_unpacked')) throw new Error('папка занята');
+        return original(file, ...args);
+      };
+      expect(models.cancelDownload().ok).toBe(true);
+      const result = await bounded(task);
+      expect(result.ok).toBe(false);
+      expect(result.canceled).not.toBe(true);
+      expect(result.cleanupFailed).toBe(true);
+      expect(result.reason).toMatch(/не удалось удалить.*папка занята/);
+      expect(existsSync(join(dir, 'bin', 'whisper-bin-x64.zip'))).toBe(false);
+      expect(existsSync(join(dir, 'bin', '_unpacked'))).toBe(true);
+    } finally { fs.rmSync = original; }
   });
 
   it('ошибка копирования не оставляет смешанные версии движка', async () => {

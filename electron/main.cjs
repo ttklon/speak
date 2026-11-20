@@ -2754,7 +2754,7 @@ function registerIpc() {
             res.ok ? 'Сервер распознавания установлен' : 'Сервер распознавания не скачался',
             { keep: true, reason: res.reason || '' },
           );
-          if (res.canceled) return res;
+          if (res.canceled || res.cleanupFailed) return res;
         }
         // VAD весит меньше мегабайта — качаем сразу, чтобы тишина не попадала
         // в движок с первой же диктовки
@@ -2765,7 +2765,10 @@ function registerIpc() {
             vadRes.ok ? 'VAD-модель установлена' : 'VAD-модель не скачалась',
             { keep: true, reason: vadRes.reason || '' },
           );
-          if (vadRes.canceled) return vadRes;
+          if (vadRes.cleanupFailed) {
+            push({ id: 'vad', percent: 0, done: true, ok: false, reason: vadRes.reason || '' });
+          }
+          if (vadRes.canceled || vadRes.cleanupFailed) return vadRes;
         }
         st = models.modelStatus();
         const downloaded = Object.values(st.models).filter((m) => m.downloaded);

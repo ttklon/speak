@@ -3563,11 +3563,13 @@ async function scenarioEngineCancel(browser) {
       native.modelsStatus = async () => ({ ...(await originalStatus()), bin: false, server: false });
       let finish, attempts = 0;
       native.downloadEngine = () => {
-        if (++attempts > 1) return Promise.resolve({ ok: false, reason: 'сеть недоступна' });
+        if (++attempts === 2) return Promise.resolve({ ok: false, reason: 'сеть недоступна' });
         return new Promise((resolve) => { finish = resolve; });
       };
       native.modelsCancel = async () => {
-        const result = { ok: false, canceled: true, reason: 'скачивание отменено' };
+        const result = attempts === 3
+          ? { ok: false, cleanupFailed: true, reason: 'не удалось удалить временные данные: _unpacked: папка занята' }
+          : { ok: false, canceled: true, reason: 'скачивание отменено' };
         window.__e2e.emit('model:progress', { id: 'engine', percent: 0, done: true, ...result });
         finish?.(result);
         return { ok: true };
@@ -3590,6 +3592,12 @@ async function scenarioEngineCancel(browser) {
     const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
     const errors = takeErrors(page);
     record('сценарии', 'движок: последующий сбой сети не выдаётся за отмену', /Движок не установился/.test(toast) && /сеть недоступна/.test(toast) && errors.length === 0, toast);
+    await clickIn(page, '', 'Скачать движок whisper.cpp');
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Отменить скачивание/.test(b.innerText)));
+    await clickIn(page, '', 'Отменить скачивание');
+    await sleep(250);
+    const cleanup = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+    record('сценарии', 'движок: ошибка очистки после отмены показана с путём', /не удалось удалить временные данные: _unpacked: папка занята/.test(cleanup) && takeErrors(page).length === 0, cleanup);
   } finally { await page.close(); }
 }
 
@@ -3605,6 +3613,7 @@ async function scenarioImportModelRetry(browser) {
         if (attempts === 1) return { ok: false, reason: 'другая загрузка уже выполняется' };
         if (attempts === 2) return { ok: false, canceled: true };
         if (attempts === 3) return { ok: false, canceled: true, reason: 'скачивание отменено' };
+        if (attempts === 4) return { ok: false, reason: 'не удалось удалить временные данные: .import-123: файл занят' };
         return { ok: true, id: 'base-q5_1', sizeMb: 60 };
       };
     },
@@ -3634,6 +3643,13 @@ async function scenarioImportModelRetry(browser) {
     }));
     record('сценарии', 'импорт модели: отмена подключения не меняет модель', /Подключение отменено/.test(cancelledImport.toast) && cancelledImport.model === initial, cancelledImport.toast);
     await clickIn(page, '', 'Указать файл модели');
+    await sleep(250);
+    const cleanup = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      model: window.__e2e.read('zs.settings')?.whisperModel,
+    }));
+    record('сценарии', 'импорт модели: ошибка очистки показана с путём', /не удалось удалить временные данные: .import-123: файл занят/.test(cleanup.toast) && cleanup.model === initial, cleanup.toast);
+    await clickIn(page, '', 'Указать файл модели');
     await sleep(400);
     const done = await page.evaluate(() => ({
       toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
@@ -3641,7 +3657,7 @@ async function scenarioImportModelRetry(browser) {
       calls: window.__bridgeCalls.filter((c) => c.channel === 'models:import').length,
     }));
     const errors = takeErrors(page);
-    record('сценарии', 'импорт модели: повтор подключает выбранную модель', done.calls === 4 && done.model === 'base-q5_1' && /Модель подключена/.test(done.toast) && errors.length === 0, `${done.model} | ${done.toast}`);
+    record('сценарии', 'импорт модели: повтор подключает выбранную модель', done.calls === 5 && done.model === 'base-q5_1' && /Модель подключена/.test(done.toast) && errors.length === 0, `${done.model} | ${done.toast}`);
   } finally { await page.close(); }
 }
 

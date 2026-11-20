@@ -1961,6 +1961,31 @@ await check('автоподготовка: отмена обновления д�
   } finally { models.modelStatus = saved.status; models.downloadEngine = saved.engine; models.downloadVad = saved.vad; }
 });
 
+await check('автоподготовка: ошибка очистки движка и VAD видна и останавливает цепочку', async () => {
+  const models = require(path.resolve('electron/models.cjs'));
+  const saved = { status: models.modelStatus, engine: models.downloadEngine, vad: models.downloadVad, model: models.downloadModel };
+  let stage = 'engine', vadCalls = 0, modelCalls = 0;
+  const failure = { ok: false, cleanupFailed: true, reason: 'не удалось удалить временные данные: файл занят' };
+  models.modelStatus = () => ({ bin: true, server: stage === 'vad', vad: false, models: {} });
+  models.downloadEngine = async () => failure;
+  models.downloadVad = async () => { vadCalls++; return failure; };
+  models.downloadModel = async () => { modelCalls++; return { ok: true }; };
+  try {
+    sentEvents.length = 0;
+    const engine = await handlers.get('models:prepare')({});
+    if (!engine.cleanupFailed || vadCalls || modelCalls) throw new Error(`движок: ${JSON.stringify({ engine, vadCalls, modelCalls })}`);
+    stage = 'vad';
+    sentEvents.length = 0;
+    const vad = await handlers.get('models:prepare')({});
+    if (!vad.cleanupFailed || vadCalls !== 1 || modelCalls) throw new Error(`VAD: ${JSON.stringify({ vad, vadCalls, modelCalls })}`);
+    if (!sentEvents.some((e) => e.ch === 'model:progress' && e.payload?.id === 'vad' && e.payload.reason === failure.reason)) {
+      throw new Error(`нет уведомления об очистке VAD: ${JSON.stringify(sentEvents)}`);
+    }
+  } finally {
+    models.modelStatus = saved.status; models.downloadEngine = saved.engine; models.downloadVad = saved.vad; models.downloadModel = saved.model;
+  }
+});
+
 await check('автоподготовка: отмена поиска движка возвращается без запуска VAD', async () => {
   const models = require(path.resolve('electron/models.cjs'));
   const saved = { status: models.modelStatus, engine: models.downloadEngine, vad: models.downloadVad };

@@ -4,6 +4,19 @@ const http = require('node:http');
 const https = require('node:https');
 const { pipeline } = require('node:stream/promises');
 
+function removeTemporary(entries) {
+  const failures = [];
+  for (const [file, options] of entries) {
+    try { fs.rmSync(file, options); }
+    catch (err) { failures.push(`${file}: ${err.message}`); }
+  }
+  if (failures.length) {
+    const failure = new Error(`не удалось удалить временные данные: ${failures.join('; ')}`);
+    failure.cleanupFailed = true;
+    throw failure;
+  }
+}
+
 function createDownloadManager() {
   let active = null;
 
@@ -88,7 +101,7 @@ function createDownloadManager() {
     try {
       return await work({ signal, download: (url, dest, onProgress, options) => downloadFile(url, dest, onProgress, signal, options) });
     } catch (err) {
-      if (signal.aborted) throw new Error('скачивание отменено');
+      if (signal.aborted && !err.cleanupFailed) throw new Error('скачивание отменено');
       throw err;
     } finally {
       if (active === operation) active = null;
@@ -104,7 +117,7 @@ function createDownloadManager() {
       return { bytes };
     } finally {
       // pipeline уже дождался закрытия файла — удаление безопаснее на Windows.
-      fs.rmSync(tmp, { force: true });
+      removeTemporary([[tmp, { force: true }]]);
     }
   }
 
@@ -115,4 +128,4 @@ function createDownloadManager() {
   return { download, cancelDownload, runExclusive };
 }
 
-module.exports = { createDownloadManager };
+module.exports = { createDownloadManager, removeTemporary };
