@@ -7,6 +7,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
 import { diag, localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
 import { writeClipboard } from '../../../lib/clipboard.js';
+import { analyseQuality, qualityReportText } from '../../../lib/qualityReport.js';
 import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
 import { resolveLiveDraft } from '../../../lib/liveDraftPolicy.js';
@@ -50,6 +51,9 @@ export default function DiagnosticsSection() {
   // измеряет и никуда не ходит. Человеку нужен ответ «успевает или нет», а не
   // ещё одна таблица настроек.
   const speed = analyseSpeed(dictations);
+  // «Где теряется точность»: тот же принцип, что у скорости — только история,
+  // никаких новых замеров и никакой сети.
+  const quality = analyseQuality(dictations);
   // Переключение на режим легче прямо из отчёта: человек видит «долго» и не
   // должен идти искать, где это меняется. Если режим ещё не скачан — качаем
   // и говорим об этом, а не переключаем на отсутствующий файл.
@@ -512,6 +516,52 @@ export default function DiagnosticsSection() {
               ? 'включён — микрофон открыт заранее, первые 0,6 с не теряются'
               : 'выключен — запись начинается с нажатия'}
           </span>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Где теряется точность</div>
+        <div className="settings-group__desc">
+          Разбор по своей же истории: был ли честный проход, усиливался ли звук, не считалась ли
+          фраза дольше, чем длилась. Без сети и без новых замеров.
+        </div>
+        <div className="quality-report">
+          {quality.verdicts.map((verdict, index) => (
+            <div className={`quality-report__row is-${verdict.level}`} key={`${verdict.level}-${index}`}>
+              <span className="quality-report__mark">
+                {verdict.level === 'ok' ? 'в порядке' : verdict.level === 'warn' ? 'стоит поправить' : 'мало данных'}
+              </span>
+              <span className="quality-report__title">{verdict.title}</span>
+              <span className="quality-report__hint">{verdict.hint}</span>
+            </div>
+          ))}
+        </div>
+        {quality.models.length ? (
+          <div className="settings-foot-hint" style={{ marginTop: 6 }}>
+            {quality.models
+              .map((m) => `${m.model}: ${m.count} фраз${m.secondPass ? `, второй проход ${m.secondPass}` : ''}`)
+              .join(' · ')}
+          </div>
+        ) : null}
+        <div className="row-8" style={{ flexWrap: 'wrap', marginTop: 8 }}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              try {
+                await writeClipboard(qualityReportText(quality, { version: APP.version }));
+                push({
+                  title: 'Разбор скопирован',
+                  description: 'Только числа и модель — текст диктовок не копируется.',
+                  tone: 'success',
+                });
+              } catch (err) {
+                push({ title: 'Скопировать не удалось', description: String(err?.message || err), tone: 'warn' });
+              }
+            }}
+          >
+            Скопировать разбор
+          </Button>
         </div>
       </div>
 

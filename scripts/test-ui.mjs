@@ -4052,6 +4052,92 @@ async function scenarioDictionaryAliases(browser) {
   await dictate.close();
 }
 
+/**
+ * «Где теряется точность»: разбор по своей истории. Проверяем не цифры, а
+ * главное — что приложение называет причину словами и не выдумывает её, когда
+ * данных мало.
+ */
+async function scenarioQualityReport(browser) {
+  const at = Date.now();
+  const seeded = [
+    // свежие сверху: три фразы с тихим звуком и вторым проходом
+    { id: 'q1', text: 'первая', createdAt: at, sttGainDb: 15, sttSecondPass: true, sttModel: 'ggml-small-q5_1.bin', sttMs: 900, spokenMs: 3000 },
+    { id: 'q2', text: 'вторая', createdAt: at - 1000, sttGainDb: 12, sttSecondPass: true, sttModel: 'ggml-small-q5_1.bin', sttMs: 800, spokenMs: 3000 },
+    { id: 'q3', text: 'третья', createdAt: at - 2000, sttGainDb: 14, sttModel: 'ggml-small-q5_1.bin', sttMs: 700, spokenMs: 3000 },
+  ];
+  const page = await openPage(browser, '#/settings?section=diagnostics&from=home', {
+    storeSeed: { 'zs.dictations': seeded },
+    settle: 800,
+  });
+  takeErrors(page);
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('.quality-report__row')].map((row) => ({
+      level: [...row.classList].find((c) => c.startsWith('is-')) || '',
+      title: row.querySelector('.quality-report__title')?.innerText || '',
+      hint: row.querySelector('.quality-report__hint')?.innerText || '',
+    })),
+  );
+  const secondPass = rows.find((r) => /Второй проход в/.test(r.title)) || {};
+  const quiet = rows.find((r) => /Звук тихий/.test(r.title)) || {};
+  record(
+    'сценарии',
+    'разбор точности: называет причину словами, а не «распознаёт плохо»',
+    secondPass.level === 'is-warn' && /2 из 3/.test(secondPass.title) && /«Точно»/.test(secondPass.hint || ''),
+    `${secondPass.title || 'нет строки'} — ${(secondPass.hint || '').slice(0, 60)}`,
+  );
+  record(
+    'сценарии',
+    'разбор точности: тихий микрофон отличается от слабого процессора',
+    quiet.level === 'is-warn' && /\+15/.test(quiet.hint || ''),
+    quiet.hint || 'нет строки',
+  );
+
+  const copied = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.settings-main button')].find((b) => /Скопировать разбор/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(500);
+  const clipboard = await page.evaluate(() => {
+    // main получает объект {text, image}: строка лежит в text
+    const call = (window.__bridgeCalls || []).find((c) => c.channel === 'clipboard:write');
+    return call ? String(call.args?.[0]?.text || '') : '';
+  });
+  record(
+    'сценарии',
+    'разбор точности: копируется текстом и без самого текста диктовок',
+    copied && /Второй проход: 2/.test(clipboard) && !/третья|вторая/.test(clipboard),
+    `${clipboard.split('\n')[0] || 'буфер пуст'} · ${clipboard.length} символов`,
+  );
+
+  await page.close();
+
+  // Мало данных — честное «разбирать нечего», а не выдуманный диагноз.
+  const thin = await openPage(browser, '#/settings?section=diagnostics&from=home', {
+    storeSeed: { 'zs.dictations': [seeded[2]] },
+    settle: 700,
+  });
+  takeErrors(thin);
+  const thinRow = await thin.evaluate(() => {
+    const row = document.querySelector('.quality-report__row');
+    return {
+      level: row ? [...row.classList].find((c) => c.startsWith('is-')) || '' : '',
+      title: row?.querySelector('.quality-report__title')?.innerText || '',
+      hint: row?.querySelector('.quality-report__hint')?.innerText || '',
+    };
+  });
+  record(
+    'сценарии',
+    'разбор точности: при одной фразе не делает выводов',
+    thinRow.level === 'is-unknown' && /Пока нечего разбирать/.test(thinRow.title),
+    `${thinRow.title} — ${(thinRow.hint || '').slice(0, 50)}`,
+  );
+  const errors = [...takeErrors(page), ...takeErrors(thin)];
+  record('сценарии', 'разбор точности: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await thin.close();
+}
+
 async function scenarioClearDictations(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
   takeErrors(page);
@@ -6120,6 +6206,7 @@ async function main() {
       ['переспросить точно', scenarioRetryLast],
       ['режим распознавания', scenarioDecodeMode],
       ['словарь: кириллица', scenarioDictionaryAliases],
+      ['разбор точности', scenarioQualityReport],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],
