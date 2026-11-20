@@ -25,7 +25,8 @@ export default function ConfirmDialog({
       width={420}
       footer={
         <>
-          <Button variant="bare" onClick={onClose}>
+          {/* data-autofocus: фокус сразу на «Отмене» — случайный Enter не удалит */}
+          <Button variant="bare" onClick={onClose} data-autofocus>
             {cancelLabel}
           </Button>
           <Button

@@ -4216,6 +4216,92 @@ async function scenarioHardwareFit(browser) {
 }
 
 /**
+ * Вложенный диалог: подтверждение удаления открывается поверх настроек.
+ * До 1.36.0 одно нажатие Escape закрывало сразу оба окна — человек терял
+ * настройки вместе с вопросом, — а Tab уводил фокус на кнопки под диалогом.
+ */
+async function scenarioNestedDialog(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 800 });
+  takeErrors(page);
+  const openConfirm = () =>
+    page.evaluate(() => {
+      const btn = [...document.querySelectorAll('.settings-main button')].find((b) => /Удалить сейчас/i.test(b.innerText));
+      if (!btn) return false;
+      btn.scrollIntoView({ block: 'center' });
+      btn.click();
+      return true;
+    });
+
+  record('сценарии', 'подтверждение открывается поверх настроек', (await openConfirm()) === true);
+  await sleep(500);
+  const two = await page.evaluate(() => ({
+    modals: document.querySelectorAll('.modal').length,
+    focus: (document.activeElement?.innerText || document.activeElement?.getAttribute('aria-label') || '').trim(),
+  }));
+  record('сценарии', 'во вложенном диалоге фокус сразу на «Отмене»', two.modals === 2 && two.focus === 'Отмена', `${two.modals} окна, фокус: ${two.focus}`);
+
+  await page.keyboard.press('Escape');
+  await sleep(450);
+  const afterEsc = await page.evaluate(() => ({
+    modals: document.querySelectorAll('.modal').length,
+    settings: /Удалить сейчас/.test(document.body.innerText),
+  }));
+  record(
+    'сценарии',
+    'Escape закрывает только вопрос, настройки остаются',
+    afterEsc.modals === 1 && afterEsc.settings,
+    `окон: ${afterEsc.modals}`,
+  );
+
+  await openConfirm();
+  await sleep(450);
+  const tabs = [];
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press('Tab');
+    tabs.push(
+      await page.evaluate(() => {
+        const top = [...document.querySelectorAll('.modal')].pop();
+        const el = document.activeElement;
+        return {
+          inside: Boolean(top && top.contains(el)),
+          label: (el?.innerText || el?.getAttribute('aria-label') || el?.tagName || '').replace(/\s+/g, ' ').trim().slice(0, 20),
+        };
+      }),
+    );
+  }
+  record(
+    'сценарии',
+    'Tab не уводит фокус из верхнего диалога',
+    tabs.every((t) => t.inside),
+    tabs.map((t) => `${t.inside ? '+' : '-'}${t.label}`).join(' · '),
+  );
+
+  const cancelled = await page.evaluate(() => {
+    const top = [...document.querySelectorAll('.modal')].pop();
+    const btn = [...(top?.querySelectorAll('button') || [])].find((b) => /Отмена/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(400);
+  const afterCancel = await page.evaluate(() => ({
+    modals: document.querySelectorAll('.modal').length,
+    settings: /Удалить сейчас/.test(document.body.innerText),
+    dictations: (window.__e2e.read('zs.dictations') || []).length,
+  }));
+  record(
+    'сценарии',
+    '«Отмена» не удаляет историю и не закрывает настройки',
+    cancelled && afterCancel.modals === 1 && afterCancel.settings && afterCancel.dictations > 0,
+    `история: ${afterCancel.dictations}`,
+  );
+
+  const errors = takeErrors(page);
+  record('сценарии', 'вложенный диалог: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+/**
  * Узкое окно: маленькие ноутбуки и масштаб 150 %. Раньше окно настроек было
  * жёстко 780 px и в окне приложения 860 px всё помещалось, а на экране
  * 1024×600 — уже нет: правый край с кнопками уезжал за границу.
@@ -6373,6 +6459,7 @@ async function main() {
       ['разбор точности', scenarioQualityReport],
       ['совет по модели', scenarioHardwareFit],
       ['узкое окно', scenarioNarrowWindow],
+      ['вложенный диалог', scenarioNestedDialog],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

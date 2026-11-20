@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('zspeakly', {
     toggleMaximize: () => ipcRenderer.invoke('win:toggle-maximize'),
     close: () => ipcRenderer.invoke('win:close'),
     setBadge: (value) => ipcRenderer.invoke('win:badge', value),
+    // окно развернули или восстановили — от этого зависит иконка в заголовке
+    onMaximized: (cb) => on('window:maximized', cb),
+    state: () => ipcRenderer.invoke('win:state'),
   },
 
   native: {

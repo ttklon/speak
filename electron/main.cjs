@@ -31,6 +31,7 @@ const {
 const { averageFactor, decodePlan } = require('./adaptiveDecode.cjs');
 const { aliasesFor } = require('./dictionaryAliases.cjs');
 const { IDLE_UNLOAD_MS, shouldUnload } = require('./idleMemory.cjs');
+const { resolveWindowBounds, boundsToSave } = require('./windowBounds.cjs');
 const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
@@ -140,19 +141,57 @@ const BOOT_AT = Date.now();
 let startupMs = 0;
 let warmMs = 0;
 
-function createWindow() {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+/**
+ * Сохранение размера и места окна. Раньше окно каждый запуск открывалось
+ * заново по размеру экрана: человек сужал его под браузер, а после
+ * перезапуска получал развёрнутое. Пишем не чаще раза в секунду — событий
+ * move/resize при перетаскивании бывает сотни.
+ */
+let boundsTimer = null;
+function rememberWindowBounds(win = mainWindow, delay = 600) {
+  if (!win) return;
+  const write = () => {
+    try {
+      const bounds = boundsToSave(win);
+      if (bounds) store?.set('ui:windowBounds', bounds);
+    } catch {
+      /* профиль не должен мешать закрытию окна */
+    }
+  };
+  // Задержка 0 — записываем сразу: при выходе из приложения отложенный таймер
+  // может не успеть, и окно «забудет» размер.
+  clearTimeout(boundsTimer);
+  if (!delay) {
+    write();
+    return;
+  }
+  boundsTimer = setTimeout(write, delay);
+  boundsTimer.unref?.();
+}
 
-  // Старые ноутбуки и нетбуки: 1024×600, 1366×768 с масштабом 150 % дают
-  // рабочий стол шириной ~910. Раньше окно стартовало на 860 px и не давало
-  // себя сузить — на таких экранах правый край с кнопками уезжал за границу.
-  // Интерфейс проверен аудитом на 640×440, поэтому потолок опускаем до 720.
-  const initialWidth = Math.min(1020, Math.max(720, width - 60));
-  const initialHeight = Math.min(680, Math.max(480, height - 60));
+function createWindow() {
+  const primary = screen.getPrimaryDisplay();
+  const displays = (() => {
+    try {
+      return (screen.getAllDisplays?.() || [primary]).map((d) => d.workArea || d.workAreaSize);
+    } catch {
+      return [primary.workArea || primary.workAreaSize];
+    }
+  })();
+  // Размер и место — из прошлого запуска; если сохранённое больше не на экране,
+  // окно откроется по центру и об этом будет строка в журнале.
+  const placement = resolveWindowBounds(store?.get('ui:windowBounds'), {
+    displays,
+    primary: primary.workArea || primary.workAreaSize,
+  });
+  if (placement.reason === 'прошлое место больше не на экране') {
+    logger.info('app', 'Окно открыто по центру: прошлое место больше не на экране', { keep: true });
+  }
 
   mainWindow = new BrowserWindow({
-    width: initialWidth,
-    height: initialHeight,
+    width: placement.width,
+    height: placement.height,
+    ...(placement.x !== undefined && placement.y !== undefined ? { x: placement.x, y: placement.y } : {}),
     minWidth: 720,
     minHeight: 480,
     backgroundColor: '#1e1e1e',
@@ -173,6 +212,13 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
+    if (placement.maximized) {
+      try {
+        mainWindow.maximize();
+      } catch {
+        /* платформа без maximize — не повод не показывать окно */
+      }
+    }
     if (!START_HIDDEN) mainWindow.show();
     startupMs = Date.now() - BOOT_AT;
     logger.info('app', 'Окно на экране', { keep: true, ms: startupMs });
@@ -202,7 +248,29 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
+  // Размер и место запоминаем сразу, без задержки: окно может закрыться
+  // раньше, чем сработает отложенная запись.
+  mainWindow.on('resize', () => rememberWindowBounds());
+  mainWindow.on('move', () => rememberWindowBounds());
+  mainWindow.on('maximize', () => {
+    rememberWindowBounds(mainWindow, 0);
+    try {
+      mainWindow.webContents?.send('window:maximized', true);
+    } catch {
+      /* окно могло закрыться */
+    }
+  });
+  mainWindow.on('unmaximize', () => {
+    rememberWindowBounds(mainWindow, 0);
+    try {
+      mainWindow.webContents?.send('window:maximized', false);
+    } catch {
+      /* окно могло закрыться */
+    }
+  });
+
   mainWindow.on('close', (e) => {
+    rememberWindowBounds(mainWindow, 0);
     const closeToTray = store?.get('zs:settings')?.closeToTray !== false;
     if (closeToTray && !app.isQuitting) {
       e.preventDefault();
@@ -1177,6 +1245,15 @@ function registerIpc() {
     if (!mainWindow) return;
     if (mainWindow.isMaximized()) mainWindow.unmaximize();
     else mainWindow.maximize();
+  });
+  // Состояние окна для заголовка: приложение может открыться уже развёрнутым
+  // (оно это помнит), и иконка должна сразу показывать «Восстановить».
+  ipcMain.handle('win:state', () => {
+    try {
+      return { maximized: mainWindow?.isMaximized?.() === true };
+    } catch {
+      return { maximized: false };
+    }
   });
   ipcMain.handle('win:close', () => mainWindow?.close());
   ipcMain.handle('win:badge', (_e, value) => {

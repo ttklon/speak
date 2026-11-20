@@ -47,7 +47,16 @@ const makeWindow = (options = {}) => {
       setWindowOpenHandler: () => {},
       on: () => {},
     },
-    on: () => {},
+    // слушатели событий окна запоминаем: проверяем, что размер и место
+    // действительно сохраняются по resize/move
+    _listeners: {},
+    on: (event, fn) => {
+      if (!win._listeners[event]) win._listeners[event] = [];
+      win._listeners[event].push(fn);
+    },
+    emit: (event, payload) => {
+      for (const fn of win._listeners[event] || []) fn(payload);
+    },
     once: () => {},
     loadURL: async () => {},
     loadFile: async (file) => {
@@ -1052,6 +1061,18 @@ await check('models:status честно говорит, какая модель 
   const dl = st.models['large-v3-turbo'];
   if (!dl || dl.downloaded) throw new Error('турбо-модель будто скачана');
   if (dl.sizeMb < 1000) throw new Error(`размер turbo подозрительный: ${dl.sizeMb}`);
+});
+
+await check('размер и место окна запоминаются между запусками', async () => {
+  const mainWin = findMainWindow();
+  mainWin._bounds = { x: 140, y: 90, width: 880, height: 560 };
+  mainWin.emit('resize');
+  await new Promise((r) => setTimeout(r, 800));
+  const saved = handlers.get('store:get')({}, 'ui:windowBounds');
+  if (!saved) throw new Error('размер окна не сохранён');
+  if (saved.width !== 880 || saved.height !== 560) throw new Error(`сохранён размер ${saved.width}×${saved.height}`);
+  if (saved.x !== 140 || saved.y !== 90) throw new Error(`сохранено место ${saved.x},${saved.y}`);
+  if (saved.maximized !== false) throw new Error('окно записано развёрнутым');
 });
 
 await check('главное окно помещается в маленький экран и сужается до 720×480', () => {

@@ -541,6 +541,8 @@ export function installMockBridge() {
         record('win:badge', [value]);
         return true;
       },
+      state: async () => ({ maximized: false }),
+      onMaximized: () => () => {},
     },
     native,
     clipboard: {
