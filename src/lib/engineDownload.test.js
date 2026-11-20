@@ -204,17 +204,18 @@ describe('подготовка движка Whisper', () => {
     writeFileSync(join(source, 'whisper-server.exe'), 'сервер');
     const quote = (value) => value.replace(/'/g, "''");
     cp.execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      `Compress-Archive -Path '${quote(join(source, '*'))}' -DestinationPath '${quote(fixture)}' -Force`], { timeout: 30000 });
+      `$ErrorActionPreference = 'Stop'; Compress-Archive -LiteralPath '${quote(join(source, 'whisper-cli.exe'))}','${quote(join(source, 'whisper-server.exe'))}' -DestinationPath '${quote(fixture)}' -Force`], { timeout: 30000 });
+    const zipEntries = cp.execFileSync('tar.exe', ['-tf', fixture], { encoding: 'utf8' });
     archive = readFileSync(fixture);
-    let unpacked = [];
+    let unpacked = [], unpackError = '';
     cp.execFile = (file, args, options, callback) => originalExec(file, args, options, (err, stdout, stderr) => {
-      if (err) console.error('Ошибка проверочной распаковки:', err.message, stderr);
+      unpackError = `${err?.message || ''} ${stderr || ''}`;
       const out = join(dir, 'bin', '_unpacked');
       if (existsSync(out)) unpacked = readdirSync(out, { recursive: true });
       callback(err, stdout, stderr);
     });
     const result = await models.downloadEngine(undefined, { force: true });
-    expect(result, `результат установки: ${JSON.stringify(result)}, исходные файлы: ${JSON.stringify(readdirSync(source))}, распаковано: ${JSON.stringify(unpacked)}`).toMatchObject({ ok: true, bin: true, server: true });
+    expect(result, `результат: ${JSON.stringify(result)}, исходные: ${JSON.stringify(readdirSync(source))}, архив: ${zipEntries}, распаковано: ${JSON.stringify(unpacked)}, ошибки: ${unpackError}`).toMatchObject({ ok: true, bin: true, server: true });
     expect(readFileSync(join(dir, 'bin', 'whisper-cli.exe'), 'utf8')).toBe('настоящая распаковка');
     expect(readdirSync(join(dir, 'bin')).sort()).toEqual(['whisper-cli.exe', 'whisper-server.exe']);
   }, 60000);

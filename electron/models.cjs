@@ -201,7 +201,7 @@ function unpackArchive(zip, out, signal) {
     const child = execFile(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command',
-        `Expand-Archive -LiteralPath '${quote(zip)}' -DestinationPath '${quote(out)}' -Force`],
+        `$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath '${quote(zip)}' -DestinationPath '${quote(out)}' -Force`],
       { windowsHide: true, timeout: 120000, signal },
       (err) => { failure = err; },
     );
