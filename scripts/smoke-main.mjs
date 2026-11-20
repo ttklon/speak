@@ -1392,6 +1392,28 @@ await check('подсказка: произношение помогает дв�
   await handlers.get('store:set')({}, 'zs:dictionary', savedDict);
 });
 
+await check('подсказка: известное произношение уходит движку до распознавания', async () => {
+  // «Zoom» человек говорит «зум». Если подсказка знает только написание, движок
+  // пишет «зум» и узнаёт об ошибке уже после диктовки.
+  const saved = (handlers.get('store:get')({}, 'zs:dictionary') || []);
+  await handlers.get('store:set')({}, 'zs:dictionary', [{ word: 'Zoom' }, { word: 'Telegram' }]);
+  runWhisper('текст');
+  spawnCalls.length = 0;
+  await handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(500),
+    durationMs: 500,
+    lang: 'ru',
+    model: 'small',
+    useDictionary: true,
+  });
+  const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+  const prompt = call.args[call.args.indexOf('--prompt') + 1] || '';
+  if (!prompt.includes('Zoom')) throw new Error(`нет слова: ${prompt}`);
+  if (!prompt.includes('зум')) throw new Error(`нет известного произношения: ${prompt}`);
+  if (!prompt.includes('телеграм')) throw new Error(`нет второго слова: ${prompt}`);
+  await handlers.get('store:set')({}, 'zs:dictionary', saved);
+});
+
 await check('подсказка: словарь не вытесняется контекстом экрана', async () => {
   await handlers.get('store:set')(
     {},

@@ -29,6 +29,7 @@ const {
   shouldRetry,
 } = require('./textQuality.cjs');
 const { averageFactor, decodePlan } = require('./adaptiveDecode.cjs');
+const { aliasesFor } = require('./dictionaryAliases.cjs');
 const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
@@ -341,6 +342,17 @@ function buildSttPrompt({ context = '', dictionary = [], tail = '' } = {}) {
         words.push(pron);
         used += pronCost;
       }
+    }
+    // Известное русское произношение («Zoom» человек говорит «зум»). В подсказку
+    // его тоже кладём: движок сопоставляет звук с написанием до распознавания,
+    // а не после — так он и пишет Zoom, а не зум.
+    for (const alias of aliasesFor(word).slice(0, 1)) {
+      if (seen.has(alias)) continue;
+      const aliasCost = alias.length + 2;
+      if (used + aliasCost > STT_DICT_LIMIT) break;
+      seen.add(alias);
+      words.push(alias);
+      used += aliasCost;
     }
   }
   const dict = words.join(', ');

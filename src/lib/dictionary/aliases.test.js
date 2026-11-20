@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { aliasesFor, knownAliases, termVariants } from './aliases.js';
 
@@ -47,5 +48,25 @@ describe('termVariants', () => {
 describe('knownAliases', () => {
   it('нужен интерфейсу, чтобы подсказать произношение до диктовки', () => {
     expect(knownAliases('GitHub')).toContain('гитхаб');
+  });
+});
+
+describe('один список на интерфейс и main', () => {
+  // Подсказку движку собирает main (CommonJS), замену в тексте — интерфейс
+  // (ESM). Если списки разойдутся, «зум» будет узнаваться по-разному до и после
+  // распознавания — это худший вид расхождения: незаметный.
+  const require = createRequire(import.meta.url);
+  const cjs = require('../../../electron/dictionaryAliases.cjs');
+
+  it('оба модуля читают один и тот же файл пар', () => {
+    expect(cjs.PAIRS).toEqual(
+      expect.objectContaining({ zoom: ['зум'], telegram: expect.arrayContaining(['телеграм']) }),
+    );
+  });
+
+  it('для известных слов ответы совпадают', () => {
+    for (const word of ['Zoom', 'зум', 'Telegram', 'Docker', 'докер', 'GitHub', 'ZSpeakly']) {
+      expect(cjs.aliasesFor(word)).toEqual(aliasesFor(word));
+    }
   });
 });
