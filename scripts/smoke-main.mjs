@@ -1634,9 +1634,16 @@ await check('импорт модели: чужой файл не подключ�
   const bad = await modelsMod.importModel(fake);
   if (bad.ok) throw new Error('случайный файл подключился');
   if (!/ggml/.test(String(bad.reason))) throw new Error(`причина: ${bad.reason}`);
+  for (const magic of ['ggml', 'GGUF']) {
+    fs.writeFileSync(fake, Buffer.concat([Buffer.from(magic), Buffer.alloc(21 * 1024 * 1024)]));
+    const rejected = await modelsMod.importModel(fake);
+    if (rejected.ok) throw new Error(`принят неподходящий заголовок ${magic}`);
+  }
 
   const good = path.join(tmpDir, 'ggml-large-v3-turbo.bin');
-  fs.writeFileSync(good, Buffer.concat([Buffer.from('ggml'), Buffer.alloc(21 * 1024 * 1024)]));
+  // whisper.cpp пишет 0x67676d6c как little-endian: первые байты — lmgg,
+  // как у официальной модели for-tests-ggml-tiny.bin.
+  fs.writeFileSync(good, Buffer.concat([Buffer.from([0x6c, 0x6d, 0x67, 0x67]), Buffer.alloc(21 * 1024 * 1024)]));
   const ok = await modelsMod.importModel(good);
   if (!ok.ok || ok.id !== 'large-v3-turbo') throw new Error(JSON.stringify(ok));
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1892,6 +1899,79 @@ await check('подготовка распознавания: канал models:
   if (!handlers.has('models:prepare')) throw new Error('нет models:prepare');
   const res = await handlers.get('models:prepare')({});
   if (!res || typeof res.ok !== 'boolean') throw new Error(`странный ответ: ${JSON.stringify(res)}`);
+});
+
+await check('автоподготовка: отмена VAD останавливает цепочку, повтор запускается', async () => {
+  const models = require(path.resolve('electron/models.cjs'));
+  const hardware = require(path.resolve('electron/hardware.cjs'));
+  const saved = {
+    status: models.modelStatus, vad: models.downloadVad, model: models.downloadModel,
+    cancel: models.cancelDownload, lighter: hardware.lighterModel,
+  };
+  let started, finish;
+  const vadStarted = new Promise((resolve) => { started = resolve; });
+  let vadCalls = 0, modelCalls = 0;
+  const settingsBefore = handlers.get('store:get')({}, 'zs:settings');
+  models.modelStatus = () => ({ bin: true, server: true, vad: false, models: {} });
+  models.downloadVad = () => {
+    vadCalls++;
+    if (vadCalls > 1) return Promise.resolve({ ok: true });
+    started();
+    return new Promise((resolve) => { finish = resolve; });
+  };
+  models.downloadModel = async () => { modelCalls++; return { ok: true }; };
+  models.cancelDownload = () => { finish?.({ ok: false, canceled: true, reason: 'скачивание отменено' }); return { ok: true }; };
+  hardware.lighterModel = () => null;
+  try {
+    const first = handlers.get('models:prepare')({});
+    let timer;
+    await Promise.race([vadStarted, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('VAD не запущен')), 1500); })]).finally(() => clearTimeout(timer));
+    const simultaneous = handlers.get('models:prepare')({});
+    if (vadCalls !== 1) throw new Error('одновременная подготовка запустилась дважды');
+    if (!handlers.get('models:cancel')({}).ok) throw new Error('отмена не сработала');
+    const [a, b] = await Promise.all([first, simultaneous]);
+    if (a.ok || b.ok || !/отменено/.test(a.reason || '') || modelCalls) throw new Error(`после отмены: ${JSON.stringify({ a, b, modelCalls })}`);
+    const retry = await handlers.get('models:prepare')({});
+    if (!retry.ok || vadCalls !== 2 || modelCalls !== 1) throw new Error(`повтор: ${JSON.stringify({ retry, vadCalls, modelCalls })}`);
+  } finally {
+    finish?.({ ok: false, canceled: true, reason: 'скачивание отменено' });
+    models.modelStatus = saved.status; models.downloadVad = saved.vad; models.downloadModel = saved.model;
+    models.cancelDownload = saved.cancel; hardware.lighterModel = saved.lighter;
+    await handlers.get('store:set')({}, 'zs:settings', settingsBefore);
+  }
+});
+
+await check('автоподготовка: отмена обновления движка не запускает VAD и допускает повтор', async () => {
+  const models = require(path.resolve('electron/models.cjs'));
+  const saved = { status: models.modelStatus, engine: models.downloadEngine, vad: models.downloadVad };
+  let attempts = 0, vadCalls = 0, ready = false;
+  models.modelStatus = () => ({ bin: true, server: ready, vad: false, models: { base: { downloaded: true } } });
+  models.downloadEngine = async (_progress, options) => {
+    if (!options?.force) throw new Error('ожидалось обновление движка');
+    if (++attempts === 1) return { ok: false, canceled: true, reason: 'скачивание отменено' };
+    ready = true;
+    return { ok: true };
+  };
+  models.downloadVad = async () => { vadCalls++; return { ok: true }; };
+  try {
+    const first = await handlers.get('models:prepare')({});
+    if (first.ok || !first.canceled || vadCalls) throw new Error(`отмена: ${JSON.stringify({ first, vadCalls })}`);
+    const retry = await handlers.get('models:prepare')({});
+    if (!retry.ok || attempts !== 2 || vadCalls !== 1) throw new Error(`повтор: ${JSON.stringify({ retry, attempts, vadCalls })}`);
+  } finally { models.modelStatus = saved.status; models.downloadEngine = saved.engine; models.downloadVad = saved.vad; }
+});
+
+await check('автоподготовка: повтор после ошибки сети запускает поиск движка заново', async () => {
+  const models = require(path.resolve('electron/models.cjs'));
+  const saved = { status: models.modelStatus, engine: models.downloadEngine };
+  let attempts = 0;
+  models.modelStatus = () => ({ bin: false, server: false, vad: false, models: {} });
+  models.downloadEngine = async () => { attempts++; return { ok: false, reason: 'сеть недоступна' }; };
+  try {
+    const first = await handlers.get('models:prepare')({});
+    const second = await handlers.get('models:prepare')({});
+    if (first.ok || second.ok || attempts !== 2) throw new Error(`повтор не выполнен: ${JSON.stringify({ first, second, attempts })}`);
+  } finally { models.modelStatus = saved.status; models.downloadEngine = saved.engine; }
 });
 
 await check('пауза и отмена из плавающей плашки доходят до окна', async () => {
@@ -2632,6 +2712,75 @@ await check('отмена русской и европейской моделе�
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('Whisper: отмена через IPC до ответа и повтор загрузки', async () => {
+  const http = require('node:http');
+  const https = require('node:https');
+  const models = require(path.resolve('electron/models.cjs'));
+  const target = path.join(userData, 'models', models.MODELS['tiny-q5_1'].file);
+  fs.rmSync(target, { force: true });
+  let waiting;
+  const requested = new Promise((resolve) => { waiting = resolve; });
+  let respond = false;
+  const server = http.createServer((_req, res) => {
+    if (respond) res.end('тест');
+    else waiting();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const originalGet = https.get;
+  https.get = (_url, options, callback) => http.get(`http://127.0.0.1:${server.address().port}/`, options, callback);
+  try {
+    const first = handlers.get('models:download')({}, 'tiny-q5_1');
+    await requested;
+    const duplicate = await handlers.get('models:download')({}, 'tiny-q5_1');
+    if (duplicate.ok || !/уже выполняется/.test(duplicate.reason)) throw new Error(`параллельная загрузка: ${JSON.stringify(duplicate)}`);
+    if (!handlers.get('models:cancel')({}).ok) throw new Error('отмена не сработала');
+    let timer;
+    const result = await Promise.race([
+      first,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('отмена зависла')), 2000); }),
+    ]).finally(() => clearTimeout(timer));
+    if (result.ok || !/отменено/.test(result.reason)) throw new Error(`ответ: ${JSON.stringify(result)}`);
+    if (fs.existsSync(target) || fs.existsSync(`${target}.part`)) throw new Error('остался файл загрузки');
+    respond = true;
+    const retry = await handlers.get('models:download')({}, 'tiny-q5_1');
+    if (!retry.ok || fs.readFileSync(target, 'utf8') !== 'тест') throw new Error(`повтор: ${JSON.stringify(retry)}`);
+  } finally {
+    models.cancelDownload();
+    https.get = originalGet;
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(target, { force: true });
+    fs.rmSync(`${target}.part`, { force: true });
+  }
+});
+
+await check('VAD: отмена до ответа сервера возвращает признак отмены', async () => {
+  const http = require('node:http');
+  const https = require('node:https');
+  const models = require(path.resolve('electron/models.cjs'));
+  const target = path.join(userData, 'models', models.VAD.file);
+  fs.rmSync(target, { force: true });
+  let started;
+  const requested = new Promise((resolve) => { started = resolve; });
+  const server = http.createServer((_req, _res) => started());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const originalGet = https.get;
+  https.get = (_url, options, callback) => http.get(`http://127.0.0.1:${server.address().port}/`, options, callback);
+  try {
+    const task = models.downloadVad();
+    await requested;
+    if (!handlers.get('models:cancel')({}).ok) throw new Error('отмена VAD не сработала');
+    let timer;
+    const result = await Promise.race([task, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('отмена VAD зависла')), 2000); })]).finally(() => clearTimeout(timer));
+    if (result.ok || !result.canceled || !/отменено/.test(result.reason)) throw new Error(`ответ VAD: ${JSON.stringify(result)}`);
+    if (fs.existsSync(target) || fs.existsSync(`${target}.part`)) throw new Error('остался файл VAD');
+  } finally {
+    models.cancelDownload(); https.get = originalGet;
+    server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(target, { force: true }); fs.rmSync(`${target}.part`, { force: true });
   }
 });
 

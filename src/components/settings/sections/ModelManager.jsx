@@ -52,7 +52,9 @@ export default function ModelManager() {
     lastToast.current = { key, at: now };
     push({ title, description, tone });
   };
-  const cancelAsked = useRef(false);
+  // Отмена определяется по ответу именно этой операции, а не по нажатию:
+  // пока кнопка обрабатывается, другая загрузка тоже может завершиться.
+  const wasCanceled = (result) => result?.canceled === true || /скачивание отменено/i.test(String(result?.reason || ''));
   // какую модель человек собрался удалить (подтверждение — ниже)
   const [toDelete, setToDelete] = useState(null);
 
@@ -128,9 +130,8 @@ export default function ModelManager() {
       // перечитываем статус на любом прогрессе: диск мог измениться извне
       refresh();
       if (p.done) {
-        setBusy(null);
-        if (cancelAsked.current && !p.ok) {
-          cancelAsked.current = false;
+        setBusy((current) => (!p.auto && current === p.id ? null : current));
+        if (!p.ok && wasCanceled(p)) {
           pushOnce('Скачивание отменено', 'Недокачанный файл удалён — можно попробовать снова.', 'success');
           return;
         }
@@ -182,9 +183,8 @@ export default function ModelManager() {
     // статус перечитываем в любом случае — даже если ответ потерялся
     await refresh();
     if (!res?.ok) {
-      setBusy(null);
-      if (cancelAsked.current) {
-        cancelAsked.current = false;
+      setBusy((current) => (current === id ? null : current));
+      if (wasCanceled(res)) {
         pushOnce('Скачивание отменено', 'Недокачанный файл удалён — можно попробовать снова.', 'success');
       } else {
         pushOnce('Не удалось скачать модель', res?.reason, 'warn');
@@ -216,9 +216,8 @@ export default function ModelManager() {
     }
     await refresh();
     if (!res?.ok) {
-      setBusy(null);
-      if (cancelAsked.current) {
-        cancelAsked.current = false;
+      setBusy((current) => (current === 'russian' ? null : current));
+      if (wasCanceled(res)) {
         pushOnce('Скачивание отменено', 'Недокачанный файл удалён — можно попробовать снова.', 'success');
       } else {
         pushOnce('Не удалось скачать русскую модель', res?.reason, 'warn');
@@ -250,9 +249,8 @@ export default function ModelManager() {
     }
     await refresh();
     if (!res?.ok) {
-      setBusy(null);
-      if (cancelAsked.current) {
-        cancelAsked.current = false;
+      setBusy((current) => (current === 'european' ? null : current));
+      if (wasCanceled(res)) {
         pushOnce('Скачивание отменено', 'Недокачанный файл удалён — можно попробовать снова.', 'success');
       } else {
         pushOnce('Не удалось скачать модель европейских языков', res?.reason, 'warn');
@@ -267,16 +265,12 @@ export default function ModelManager() {
       push({ title: 'Отмена — в установленном приложении', tone: 'warn' });
       return;
     }
-    cancelAsked.current = true;
     try {
       const res = await bridge.modelsCancel();
       if (!res?.ok) {
-        cancelAsked.current = false;
-        pushOnce('Отменять пока нечего', res?.reason || '', 'warn');
-        setBusy(null);
+        pushOnce('Не удалось отменить скачивание', res?.reason || '', 'warn');
       }
     } catch (err) {
-      cancelAsked.current = false;
       pushOnce('Не удалось отменить', String(err?.message || err), 'warn');
     }
     await refresh();
@@ -324,8 +318,12 @@ export default function ModelManager() {
     }
     await refresh();
     if (!res?.ok) {
-      setBusy(null);
-      push({ title: 'Движок не установился', description: res?.reason, tone: 'warn' });
+      setBusy((current) => (current === 'engine' ? null : current));
+      if (wasCanceled(res)) {
+        pushOnce('Скачивание отменено', 'Недокачанный файл удалён — можно попробовать снова.', 'success');
+      } else {
+        push({ title: 'Движок не установился', description: res?.reason, tone: 'warn' });
+      }
     }
   };
 

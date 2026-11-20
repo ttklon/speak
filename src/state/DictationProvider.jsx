@@ -1561,14 +1561,14 @@ export function DictationProvider({ children }) {
       if (p.done) {
         if (p.ok) {
           pushToast({
-            title: 'Модель распознавания готова',
-            description: 'Диктовка работает офлайн. Можно говорить.',
+            title: p.id === 'engine' ? 'Движок распознавания установлен' : 'Модель распознавания скачана',
+            description: p.id === 'engine' ? 'Если модель ещё не скачана, она понадобится для диктовки.' : 'Можно проверить диктовку.',
             tone: 'success',
             ttl: 8000,
           });
         } else if (p.reason) {
           pushToast({
-            title: 'Модель не скачалась',
+            title: p.id === 'engine' ? 'Движок не скачался' : 'Модель не скачалась',
             description: String(p.reason).slice(0, 160),
             tone: 'warn',
             ttl: 12000,

@@ -2754,6 +2754,7 @@ function registerIpc() {
             res.ok ? 'Сервер распознавания установлен' : 'Сервер распознавания не скачался',
             { keep: true, reason: res.reason || '' },
           );
+          if (res.canceled) return res;
         }
         // VAD весит меньше мегабайта — качаем сразу, чтобы тишина не попадала
         // в движок с первой же диктовки
@@ -2764,6 +2765,7 @@ function registerIpc() {
             vadRes.ok ? 'VAD-модель установлена' : 'VAD-модель не скачалась',
             { keep: true, reason: vadRes.reason || '' },
           );
+          if (vadRes.canceled) return vadRes;
         }
         st = models.modelStatus();
         const downloaded = Object.values(st.models).filter((m) => m.downloaded);
@@ -2820,7 +2822,7 @@ function registerIpc() {
         logger.error('stt', 'Автоподготовка распознавания не удалась', { reason: String(err?.message || err) });
         return { ok: false, reason: String(err?.message || err) };
       }
-    })();
+    })().finally(() => { autoPrep = null; });
     return autoPrep;
   };
 

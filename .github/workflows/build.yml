@@ -175,7 +175,7 @@ jobs:
         run: npm run icons
 
       - name: Загрузка и отмена моделей на Windows
-        run: npx vitest run src/lib/modelDownload.test.js
+        run: npx vitest run src/lib/modelDownload.test.js src/lib/whisperDownload.test.js
 
       - name: Помощник ввода (C# → exe) собирается и отвечает
         shell: bash

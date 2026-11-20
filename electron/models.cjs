@@ -84,92 +84,8 @@ function modelStatus() {
   return { models: out, bin, server, vad, vadPath: vad ? vadPath : '', vadSizeMb: VAD.mb };
 }
 
-/**
- * Отмена текущей загрузки: модель весит сотни мегабайт, и раньше
- * единственным способом остановить её было закрыть приложение.
- * Держим ссылку на активный запрос и файл, чтобы убрать .part.
- */
-let active = null;
-
-function cancelDownload() {
-  if (!active) return { ok: false, reason: 'нечего отменять' };
-  const { req, file, tmp } = active;
-  active = null;
-  try {
-    req?.destroy();
-  } catch {}
-  try {
-    file?.destroy();
-  } catch {}
-  try {
-    if (tmp) fs.rmSync(tmp, { force: true });
-  } catch {}
-  return { ok: true };
-}
-
-/** Скачивание с редиректами и прогрессом. */
-function download(url, dest, onProgress, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > 5) {
-      reject(new Error('слишком много редиректов'));
-      return;
-    }
-    const req = https.get(
-      url,
-      { headers: { 'User-Agent': 'ZSpeakly', Accept: '*/*' } },
-      (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          res.resume();
-          download(res.headers.location, dest, onProgress, redirects + 1).then(resolve, reject);
-          return;
-        }
-        if (res.statusCode !== 200) {
-          res.resume();
-          reject(new Error(`HTTP ${res.statusCode}`));
-          return;
-        }
-        const total = Number(res.headers['content-length'] || 0);
-        let received = 0;
-        const tmp = `${dest}.part`;
-        const file = fs.createWriteStream(tmp);
-        active = { req, file, tmp };
-        res.on('data', (chunk) => {
-          if (!active) {
-            // отменили посреди загрузки — прекращаем читать поток
-            res.destroy();
-            return;
-          }
-          received += chunk.length;
-          if (total) onProgress?.(Math.round((received / total) * 100), received, total);
-        });
-        res.on('close', () => {
-          if (!active) reject(new Error('скачивание отменено'));
-        });
-        res.pipe(file);
-        file.on('finish', () => {
-          file.close(() => {
-            if (!active) {
-              fs.rmSync(tmp, { force: true });
-              reject(new Error('скачивание отменено'));
-              return;
-            }
-            active = null;
-            fs.renameSync(tmp, dest);
-            resolve({ bytes: received });
-          });
-        });
-        file.on('error', (err) => {
-          fs.rmSync(tmp, { force: true });
-          reject(err);
-        });
-      },
-    );
-    req.on('error', reject);
-    req.setTimeout(120000, () => {
-      req.destroy(new Error('таймаут загрузки'));
-    });
-  });
-}
+// Один сетевой поток Whisper/VAD/архива; отмена действует и до ответа сервера.
+const { download, cancelDownload } = require('./whisperDownload.cjs').createDownloadManager();
 
 async function downloadModel(id, onProgress) {
   const meta = MODELS[id];
@@ -182,7 +98,7 @@ async function downloadModel(id, onProgress) {
     await download(url, dest, onProgress);
     return { ok: true, path: dest };
   } catch (err) {
-    return { ok: false, reason: err.message };
+    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
 }
 
@@ -219,7 +135,7 @@ async function downloadVad() {
     await download(VAD.url, dest, undefined);
     return { ok: true, path: dest };
   } catch (err) {
-    return { ok: false, reason: err.message };
+    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
 }
 
@@ -277,7 +193,7 @@ async function downloadEngine(onProgress, { force = false } = {}) {
   try {
     await download(asset.browser_download_url, zip, (p) => onProgress?.(Math.round(p * 0.7)));
   } catch (err) {
-    return { ok: false, reason: `не скачался архив: ${err.message}` };
+    return { ok: false, reason: `не скачался архив: ${err.message}`, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
   }
 
   // Распаковка без внешних зависимостей: PowerShell Expand-Archive на Windows
@@ -345,15 +261,15 @@ async function importModel(sourcePath, onProgress) {
     return { ok: false, reason: 'это не похоже на модель whisper.cpp (меньше 20 МБ)' };
   }
 
-  // Настоящий ggml-файл начинается с магии «ggml» (или «GGUF» у новых сборок).
-  // Раньше подходил любой .bin — и человек мог «подключить» случайный файл.
+  // whisper.cpp записывает 0x67676d6c в порядке little-endian, то есть «lmgg».
+  // Это только проверка заголовка, а не доказательство целостности всей модели.
   try {
     const head = Buffer.alloc(4);
     const fd = fs.openSync(file, 'r');
     fs.readSync(fd, head, 0, 4, 0);
     fs.closeSync(fd);
     const magic = head.toString('latin1');
-    if (magic !== 'ggml' && magic !== 'GGUF') {
+    if (magic !== 'lmgg') {
       return {
         ok: false,
         reason: 'файл не в формате ggml — скачайте модель ggml-*.bin (whisper.cpp / Hugging Face)',

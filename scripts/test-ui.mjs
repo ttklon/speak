@@ -3479,6 +3479,80 @@ async function scenarioModelCancel(browser) {
   await page.close();
 }
 
+// Завершение фоновой загрузки другой модели не должно разблокировать ручную.
+async function scenarioModelConcurrentProgress(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 600,
+    patchNative: () => {
+      let finish, modelId;
+      window.zspeakly.native.downloadModel = (id) => {
+        modelId = id;
+        return new Promise((resolve) => { finish = resolve; });
+      };
+      window.zspeakly.native.modelsCancel = async () => {
+        window.__e2e.emit('model:progress', { id: 'engine', auto: true, percent: 0, done: true, ok: false, reason: 'движок недоступен' });
+        setTimeout(() => {
+          const result = { ok: false, canceled: true, reason: 'скачивание отменено' };
+          window.__e2e.emit('model:progress', { id: modelId, percent: 0, done: true, ...result });
+          finish?.(result);
+        }, 50);
+        return { ok: true };
+      };
+    },
+  });
+  try {
+    takeErrors(page);
+    const started = await clickIn(page, '', 'Скачать');
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Отменить скачивание/.test(b.innerText)));
+    await page.evaluate(() => window.__e2e.emit('model:progress', { id: 'engine', auto: true, percent: 100, done: true, ok: true }));
+    await sleep(200);
+    const state = await page.evaluate(() => ({
+      cancel: [...document.querySelectorAll('button')].some((b) => /Отменить скачивание/.test(b.innerText)),
+      enabled: [...document.querySelectorAll('.settings-main button')].some((b) => /^Скачать$/.test((b.innerText || '').trim()) && !b.disabled),
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    }));
+    record('сценарии', 'фоновое завершение не прерывает ручное скачивание', started && state.cancel && !state.enabled, JSON.stringify(state));
+    record('сценарии', 'установка движка не выдаётся за готовую модель', /Движок/.test(state.toast) && !/Модель распознавания готова|Диктовка работает офлайн/.test(state.toast), state.toast);
+    if (state.cancel) await clickIn(page, '', 'Отменить скачивание');
+    await sleep(250);
+    const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+    record('сценарии', 'чужая ошибка и событие отмены не путаются с ответом',
+      /движок недоступен/.test(toast) && (toast.match(/Скачивание отменено/g) || []).length === 1 && !/Не удалось скачать модель|Модель не скачалась/.test(toast), toast);
+    const errors = takeErrors(page);
+    record('сценарии', 'параллельные события модели без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally { await page.close(); }
+}
+
+async function scenarioCancelNotAccepted(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 600,
+    patchNative: () => {
+      let finish, calls = 0;
+      window.zspeakly.native.downloadModel = () => new Promise((resolve) => { finish = resolve; });
+      window.zspeakly.native.modelsCancel = async () => {
+        if (++calls === 1) return { ok: false, reason: 'отмена пока недоступна' };
+        finish?.({ ok: false, reason: 'скачивание отменено' });
+        return { ok: true };
+      };
+    },
+  });
+  try {
+    takeErrors(page);
+    await clickIn(page, '', 'Скачать');
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Отменить скачивание/.test(b.innerText)));
+    await clickIn(page, '', 'Отменить скачивание');
+    await sleep(200);
+    const canRetry = await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => /Отменить скачивание/.test(b.innerText)));
+    record('сценарии', 'непринятая отмена не скрывает работающую загрузку', canRetry);
+    if (canRetry) await clickIn(page, '', 'Отменить скачивание');
+    await sleep(200);
+    const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+    record('сценарии', 'повторная отмена останавливает загрузку', canRetry && /Скачивание отменено/.test(toast), toast);
+    const errors = takeErrors(page);
+    record('сценарии', 'повторная отмена без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally { await page.close(); }
+}
+
 // На русской и европейской модели main отклоняет запрос при отмене,
 // не отправляя отдельное событие завершения: проверяем именно этот путь.
 async function scenarioSpecialModelCancel(browser) {
@@ -6603,6 +6677,8 @@ async function main() {
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['модель в памяти', scenarioWarmModel],
       ['отмена скачивания модели', scenarioModelCancel],
+      ['параллельные события модели', scenarioModelConcurrentProgress],
+      ['непринятая отмена модели', scenarioCancelNotAccepted],
       ['отмена отдельных моделей', scenarioSpecialModelCancel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
