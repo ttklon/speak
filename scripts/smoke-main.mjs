@@ -1961,6 +1961,19 @@ await check('автоподготовка: отмена обновления д�
   } finally { models.modelStatus = saved.status; models.downloadEngine = saved.engine; models.downloadVad = saved.vad; }
 });
 
+await check('автоподготовка: отмена поиска движка возвращается без запуска VAD', async () => {
+  const models = require(path.resolve('electron/models.cjs'));
+  const saved = { status: models.modelStatus, engine: models.downloadEngine, vad: models.downloadVad };
+  let vadCalls = 0;
+  models.modelStatus = () => ({ bin: false, server: false, vad: false, models: {} });
+  models.downloadEngine = async () => ({ ok: false, canceled: true, reason: 'скачивание отменено' });
+  models.downloadVad = async () => { vadCalls++; return { ok: true }; };
+  try {
+    const result = await handlers.get('models:prepare')({});
+    if (result.ok || !result.canceled || vadCalls) throw new Error(`отмена не передана: ${JSON.stringify({ result, vadCalls })}`);
+  } finally { models.modelStatus = saved.status; models.downloadEngine = saved.engine; models.downloadVad = saved.vad; }
+});
+
 await check('автоподготовка: повтор после ошибки сети запускает поиск движка заново', async () => {
   const models = require(path.resolve('electron/models.cjs'));
   const saved = { status: models.modelStatus, engine: models.downloadEngine };
@@ -2712,6 +2725,32 @@ await check('отмена русской и европейской моделе�
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('движок: отмена во время поиска релиза через общий канал', async () => {
+  const http = require('node:http');
+  const https = require('node:https');
+  const models = require(path.resolve('electron/models.cjs'));
+  let started;
+  const requested = new Promise((resolve) => { started = resolve; });
+  const server = http.createServer((_req, _res) => started());
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const originalGet = https.get;
+  https.get = (_url, options, callback) => http.get(`http://127.0.0.1:${server.address().port}/`, options, callback);
+  let task;
+  try {
+    task = models.downloadEngine(undefined, { force: true });
+    await requested;
+    const cancelled = handlers.get('models:cancel')({});
+    if (!cancelled?.ok) throw new Error(`отмена поиска не принята: ${JSON.stringify(cancelled)}`);
+    let timer;
+    const result = await Promise.race([task, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('поиск релиза завис')), 2000); })]).finally(() => clearTimeout(timer));
+    if (result.ok || !result.canceled || !/отменено/.test(result.reason)) throw new Error(`ответ: ${JSON.stringify(result)}`);
+  } finally {
+    models.cancelDownload(); https.get = originalGet;
+    server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+    await task;
   }
 });
 

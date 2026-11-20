@@ -2737,7 +2737,7 @@ function registerIpc() {
           push({ id: 'engine', percent: 0 });
           const res = await models.downloadEngine((percent) => push({ id: 'engine', percent }));
           push({ id: 'engine', percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
-          if (!res.ok) return { ok: false, reason: res.reason };
+          if (!res.ok) return res;
         }
         // Движок есть, а сервера распознавания нет (так было в старых
         // сборках): без него каждая диктовка платит за загрузку весов.

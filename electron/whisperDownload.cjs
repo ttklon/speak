@@ -1,4 +1,4 @@
-/** Сетевые загрузки Whisper: одна операция за раз, отмена и очистка .part. */
+/** Подготовка Whisper: одна операция за раз, отмена и очистка .part. */
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
@@ -13,7 +13,7 @@ function createDownloadManager() {
     return { ok: true };
   }
 
-  function transfer(url, temporary, onProgress, signal, redirects = 0) {
+  function transfer(url, temporary, onProgress, signal, redirects = 0, maxBytes) {
     return new Promise((resolve, reject) => {
       if (redirects > 5) return reject(new Error('слишком много перенаправлений'));
       let address;
@@ -43,7 +43,7 @@ function createDownloadManager() {
             reject(new Error('неверный адрес перенаправления'));
             return;
           }
-          transfer(next.toString(), temporary, onProgress, signal, redirects + 1).then(resolve, reject);
+          transfer(next.toString(), temporary, onProgress, signal, redirects + 1, maxBytes).then(resolve, reject);
           return;
         }
         if (res.statusCode !== 200) {
@@ -57,6 +57,10 @@ function createDownloadManager() {
         let nextProgressAt = 0;
         res.on('data', (chunk) => {
           received += chunk.length;
+          if (maxBytes != null && received > maxBytes) {
+            res.destroy(new Error('файл больше указанного размера'));
+            return;
+          }
           if (total && Date.now() >= nextProgressAt) {
             nextProgressAt = Date.now() + 200;
             try { onProgress?.(Math.round(received / total * 100), received, total); }
@@ -75,27 +79,40 @@ function createDownloadManager() {
     });
   }
 
-  async function download(url, dest, onProgress) {
+  // Для движка блокировка занимает и поиск релиза, и распаковку, а не только сеть.
+  async function runExclusive(work) {
     if (active) throw new Error('другая загрузка уже выполняется');
     const operation = { controller: new AbortController() };
     active = operation;
-    const tmp = `${dest}.part`;
+    const signal = operation.controller.signal;
     try {
-      const bytes = await transfer(url, tmp, onProgress, operation.controller.signal);
-      if (operation.controller.signal.aborted) throw new Error('скачивание отменено');
-      fs.renameSync(tmp, dest);
-      return { bytes };
+      return await work({ signal, download: (url, dest, onProgress, options) => downloadFile(url, dest, onProgress, signal, options) });
     } catch (err) {
-      if (operation.controller.signal.aborted) throw new Error('скачивание отменено');
+      if (signal.aborted) throw new Error('скачивание отменено');
       throw err;
     } finally {
-      // pipeline уже дождался закрытия файла — удаление безопаснее на Windows.
-      try { fs.rmSync(tmp, { force: true }); }
-      finally { if (active === operation) active = null; }
+      if (active === operation) active = null;
     }
   }
 
-  return { download, cancelDownload };
+  async function downloadFile(url, dest, onProgress, signal, { maxBytes } = {}) {
+    const tmp = `${dest}.part`;
+    try {
+      const bytes = await transfer(url, tmp, onProgress, signal, 0, maxBytes);
+      if (signal.aborted) throw new Error('скачивание отменено');
+      fs.renameSync(tmp, dest);
+      return { bytes };
+    } finally {
+      // pipeline уже дождался закрытия файла — удаление безопаснее на Windows.
+      fs.rmSync(tmp, { force: true });
+    }
+  }
+
+  function download(url, dest, onProgress) {
+    return runExclusive((operation) => operation.download(url, dest, onProgress));
+  }
+
+  return { download, cancelDownload, runExclusive };
 }
 
 module.exports = { createDownloadManager };

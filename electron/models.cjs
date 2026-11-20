@@ -84,8 +84,8 @@ function modelStatus() {
   return { models: out, bin, server, vad, vadPath: vad ? vadPath : '', vadSizeMb: VAD.mb };
 }
 
-// Один сетевой поток Whisper/VAD/архива; отмена действует и до ответа сервера.
-const { download, cancelDownload } = require('./whisperDownload.cjs').createDownloadManager();
+// Одна подготовка Whisper/VAD/движка; блокировка включает поиск и распаковку.
+const { download, cancelDownload, runExclusive } = require('./whisperDownload.cjs').createDownloadManager();
 
 async function downloadModel(id, onProgress) {
   const meta = MODELS[id];
@@ -143,28 +143,45 @@ async function downloadVad() {
  * Движок whisper.cpp: берём последний релиз ggml-org/whisper.cpp,
  * asset whisper-bin-x64.zip, распаковываем .exe/.dll в userData\bin.
  */
-async function fetchJson(url) {
+async function fetchJson(url, signal) {
   return new Promise((resolve, reject) => {
-    https
-      .get(url, { headers: { 'User-Agent': 'ZSpeakly', Accept: 'application/vnd.github+json' } }, (res) => {
-        let body = '';
-        res.on('data', (c) => (body += c));
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(body));
-          } catch (err) {
-            reject(err);
-          }
-        });
-      })
-      .on('error', reject);
+    const req = https.get(url, {
+      headers: { 'User-Agent': 'ZSpeakly', Accept: 'application/vnd.github+json' },
+      timeout: 120000,
+      signal,
+    }, (res) => {
+      if (res.statusCode !== 200) {
+        res.on('error', () => {});
+        res.resume();
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      let size = 0;
+      const chunks = [];
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 8 * 1024 * 1024) {
+          res.destroy(new Error('список сборок слишком большой'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('error', reject);
+      res.on('aborted', () => reject(new Error('соединение прервано')));
+      res.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+        catch (err) { reject(err); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('таймаут запроса')));
+    req.on('error', reject);
   });
 }
 
 /** Новейший релиз, в котором реально есть whisper-bin-x64.zip. */
-async function findEngineAsset() {
+async function findEngineAsset(signal) {
   const want = ['whisper-bin-x64.zip', 'whisper-bin-Win32.zip'];
-  const releases = await fetchJson('https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30');
+  const releases = await fetchJson('https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30', signal);
   for (const rel of Array.isArray(releases) ? releases : []) {
     for (const name of want) {
       const asset = (rel.assets || []).find((a) => a.name === name);
@@ -174,64 +191,87 @@ async function findEngineAsset() {
   return null;
 }
 
+// execFile может вызвать callback при AbortError раньше, чем процесс закроется.
+// Дожидаемся close, прежде чем удалять архив и каталог распаковки на Windows.
+function unpackArchive(zip, out, signal) {
+  const { execFile } = require('node:child_process');
+  const quote = (value) => value.replace(/'/g, "''");
+  return new Promise((resolve, reject) => {
+    let failure;
+    const child = execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command',
+        `Expand-Archive -LiteralPath '${quote(zip)}' -DestinationPath '${quote(out)}' -Force`],
+      { windowsHide: true, timeout: 120000, signal },
+      (err) => { failure = err; },
+    );
+    child.once('close', () => failure ? reject(failure) : resolve());
+  });
+}
+
 async function downloadEngine(onProgress, { force = false } = {}) {
   const d = ensureDirs();
-  // force — «движок есть, но сервера распознавания в нём нет»: без нового
-  // архива быстрый путь не появится никогда.
+  // force — «движок есть, но сервера распознавания в нём нет».
   if (modelStatus().bin && !force) return { ok: true, already: true, path: d.bin };
 
-  let found;
   try {
-    found = await findEngineAsset();
-  } catch (err) {
-    return { ok: false, reason: `GitHub недоступен: ${err.message}` };
-  }
-  if (!found) return { ok: false, reason: 'не нашёл сборку whisper.cpp для Windows x64' };
-  const asset = found.asset;
-
-  const zip = path.join(d.bin, 'whisper-bin-x64.zip');
-  try {
-    await download(asset.browser_download_url, zip, (p) => onProgress?.(Math.round(p * 0.7)));
-  } catch (err) {
-    return { ok: false, reason: `не скачался архив: ${err.message}`, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
-  }
-
-  // Распаковка без внешних зависимостей: PowerShell Expand-Archive на Windows
-  const { execFile } = require('node:child_process');
-  const out = path.join(d.bin, '_unpacked');
-  fs.rmSync(out, { recursive: true, force: true });
-  const ok = await new Promise((resolve) => {
-    execFile(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${out}' -Force`,
-      ],
-      { windowsHide: true, timeout: 120000 },
-      (err) => resolve(!err),
-    );
-  });
-  if (!ok) return { ok: false, reason: 'не удалось распаковать архив' };
-
-  onProgress?.(85);
-  // копируем все exe/dll из подпапок (в архиве есть Release/)
-  const walk = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (/\.(exe|dll)$/i.test(entry.name)) {
-        fs.copyFileSync(full, path.join(d.bin, entry.name));
+    return await runExclusive(async ({ signal, download: downloadArchive }) => {
+      let found;
+      try { found = await findEngineAsset(signal); }
+      catch (err) { throw new Error(`GitHub недоступен: ${err.message}`); }
+      if (!found) throw new Error('не нашёл сборку whisper.cpp для Windows x64');
+      const asset = found.asset;
+      try {
+        const address = new URL(asset.browser_download_url);
+        if (address.protocol !== 'https:' || address.username || address.password) throw new Error();
+      } catch { throw new Error('неверный адрес архива'); }
+      if (!Number.isSafeInteger(asset.size) || asset.size <= 0) throw new Error('не указан размер архива');
+      if (asset.digest != null && !/^sha256:[a-f0-9]{64}$/i.test(asset.digest)) {
+        throw new Error('неизвестный хеш архива');
       }
-    }
-  };
-  walk(out);
-  fs.rmSync(out, { recursive: true, force: true });
-  fs.rmSync(zip, { force: true });
-  onProgress?.(100);
-  const after = modelStatus();
-  return { ok: true, path: d.bin, bin: after.bin, server: after.server };
+
+      const zip = path.join(d.bin, 'whisper-bin-x64.zip');
+      const out = path.join(d.bin, '_unpacked');
+      try {
+        try { await downloadArchive(asset.browser_download_url, zip, (p) => onProgress?.(Math.round(p * 0.7)), { maxBytes: asset.size }); }
+        catch (err) { throw new Error(`не скачался архив: ${err.message}`); }
+        if (fs.statSync(zip).size !== asset.size) throw new Error('неверный размер архива');
+        if (asset.digest) {
+          // Хеш получен из ответа GitHub, а не из закреплённого манифеста.
+          const { hashFile } = require('./modelDownload.cjs');
+          const actual = await hashFile(zip, signal);
+          if (actual !== asset.digest.slice(7).toLowerCase()) throw new Error('архив пришёл повреждённым');
+        }
+        fs.rmSync(out, { recursive: true, force: true });
+        try { await unpackArchive(zip, out, signal); }
+        catch { throw new Error('не удалось распаковать архив'); }
+        if (signal.aborted) throw new Error('скачивание отменено');
+
+        onProgress?.(85);
+        const files = [];
+        const walk = (dir) => {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (/\.(exe|dll)$/i.test(entry.name)) files.push(full);
+          }
+        };
+        walk(out);
+        if (!files.some((file) => /^(whisper-cli|whisper|main)\.exe$/i.test(path.basename(file)))) {
+          throw new Error('в архиве нет программы распознавания');
+        }
+        for (const file of files) fs.copyFileSync(file, path.join(d.bin, path.basename(file)));
+        onProgress?.(100);
+        const after = modelStatus();
+        return { ok: true, path: d.bin, bin: after.bin, server: after.server };
+      } finally {
+        fs.rmSync(out, { recursive: true, force: true });
+        fs.rmSync(zip, { force: true });
+      }
+    });
+  } catch (err) {
+    return { ok: false, reason: err.message, ...(err.message === 'скачивание отменено' ? { canceled: true } : {}) };
+  }
 }
 
 /**

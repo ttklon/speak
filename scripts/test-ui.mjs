@@ -3553,6 +3553,46 @@ async function scenarioCancelNotAccepted(browser) {
   } finally { await page.close(); }
 }
 
+// Движок можно отменить во время поиска сборки; затем допускается повтор.
+async function scenarioEngineCancel(browser) {
+  const page = await openPage(browser, '#/settings?section=features&from=home', {
+    settle: 600,
+    patchNative: () => {
+      const native = window.zspeakly.native;
+      const originalStatus = native.modelsStatus;
+      native.modelsStatus = async () => ({ ...(await originalStatus()), bin: false, server: false });
+      let finish, attempts = 0;
+      native.downloadEngine = () => {
+        if (++attempts > 1) return Promise.resolve({ ok: false, reason: 'сеть недоступна' });
+        return new Promise((resolve) => { finish = resolve; });
+      };
+      native.modelsCancel = async () => {
+        const result = { ok: false, canceled: true, reason: 'скачивание отменено' };
+        window.__e2e.emit('model:progress', { id: 'engine', percent: 0, done: true, ...result });
+        finish?.(result);
+        return { ok: true };
+      };
+    },
+  });
+  try {
+    takeErrors(page);
+    const started = await clickIn(page, '', 'Скачать движок whisper.cpp');
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Отменить скачивание/.test(b.innerText)));
+    const cancelled = await clickIn(page, '', 'Отменить скачивание');
+    await sleep(250);
+    const state = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      enabled: [...document.querySelectorAll('button')].some((b) => /Скачать движок whisper.cpp/.test(b.innerText) && !b.disabled),
+    }));
+    record('сценарии', 'движок: отмена сообщает об отмене и разрешает повтор', started && cancelled && state.enabled && /Скачивание отменено/.test(state.toast) && !/Движок не установился|Не удалось скачать/.test(state.toast), state.toast);
+    await clickIn(page, '', 'Скачать движок whisper.cpp');
+    await sleep(250);
+    const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+    const errors = takeErrors(page);
+    record('сценарии', 'движок: последующий сбой сети не выдаётся за отмену', /Движок не установился/.test(toast) && /сеть недоступна/.test(toast) && errors.length === 0, toast);
+  } finally { await page.close(); }
+}
+
 // На русской и европейской модели main отклоняет запрос при отмене,
 // не отправляя отдельное событие завершения: проверяем именно этот путь.
 async function scenarioSpecialModelCancel(browser) {
@@ -6679,6 +6719,7 @@ async function main() {
       ['отмена скачивания модели', scenarioModelCancel],
       ['параллельные события модели', scenarioModelConcurrentProgress],
       ['непринятая отмена модели', scenarioCancelNotAccepted],
+      ['отмена загрузки движка', scenarioEngineCancel],
       ['отмена отдельных моделей', scenarioSpecialModelCancel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
