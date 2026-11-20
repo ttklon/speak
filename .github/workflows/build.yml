@@ -80,6 +80,9 @@ jobs:
         # запустился и упал, его ошибка должна остановить выпуск.
         run: |
           set -u
+          # Если подготовка завершится раньше самого теста, фиксируем место
+          # сбоя даже когда GitHub не отдаёт полный журнал задания.
+          trap 'status=$?; echo "::error title=whisper-live::Ошибка подготовки (строка $LINENO, код $status)"' ERR
           mkdir -p /tmp/wtest && cd /tmp/wtest
           url=$(curl -s --retry 3 https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30 \
             | grep -o '"browser_download_url": *"[^"]*whisper-bin-ubuntu-x64.tar.gz"' \
@@ -129,9 +132,14 @@ jobs:
           set -o pipefail
           # Логи упавших джобов GitHub иногда не отдаёт совсем (EOF), поэтому
           # причину провала выносим в аннотацию — её видно в интерфейсе.
+          # GitHub запускает bash с -e: временно отключаем его, чтобы успеть
+          # записать причину и затем явно вернуть исходный код теста.
+          trap - ERR
+          set +e
           ZS_WHISPER_BIN="$bin" ZS_WHISPER_MODEL="$model" ZS_WHISPER_LIB_DIR="$libdir" ZS_WHISPER_VAD="$vad" \
             LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" npm run test:whisper 2>&1 | tee /tmp/wt.log
           code=${PIPESTATUS[0]}
+          set -e
           if [ "$code" -ne 0 ]; then
             tail -c 900 /tmp/wt.log | tr '\n' ' ' | sed 's/%/%25/g' > /tmp/wt-msg.txt
             echo "::warning title=whisper-live::$(cat /tmp/wt-msg.txt)"
