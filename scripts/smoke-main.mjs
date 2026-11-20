@@ -2571,7 +2571,8 @@ await check('скачивание русской модели проверяет
 
     // повреждённый файл не должен становиться моделью
     fs.rmSync(gigaam.modelDir(), { recursive: true, force: true });
-    const broken = files['v3_e2e_rnnt_vocab.txt'] + 'испорчено';
+    // Та же длина, другой хеш: отдельно проверяем именно хеш, а не размер.
+    const broken = files['v3_e2e_rnnt_vocab.txt'].replace('а', 'б');
     files['v3_e2e_rnnt_vocab.txt'] = broken;
     let failed = false;
     try {
@@ -2585,6 +2586,52 @@ await check('скачивание русской модели проверяет
   } finally {
     server.close();
     gigaam.reset();
+  }
+});
+
+await check('отмена русской и европейской моделей прерывает соединение и убирает временный файл', async () => {
+  const http = require('node:http');
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200);
+    res.write('часть'); // сервер специально не заканчивает ответ
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const name of ['gigaam', 'parakeet']) {
+      const engine = require(path.resolve(`electron/${name}.cjs`));
+      const manifest = [{ name: 'test.bin', size: 1000, sha256: '0'.repeat(64) }];
+      engine.setTestDeps({ files: manifest, ort: { InferenceSession: {} } });
+      fs.rmSync(engine.modelDir(), { recursive: true, force: true });
+      let read;
+      const received = new Promise((resolve) => { read = resolve; });
+      try {
+        const task = engine.downloadModel({ baseUrl: `http://127.0.0.1:${server.address().port}`, onProgress: read });
+        const result = task.then(() => 'загрузка завершилась', (err) => String(err?.message || err));
+        await received;
+        let duplicate = false;
+        try { await engine.downloadModel({ baseUrl: `http://127.0.0.1:${server.address().port}` }); }
+        catch (err) { duplicate = /уже выполняется/.test(String(err?.message || err)); }
+        if (!duplicate) throw new Error(`${name}: повторная загрузка не заблокирована`);
+        const cancelled = handlers.get('models:cancel')({});
+        if (!cancelled?.ok) throw new Error(`${name}: общая отмена не сработала`);
+        let timer;
+        const reason = await Promise.race([
+          result,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${name}: отмена зависла`)), 2000); }),
+        ]).finally(() => clearTimeout(timer));
+        if (!/отмен/.test(reason)) throw new Error(`${name}: причина: ${reason}`);
+        const remaining = fs.readdirSync(engine.modelDir());
+        if (remaining.length) throw new Error(`${name}: остались файлы ${remaining.join(', ')}`);
+        if (engine.cancelDownload()) throw new Error(`${name}: после отмены загрузка ещё активна`);
+      } finally {
+        engine.cancelDownload();
+        engine.reset();
+        fs.rmSync(engine.modelDir(), { recursive: true, force: true });
+      }
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 

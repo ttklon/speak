@@ -3479,6 +3479,58 @@ async function scenarioModelCancel(browser) {
   await page.close();
 }
 
+// На русской и европейской модели main отклоняет запрос при отмене,
+// не отправляя отдельное событие завершения: проверяем именно этот путь.
+async function scenarioSpecialModelCancel(browser) {
+  for (const kind of ['russian', 'european']) {
+    const page = await openPage(browser, '#/settings?section=features&from=home', {
+      settle: 600,
+      patchArg: kind,
+      patchNative: (which) => {
+        let rejectDownload;
+        let attempts = 0;
+        const native = window.zspeakly.native;
+        const originalStatus = native.modelsStatus;
+        native.modelsStatus = async () => ({
+          ...(await originalStatus()),
+          [which]: { available: false, missing: ['ещё один файл'], reason: 'модель скачана не полностью' },
+        });
+        native[which === 'russian' ? 'downloadRussianModel' : 'downloadEuropeanModel'] = () => {
+          attempts += 1;
+          if (attempts > 1) return Promise.reject(new Error('сеть недоступна'));
+          return new Promise((_, reject) => { rejectDownload = reject; });
+        };
+        native.modelsCancel = async () => {
+          window.__bridgeCalls.push({ channel: 'models:cancel', args: [] });
+          setTimeout(() => rejectDownload?.(new Error('скачивание отменено')), 0);
+          return { ok: true };
+        };
+      },
+    });
+    try {
+      await page.waitForFunction((k) => /незавершённый скачается заново/.test(document.querySelector(`.model-card--${k}`)?.innerText || ''), {}, kind);
+      await page.click(`.model-card--${kind} button`);
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Отменить скачивание/.test(b.innerText)));
+      await clickIn(page, '', 'Отменить скачивание');
+      await sleep(450);
+      const cancelled = await page.evaluate((k) => ({
+        toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+        enabled: !document.querySelector(`.model-card--${k} button`)?.disabled,
+        calls: window.__bridgeCalls.some((c) => c.channel === 'models:cancel'),
+      }), kind);
+      record('сценарии', `${kind}: отмена сообщает об отмене и разрешает повтор`,
+        cancelled.calls && cancelled.enabled && /Скачивание отменено/.test(cancelled.toast) && !/Не удалось скачать/.test(cancelled.toast), cancelled.toast);
+      await page.click(`.model-card--${kind} button`);
+      await sleep(450);
+      const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '));
+      const errors = takeErrors(page);
+      record('сценарии', `${kind}: последующая ошибка сети не выдаётся за отмену`, /Не удалось скачать/.test(toast) && /сеть недоступна/.test(toast) && errors.length === 0, `${toast} | ошибки консоли: ${errors.length}`);
+    } finally {
+      await page.close();
+    }
+  }
+}
+
 // Удалению модели раньше не было кнопки вовсе: скачал несколько — старые
 // лежали гигабайтами и убрать их было нечем.
 async function scenarioModelDelete(browser) {
@@ -6551,6 +6603,7 @@ async function main() {
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['модель в памяти', scenarioWarmModel],
       ['отмена скачивания модели', scenarioModelCancel],
+      ['отмена отдельных моделей', scenarioSpecialModelCancel],
       ['удаление модели', scenarioModelDelete],
       ['подбор модели под железо', scenarioHardwareModel],
       ['старое имя модели', scenarioOldModelName],

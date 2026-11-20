@@ -428,6 +428,7 @@ async function transcribeInner(pcm, options = {}) {
  * @param {{ onProgress?: (state: { received: number, total: number, file: string }) => void, baseUrl?: string }} [options]
  */
 async function downloadModel(options = {}) {
+  if (downloadState) throw new Error('скачивание модели уже выполняется');
   const files = modelFiles();
   downloadState = {
     cancelled: false,
@@ -462,6 +463,7 @@ function cancel() {
 function cancelDownload() {
   if (!downloadState) return false;
   downloadState.cancelled = true;
+  downloadState.abort?.();
   return true;
 }
 
