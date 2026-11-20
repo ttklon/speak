@@ -9,6 +9,7 @@ import { MODELS } from '../../../lib/config.js';
 import { MODEL_TIERS, tierForModel } from '../../../lib/modelTiers.js';
 import { pickCompareModels, runModelComparison } from '../../../lib/modelCompare.js';
 import { DECODE_MODES, describeMeasured, normalizeDecodeMode } from '../../../lib/decodeMode.js';
+import { fitVerdict } from '../../../lib/hardwareFit.js';
 
 /**
  * Модель распознавания: три режима вместо каталога из десяти моделей.
@@ -35,6 +36,9 @@ export default function ModelManager() {
   // Замеры этой машины: «счёт занимает N % от длительности речи». Нужны, чтобы
   // «Авто» не было чёрным ящиком, а «Точно»/«Быстро» — осознанным выбором.
   const [decodeStats, setDecodeStats] = useState(null);
+  // Параметры машины: по ним видно, уместна ли выбранная модель, — без гаданий
+  // и без переключения втихую.
+  const [hardware, setHardware] = useState(null);
   const [compareLevel, setCompareLevel] = useState(0);
   const [progress, setProgress] = useState({}); // id → percent
   const [busy, setBusy] = useState(null);
@@ -91,6 +95,19 @@ export default function ModelManager() {
 
   // Замеры режима — отдельным запросом: без них карточка «Скорость и точность»
   // говорила бы «решает приложение» и не показывала ни одного числа.
+  useEffect(() => {
+    let alive = true;
+    bridge
+      ?.diagStatus?.()
+      ?.then((res) => {
+        if (alive && res?.system) setHardware(res.system);
+      })
+      ?.catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [bridge]);
+
   useEffect(() => {
     let alive = true;
     bridge
@@ -373,6 +390,14 @@ export default function ModelManager() {
         .filter(([, info]) => info?.downloaded)
         .map(([id]) => id)
     : [];
+  const fit = fitVerdict({
+    current: settings.whisperModel,
+    // Подпись кнопки считаем оптимистичной, а доступность проверяем по списку
+    // скачанных ниже: обещать переключение на отсутствующий файл нельзя.
+    downloaded: true,
+    ramGb: hardware?.ramGb || 0,
+    cpus: hardware?.cpus || 0,
+  });
   const mode = normalizeDecodeMode(settings.decodeMode);
   const modeNote = describeMeasured({
     factor: decodeStats?.factor ?? null,
@@ -686,6 +711,38 @@ export default function ModelManager() {
             </div>
           ))}
           {compare.summary ? <div className="compare__summary">{compare.summary}</div> : null}
+        </div>
+      ) : null}
+
+      {/* Подходит ли модель этой машине: совет с железом в руках, а не
+          «поставьте Максимум качества». Переключаем только по нажатию. */}
+      {fit.level !== 'unknown' ? (
+        <div className={`fit-note is-${fit.level}`}>
+          <div className="fit-note__title">{fit.title}</div>
+          <div className="fit-note__hint">{fit.hint}</div>
+          {fit.switchTo && downloadedModels.includes(fit.switchTo) ? (
+            <div className="fit-note__action">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  updateSettings({ whisperModel: fit.switchTo });
+                  const fresh = await bridge?.modelsWarm?.({ model: fit.switchTo }).catch(() => null);
+                  push({
+                    title: `Модель переключена на «${fit.recommended?.label || fit.switchTo}»`,
+                    description: fresh?.ok
+                      ? 'Она уже в памяти — диктовка начнётся без загрузки.'
+                      : 'Первая диктовка загрузит её с диска.',
+                    tone: 'success',
+                  });
+                }}
+              >
+                {fit.switchLabel}
+              </Button>
+            </div>
+          ) : fit.switchTo ? (
+            <div className="fit-note__hint">{fit.switchLabel}</div>
+          ) : null}
         </div>
       ) : null}
 

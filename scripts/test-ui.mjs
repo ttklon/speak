@@ -4138,6 +4138,83 @@ async function scenarioQualityReport(browser) {
   await thin.close();
 }
 
+/**
+ * Совет по модели: приложение знает ядра и память и говорит, уместна ли
+ * выбранная модель. Проверяем оба случая — «подходит» и «тяжеловато» — и что
+ * переключение не происходит без нажатия.
+ */
+async function scenarioHardwareFit(browser) {
+  const weak = { cpus: 2, ramGb: 4 };
+  const page = await openPage(browser, '#/settings?section=dictation&from=home', {
+    settings: { whisperModel: 'large-v3-turbo-q5_0' },
+    storeSeed: { 'zs.mockSystem': weak },
+    settle: 800,
+  });
+  takeErrors(page);
+  const before = await page.evaluate(() => ({
+    model: (window.__e2e.read('zs.settings') || {}).whisperModel,
+    note: document.querySelector('.fit-note')?.innerText || '',
+    level: [...(document.querySelector('.fit-note')?.classList || [])].find((c) => c.startsWith('is-')) || '',
+  }));
+  record(
+    'сценарии',
+    'совет по модели: на 4 ГБ и двух ядрах называет подходящий режим словами',
+    before.level === 'is-warn' && /лучше «Быстро»/.test(before.note) && /4 ГБ памяти и 2 ядра/.test(before.note),
+    before.note.split('\n')[0] || 'совета нет',
+  );
+  record(
+    'сценарии',
+    'совет по модели: ничего не переключает втихую',
+    before.model === 'large-v3-turbo-q5_0',
+    before.model,
+  );
+
+  const clicked = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.fit-note button')].find((b) => /Переключить/i.test(b.innerText));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(600);
+  const after = await page.evaluate(() => ({
+    model: (window.__e2e.read('zs.settings') || {}).whisperModel,
+    note: document.querySelector('.fit-note')?.innerText || '',
+    toasts: [...document.querySelectorAll('.toast__title')].map((n) => n.innerText).join(' | '),
+  }));
+  record(
+    'сценарии',
+    'совет по модели: кнопка переключает и говорит, что теперь',
+    clicked && after.model === 'base-q5_1' && /Модель переключена/.test(after.toasts),
+    `${after.model} · ${after.toasts}`,
+  );
+
+  // Сильная машина: совет не превращается в «поставьте максимум» навязчиво.
+  const strong = await openPage(browser, '#/settings?section=dictation&from=home', {
+    settings: { whisperModel: 'small-q5_1' },
+    storeSeed: { 'zs.mockSystem': { cpus: 16, ramGb: 32 } },
+    settle: 700,
+  });
+  takeErrors(strong);
+  const strongNote = await strong.evaluate(() => {
+    const note = document.querySelector('.fit-note');
+    return {
+      level: [...(note?.classList || [])].find((c) => c.startsWith('is-')) || '',
+      text: note?.innerText || '',
+      buttons: [...document.querySelectorAll('.fit-note button')].length,
+    };
+  });
+  record(
+    'сценарии',
+    'совет по модели: на сильной машине не навязывает переключение',
+    strongNote.level === 'is-ok' && strongNote.buttons === 0,
+    strongNote.text.split('\n')[0] || 'совета нет',
+  );
+  const errors = [...takeErrors(page), ...takeErrors(strong)];
+  record('сценарии', 'совет по модели: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+  await strong.close();
+}
+
 async function scenarioClearDictations(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
   takeErrors(page);
@@ -6207,6 +6284,7 @@ async function main() {
       ['режим распознавания', scenarioDecodeMode],
       ['словарь: кириллица', scenarioDictionaryAliases],
       ['разбор точности', scenarioQualityReport],
+      ['совет по модели', scenarioHardwareFit],
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],

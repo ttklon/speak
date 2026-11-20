@@ -1494,6 +1494,19 @@ await check('режим «Быстро» не делает честный про
   await handlers.get('store:set')({}, 'zs:settings', { decodeMode: 'auto' });
 });
 
+await check('после простоя память освобождается, а не занимается вечно', async () => {
+  // Правило проверяется юнит-тестом; здесь важно, что main вообще его
+  // использует и знает, когда модель последний раз считала.
+  const { shouldUnload } = require('../electron/idleMemory.cjs');
+  if (typeof shouldUnload !== 'function') throw new Error('нет политики простоя в main');
+  if (!shouldUnload({ lastUsedAt: 1, now: 1 + 11 * 60 * 1000, warm: true, keepLoaded: true })) {
+    throw new Error('через 11 минут простоя модель не выгружается');
+  }
+  if (shouldUnload({ lastUsedAt: 1, now: 1 + 11 * 60 * 1000, warm: true, keepLoaded: false })) {
+    throw new Error('выгружаем то, чего в памяти нет');
+  }
+});
+
 await check('замеры скорости отдаются интерфейсу словами и числом', async () => {
   // Смысл: карточка «Скорость и точность» должна показывать реальный
   // коэффициент, а не «решает приложение».

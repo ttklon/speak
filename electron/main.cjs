@@ -30,6 +30,7 @@ const {
 } = require('./textQuality.cjs');
 const { averageFactor, decodePlan } = require('./adaptiveDecode.cjs');
 const { aliasesFor } = require('./dictionaryAliases.cjs');
+const { IDLE_UNLOAD_MS, shouldUnload } = require('./idleMemory.cjs');
 const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
@@ -105,6 +106,8 @@ let lastInsertTarget = { app: '', title: '', at: 0 };
 // Сколько времени движок тратит на секунду речи — по этим замерам решается,
 // можно ли считать сразу «честным» проходом на этой машине.
 const decodeHistory = [];
+/** Когда модель последний раз считала: для освобождения памяти после простоя. */
+let lastModelUseAt = 0;
 // Хвост прошлой фразы для подсказки движку: отдельно по языкам, чтобы русская
 // фраза не подсказывала английскую.
 const promptTailByLang = {};
@@ -1729,6 +1732,9 @@ function registerIpc() {
           res = { ...res, text: collapsed };
         }
       }
+      // Когда модель последний раз была нужна: по этому времени таймер решает,
+      // пора ли освободить память после простоя.
+      lastModelUseAt = Date.now();
       // Замер для адаптивного режима: сколько стоил этот проход на секунду речи
       if (res?.ok && spokenSeconds > 0.5) {
         decodeHistory.push({ ms: ms, seconds: spokenSeconds });
@@ -3132,6 +3138,34 @@ app.whenReady().then(() => {
   // Помощник ввода (PowerShell + SendInput) поднимаем один раз на всё
   // приложение: дальше вставка и ввод текста идут без холодного старта.
   setTimeout(() => warmInputHost(), 1500);
+
+  // Память после простоя: если модель держат в памяти, но диктовки не было
+  // десять минут — отпускаем её. На слабой машине это ровно те сотни мегабайт,
+  // которых не хватает браузеру; следующая диктовка просто загрузит модель.
+  const idleTimer = setInterval(() => {
+    try {
+      const cfg = store?.get('zs:settings') || {};
+      const warm = whisper.serverStatus?.().ready === true;
+      if (
+        shouldUnload({
+          lastUsedAt: lastModelUseAt,
+          now: Date.now(),
+          warm,
+          keepLoaded: cfg.keepModelLoaded !== false,
+        })
+      ) {
+        whisper.stopServer?.();
+        lastModelUseAt = 0;
+        logger.info('memory', 'Модель выгружена после 10 минут простоя — память освобождена', {
+          keep: true,
+          idleMs: IDLE_UNLOAD_MS,
+        });
+      }
+    } catch {
+      /* таймер не должен ронять приложение */
+    }
+  }, 60 * 1000);
+  idleTimer.unref?.();
 
   // После аварийного закрытия во временной папке остаются wav: живая
   // расшифровка пишет их каждые пару секунд. Свежие не трогаем — они могут

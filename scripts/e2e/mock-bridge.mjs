@@ -333,7 +333,8 @@ export function installMockBridge() {
         installId: 'e2e-install',
         entries: 3,
         pending: 0,
-        // то же, что присылает main после проверки системы
+        // то же, что присылает main после проверки системы; сценарий может
+        // подставить «слабую машину» через zs.mockSystem
         system: {
           platform: 'win32',
           version: '1.5.5',
@@ -348,6 +349,14 @@ export function installMockBridge() {
           insertSupported: true,
           clipboardWatch: true,
           micPreroll: false,
+          // сценарий может подставить «слабую машину» через zs.mockSystem
+          ...(() => {
+            try {
+              return JSON.parse(localStorage.getItem('mockstore:zs.mockSystem') || '{}') || {};
+            } catch {
+              return {};
+            }
+          })(),
           autoLaunch: true,
           engineWarm: true,
           engineWarming: false,
