@@ -587,6 +587,16 @@ jobs:
           else
             echo "::notice title=Windows Electron input::$message"
           fi
+          ZS_TEST_PACKAGED=1 node scripts/test-wininput-window.cjs > packaged-input.log 2>&1
+          code=$?
+          cat packaged-input.log
+          message=$(tail -c 2500 packaged-input.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Packaged Windows dictation::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' packaged-input.log; then
+            echo "::warning title=Packaged Windows dictation::$message"
+          else
+            echo "::notice title=Packaged Windows dictation::$message"
+          fi
 
       - name: Verify artifacts
         shell: pwsh

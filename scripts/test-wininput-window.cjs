@@ -98,8 +98,10 @@ async function main() {
     }
     if (process.env.ZS_TEST_ELECTRON === '1') {
       const dictation = process.env.ZS_TEST_WINDOWS_DICTATION === '1';
-      const executable = require('electron');
-      assert.ok(fs.existsSync(executable), 'нет Electron для проверки IPC');
+      const packaged = process.env.ZS_TEST_PACKAGED === '1';
+      if (packaged) assert.equal(process.env.CI, 'true', 'проверка сборки допускается только на выделенном CI');
+      const executable = packaged ? path.resolve('release/win-unpacked/ZSpeakly.exe') : require('electron');
+      assert.ok(fs.existsSync(executable), `нет Electron для проверки IPC: ${executable}`);
       assert.ok(fs.existsSync('dist/index.html'), 'сначала соберите интерфейс');
       const profile = path.join(dir, 'profile');
       fs.mkdirSync(profile);
@@ -107,19 +109,29 @@ async function main() {
         liveWhisper: false, aiDictationRewrite: false,
         keepModelLoaded: false, clipboardMonitor: false, checkUpdates: false,
         soundFeedback: false, closeToTray: false, autoOptimize: false };
+      const nonce = `zs-packaged-${process.pid}-${Date.now()}`;
       fs.writeFileSync(path.join(profile, 'profile.json'), JSON.stringify({
-        'zs.settings': settings, 'zs:settings': settings,
+        'zs.settings': settings, 'zs:settings': settings, 'zs:test-id': nonce,
       }));
       const { default: puppeteer } = await import('puppeteer-core');
       let browser, padded;
       try {
-        const args = [path.resolve('scripts/e2e/electron-entry.cjs')];
+        const args = packaged ? [`--user-data-dir=${profile}`] : [path.resolve('scripts/e2e/electron-entry.cjs')];
         if (dictation) {
           assert.ok(process.env.ZS_USER_DATA && process.env.ZS_DICTATION_WAV, 'не заданы модель и WAV');
           const modelRoot = path.resolve(process.env.ZS_USER_DATA, 'models');
           assert.ok(fs.existsSync(path.join(modelRoot, 'gigaam')), 'нет модели GigaAM');
-          // Junction не требует прав разработчика Windows. Данные лежат вне профиля.
-          fs.symlinkSync(modelRoot, path.join(profile, 'models'), 'junction');
+          // Junction не требует прав разработчика Windows. Сборке также нужны
+          // тестовые заглушки Whisper/VAD, чтобы не начинать фоновую загрузку.
+          if (packaged) {
+            const modelDir = path.join(profile, 'models');
+            fs.mkdirSync(modelDir);
+            fs.symlinkSync(path.join(modelRoot, 'gigaam'), path.join(modelDir, 'gigaam'), 'junction');
+            fs.writeFileSync(path.join(modelDir, 'ggml-tiny.bin'), 'not-a-real-model');
+            fs.writeFileSync(path.join(modelDir, 'ggml-silero-v6.2.0.bin'), 'not-a-real-model');
+          } else {
+            fs.symlinkSync(modelRoot, path.join(profile, 'models'), 'junction');
+          }
           const { readWav } = await import('./lib/engine-cli.mjs');
           const { createPaddedWav } = await import('./lib/virtual-mic-wav.mjs');
           const wav = readWav(process.env.ZS_DICTATION_WAV);
@@ -138,6 +150,8 @@ async function main() {
         const page = await pageTarget.page();
         await page.waitForSelector('.app-window', { timeout: 30000 });
         await page.waitForFunction(() => Boolean(window.zspeakly?.isElectron && window.zspeakly?.native?.insertText), { timeout: 15000 });
+        const seenNonce = await page.evaluate(() => window.zspeakly.store.getSync('zs:test-id'));
+        assert.equal(seenNonce, nonce, 'приложение не использует изолированный тестовый профиль');
         for (const mode of ['sendinput', 'clipboard']) {
           const text = `Electron ${mode}: Привет, café!`;
           const previous = `До вставки ${mode}`;
@@ -190,7 +204,7 @@ async function main() {
           assert.equal(inputStatus.last.ok, true, JSON.stringify(inputStatus.last));
           await sleep(1200);
           assert.equal((await command('readClipboard')).text, previous, 'буфер не восстановлен после диктовки');
-          console.log(`Виртуальная диктовка Windows + Electron IPC + GigaAM → WinForms: ${entry.text}; метод ${inputStatus.last.method}, буфер сохранён.`);
+          console.log(`Виртуальная диктовка Windows + ${packaged ? 'упакованное приложение' : 'Electron из исходников'} + GigaAM → WinForms: ${entry.text}; метод ${inputStatus.last.method}, буфер сохранён.`);
         }
       } finally {
         if (browser) await browser.close();

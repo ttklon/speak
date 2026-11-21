@@ -66,7 +66,6 @@
       "package.json",
       "!**/node_modules/onnxruntime-node/bin/napi-*/{darwin,linux}/**",
       "!**/node_modules/onnxruntime-web/**",
-      "!**/node_modules/onnxruntime-common/**",
       "!**/node_modules/onnxruntime-node/bin/**/*cuda*",
       "!**/node_modules/onnxruntime-node/bin/**/*tensorrt*",
       "!**/node_modules/onnxruntime-node/bin/**/*dml*"
