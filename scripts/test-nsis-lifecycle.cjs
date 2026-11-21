@@ -76,8 +76,9 @@ try {
     timeout: 240000, label: 'диктовка установленного приложения',
     env: { ZS_TEST_ELECTRON: '1', ZS_TEST_PACKAGED: '1', ZS_TEST_WINDOWS_DICTATION: '1', ZS_TEST_PACKAGED_EXE: exe },
   });
-  // Повтор установки той же версии проверяет обновление поверх установленного.
-  run(installer, ['/S', `/D=${installDir}`], { verbatim: true, label: 'повторная установка' });
+  // Node сам заключает /D= с пробелом в кавычки — так делает и автообновление.
+  // Повтор той же версии проверяет цитированный путь и обновление поверх установки.
+  run(installer, ['/S', `/D=${installDir}`], { label: 'повторная установка с кавычками' });
   assert.ok(fs.existsSync(exe), 'после повторной установки нет приложения');
   verifyProfile('повторная установка');
   removeInstallation();
@@ -86,6 +87,15 @@ try {
 } finally {
   if (installAttempted && !uninstalled && fs.existsSync(uninstall)) {
     try { removeInstallation(); } catch (error) { console.error(`Очистка установки не удалась: ${error.message}`); }
+  } else if (installAttempted && !uninstalled) {
+    // Старый установщик ошибочно обрезал каталог на первом пробеле.
+    // Удаляем только заведомо созданный в нашем временном корне экземпляр.
+    const truncatedDir = path.join(root, 'installed');
+    const truncatedUninstall = path.join(truncatedDir, 'Uninstall ZSpeakly.exe');
+    if (fs.existsSync(truncatedUninstall)) {
+      try { run(truncatedUninstall, ['/S', `_?=${truncatedDir}`], { verbatim: true, label: 'очистка обрезанного пути' }); }
+      catch (error) { console.error(`Очистка установки не удалась: ${error.message}`); }
+    }
   }
   // Удаляем только собственный точный маркер; неизвестные пользовательские
   // данные и нетронутый профиль не трогаем даже при ошибке.

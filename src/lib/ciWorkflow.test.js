@@ -27,6 +27,7 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('scripts/check-packaged-onnx.cjs');
     const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
     expect(pkg.build.files).not.toContain('!**/node_modules/onnxruntime-common/**');
+    expect(pkg.build.nsis.include).toBe('scripts/nsis/installer.nsh');
     expect(job).toContain('ZS_INPUT_INTERACTIVE: "1"');
     expect(job).toContain('ZS_TEST_ELECTRON: "1"');
     expect(job).toContain('ZS_TEST_WINDOWS_DICTATION: "1"');
