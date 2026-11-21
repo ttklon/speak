@@ -233,6 +233,8 @@ jobs:
 
       # Отдельный профиль, настоящий Electron/preload/IPC и системный буфер.
       # Микрофон по-прежнему виртуальный; Linux не имитирует Windows SendInput.
+      - name: Install Electron binary for Linux end-to-end test
+        run: env -u ELECTRON_SKIP_BINARY_DOWNLOAD node node_modules/electron/install.js
       - name: Build renderer for Electron end-to-end test
         run: npm run build
       - name: Electron virtual microphone and real ONNX
