@@ -593,6 +593,24 @@ jobs:
           message=$(tail -c 2500 windows-onnx.log | tr '\n' ' ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Windows GigaAM::$message"; exit "$code"; fi
           echo "::notice title=Windows GigaAM::$message"
+          mkdir -p "$root/human"
+          for pair in 'ru_0052.wav:2613b22b5e407b586db126cb00d8c3b43991f141' 'ru_0053.wav:0e7d2801fcaab8ae2aec72569960b29e60d2fd43' 'ru_0054.wav:75b784a142f4afc22c677495e7c6151a2de01ed0' 'transcripts.csv:7c2d66d383e23f90b555de3502d34299003b0ea8'; do
+            gh api "repos/GeorgeFedoseev/DeepSpeech/git/blobs/${pair#*:}" -H 'Accept: application/vnd.github.raw+json' > "$root/human/${pair%%:*}" || exit 1
+          done
+          (
+            cd "$root/human"
+            printf '%s\n' \
+              'd4168bb9f69c674a629ae5dbeaf59519da3886e77487586135841503c7c7f2f8  ru_0052.wav' \
+              'f43462661863974e68ddd2a07c83a6fbf61ecb088441aa745efddbb0b394ea6f  ru_0053.wav' \
+              '12bcf19b2629c0f751b276498ad4bc61f2bfde2b5877e9d765fbe8926b1333e2  ru_0054.wav' \
+              '196943702e7b2afa89ef257542188ecea5e644ad2b5e11e996a5e20ee171fb75  transcripts.csv' | sha256sum -c
+          ) || exit 1
+          node scripts/test-gigaam-quality.mjs "$(cygpath -m "$root/human")" > gigaam-quality.log 2>&1
+          code=$?
+          cat gigaam-quality.log
+          message=$(tail -c 5000 gigaam-quality.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Human speech GigaAM::$message"; exit "$code"; fi
+          echo "::notice title=Human speech GigaAM::$message"
           node scripts/test-wininput-window.cjs > electron-input.log 2>&1
           code=$?
           cat electron-input.log

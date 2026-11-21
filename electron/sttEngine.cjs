@@ -31,9 +31,11 @@ const MIN_SECONDS = 1;
  * @param {{ available: boolean, reason?: string }} [input.gigaam] состояние русской модели
  * @param {{ available: boolean, reason?: string }} [input.parakeet] состояние модели европейских языков
  * @param {number} [input.seconds] длительность записи
+ * @param {'auto'|'whisper'} [input.preference] явный выбор человека
  * @returns {{ engine: string, why: string }}
  */
-function chooseEngine({ language, gigaam, parakeet, seconds } = {}) {
+function chooseEngine({ language, gigaam, parakeet, seconds, preference } = {}) {
+  if (preference === 'whisper') return { engine: ENGINES.whisper, why: 'Whisper выбран вручную' };
   const lang = String(language || 'ru')
     .toLowerCase()
     .trim();

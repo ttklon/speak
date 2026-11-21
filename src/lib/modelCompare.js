@@ -92,7 +92,7 @@ export function describeComparison(rows = []) {
     if (best.score.matched.length > worst.score.matched.length) {
       return {
         winner: best.model,
-        summary: `«${name(best)}» услышала ${best.score.matched.length} из ${best.score.total} слов словаря против ${worst.score.matched.length} у «${name(worst)}».`,
+        summary: `«${name(best)}»: ${best.score.matched.length} из ${best.score.total} совпадений со словарём против ${worst.score.matched.length} у «${name(worst)}». Это не оценка точности: проверьте, что именно вы сказали.`,
         rows: scored,
       };
     }

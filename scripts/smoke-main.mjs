@@ -1969,6 +1969,32 @@ await check('отмена GigaAM и Parakeet не запускает Whisper, о
   }
 });
 
+await check('выбор Whisper не подменяется доступными языковыми моделями', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const giga = require(path.resolve('electron/gigaam.cjs'));
+  const para = require(path.resolve('electron/parakeet.cjs'));
+  const before = handlers.get('store:get')({}, 'zs:settings');
+  const pinned = handlers.get('store:get')({}, 'zs:modelPinned');
+  const saved = { ws: whisper.status, wt: whisper.transcribe, gs: giga.status, gt: giga.transcribe, ps: para.status, pt: para.transcribe };
+  let whisperCalls = 0, onnxCalls = 0;
+  whisper.status = () => ({ available: true });
+  whisper.transcribe = async () => { whisperCalls++; return { ok: true, text: 'тестовая речь', mode: 'cli' }; };
+  giga.status = () => ({ available: true }); para.status = () => ({ available: true });
+  giga.transcribe = para.transcribe = async () => { onnxCalls++; return { ok: true, text: 'языковая модель' }; };
+  try {
+    await handlers.get('store:set')({}, 'zs:settings', { ...before, recognitionEngine: 'whisper', keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false });
+    for (const lang of ['ru', 'en']) {
+      const result = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(1600), sampleRate: 16000, lang });
+      if (!result.ok || !result.text.includes('тестовая речь')) throw new Error(JSON.stringify(result));
+    }
+    if (whisperCalls !== 2 || onnxCalls !== 0) throw new Error(JSON.stringify({ whisperCalls, onnxCalls }));
+  } finally {
+    whisper.status = saved.ws; whisper.transcribe = saved.wt; giga.status = saved.gs; giga.transcribe = saved.gt; para.status = saved.ps; para.transcribe = saved.pt;
+    await handlers.get('store:set')({}, 'zs:settings', before);
+    await handlers.get('store:set')({}, 'zs:modelPinned', pinned);
+  }
+});
+
 await check('очередь диктовок: отмена и несколько итоговых проходов', async () => {
   const whisper = require(path.resolve('electron/whisper.cjs'));
   const giga = require(path.resolve('electron/gigaam.cjs'));
@@ -2752,6 +2778,8 @@ await check('движок выбирается политикой: русски�
   const ready = { available: true };
   const cases = [
     [{ language: 'ru', gigaam: ready, seconds: 4 }, 'gigaam'],
+    [{ language: 'ru', gigaam: ready, seconds: 4, preference: 'whisper' }, 'whisper'],
+    [{ language: 'en', gigaam: ready, parakeet: { available: true, languages: ['en'] }, seconds: 4, preference: 'whisper' }, 'whisper'],
     [{ language: 'ru-RU', gigaam: ready, seconds: 4 }, 'gigaam'],
     [{ language: 'en', gigaam: ready, seconds: 4 }, 'whisper'],
     [{ language: 'ru', gigaam: { available: false, reason: 'модель не скачана' }, seconds: 4 }, 'whisper'],

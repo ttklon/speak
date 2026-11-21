@@ -129,48 +129,33 @@ function compactSilence(
     }
     voiced[f] = peak > threshold;
   }
-  const minFrames = Math.round(minPauseMs / frameMs);
-  const keepFrames = Math.round(pauseMs / frameMs);
-  // собираем куски речи вместе с паузами, которые короче порога
-  const parts = [];
-  let runStart = 0;
-  let silence = 0;
-  let removed = 0;
-  for (let f = 0; f <= frames; f += 1) {
-    const isVoiced = f < frames ? voiced[f] : true; // край считаем речью: хвост не режем
-    if (isVoiced) {
-      if (silence >= minFrames && runStart < f - silence) {
-        // длинная пауза внутри записи: оставляем только keepFrames кадров
-        const speechEnd = f - silence;
-        parts.push([runStart, speechEnd]);
-        removed += (silence - keepFrames) * frameMs;
-        runStart = speechEnd + (silence - keepFrames);
-      }
-      silence = 0;
-    } else {
-      silence += 1;
-    }
-  }
-  if (!parts.length) return { pcm, removedMs: 0 };
-  parts.push([runStart, frames]);
-  // склеиваем: речевые куски + короткий «хвост» паузы между ними
+  const minFrames = Math.max(1, Math.round(minPauseMs / frameMs));
+  const keepFrames = Math.max(0, Math.round(pauseMs / frameMs));
   const pieces = [];
-  let prevEnd = 0;
-  for (const [from, to] of parts) {
-    const startSample = Math.max(0, from * frame);
-    const endSample = Math.min(total, to * frame);
-    if (startSample > prevEnd) {
-      // между кусками оставляем keepFrames тишины из исходника
-      const gapFrom = Math.max(prevEnd, startSample - keepFrames * frame);
-      if (gapFrom < startSample) {
-        pieces.push(pcm.subarray(gapFrom * 2, startSample * 2));
-      }
+  let lastSample = 0;
+  let silenceStart = -1;
+  let removedSamples = 0;
+  for (let f = 0; f < frames; f += 1) {
+    if (!voiced[f]) {
+      if (silenceStart < 0) silenceStart = f;
+      continue;
     }
-    if (endSample > startSample) pieces.push(pcm.subarray(startSample * 2, endSample * 2));
-    prevEnd = endSample;
+    if (silenceStart > 0 && f - silenceStart >= minFrames && f - silenceStart > keepFrames) {
+      // Удаляем середину паузы, сохраняя одинаковый запас у обоих слов.
+      // Краевые паузы и неполный последний кадр здесь никогда не обрезаются.
+      const keepBefore = Math.floor(keepFrames / 2);
+      const keepAfter = keepFrames - keepBefore;
+      const removeFrom = (silenceStart + keepBefore) * frame;
+      const removeTo = (f - keepAfter) * frame;
+      pieces.push(pcm.subarray(lastSample * 2, removeFrom * 2));
+      lastSample = removeTo;
+      removedSamples += removeTo - removeFrom;
+    }
+    silenceStart = -1;
   }
-  if (pieces.length < 2) return { pcm, removedMs: 0 };
-  return { pcm: Buffer.concat(pieces), removedMs: Math.max(0, removed) };
+  if (!removedSamples) return { pcm, removedMs: 0 };
+  pieces.push(pcm.subarray(lastSample * 2, total * 2));
+  return { pcm: Buffer.concat(pieces), removedMs: (removedSamples / sampleRate) * 1000 };
 }
 
 /**

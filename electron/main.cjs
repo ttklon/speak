@@ -1223,7 +1223,8 @@ function registerIpc() {
     try {
       if (key === 'zs:settings' && value && typeof value === 'object') {
         const prev = store.get('zs:settings') || {};
-        if (prev.whisperModel && value.whisperModel && prev.whisperModel !== value.whisperModel) {
+        if ((prev.whisperModel && value.whisperModel && prev.whisperModel !== value.whisperModel) ||
+            (prev.recognitionEngine !== 'whisper' && value.recognitionEngine === 'whisper')) {
           store.set('zs:modelPinned', true);
           // Модель выбрали руками — прошлое «мы сами спустились» больше не в счёт
           try {
@@ -1484,6 +1485,7 @@ function registerIpc() {
     const parakeetStatus = parakeet.status();
     const engineChoice = chooseEngine({
       language: lang,
+      preference: sttSettingsNow.recognitionEngine,
       gigaam: gigaamStatus,
       parakeet: { ...parakeetStatus, languages: parakeet.LANGUAGES },
       seconds: audio?.seconds || 0,

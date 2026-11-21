@@ -6811,21 +6811,23 @@ async function scenarioModelCompare(browser) {
   // не возвращаясь к списку моделей выше.
   const beforeApply = await page.evaluate(() => (window.__e2e.read('zs.settings') || {}).whisperModel || '');
   const applyClicked = await page.evaluate(() => {
-    const btn = document.querySelector('.compare__apply');
+    const buttons = document.querySelectorAll('.compare__apply');
+    const btn = buttons[buttons.length - 1];
     if (btn) btn.click();
     return Boolean(btn);
   });
   await sleep(500);
   const afterApply = await page.evaluate(() => ({
     model: (window.__e2e.read('zs.settings') || {}).whisperModel || '',
+    engine: (window.__e2e.read('zs.settings') || {}).recognitionEngine || 'auto',
     currentRows: document.querySelectorAll('.compare__current').length,
     toasts: [...document.querySelectorAll('.toast__title')].map((n) => n.innerText).join(' | '),
   }));
   record(
     'сценарии',
     'сравнение моделей: «Сделать основной» переключает диктовку на эту модель',
-    applyClicked && afterApply.model && afterApply.model !== beforeApply && afterApply.currentRows === 1,
-    `было «${beforeApply}», стало «${afterApply.model}»`,
+    applyClicked && afterApply.model && afterApply.model !== beforeApply && afterApply.currentRows === 1 && afterApply.engine === 'whisper',
+    `было «${beforeApply}», стало «${afterApply.model}», движок ${afterApply.engine}`,
   );
   record(
     'сценарии',
@@ -6833,6 +6835,16 @@ async function scenarioModelCompare(browser) {
     /Модель стала основной/.test(afterApply.toasts),
     afterApply.toasts || 'тоста нет',
   );
+
+  const switched = await page.evaluate(() => {
+    const toggle = document.querySelector('[role="switch"][aria-label="Использовать только Whisper"]');
+    if (!toggle || toggle.getAttribute('aria-checked') !== 'true') return false;
+    toggle.click();
+    return true;
+  });
+  await sleep(500);
+  const engineAfterToggle = await page.evaluate(() => (window.__e2e.read('zs.settings') || {}).recognitionEngine);
+  record('сценарии', 'сравнение моделей: можно вернуть автоматический выбор', switched && engineAfterToggle === 'auto', `движок: ${engineAfterToggle}`);
 
   const errors = takeErrors(page);
   record('сценарии', 'сравнение моделей: без ошибок консоли', errors.length === 0, errors[0] || '');

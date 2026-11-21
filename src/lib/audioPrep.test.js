@@ -133,6 +133,23 @@ describe('compactSilence', () => {
     expect(seconds).toBeGreaterThan(2.2); // речь и запас на месте
   });
 
+  it('не дублирует паузу, сохраняет неполный последний кадр и точно сообщает удалённую длительность', () => {
+    const input = Buffer.concat([speechWithPauses([1000, 3000, 1000]), pcmFrom(() => 1234, 0.007)]);
+    const { pcm, removedMs } = compactSilence(input);
+    expect(removedMs).toBe(2640); // 3000 мс минус 18 кадров по 20 мс
+    expect(input.length - pcm.length).toBe(removedMs * RATE * 2 / 1000);
+    expect(pcm.subarray(-224).equals(input.subarray(-224))).toBe(true);
+    expect(pcm.subarray(0, RATE * 2).equals(input.subarray(0, RATE * 2))).toBe(true);
+  });
+
+  it('не сжимает ведущую или хвостовую тишину', () => {
+    const speech = speechWithPauses([1000]);
+    const input = Buffer.concat([Buffer.alloc(RATE * 2), speech, Buffer.alloc(RATE * 2)]);
+    const result = compactSilence(input);
+    expect(result.removedMs).toBe(0);
+    expect(result.pcm.equals(input)).toBe(true);
+  });
+
   it('короткие паузы между словами не трогает', () => {
     const input = speechWithPauses([400, 200, 400, 200, 400]);
     const { pcm, removedMs } = compactSilence(input);

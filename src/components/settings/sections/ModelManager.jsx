@@ -182,6 +182,7 @@ export default function ModelManager() {
     }
     // статус перечитываем в любом случае — даже если ответ потерялся
     await refresh();
+    if (res?.ok) updateSettings({ whisperModel: id, recognitionEngine: 'whisper' });
     if (!res?.ok) {
       setBusy((current) => (current === id ? null : current));
       if (wasCanceled(res)) {
@@ -289,7 +290,7 @@ export default function ModelManager() {
       res = { ok: false, reason: String(err?.message || err) };
     }
     if (res?.ok) {
-      updateSettings({ whisperModel: res.id });
+      updateSettings({ whisperModel: res.id, recognitionEngine: 'whisper' });
       push({
         title: 'Модель подключена',
         description: `ggml-${res.id}.bin · ${res.sizeMb} МБ`,
@@ -418,7 +419,7 @@ export default function ModelManager() {
   // её можно сразу поставить основной, не ища переключатель выше.
   const applyCompared = (row) => {
     if (!row?.model) return;
-    updateSettings({ whisperModel: row.model });
+    updateSettings({ whisperModel: row.model, recognitionEngine: 'whisper' });
     push({
       title: 'Модель стала основной',
       description: `Диктовка будет считать на «${tierForModel(row.model)?.label || row.model}».`,
@@ -452,7 +453,7 @@ export default function ModelManager() {
     }
     setCompare({ stage: 'done', rows: res.rows, summary: res.summary, winner: res.winner });
     push({
-      title: res.winner ? `Точнее: ${tierForModel(res.winner)?.label || res.winner}` : 'Сравнение готово',
+      title: res.winner ? `Больше совпадений со словарём: ${tierForModel(res.winner)?.label || res.winner}` : 'Сравнение готово',
       description: res.summary,
       tone: 'success',
       ttl: 12000,
@@ -470,10 +471,11 @@ export default function ModelManager() {
             Скачиваются сюда же, один раз — дальше всё работает без интернета.
           </span>
         ) : null}
-        Сейчас работает режим{' '}
+        Выбранная модель Whisper: {' '}
         <strong>«{tierForModel(status?.active || settings.whisperModel).label.toLowerCase()}»</strong>.
-        Менять его обычно не нужно — приложение выбрало его под этот компьютер и само переключится,
-        если диктовка окажется медленной.
+        {settings.recognitionEngine === 'whisper'
+          ? ' Для диктовки выбран Whisper.'
+          : ' В автоматическом режиме при наличии подходящей языковой модели диктовка может использовать её вместо Whisper.'}
         {tierForModel(status?.active || settings.whisperModel).id === 'fast' ? (
           <>
             {' '}
@@ -509,6 +511,22 @@ export default function ModelManager() {
       </div>
 
 
+      <div className="setting-row">
+        <div className="grow">
+          <div className="setting-row__label">Использовать только Whisper</div>
+          <div className="setting-row__hint">
+            Включите, чтобы попробовать выбранную модель Whisper вместо GigaAM или Parakeet,
+            например при смешанной речи. Выключите для автоматического выбора по языку.
+            Для Whisper нужны скачанные движок и модель; результат зависит от голоса и микрофона.
+          </div>
+        </div>
+        <Toggle
+          label="Использовать только Whisper"
+          checked={settings.recognitionEngine === 'whisper'}
+          onChange={(enabled) => updateSettings({ recognitionEngine: enabled ? 'whisper' : 'auto' })}
+        />
+      </div>
+
       {measured ? (
         <div className="model-measure">
           На этом компьютере: {measured.spoken.toFixed(1)} с речи → {measured.count.toFixed(1)} с счёта
@@ -531,7 +549,7 @@ export default function ModelManager() {
                 // выбор режима без скачанного файла оставил бы диктовку без
                 // движка, поэтому «не скачано» = «скачать и включить»
                 if (available) {
-                  updateSettings({ whisperModel: m.id });
+                  updateSettings({ whisperModel: m.id, recognitionEngine: 'whisper' });
                   push({
                     title: `Режим «${tier?.label.toLowerCase() || m.label}»`,
                     description: `${m.size} · ${m.speedText} · точность ${m.quality}`,
@@ -591,22 +609,23 @@ export default function ModelManager() {
 
       {/* Русский язык — отдельный движок, а не «ещё один режим»: у него своя
           модель, свой размер и своё правило включения. */}
-      <div className={`model-card model-card--russian ${status?.russian?.available ? 'is-active' : ''}`}>
+      <div className={`model-card model-card--russian ${status?.russian?.available && settings.recognitionEngine !== 'whisper' && String(settings.language || 'ru').startsWith('ru') ? 'is-active' : ''}`}>
         <div className="grow" style={{ textAlign: 'left' }}>
           <div className="model-card__name">
             Русский язык
             {status?.russian?.available ? <span className="model-badge">скачано</span> : null}
           </div>
           <div className="model-card__meta">
-            {status?.russian?.bytes ? `${Math.round(status.russian.bytes / 1024 / 1024)} МБ` : '226 МБ'} · точнее
-            понимает русские слова · знаки препинания ставит сама
+            {status?.russian?.bytes ? `${Math.round(status.russian.bytes / 1024 / 1024)} МБ` : '226 МБ'} · русская речь · знаки препинания
           </div>
           <div className="model-card__desc">
             {status?.russian?.available
-              ? 'Включается сама, когда вы диктуете по-русски. Другие языки остаются на прежнем движке.'
+              ? settings.recognitionEngine === 'whisper'
+                ? 'Скачана, но сейчас выбран Whisper. Выключите «Использовать только Whisper» для автоматического выбора.'
+                : 'В автоматическом режиме используется для русского языка. Смешанную речь и другие языки может распознавать хуже.'
               : status?.russian?.missing?.length && status.russian.reason.includes('не полностью')
                 ? 'Прошлое скачивание не закончилось: готовые файлы сохраняются, незавершённый скачается заново.'
-                : 'Скачать один раз: 226 МБ вместо гигабайтов, а русские слова перестанут путаться — на слабом компьютере это самый заметный шаг к точности.'}
+                : 'Скачать один раз: 226 МБ. Можно сравнить её с Whisper на своей речи; ни одна модель не гарантирует точный результат.'}
           </div>
         </div>
         {status?.russian?.available ? (
@@ -627,7 +646,7 @@ export default function ModelManager() {
       {/* Европейские языки — тоже отдельный движок: своя модель, свой размер
           и своё правило включения (английский, немецкий, французский,
           испанский, украинский). Русский сюда не входит. */}
-      <div className={`model-card model-card--european ${status?.european?.available ? 'is-active' : ''}`}>
+      <div className={`model-card model-card--european ${status?.european?.available && settings.recognitionEngine !== 'whisper' && (status.european.languages || []).includes(String(settings.language || '').split(/[-_]/)[0]) ? 'is-active' : ''}`}>
         <div className="grow" style={{ textAlign: 'left' }}>
           <div className="model-card__name">
             Европейские языки
@@ -639,7 +658,9 @@ export default function ModelManager() {
           </div>
           <div className="model-card__desc">
             {status?.european?.available
-              ? 'Включается сама, когда вы диктуете по-английски, по-немецки, по-французски, по-испански или по-украински. Русский остаётся на русской модели, остальные языки — на прежнем движке.'
+              ? settings.recognitionEngine === 'whisper'
+                ? 'Скачана, но сейчас выбран Whisper. Выключите «Использовать только Whisper» для автоматического выбора.'
+                : 'В автоматическом режиме используется для поддерживаемых европейских языков. Русский остаётся на русской модели, остальные языки — на Whisper.'
               : status?.european?.missing?.length && status.european.reason.includes('не полностью')
                 ? 'Прошлое скачивание не закончилось: готовые файлы сохраняются, незавершённый скачается заново.'
                 : 'Скачать один раз: английский, немецкий, французский, испанский и украинский распознаются быстрее и точнее. Китайский, японский, турецкий и казахский эта модель не знает — они остаются на прежнем движке.'}
@@ -707,7 +728,7 @@ export default function ModelManager() {
                   {row.ok ? `${(row.ms / 1000).toFixed(1).replace('.', ',')} с` : '—'}
                   {row.ok && row.score ? ` · словарь: ${row.score.matched.length} из ${row.score.total}` : ''}
                 </span>
-                {row.ok && row.model !== settings.whisperModel ? (
+                {row.ok && (row.model !== settings.whisperModel || settings.recognitionEngine !== 'whisper') ? (
                   <Button variant="ghost" size="sm" className="compare__apply" onClick={() => applyCompared(row)}>
                     Сделать основной
                   </Button>
@@ -733,7 +754,7 @@ export default function ModelManager() {
                 variant="ghost"
                 size="sm"
                 onClick={async () => {
-                  updateSettings({ whisperModel: fit.switchTo });
+                  updateSettings({ whisperModel: fit.switchTo, recognitionEngine: 'whisper' });
                   const fresh = await bridge?.modelsWarm?.({ model: fit.switchTo }).catch(() => null);
                   push({
                     title: `Модель переключена на «${fit.recommended?.label || fit.switchTo}»`,
