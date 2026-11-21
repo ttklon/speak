@@ -116,10 +116,12 @@ try {
       }
       $signature = (($items | ForEach-Object { "$($_.Id):$($_.Class):$($_.Text):$($_.Enabled)" }) -join '|')
       $next = $items | Where-Object { $_.Class -eq 'Button' -and $_.Id -eq 1 -and $_.Enabled } | Select-Object -First 1
-      # NSIS иногда показывает заголовок/кнопку раньше, чем дочернее Edit.
-      # Не жмём Install и не покидаем страницу каталога до проверки пути.
-      $locationTitle = $items | Where-Object { $_.Class -eq 'Static' -and $_.Text -match 'Choose Install Location|Выбор места установки' } | Select-Object -First 1
-      $installButton = $null -ne $next -and $next.Text -match 'Install|Установ'
+      # The page may appear before its child Edit is available. Never click
+      # Install or leave the directory page until the intended path is verified.
+      # These installers use the English wizard; keep this file ASCII for
+      # Windows PowerShell 5.1, which otherwise parses UTF-8 without BOM as ANSI.
+      $locationTitle = $items | Where-Object { $_.Class -eq 'Static' -and $_.Text -match 'Choose Install Location' } | Select-Object -First 1
+      $installButton = $null -ne $next -and $next.Text -match 'Install'
       $mustWait = -not $directorySeen -and ($null -ne $locationTitle -or $installButton)
       if ($mustWait) {
         if ($waitingForDirectory -eq [DateTime]::MinValue) {
