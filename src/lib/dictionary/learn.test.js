@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { learnFromEdit, distance, normalize, bumpUsage } from './learn.js';
+import { learnFromEdit, distance, normalize } from './learn.js';
 
 describe('обучение словаря по правкам', () => {
   it('нормализует ё и пунктуацию', () => {
@@ -23,9 +23,4 @@ describe('обучение словаря по правкам', () => {
     expect(learnFromEdit('привет', 'совершенно другой текст')).toEqual([]);
   });
 
-  it('увеличивает счётчик использования', () => {
-    const entries = [{ id: 'a', hits: 1 }, { id: 'b' }];
-    expect(bumpUsage(entries, 'a')[0].hits).toBe(2);
-    expect(bumpUsage(entries, 'b')[1].hits).toBe(1);
-  });
 });

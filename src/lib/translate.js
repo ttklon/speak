@@ -306,6 +306,9 @@ export function offlineTranslate(text, from = 'ru', to = 'en') {
   // пунктуация и пробелы
   out = out.replace(/\s+([,.;:!?])/g, '$1').replace(/([,.;:!?])(?=[^\s\d])/g, '$1 ');
   out = out.replace(/\s{2,}/g, ' ').trim();
+  // Начало каждого предложения — с большой буквы: после подстановки фраз
+  // («как дела» → «how are you») она терялась посреди строки.
+  out = out.replace(/([.!?]\s+)(\p{Ll})/gu, (m, before, letter) => before + letter.toUpperCase());
   if (out) out = out[0].toUpperCase() + out.slice(1);
 
   // Сколько слов реально переведено, а сколько осталось как есть

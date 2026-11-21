@@ -1,5 +1,7 @@
 /** Хелперы: форматирование, склонения, работа с клавишами и текстом. */
 
+import { termVariants } from './dictionary/aliases.js';
+
 export function plural(n, one, few, many) {
   const abs = Math.abs(n) % 100;
   const n1 = abs % 10;
@@ -16,6 +18,9 @@ export function pad2(n) {
 /** 18:14 — как в списке «Недавние» */
 export function timeHM(value) {
   const d = value instanceof Date ? value : new Date(value);
+  // Старые записи профиля могли прийти без времени: раньше на карточке
+  // появлялось «NaN:NaN» — выглядело как поломка, а не как «время неизвестно».
+  if (!d || Number.isNaN(d.getTime())) return '—';
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
@@ -27,32 +32,13 @@ export function dayLabel(value, now = new Date()) {
   const diff = Math.round((b - a) / 86400000);
   if (diff === 0) return 'Сегодня';
   if (diff === 1) return 'Вчера';
-  if (diff < 7) return `${plural(diff, 'день', 'дня', 'дней')} назад`;
+  if (diff < 7) return `${diff} ${plural(diff, 'день', 'дня', 'дней')} назад`;
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
-}
-
-export function relativeTime(value, now = new Date()) {
-  const d = value instanceof Date ? value : new Date(value);
-  const mins = Math.max(0, Math.round((now - d) / 60000));
-  if (mins < 1) return 'только что';
-  if (mins < 60) return `${mins} ${plural(mins, 'минуту', 'минуты', 'минут')} назад`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} ${plural(hours, 'час', 'часа', 'часов')} назад`;
-  const days = Math.round(hours / 24);
-  return `${days} ${plural(days, 'день', 'дня', 'дней')} назад`;
 }
 
 export function words(text = '') {
   const matches = String(text).match(/[\p{L}\p{N}’'-]+/gu);
   return matches ? matches.length : 0;
-}
-
-export function formatMinutes(totalMinutes) {
-  const m = Math.max(0, Math.round(totalMinutes));
-  if (m < 60) return `${m} мин`;
-  const h = Math.floor(m / 60);
-  const rest = m % 60;
-  return rest ? `${h} ч ${rest} мин` : `${h} ч`;
 }
 
 export function formatK(n) {
@@ -66,10 +52,6 @@ export function formatSeconds(ms) {
   return `${s.toFixed(1)} с`;
 }
 
-export function clamp(n, min, max) {
-  return Math.min(max, Math.max(min, n));
-}
-
 export function uid(prefix = 'id') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -81,27 +63,6 @@ export function truncate(text = '', max = 120) {
 }
 
 /** Подсветка найденных фрагментов: "Привет, как дела?" → результаты по слову. */
-export function normalizeQuery(q = '') {
-  return q
-    .toLowerCase()
-    .replace(/[«»"'`]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-export function searchScore(text = '', query = '') {
-  const q = normalizeQuery(query);
-  if (!q) return 0;
-  const t = normalizeQuery(text);
-  if (!t) return 0;
-  if (t.includes(q)) return 100 - Math.min(50, t.indexOf(q) / 20);
-  const tokens = q.split(' ').filter((w) => w.length > 2);
-  if (!tokens.length) return 0;
-  const hit = tokens.filter((w) => t.includes(w)).length;
-  return (hit / tokens.length) * 60;
-}
-
-/** Keys: ['Ctrl','Alt','Space'] → «Ctrl + Alt + Space» */
 export function keysLabel(keys = []) {
   return keys.join(' + ');
 }
@@ -197,16 +158,18 @@ export function applyDictionary(text, entries = []) {
     if (!entry || !entry.word) continue;
     const word = entry.word.trim();
     if (!word) continue;
-    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const variants = [escaped];
-    if (entry.pronunciation) {
-      variants.push(entry.pronunciation.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    }
+    // Написания: сам термин, произношение человека и известные пары
+    // («зум» → Zoom, «телеграм» → Telegram). Без последнего словарь работал
+    // только на бумаге: движок пишет кириллицей, а в словаре латиница.
+    const variants = termVariants(entry).map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (!variants.length) continue;
     const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${variants.join('|')})(?=$|[^\\p{L}\\p{N}])`, 'giu');
-    out = out.replace(re, (m, pre, _hit, offset) => {
-      // сохраняем заглавную букву в начале предложения
-      const startsUpper = /[A-ZА-ЯЁ]/.test(_hit[0]);
-      const replacement = startsUpper ? word[0].toUpperCase() + word.slice(1) : word;
+    out = out.replace(re, (m, pre, hit, offset) => {
+      // Заглавную поднимаем только в начале предложения: иначе «созвонились в
+      // Zoom» превращалось в «созвонились в Зум» — заглавная посреди фразы.
+      const startsSentence = offset === 0 || /[.!?…]\s*$/.test(out.slice(0, offset));
+      const capitalizedInText = /[A-ZА-ЯЁ]/.test(hit[0]);
+      const replacement = startsSentence && capitalizedInText ? word[0].toUpperCase() + word.slice(1) : word;
       return `${pre}${replacement}`;
     });
   }
@@ -225,10 +188,6 @@ export function postProcess(text = '', { capitalize = true } = {}) {
   return out;
 }
 
-export function escapeRegExp(s = '') {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /** Цвет по типу буфера/элемента */
 export function kindLabel(kind) {
   return (
@@ -237,7 +196,8 @@ export function kindLabel(kind) {
       format: 'ФОРМАТ',
       image: 'ИЗОБРАЖЕНИЕ',
       file: 'ФАЙЛ',
-      password: 'ЗАШИФРОВАНО',
+      password: 'ПАРОЛЬ',
+      note: 'ЗАМЕТКА',
       link: 'ССЫЛКА',
     }[kind] || 'ТЕКСТ'
   );

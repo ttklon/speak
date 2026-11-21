@@ -6,10 +6,13 @@ import DictionaryPage from './pages/DictionaryPage.jsx';
 import HotkeysPage from './pages/HotkeysPage.jsx';
 import ClipboardPage from './pages/ClipboardPage.jsx';
 import SettingsModal from './components/settings/SettingsModal.jsx';
-import ProfileModal from './components/modals/ProfileModal.jsx';
+import CommandPalette from './components/layout/CommandPalette.jsx';
 import DictationHUD from './components/ui/DictationHUD.jsx';
 import OnboardingModal from './components/modals/OnboardingModal.jsx';
 import { useRoute, navigate, replace } from './lib/router.js';
+import { keysLabel } from './lib/utils.js';
+import { NAV } from './lib/config.js';
+import { resolveSection } from './lib/settingsSections.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
 
@@ -25,8 +28,14 @@ export default function App() {
   const { settings, updateSettings, presets, instructions, voiceHotkeys } = useAppData();
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState('account');
-  const [profileOpen, setProfileOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState('dictation');
+  // Палитра команд: одна строка на всё приложение (Ctrl+K).
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // «НОВОЕ» у буфера — не вечная наклейка: после первого захода гаснет
+  useEffect(() => {
+    if (route.page === 'clipboard' && !settings.seenClipboard) updateSettings({ seenClipboard: true });
+  }, [route.page, settings.seenClipboard, updateSettings]);
 
   const prevPage = useRef(route.page);
   const openedFromHash = useRef(false);
@@ -36,7 +45,7 @@ export default function App() {
     // пока не спросили имя — не перекрываем приветствие настройками
     if (route.page === 'settings' && settings.onboarded) {
       openedFromHash.current = true;
-      setSettingsSection(route.params.section || 'account');
+      setSettingsSection(resolveSection(route.params.section || 'dictation'));
       setSettingsOpen(true);
       // replace, а не navigate: иначе hashchange закроет только что открытые настройки
       replace(route.params.from || 'home');
@@ -51,11 +60,12 @@ export default function App() {
       openedFromHash.current = false;
       return;
     }
-    setProfileOpen(false);
     setSettingsOpen(false);
   }, [route.page]);
 
-  // Ctrl+, — настройки, Ctrl+K — поиск по буферу
+  // Ctrl+, — настройки, Ctrl+K — поиск и команды (палитра).
+  // Раньше Ctrl+K открывал поиск только по буферу: сочетание обещало «поиск по
+  // всему», а вело в один раздел. Поиск по буферу остался внутри страницы.
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
@@ -64,11 +74,25 @@ export default function App() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        navigate('clipboard');
-        setTimeout(() => {
-          const input = document.querySelector('.clip-toolbar .search-input input');
-          input?.focus();
-        }, 90);
+        setPaletteOpen((open) => !open);
+      }
+      // Ctrl+/ — та же палитра: привычка из редакторов, где так ищут команды
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+      // Ctrl+1…4 — страницы по порядку в боковой панели. Не срабатывает,
+      // когда человек печатает: иначе цифра не попала бы в поле.
+      if ((e.ctrlKey || e.metaKey) && /^[1-4]$/.test(e.key)) {
+        const target = document.activeElement;
+        const typing =
+          target &&
+          (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        if (typing) return;
+        const page = NAV[Number(e.key) - 1];
+        if (!page) return;
+        e.preventDefault();
+        navigate(page.id);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -76,12 +100,13 @@ export default function App() {
   }, []);
 
   // Команды из трея / меню Electron
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
+  // Тема: тёмная / светлая / как в системе. Значение уходит в data-theme,
+  // палитра живёт в base.css (светлая там уже была, но выбрать её было нельзя).
   useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
+    const theme = ['light', 'system', 'dark'].includes(settings.theme) ? settings.theme : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
+    document.documentElement.style.colorScheme =
+      theme === 'system' ? 'light dark' : theme === 'light' ? 'light' : 'dark';
   }, [settings.theme]);
 
   // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
@@ -93,22 +118,24 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
+  // Место в localStorage кончается — раньше запись тихо терялась. Говорим
+  // об этом один раз в 30 секунд, чтобы не заваливать тостами.
   useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
-  }, [settings.theme]);
-
-  // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
-  // отдельно. Раньше это происходило только при ручном щелчке тумблера —
-  // после переезда профиля или переустановки автозапуск молча терялся.
-  useEffect(() => {
-    const bridge = window.zspeakly?.native;
-    if (!bridge?.setAutoLaunch) return;
-    bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
-  }, [settings.autoLaunch]);
+    let lastAt = 0;
+    const onStorageError = (event) => {
+      const now = Date.now();
+      if (now - lastAt < 30_000) return;
+      lastAt = now;
+      push({
+        title: 'Не удалось сохранить данные',
+        description: 'Место в браузере закончилось. Удалите крупные записи буфера или снимки.',
+        tone: 'warn',
+        ttl: 10_000,
+      });
+    };
+    window.addEventListener('zs:storage-error', onStorageError);
+    return () => window.removeEventListener('zs:storage-error', onStorageError);
+  }, [push]);
 
   // AI-инструкции должны срабатывать в любом приложении и на любой странице,
   // а не только когда открыт раздел «Горячие клавиши». Регистрируем их здесь,
@@ -148,25 +175,30 @@ export default function App() {
       }
       if (command === 'clipboard') navigate('clipboard');
       if (command === 'home') navigate('home');
-      if (command === 'mobile') {
-        setSettingsSection('account');
-        setSettingsOpen(true);
-      }
       if (command === 'about') {
-        setSettingsSection('about');
+        setSettingsSection('app');
         setSettingsOpen(true);
       }
     });
   }, []);
 
-  // Сочетание занято другой программой — сказать вслух, а не молчать
+  // Сочетание занято — сказать вслух, а не молчать. Слушаем на уровне
+  // приложения: конфликт может всплыть при запуске, когда раздел «Горячие
+  // клавиши» ещё не открывали, и раньше сообщение просто терялось.
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onHotkeyConflict) return undefined;
     return bridge.onHotkeyConflict((payload) => {
+      const keys = keysLabel(payload?.keys || []);
+      push({
+        title: payload?.id === 'dictation' ? 'Сочетание диктовки занято' : 'Сочетание занято',
+        description: `${keys || 'Сочетание'} — ${payload?.reason || 'уже используется другой программой'}. Выберите другое в «Горячих клавишах».`,
+        tone: 'warn',
+        ttl: 10000,
+      });
       window.dispatchEvent(new CustomEvent('zs:hotkey-conflict', { detail: payload }));
     });
-  }, []);
+  }, [push]);
 
   // Новые элементы буфера из main-процесса
   useEffect(() => {
@@ -209,24 +241,19 @@ export default function App() {
     });
   }, [push]);
 
-  const openPresets = useCallback(() => {
-    navigate('hotkeys');
-    setTimeout(() => {
-      const tab = Array.from(document.querySelectorAll('.hk-toolbar .tabs__tab')).find((b) =>
-        /Рекомендуемые/i.test(b.textContent || ''),
-      );
-      tab?.click();
-    }, 120);
-  }, []);
-  const openProfile = useCallback(() => setProfileOpen(true), []);
-  const openSettings = useCallback((section = 'account') => {
+  // Раньше вкладку «Рекомендуемые» искали в DOM через setTimeout: не успела
+  // отрисоваться — человек оказывался на «Голосовых сочетаниях» и решал, что
+  // кнопка не работает. Теперь вкладка едет в адресе страницы.
+  const openPresets = useCallback(() => navigate('hotkeys', { tab: 'recommended' }), []);
+  const openSettings = useCallback((section = 'dictation') => {
     setSettingsSection(section);
     setSettingsOpen(true);
   }, []);
+  // Раньше здесь писалась «дата последнего захода в настройки», которую никто
+  // не читал: каждая правка настроек сохраняла профиль на диск без пользы.
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    updateSettings({ lastSettingsVisit: Date.now() });
-  }, [updateSettings]);
+  }, []);
 
   const content = useMemo(() => {
     if (page(route) === 'home') return <HomePage onOpenSettings={openSettings} />;
@@ -241,9 +268,9 @@ export default function App() {
         <div className="app-body">
           <Sidebar
             page={page(route)}
-            onOpenSettings={() => openSettings('account')}
-            onOpenProfile={openProfile}
+            onOpenSettings={() => openSettings('app')}
             onOpenPresets={openPresets}
+            onOpenCommands={() => setPaletteOpen(true)}
           />
           <main className="content">{content}</main>
         </div>
@@ -251,15 +278,9 @@ export default function App() {
 
       <DictationHUD />
 
-      <ProfileModal
-        open={profileOpen}
-        onClose={() => setProfileOpen(false)}
-        onOpenSettings={() => {
-          setProfileOpen(false);
-          openSettings('account');
-        }}
-      />
       <OnboardingModal />
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 
       <SettingsModal
         open={settingsOpen}

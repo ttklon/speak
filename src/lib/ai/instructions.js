@@ -31,15 +31,20 @@ function guessOp(prompt = '') {
   return 'clean';
 }
 
-function offlineRun(op, text, settings = {}) {
+async function offlineRun(op, text, settings = {}) {
   switch (op) {
     case 'translate': {
-      const result = translate(text, {
+      // translate асинхронный: без await здесь возвращался Promise, и проверка
+      // «строка ли это» в runInstruction отбрасывала результат — перевод офлайн
+      // не работал вовсе и выглядел как пустой ответ
+      const result = await translate(text, {
         from: settings.language || 'ru',
         to: settings.translateTarget || 'en',
         settings,
       });
-      return result?.text ?? result;
+      // Офлайн-словарь знает не все слова: вместе с текстом отдаём честную
+      // пометку, чтобы интерфейс не выдавал частичный перевод за полный.
+      return { text: String(result?.text ?? ''), note: String(result?.note || '') };
     }
     case 'formal':
       return OPS.formal(text);
@@ -62,7 +67,8 @@ function offlineRun(op, text, settings = {}) {
  * @param {object} instruction  {id, title, prompt, kind?}
  * @param {string} text         выделенный текст
  * @param {object} settings     настройки приложения (LLM, язык)
- * @returns {Promise<string>}   переписанный текст
+ * @returns {Promise<string|{text: string, note: string}>} переписанный текст;
+ *   объект — когда движок хочет предупредить (например, частичный перевод)
  */
 export async function runInstruction(instruction, text, settings = {}) {
   const source = String(text || '').trim();
@@ -80,7 +86,10 @@ export async function runInstruction(instruction, text, settings = {}) {
     if (llm) return llm;
   }
 
-  const out = offlineRun(op, source, settings);
+  const out = await offlineRun(op, source, settings);
+  if (out && typeof out === 'object') {
+    return { text: String(out.text || ''), note: String(out.note || '') };
+  }
   return typeof out === 'string' ? out : '';
 }
 

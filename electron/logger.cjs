@@ -3,7 +3,8 @@
  *
  * Идея: приложение офлайн, но ошибки надо как-то видеть. Поэтому есть
  * обычный локальный журнал (файл + кольцевой буфер в памяти) и НЕОБЯЗАТЕЛЬНАЯ
- * отправка в приёмник — по умолчанию включена, выключается одним тумблером.
+ * отправка в приёмник: по умолчанию адреса нет и наружу ничего не уходит;
+ * отправка включается адресом приёмника и выключается тумблером.
  *
  * Что уходит наружу:
  *  • уровень и текст события (сообщение об ошибке, стек),
@@ -193,6 +194,13 @@ async function send({ force = false, filter = null } = {}) {
  * @param {boolean} opts.enabled       включать ли отправку
  * @param {string} opts.endpoint       переопределить приёмник ('' = никогда)
  */
+/** Как в отчёте назвать живую расшифровку: значение может быть и «сама». */
+function liveDraftLabel(value) {
+  if (value === true || value === 'включена вручную') return 'включена вручную';
+  if (value === false || value === 'выключена вручную') return 'выключена вручную';
+  return 'решает приложение';
+}
+
 function init(opts = {}) {
   if (opts.dir) filePath = path.join(opts.dir, 'logs', 'zspeakly.log');
   if (opts.endpoint !== undefined) endpoint = opts.endpoint || '';
@@ -339,7 +347,7 @@ const logger = {
    * Готовый текстовый отчёт для файла или буфера: журнал + окружение.
    * Именно это человек прикладывает, когда что-то «не работает».
    */
-  report({ limit = 200 } = {}) {
+  report({ limit = 200, settings = null, system = null } = {}) {
     const lines = [];
     const c = context || {};
     lines.push('ZSpeakly — отчёт диагностики');
@@ -350,6 +358,78 @@ const logger = {
     lines.push(`отправка на сервер: ${enabled && endpoint ? 'включена' : 'выключена'}`);
     lines.push(`идентификатор установки: ${installId}`);
     lines.push(`журнал: ${filePath || '—'}`);
+    // Настройки, которые объясняют поведение диктовки. Без самого текста,
+    // буфера и слов словаря — только то, что нужно для разбора.
+    const st = settings && typeof settings === 'object' ? settings : null;
+    if (st) {
+      lines.push('');
+      lines.push('── настройки диктовки ──');
+      lines.push(`модель: ${st.model || '?'}${st.keepModelLoaded ? ' (держится в памяти)' : ''}`);
+      lines.push(`язык: ${st.language || '?'}`);
+      lines.push(`живая расшифровка: ${liveDraftLabel(st.liveWhisper)}`);
+      lines.push(`горячий микрофон: ${st.micPreroll ? 'включён' : 'выключен'}`);
+      lines.push(`вставка: ${st.insertMethod === 'sendinput' ? 'SendInput без буфера' : 'буфер обмена + Ctrl+V'}`);
+      lines.push(`микрофон: ${st.customMic ? 'выбран пользователем' : 'системный'}`);
+      lines.push(`слов в словаре: ${Number(st.dictionaryWords) || 0}`);
+    }
+    // Проверенные факты о машине: по отчёту видно, работает ли сочетание,
+    // есть ли движок и модель, каким способом вставляется текст.
+    const sys = system && typeof system === 'object' ? system : null;
+    if (sys) {
+      lines.push('');
+      lines.push('── система и железо ──');
+      lines.push(`процессор: ${sys.cpus || '?'} ядер · память: ${sys.ramGb || '?'} ГБ`);
+      lines.push(`движок на диске: ${sys.engine || '?'} · VAD: ${sys.vad ? 'есть' : 'нет'}`);
+      lines.push(
+        `модель: ${sys.model || '?'}${sys.modelDownloaded ? ' (скачана)' : ' (нет на диске)'}`,
+      );
+      lines.push(
+        `сочетания: ${Array.isArray(sys.hotkeys) && sys.hotkeys.length ? sys.hotkeys.join(', ') : 'ни одного'}`,
+      );
+      lines.push(
+        `вставка: ${sys.insertMethod === 'sendinput' ? 'SendInput без буфера' : 'буфер обмена + Ctrl+V'}${
+          sys.insertSupported ? '' : ' (системой не поддержано)'
+        }`,
+      );
+      lines.push(`мониторинг буфера: ${sys.clipboardWatch ? 'включён' : 'выключен'}`);
+      lines.push(`горячий микрофон: ${sys.micPreroll ? 'включён' : 'выключен'}`);
+      lines.push(`автозапуск: ${sys.autoLaunch ? 'включён' : 'выключен'}`);
+      lines.push(
+        `быстрый путь: модель ${sys.engineWarm ? 'прогрета' : sys.engineWarming ? 'греется' : 'не прогрета'}${
+          sys.lastSttMs ? ` · последняя диктовка ${Math.round(sys.lastSttMs / 100) / 10} с (${sys.engineMode || '?'})` : ''
+        }`,
+      );
+      if (sys.winInput) {
+        lines.push(
+          `ввод SendInput: ${
+            sys.winInput.ready
+              ? `помощник собран (${sys.winInput.path || 'путь неизвестен'})`
+              : `недоступен: ${sys.winInput.reason || 'причина неизвестна'}`
+          }`,
+        );
+      }
+      if (sys.lastInsert && sys.lastInsert.at) {
+        const li = sys.lastInsert;
+        lines.push(
+          `последняя вставка: ${li.ok ? 'получилась' : 'НЕ получилась'} · способ ${li.method || '?'} · ${
+            li.ms || 0
+          } мс${li.reason ? ` · причина: ${li.reason}` : ''}`,
+        );
+      }
+      if (sys.inputHost) {
+        lines.push(
+          `помощник ввода: ${
+            !sys.inputHost.available
+              ? 'не поддерживается системой'
+              : sys.inputHost.ready
+                ? 'готов'
+                : sys.inputHost.running
+                  ? 'запускается'
+                  : 'не запущен'
+          }`,
+        );
+      }
+    }
     lines.push('');
     lines.push(`── последние события (${Math.min(limit, buffered.length)}) ──`);
     const rows = buffered.slice(-limit);

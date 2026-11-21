@@ -5,8 +5,10 @@ import { Button, Keys, SearchInput, Tabs } from '../components/ui/Controls.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import ShortcutRecorder from '../components/modals/ShortcutRecorder.jsx';
 import AddInstructionModal from '../components/modals/AddInstructionModal.jsx';
+import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
+import { useRoute } from '../lib/router.js';
 import { keysLabel, toAccelerator } from '../lib/utils.js';
 import { useTextAction } from '../lib/hotkeys/useTextAction.js';
 import { analyzeStyle, describeStyle } from '../lib/ai/style.js';
@@ -31,10 +33,21 @@ export default function HotkeysPage() {
   const { push } = useToast();
   const { run: runAction, busy } = useTextAction();
   const style = useMemo(() => analyzeStyle(dictations), [dictations]);
-  const [tab, setTab] = useState('voice');
+  const route = useRoute();
+  const [tab, setTab] = useState(route.params?.tab || 'voice');
   const [recorder, setRecorder] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
+  // сброс сочетаний затирает настроенные клавиши — спрашиваем подтверждение
+  const [confirmReset, setConfirmReset] = useState(false);
   const [query, setQuery] = useState('');
+
+  // Вкладка может приехать в адресе (#/hotkeys?tab=recommended) — так ведёт
+  // кнопка «AI-инструкции» в боковой панели и старая ссылка #/instructions.
+  useEffect(() => {
+    const next = route.params?.tab;
+    if (route.page !== 'hotkeys' || !next) return;
+    if (['voice', 'recommended', 'custom'].includes(next)) setTab(next);
+  }, [route.page, route.params?.tab]);
 
   /** Все включённые AI-инструкции уходят в main-процесс как глобальные хоткеи. */
   const textActions = useMemo(
@@ -50,20 +63,8 @@ export default function HotkeysPage() {
   // регистрация висела здесь, и после ухода со страницы сочетания оставались
   // от последнего её рендера.
 
-  // Сочетание, занятое другой программой: показываем прямо в разделе
-  useEffect(() => {
-    const onConflict = (e) => {
-      const d = e.detail || {};
-      push({
-        title: 'Сочетание занято',
-        description: `${keysLabel(d.keys || [])} уже использует другая программа — выберите другое.`,
-        tone: 'warn',
-        ttl: 10000,
-      });
-    };
-    window.addEventListener('zs:hotkey-conflict', onConflict);
-    return () => window.removeEventListener('zs:hotkey-conflict', onConflict);
-  }, [push]);
+  // Тост о занятом сочетании показывает App.jsx — он живёт всё время работы
+  // приложения, поэтому сообщение не теряется, если раздел ещё не открывали.
 
   // Хоткей нажали в системе — выполняем инструкцию здесь, в рендерере
   useEffect(() => {
@@ -81,8 +82,34 @@ export default function HotkeysPage() {
    * перерегистрирует всё при изменении — иначе один отправитель затирал
    * сочетания другого.
    */
+  // Сочетания проверяем на дубли: Windows регистрирует глобальные клавиши
+  // по одной, и второе такое же молча не работало. Раньше можно было назначить
+  // Ctrl+Shift+9 двум действиям и не понять, почему одно не срабатывает.
+  const comboOf = (keys) => (keys || []).join('+').toLowerCase();
   const applyCombo = (hk, keys) => {
     if (!keys?.length) return;
+    const wanted = comboOf(keys);
+    const twin = voiceHotkeys.find(
+      (h) => h.id !== hk.id && h.enabled !== false && h.keys?.length && comboOf(h.keys) === wanted,
+    );
+    const dictationTaken =
+      hk.id !== 'dictation' && comboOf(settings.dictationKeys) === wanted;
+    if (twin) {
+      push({
+        title: 'Сочетание занято',
+        description: `${keysLabel(keys)} уже закреплено за «${twin.title}». Выберите другое.`,
+        tone: 'warn',
+      });
+      return;
+    }
+    if (dictationTaken) {
+      push({
+        title: 'Сочетание занято',
+        description: `${keysLabel(keys)} уже запускает диктовку. Выберите другое.`,
+        tone: 'warn',
+      });
+      return;
+    }
     if (hk.id === 'dictation') {
       updateSettings({ dictationKeys: keys, dictationKey: toAccelerator(keys) });
     }
@@ -118,29 +145,42 @@ export default function HotkeysPage() {
         <div>
           <h1 className="page__title">Горячие клавиши</h1>
           <p className="page__sub">
-            Настройте сочетания клавиш для активации ZSpeakly. Нажмите клавиши, чтобы начать запись,
-            отпустите — текст подставится в активное поле.
+            Нажмите сочетание — запись; нажмите ещё раз — текст в активном поле.
           </p>
         </div>
         <div className="page__actions">
+          {/* «Добавить новую инструкцию» рядом с «Голосовыми сочетаниями» читалось
+              как «добавить сочетание». Теперь подпись говорит, что именно
+              добавляется, и кнопка есть на любой вкладке. */}
           <Button variant="white" size="sm" icon={<Plus size={13} />} onClick={() => setAddOpen(true)}>
-            Добавить новую инструкцию
+            Своя инструкция
           </Button>
         </div>
       </div>
 
       <div className="hk-toolbar">
+        {/* Вкладка без содержимого — это не раздел, а пустая страница. Раньше
+            здесь всегда стояли три вкладки, две из которых показывали «0» и
+            ничего больше. Показываем вкладку, только если в ней что-то есть
+            (или если она уже открыта). */}
         <Tabs
           variant="underline"
           value={tab}
           onChange={setTab}
           items={[
             { id: 'voice', label: 'Голосовые сочетания клавиш', count: voiceHotkeys.length },
-            { id: 'recommended', label: 'Рекомендуемые горячие клавиши', count: presets.length },
-            { id: 'custom', label: 'Мои горячие клавиши', count: instructions.length },
+            ...(presets.length || tab === 'recommended'
+              ? [{ id: 'recommended', label: 'Рекомендуемые', count: presets.length }]
+              : []),
+            ...(instructions.length || tab === 'custom'
+              ? [{ id: 'custom', label: 'Мои', count: instructions.length }]
+              : []),
           ]}
         />
-        <SearchInput value={query} onChange={setQuery} placeholder="Поиск" />
+        {/* Поиск по четырём строкам только занимает место */}
+        {tab === 'voice' && voiceHotkeys.length <= 5 ? null : (
+          <SearchInput value={query} onChange={setQuery} placeholder="Поиск" />
+        )}
       </div>
 
       {tab === 'voice' ? (
@@ -166,7 +206,11 @@ export default function HotkeysPage() {
                         size="sm"
                         onRemove={() => updateHotkey(hk.id, { keys: [] })}
                       />
-                      {hk.double ? <span className="sep">×2</span> : null}
+                      {/* «×2» читается как «два раза это сочетание», а не как
+                          «двойное нажатие». Пишем словом: на нём же висит
+                          диктовка, и человек должен понять, что двойное
+                          нажатие — другая команда. */}
+                      {hk.double ? <span className="sep">дважды</span> : null}
                     </div>
                   ) : (
                     <button
@@ -202,13 +246,17 @@ export default function HotkeysPage() {
                 </div>
               </div>
 
-              {hk.id === 'screen-aware' ? (
+              {/* «Стиль письма» на свежей установке — тумблер без смысла:
+                  анализировать нечего, а рядом написано «продиктуйте пару
+                  фраз». Показываем только когда есть что анализировать. */}
+              {hk.id === 'screen-aware' && (dictations?.length || 0) > 2 ? (
                 <div className="hk-row--sub">
                   <div className="hk-row__body">
                     <div className="hk-row__title">Стиль письма</div>
                     <div className="hk-row__desc">{describeStyle(style)}</div>
                   </div>
                   <Toggle
+                    label="Стиль письма"
                     checked={Boolean(settings.useWritingStyle)}
                     onChange={(v) => {
                       updateSettings({ useWritingStyle: v });
@@ -227,7 +275,7 @@ export default function HotkeysPage() {
           ))}
 
           <div className="hk-reset">
-            <Button variant="bare" size="sm" icon={<RefreshCw size={12} />} onClick={resetHotkeys}>
+            <Button variant="bare" size="sm" icon={<RefreshCw size={12} />} onClick={() => setConfirmReset(true)}>
               Сбросить все сочетания
             </Button>
           </div>
@@ -237,8 +285,7 @@ export default function HotkeysPage() {
       {tab === 'recommended' ? (
         <div className="stack-8">
           <p className="hk-note">
-            Готовые AI-инструкции. Выделите текст, нажмите сочетание — ZSpeakly перепишет его локально.
-            Работает без интернета: правила + словарь, либо ваша локальная модель Ollama.
+            Выделите текст и нажмите сочетание — ZSpeakly перепишет его локально, без интернета.
           </p>
           {filteredPresets.map((p) => (
             <div key={p.id} className="preset-row">
@@ -354,6 +401,21 @@ export default function HotkeysPage() {
           setAddOpen(false);
           setTab('custom');
         }}
+      />
+      <ConfirmDialog
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={() => {
+          resetHotkeys();
+          push({
+            title: 'Сочетания сброшены',
+            description: 'Голосовые сочетания вернулись к стандартным: диктовка — Ctrl+Alt+Space.',
+            tone: 'success',
+          });
+        }}
+        title="Сбросить все сочетания?"
+        description="Голосовые сочетания вернутся к стандартным. Ваши AI-инструкции и их клавиши останутся как есть."
+        confirmLabel="Сбросить"
       />
     </div>
   );

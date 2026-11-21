@@ -80,9 +80,4 @@ export function learnFromEdit(before = '', after = '', known = []) {
   return out;
 }
 
-/** Учёт уже добавленного слова: увеличивает счётчик «сколько раз пригодилось». */
-export function bumpUsage(entries = [], id) {
-  return entries.map((e) => (e.id === id ? { ...e, hits: (e.hits || 0) + 1 } : e));
-}
-
 export default learnFromEdit;

@@ -3,7 +3,7 @@
  *
  * Что делает main:
  *  • окно 1000×640 без системной рамки, тёмный фон, скругления даёт CSS;
- *  • трей + меню (Главная, Настройки, Буфер, Мобильное приложение);
+ *  • трей + меню (Главная, Настройки, Буфер, Диагностика, О программе);
  *  • глобальные хоткеи: Ctrl+Alt+Space (диктовка), Ctrl+Shift+V (буфер);
  *  • мониторинг буфера обмена через WM_CLIPBOARDUPDATE (Electron clipboard polling);
  *  • хранение профиля в JSON;
@@ -14,15 +14,45 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { execFile } = require('node:child_process');
+const { sendUnicodeText } = require('./sendInput.cjs');
+// Резидентный помощник ввода: PowerShell поднимается один раз, а не на каждую
+// вставку — иначе диктовка ждёт компиляцию C# дважды подряд.
+const { host: inputHost } = require('./inputHost.cjs');
+const { createWinInput } = require('./winInput.cjs');
+const { planUndo } = require('./undoLast.cjs');
+const audioPrep = require('./audioPrep.cjs');
+const {
+  judgeText,
+  betterText,
+  stripPromptEcho,
+  tailForPrompt,
+  shouldRetry,
+} = require('./textQuality.cjs');
+const { averageFactor, decodePlan } = require('./adaptiveDecode.cjs');
+const { aliasesFor } = require('./dictionaryAliases.cjs');
+const { IDLE_UNLOAD_MS, shouldUnload } = require('./idleMemory.cjs');
+const { resolveWindowBounds, boundsToSave } = require('./windowBounds.cjs');
+const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
+const { randomUUID } = require('node:crypto');
+const { cleanupTemp } = require('./tempCleanup.cjs');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
-  clipboard, shell, dialog, screen, session,
+  clipboard, shell, dialog, screen, session, safeStorage,
 } = require('electron');
 
 const { JsonStore } = require('./store.cjs');
 const whisper = require('./whisper.cjs');
+// русский движок: GigaAM v3 на процессоре, включается сам для русского языка
+const gigaam = require('./gigaam.cjs');
+// европейский движок: Parakeet TDT v3, включается сам для европейских языков
+const parakeet = require('./parakeet.cjs');
+const { chooseEngine } = require('./sttEngine.cjs');
 const { createUpdater } = require('./updater.cjs');
 const models = require('./models.cjs');
+// Подбор модели под железо: одна и та же модель не может быть быстрой и на
+// старом ноутбуке, и на новом ПК.
+const hardware = require('./hardware.cjs');
+const speedTune = require('./speedTune.cjs');
 const { writeWav } = require('./wav.cjs');
 const { logger } = require('./logger.cjs');
 
@@ -31,13 +61,60 @@ const DEV_URL = process.env.ZSPEAKLY_DEV_URL || 'http://localhost:5173';
 const START_HIDDEN = process.argv.includes('--hidden');
 
 let mainWindow = null;
+// автоподготовка распознавания (заполняется при регистрации IPC)
+let prepareRecognition = null;
+// Подбор модели под железо живёт там же, где IPC, а вызывается при старте окна.
+let applyHardwareModel = null;
 let tray = null;
 let store = null;
+// Отдельное «плавающее» окно индикатора диктовки: видно поверх любых
+// приложений и не забирает фокус, поэтому вставка идёт туда, где человек печатал.
+let hudWindow = null;
+// Размеры плашки: в обычном режиме — одна строка текста, при ошибке — две.
+const HUD_WIDTH = 360;
+const HUD_HEIGHT = 92;
+const HUD_HEIGHT_ERROR = 112;
+// идёт ли сейчас диктовка (для пункта «Остановить диктовку» в трее)
+let hudActive = false;
 let clipboardTimer = null;
 let updater = null;
 let lastClipboardText = '';
 let windowHiddenForInsert = false;
+// Ввод в чужие окна без PowerShell: свой exe, собранный csc.exe при первом
+// использовании. Это главный путь — PowerShell остался запасным.
+let winInput = null;
+const getWinInput = () => {
+  if (!winInput) {
+    let base = '';
+    try {
+      base = path.join(app.getPath('userData'), 'input');
+    } catch {
+      base = '';
+    }
+    winInput = createWinInput({ baseDir: base });
+  }
+  return winInput;
+};
+
+// Чем закончилась последняя вставка: способ, время, причина отказа.
+let lastInsertInfo = { at: 0, ok: null, method: '', ms: 0, reason: '' };
 let lastInsertedText = '';
+let lastInsertedAt = 0;
+// Куда ушла последняя вставка и через сколько её ещё можно убрать.
+// «Отмени» стирает вслепую, поэтому перед стиранием сверяем окно: иначе в
+// другом приложении пропали бы слова, которые человек туда написал сам.
+let lastInsertTarget = { app: '', title: '', at: 0 };
+// Сколько времени движок тратит на секунду речи — по этим замерам решается,
+// можно ли считать сразу «честным» проходом на этой машине.
+const decodeHistory = [];
+/** Когда модель последний раз считала: для освобождения памяти после простоя. */
+let lastModelUseAt = 0;
+// Хвост прошлой фразы для подсказки движку: отдельно по языкам, чтобы русская
+// фраза не подсказывала английскую.
+const promptTailByLang = {};
+// Свою же вставку считаем «своей» только пару секунд: иначе человек,
+// скопировавший ту же фразу позже, не увидел бы её в истории буфера.
+const OWN_TEXT_TTL = 2000;
 let lastClipboardImageHash = '';
 
 // ── Одиночный экземпляр ────────────────────────────────────────────────────
@@ -58,14 +135,65 @@ app.setAppUserModelId('app.zspeakly.desktop');
 app.commandLine.appendSwitch('enable-features', 'MediaFoundationWidevineCdm');
 
 // ── Окно ───────────────────────────────────────────────────────────────────
+// Сколько занял путь «процесс запущен → окно на экране» и «прогрев модели»:
+// это первые два числа, которые объясняют «почему приложение открывается долго».
+const BOOT_AT = Date.now();
+let startupMs = 0;
+let warmMs = 0;
+
+/**
+ * Сохранение размера и места окна. Раньше окно каждый запуск открывалось
+ * заново по размеру экрана: человек сужал его под браузер, а после
+ * перезапуска получал развёрнутое. Пишем не чаще раза в секунду — событий
+ * move/resize при перетаскивании бывает сотни.
+ */
+let boundsTimer = null;
+function rememberWindowBounds(win = mainWindow, delay = 600) {
+  if (!win) return;
+  const write = () => {
+    try {
+      const bounds = boundsToSave(win);
+      if (bounds) store?.set('ui:windowBounds', bounds);
+    } catch {
+      /* профиль не должен мешать закрытию окна */
+    }
+  };
+  // Задержка 0 — записываем сразу: при выходе из приложения отложенный таймер
+  // может не успеть, и окно «забудет» размер.
+  clearTimeout(boundsTimer);
+  if (!delay) {
+    write();
+    return;
+  }
+  boundsTimer = setTimeout(write, delay);
+  boundsTimer.unref?.();
+}
+
 function createWindow() {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const primary = screen.getPrimaryDisplay();
+  const displays = (() => {
+    try {
+      return (screen.getAllDisplays?.() || [primary]).map((d) => d.workArea || d.workAreaSize);
+    } catch {
+      return [primary.workArea || primary.workAreaSize];
+    }
+  })();
+  // Размер и место — из прошлого запуска; если сохранённое больше не на экране,
+  // окно откроется по центру и об этом будет строка в журнале.
+  const placement = resolveWindowBounds(store?.get('ui:windowBounds'), {
+    displays,
+    primary: primary.workArea || primary.workAreaSize,
+  });
+  if (placement.reason === 'прошлое место больше не на экране') {
+    logger.info('app', 'Окно открыто по центру: прошлое место больше не на экране', { keep: true });
+  }
 
   mainWindow = new BrowserWindow({
-    width: Math.min(1020, width - 60),
-    height: Math.min(680, height - 60),
-    minWidth: 860,
-    minHeight: 560,
+    width: placement.width,
+    height: placement.height,
+    ...(placement.x !== undefined && placement.y !== undefined ? { x: placement.x, y: placement.y } : {}),
+    minWidth: 720,
+    minHeight: 480,
     backgroundColor: '#1e1e1e',
     show: false,
     frame: false,
@@ -84,7 +212,30 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
+    if (placement.maximized) {
+      try {
+        mainWindow.maximize();
+      } catch {
+        /* платформа без maximize — не повод не показывать окно */
+      }
+    }
     if (!START_HIDDEN) mainWindow.show();
+    startupMs = Date.now() - BOOT_AT;
+    logger.info('app', 'Окно на экране', { keep: true, ms: startupMs });
+    // Первая установка: движок уже в комплекте, модель докачиваем сами.
+    // Стартуем почти сразу после появления окна: пока человек читает первый
+    // экран, модель уже качается. Не блокирует запуск и не мешает, если сети нет.
+    setTimeout(() => prepareRecognition?.(), 800);
+    // Модель в памяти: поднимаем whisper-server заранее, чтобы первая
+    // диктовка не ждала загрузку весов (как в быстрых диктовочных приложениях).
+    setTimeout(() => applyHardwareModel?.(), 600);
+    setTimeout(() => {
+      const cfg = store?.get('zs:settings') || {};
+      // 1.6.0: «держать модель в памяти» больше не тумблер — приложение делает
+      // это всегда, если профиль явно не против.
+      if (cfg.keepModelLoaded === false) return;
+      warmRecognition(cfg.whisperModel || 'base');
+    }, 500);
   });
 
   if (isDev && process.env.ZSPEAKLY_DEV_URL !== 'none') {
@@ -97,7 +248,29 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
+  // Размер и место запоминаем сразу, без задержки: окно может закрыться
+  // раньше, чем сработает отложенная запись.
+  mainWindow.on('resize', () => rememberWindowBounds());
+  mainWindow.on('move', () => rememberWindowBounds());
+  mainWindow.on('maximize', () => {
+    rememberWindowBounds(mainWindow, 0);
+    try {
+      mainWindow.webContents?.send('window:maximized', true);
+    } catch {
+      /* окно могло закрыться */
+    }
+  });
+  mainWindow.on('unmaximize', () => {
+    rememberWindowBounds(mainWindow, 0);
+    try {
+      mainWindow.webContents?.send('window:maximized', false);
+    } catch {
+      /* окно могло закрыться */
+    }
+  });
+
   mainWindow.on('close', (e) => {
+    rememberWindowBounds(mainWindow, 0);
     const closeToTray = store?.get('zs:settings')?.closeToTray !== false;
     if (closeToTray && !app.isQuitting) {
       e.preventDefault();
@@ -155,13 +328,142 @@ function iconPath() {
 }
 
 // ── Трей ───────────────────────────────────────────────────────────────────
-function createTray() {
-  const icon = nativeImage.createFromPath(iconPath() || '');
-  const trayIcon = icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 18, height: 18 });
+// Сочетание диктовки можно поменять в приложении — подпись в меню трея
+// должна это отражать, иначе там годами висит «Ctrl+Alt+Space».
+let trayDictKey = 'Control+Alt+Space';
 
-  tray = new Tray(trayIcon);
-  tray.setToolTip('ZSpeakly — офлайн голосовой ввод');
-  const menu = Menu.buildFromTemplate([
+// Что нибудь в трее объясняет происходящее: открытый «горячим микрофоном»
+// поток незаметен иначе, а незнакомый значок в системном индикаторе пугает.
+let micWarmOpen = false;
+let unreadCount = 0;
+
+function trayTooltip() {
+  const base = unreadCount > 0 ? `ZSpeakly — ${unreadCount} новых` : 'ZSpeakly — офлайн голосовой ввод';
+  return micWarmOpen ? `${base} · микрофон открыт заранее` : base;
+}
+
+function updateTrayTooltip() {
+  try {
+    tray?.setToolTip(trayTooltip());
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Пределы подсказки распознаванию.
+ *
+ * whisper читает начало подсказки как текст и обрезает её по размеру окна
+ * модели, причём берёт ПОСЛЕДНИЕ токены. Поэтому обрезать «с хвоста» нельзя:
+ * именно в хвосте стоят слова словаря — они и нужны. Режем с начала и по
+ * целым словам.
+ */
+const STT_PROMPT_LIMIT = 500;
+const STT_CONTEXT_LIMIT = 120;
+const STT_DICT_LIMIT = 320;
+// Хвост прошлой фразы: коротко — иначе модель начнёт повторять подсказку
+const STT_TAIL_LIMIT = 60;
+
+/**
+ * Подсказка движку: термины с экрана + словарь.
+ *
+ * Раньше словарь брался «первые 40 слов» и обрезался вместе со всей строкой до
+ * 500 символов — то есть при длинном контексте экрана половина словаря молча
+ * отваливалась, и человек удивлялся, почему новые слова «не работают».
+ * Теперь у контекста и словаря отдельные бюджеты, слова идут целыми, а
+ * лишнее отрезается с начала (где стоит подсказка с экрана, её легче потерять,
+ * чем термины, которые человек вносил руками).
+ */
+function buildSttPrompt({ context = '', dictionary = [], tail = '' } = {}) {
+  const ctx = String(context || '').trim().slice(0, STT_CONTEXT_LIMIT);
+  // хвост прошлой фразы — первым: он ближе всего к тому, что человек скажет
+  // сейчас, и не должен вытесняться словарём при обрезке
+  const lastTail = tailForPrompt(tail, STT_TAIL_LIMIT);
+  const seen = new Set();
+  for (const raw of ctx.split(',')) {
+    const word = raw.trim().toLowerCase();
+    if (word) seen.add(word);
+  }
+  const words = [];
+  let used = 0;
+  // Порядок решает: подсказка короткая, и всё, что не влезло, движок не
+  // увидит. Поэтому закреплённое и часто диктуемое — вперёд, новые — в конце.
+  // Сортируем здесь, а не только в интерфейсе: профиль мог быть записан
+  // прошлой версией, а после перезапуска main читает его напрямую.
+  const ordered = [...(Array.isArray(dictionary) ? dictionary : [])].sort((a, b) => {
+    const field = (item, key) => (item && typeof item === 'object' ? item[key] : undefined);
+    return (
+      Number(field(b, 'pinned') === true) - Number(field(a, 'pinned') === true) ||
+      Number(field(b, 'hits') || 0) - Number(field(a, 'hits') || 0) ||
+      Number(field(b, 'lastUsedAt') || 0) - Number(field(a, 'lastUsedAt') || 0)
+    );
+  });
+  for (const entry of ordered) {
+    const word = String(entry && typeof entry === 'object' ? entry.word || '' : entry || '').trim();
+    if (word.length < 2) continue;
+    const key = word.toLowerCase();
+    if (seen.has(key)) continue;
+    const cost = word.length + (words.length ? 2 : 0);
+    if (used + cost > STT_DICT_LIMIT) break;
+    seen.add(key);
+    words.push(word);
+    used += cost;
+    // Произношение — второй способ сказать то же слово: «ZSpeakly» человек
+    // произносит «зи-спикли». Маленькая модель слышит звук, а не буквы, и такая
+    // пара в подсказке помогает ей связать одно с другим. Это не украшение:
+    // без него словарь работает только если модель уже знает слово.
+    const pron = String(entry && typeof entry === 'object' ? entry.pronunciation || '' : '').trim();
+    if (pron && pron.toLowerCase() !== key && !seen.has(pron.toLowerCase())) {
+      const pronCost = pron.length + 2;
+      if (used + pronCost <= STT_DICT_LIMIT) {
+        seen.add(pron.toLowerCase());
+        words.push(pron);
+        used += pronCost;
+      }
+    }
+    // Известное русское произношение («Zoom» человек говорит «зум»). В подсказку
+    // его тоже кладём: движок сопоставляет звук с написанием до распознавания,
+    // а не после — так он и пишет Zoom, а не зум.
+    for (const alias of aliasesFor(word).slice(0, 1)) {
+      if (seen.has(alias)) continue;
+      const aliasCost = alias.length + 2;
+      if (used + aliasCost > STT_DICT_LIMIT) break;
+      seen.add(alias);
+      words.push(alias);
+      used += aliasCost;
+    }
+  }
+  const dict = words.join(', ');
+  // Порядок: контекст экрана, словарь, хвост прошлой фразы. Хвост в конце —
+  // модель продолжает с конца подсказки, и ей ближе всего то, что человек уже
+  // сказал. Режем наоборот: сначала хвост, потом контекст, потом словарь.
+  let prompt = [ctx, dict, lastTail].filter(Boolean).join(', ');
+  if (prompt.length > STT_PROMPT_LIMIT) {
+    const parts = { ctx, dict, tail: lastTail };
+    if (parts.tail) {
+      prompt = [parts.ctx, parts.dict].filter(Boolean).join(', ');
+      parts.tail = '';
+    }
+    if (prompt.length > STT_PROMPT_LIMIT && parts.ctx) {
+      prompt = [parts.dict].filter(Boolean).join(', ');
+    }
+    if (prompt.length > STT_PROMPT_LIMIT) {
+      // последнее средство — режем словарь с конца по целым словам
+      const list = parts.dict.split(', ');
+      while (list.length > 1 && list.join(', ').length > STT_PROMPT_LIMIT) list.pop();
+      prompt = list.join(', ');
+    }
+  }
+  return {
+    prompt,
+    contextChars: ctx.length,
+    dictionaryWords: words.length,
+    tailChars: lastTail.length,
+  };
+}
+
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
     {
       label: 'Открыть ZSpeakly',
       click: () => {
@@ -170,11 +472,24 @@ function createTray() {
       },
     },
     { type: 'separator' },
-    { label: 'Диктовка (старт/стоп)', accelerator: 'Control+Alt+Space', click: () => toggleDictation() },
+    { label: `Диктовка (старт/стоп) — ${prettyAccel(trayDictKey)}`, click: () => toggleDictation() },
+    // Пока идёт запись, из трея можно остановить её, не ища индикатор
+    ...(recordingState === 'listening' || hudActive
+      ? [
+          {
+            label: 'Остановить диктовку',
+            click: () => mainWindow?.webContents.send('dictation:stop', { from: 'tray' }),
+          },
+        ]
+      : []),
+    // Если «горячий микрофон» включён, микрофон открыт прямо сейчас — об этом
+    // лучше сказать в меню, чем оставлять пользователя догадываться.
+    ...(micWarmOpen
+      ? [{ label: 'Микрофон открыт заранее (горячий микрофон)', enabled: false }]
+      : []),
     { label: 'Буфер обмена', click: () => navigate('clipboard') },
     { label: 'Настройки', click: () => sendCommand('settings') },
     { type: 'separator' },
-    { label: 'Мобильное приложение', click: () => sendCommand('mobile') },
     { label: 'О программе', click: () => sendCommand('about') },
     // Витрина для «пришлите логи, если что-то не работает»
     { label: 'Диагностика', click: () => sendCommand('diagnostics') },
@@ -187,7 +502,242 @@ function createTray() {
       },
     },
   ]);
-  tray.setContextMenu(menu);
+}
+
+function refreshTrayMenu() {
+  try {
+    if (tray && !tray.isDestroyed?.()) tray.setContextMenu(buildTrayMenu());
+  } catch (err) {
+    console.warn('[tray] меню не обновилось', err.message);
+  }
+}
+
+/**
+ * Плавающий индикатор записи.
+ *
+ * Раньше HUD жил внутри главного окна: стоило свернуть приложение — и человек
+ * не видел ни «Слушаю…», ни кнопки «стоп». Теперь это отдельное окно без рамки,
+ * всегда сверху, без фокуса (иначе Ctrl+V уходил бы в него, а не в чужое окно).
+ */
+function createHudWindow() {
+  if (hudWindow && !hudWindow.isDestroyed?.()) return hudWindow;
+  const { workArea } = screen.getPrimaryDisplay();
+  const width = HUD_WIDTH;
+  const height = HUD_HEIGHT;
+  hudWindow = new BrowserWindow({
+    width,
+    height,
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + workArea.height - height - 28),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    focusable: false,
+    hasShadow: false,
+    show: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'hud-preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  try {
+    hudWindow.setAlwaysOnTop(true, 'screen-saver');
+    hudWindow.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true });
+    hudWindow.setIgnoreMouseEvents?.(false);
+  } catch {
+    /* не на всех платформах есть эти методы */
+  }
+  hudWindow.loadFile(path.join(__dirname, 'hud.html'));
+  hudWindow.on('closed', () => {
+    hudWindow = null;
+  });
+  return hudWindow;
+}
+
+function setHudActive(active) {
+  if (hudActive === active) return;
+  hudActive = active;
+  refreshTrayMenu();
+}
+
+/**
+ * Ставим плашку на тот монитор, где сейчас курсор: на двух экранах прежняя
+ * привязка к основному оставляла индикатор на соседнем дисплее, и человек его
+ * просто не видел.
+ */
+function placeHudWindow(win) {
+  try {
+    const point = screen.getCursorScreenPoint?.();
+    const display = point ? screen.getDisplayNearestPoint(point) : screen.getPrimaryDisplay();
+    const area = display?.workArea || screen.getPrimaryDisplay().workArea;
+    const { width, height } = win.getBounds?.() || { width: HUD_WIDTH, height: HUD_HEIGHT };
+    win.setBounds?.({
+      x: Math.round(area.x + (area.width - width) / 2),
+      y: Math.round(area.y + area.height - height - 28),
+      width,
+      height,
+    });
+  } catch {
+    /* размеры экрана недоступны — остаёмся там, где открылись */
+  }
+}
+
+/** Высота плашки: при ошибке вторая строка подсказки должна быть видна. */
+function resizeHudWindow(height) {
+  const win = hudWindow;
+  if (!win || win.isDestroyed?.()) return;
+  try {
+    const b = win.getBounds?.();
+    if (!b || b.height === height) return;
+    win.setBounds({ x: b.x, y: b.y + (b.height - height), width: b.width, height });
+  } catch {
+    /* окно могло закрыться между проверкой и вызовом */
+  }
+}
+
+function showHudWindow() {
+  const win = createHudWindow();
+  placeHudWindow(win);
+  try {
+    if (!win.isVisible?.()) win.showInactive();
+  } catch {
+    /* ignore */
+  }
+  setHudActive(true);
+  return true;
+}
+
+function hideHudWindow() {
+  try {
+    hudWindow?.hide();
+  } catch {
+    /* ignore */
+  }
+  setHudActive(false);
+  return true;
+}
+
+function sendHudState(state) {
+  if (!hudWindow || hudWindow.isDestroyed?.()) return;
+  try {
+    hudWindow.webContents.send('hud:state', state);
+  } catch {
+    /* окно могло закрыться между кадрами */
+  }
+}
+
+// Рендерер сообщает, что реально происходит с записью: по этому состоянию
+// трей показывает «Остановить диктовку», а глобальное сочетание понимает,
+// слушаем мы сейчас или нет.
+let recordingState = 'idle';
+
+function registerHudIpc() {
+  ipcMain.on('dictation:state', (_e, next) => {
+    const state = ['listening', 'processing', 'done', 'idle'].includes(next) ? next : 'idle';
+    if (state === recordingState) return;
+    recordingState = state;
+    dictationActive = state === 'listening';
+    // Человек начал говорить — самое время поднять помощника ввода: пока идёт
+    // запись, PowerShell успевает стартовать, и вставка не ждёт старта.
+    if (state === 'listening') {
+      warmInputHost();
+      // И модель: пока человек говорит, веса успевают загрузиться, и итоговый
+      // проход идёт уже в прогретый сервер. Раньше прогрев начинался только
+      // после неудачной диктовки — то есть слишком поздно.
+      try {
+        const cfg = store?.get('zs:settings') || {};
+        const server = whisper.serverStatus?.() || {};
+        // Только если сервера нет вовсе: если он уже греется, второй прогрев
+        // отнял бы ядра у распознавания этой же фразы.
+        if (cfg.keepModelLoaded !== false && !server.ready && !server.running && !whisper.isBusy?.()) {
+          warmRecognition(cfg.whisperModel || 'base');
+        }
+      } catch {
+        /* прогрев — не критичный путь */
+      }
+    }
+    refreshTrayMenu();
+  });
+  ipcMain.on('mic:warm', (_e, open) => {
+    const next = !!open;
+    if (next === micWarmOpen) return;
+    micWarmOpen = next;
+    updateTrayTooltip();
+    refreshTrayMenu();
+  });
+  ipcMain.handle('hud:show', () => {
+    // Началась запись — начинаем прогрев. Пока человек говорит, whisper-server
+    // успевает загрузить модель, и итоговый проход считается уже в памяти, а не
+    // холодным whisper-cli. Именно это отличает «фраза на двадцать секунд
+    // распознана за три» от «за двадцать»: прогрев по хоткею, а не по факту.
+    try {
+      const cfg = store.get('zs:settings') || {};
+      if (cfg.keepModelLoaded !== false) warmRecognition(cfg.whisperModel || 'base');
+    } catch {
+      /* прогрев — не повод ломать показ плашки */
+    }
+    return showHudWindow();
+  });
+  ipcMain.handle('hud:hide', () => hideHudWindow());
+  ipcMain.handle('hud:update', (_e, state) => {
+    // Ошибку показываем двумя строками — для этого плашка становится выше.
+    resizeHudWindow(state?.error ? HUD_HEIGHT_ERROR : HUD_HEIGHT);
+    sendHudState(state || {});
+    return true;
+  });
+  // Кнопки на плавающем индикаторе: стоп просим у окна диктовки,
+  // закрытие прячет только индикатор — запись продолжается.
+  ipcMain.handle('hud:pause', () => {
+    mainWindow?.webContents.send('dictation:pause', { paused: true, from: 'hud' });
+    return true;
+  });
+
+  ipcMain.handle('hud:resume', () => {
+    mainWindow?.webContents.send('dictation:pause', { paused: false, from: 'hud' });
+    return true;
+  });
+
+  ipcMain.handle('hud:cancel', () => {
+    mainWindow?.webContents.send('dictation:cancel', { from: 'hud' });
+    return true;
+  });
+
+  ipcMain.handle('hud:stop', () => {
+    mainWindow?.webContents.send('dictation:stop', { from: 'hud' });
+    return true;
+  });
+  ipcMain.handle('hud:close', () => {
+    hideHudWindow();
+    // Если окно приложения на экране — оно нарисует индикатор внутри себя,
+    // и запись можно остановить оттуда. Если окно свёрнуто в трей, показать
+    // индикатор негде: закрытие плашки завершает запись, иначе она осталась бы
+    // без единой кнопки.
+    if (mainWindow?.isVisible?.()) mainWindow.webContents.send('hud:closed');
+    else mainWindow?.webContents.send('dictation:stop', { from: 'hud' });
+    return true;
+  });
+  ipcMain.handle('hud:status', () => ({
+    open: Boolean(hudWindow && !hudWindow.isDestroyed?.() && hudWindow.isVisible?.()),
+  }));
+}
+
+function createTray() {
+  const icon = nativeImage.createFromPath(iconPath() || '');
+  const trayIcon = icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 18, height: 18 });
+
+  tray = new Tray(trayIcon);
+  updateTrayTooltip();
+  tray.setContextMenu(buildTrayMenu());
   tray.on('double-click', () => {
     mainWindow?.show();
     mainWindow?.focus();
@@ -196,25 +746,27 @@ function createTray() {
 
 // ── Хоткеи ─────────────────────────────────────────────────────────────────
 let dictationActive = false;
-let windowWasHiddenForDictation = false;
 
 function toggleDictation() {
+  // Обычно переключаем своё состояние, но если запись остановили кнопкой на
+  // плашке, рендерер уже сообщил «idle» — тогда следующее нажатие начинает
+  // заново, а не пытается «остановить» пустоту.
   dictationActive = !dictationActive;
   mainWindow?.webContents.send('hotkey', { type: dictationActive ? 'down' : 'up' });
-  // если окно скрыто в трее — на время диктовки оно должно быть на экране,
-  // иначе человек не видит индикатор и не понимает, слушают его или нет
-  if (dictationActive) {
-    if (!mainWindow?.isVisible()) mainWindow?.show();
-    mainWindow?.showInactive();
-    windowWasHiddenForDictation = true;
-  } else if (windowWasHiddenForDictation) {
-    windowWasHiddenForDictation = false;
-    setTimeout(() => {
-      if (dictationActive) return;
-      const toTray = store?.get('zs:settings')?.closeToTray !== false;
-      if (toTray && !mainWindow?.isFocused?.()) mainWindow?.hide();
-    }, 900);
-  }
+  // Окно ZSpeakly не показываем: индикатор записи — отдельная плашка поверх
+  // всех приложений. Раньше окно выпрыгивало при каждом нажатии хоткея и
+  // закрывало собой то приложение, куда человек диктует.
+  if (dictationActive) showWindowIfIndicatorOff();
+}
+
+/**
+ * Если плавающий индикатор выключен в настройках, единственное место, где
+ * видно запись, — окно приложения. Тогда его надо показать (без фокуса).
+ */
+function showWindowIfIndicatorOff() {
+  const settings = store?.get('zs:settings') || {};
+  if (settings.showFloatingIndicator !== false) return;
+  if (!mainWindow?.isVisible?.()) mainWindow?.showInactive?.();
 }
 
 function navigate(page) {
@@ -233,6 +785,77 @@ function accelerator(keys = []) {
   return keys.map((k) => map[k] || k).join('+');
 }
 
+// Сочетания, уже занятые внутри приложения: globalShortcut.register на занятое
+// сочетание возвращает false и ничего не сообщает. Из-за этого «Режим агента»
+// и часть инструкций молча не работали — их сочетания совпадали с диктовкой.
+const usedAccels = new Set();
+
+/** Зарегистрировать сочетание или честно сказать, что оно занято. */
+function registerAccel(accel, handler, info = {}) {
+  if (!accel) return false;
+  if (usedAccels.has(accel)) {
+    mainWindow?.webContents.send('hotkey:conflict', {
+      id: info.id || '',
+      keys: info.keys || [],
+      reason: 'сочетание уже занято другой функцией ZSpeakly',
+    });
+    return false;
+  }
+  try {
+    const ok = globalShortcut.register(accel, handler) !== false;
+    if (ok) {
+      usedAccels.add(accel);
+      return true;
+    }
+    mainWindow?.webContents.send('hotkey:conflict', {
+      id: info.id || '',
+      keys: info.keys || [],
+      reason: 'сочетание занято другой программой',
+    });
+    return false;
+  } catch (err) {
+    console.warn('[hotkeys] не удалось зарегистрировать', accel, err.message);
+    mainWindow?.webContents.send('hotkey:conflict', {
+      id: info.id || '',
+      keys: info.keys || [],
+      reason: err.message,
+    });
+    return false;
+  }
+}
+
+// Одиночное нажатие диктовки и двойное («агент») на одном сочетании:
+// глобальные сочетания не дают события отпускания, поэтому различаем по паузе.
+let lastDictPress = 0;
+let dictPressTimer = null;
+
+function onDictationPress(agentOnDouble) {
+  if (!agentOnDouble) {
+    toggleDictation();
+    return;
+  }
+  const now = Date.now();
+  if (now - lastDictPress < 420) {
+    // Второе нажатие: только что начатую диктовку отменяем БЕЗ распознавания
+    // (иначе короткий обрывок превращался в «слишком короткую запись»)
+    // и открываем «агента».
+    clearTimeout(dictPressTimer);
+    lastDictPress = 0;
+    if (dictationActive) {
+      dictationActive = false;
+      mainWindow?.webContents.send('hotkey', { type: 'cancel' });
+    }
+    showWindowForDictation();
+    mainWindow?.webContents.send('hotkey', { type: 'agent' });
+    return;
+  }
+  lastDictPress = now;
+  clearTimeout(dictPressTimer);
+  // Диктовка стартует сразу: раньше она ждала 430 мс, чтобы отличить двойное
+  // нажатие, и человек слышал «щелчок» с задержкой.
+  toggleDictation();
+}
+
 /**
  * Голосовые сочетания из раздела «Горячие клавиши». Раньше список был только
  * подписями в интерфейсе: тумблеры включались, клавиши не работали.
@@ -244,31 +867,62 @@ function accelerator(keys = []) {
  */
 function registerVoiceHotkeys(settings = {}) {
   const list = Array.isArray(settings.voiceHotkeys) ? settings.voiceHotkeys : [];
+  const dictKey = settings.dictationKey || 'Control+Alt+Space';
+  if (dictKey !== trayDictKey) {
+    trayDictKey = dictKey;
+    refreshTrayMenu();
+  }
   for (const hk of list) {
     if (!hk?.enabled || !hk.keys?.length) continue;
-    const accel = hk.id === 'dictation' ? settings.dictationKey || accelerator(hk.keys) : accelerator(hk.keys);
+    const accel = hk.id === 'dictation' ? dictKey : accelerator(hk.keys);
     if (!accel) continue;
-    try {
-      if (hk.id === 'dictation' || hk.id === 'screen-aware') {
-        // удержание: нажали — слушаем, отпустили — распознаём
-        globalShortcut.register(accel, () => {
+    // «Диктовка» уже висит на этом сочетании, а «Агент» с тем же сочетанием
+    // ловится двойным нажатием в её обработчике — второй раз не регистрируем.
+    if (accel === dictKey && (hk.id === 'dictation' || hk.id === 'agent')) continue;
+    const info = { id: hk.id, keys: hk.keys };
+    if (hk.id === 'dictation' || hk.id === 'screen-aware') {
+      // глобальные сочетания не присылают отпускание клавиши, поэтому это
+      // переключатель: нажали — слушаем, нажали ещё раз — распознаём
+      registerAccel(
+        accel,
+        () => {
           showWindowForDictation();
           mainWindow?.webContents.send('hotkey', {
-            type: 'down',
-            mode: hk.mode === 'toggle' ? 'toggle' : 'hold',
+            type: 'toggle',
+            mode: 'toggle',
             screenAware: hk.id === 'screen-aware',
           });
-        });
-      } else if (hk.id === 'hands-free') {
-        globalShortcut.register(accel, () => {
+        },
+        info,
+      );
+    } else if (hk.id === 'hands-free') {
+      registerAccel(
+        accel,
+        () => {
           showWindowForDictation();
           mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle' });
-        });
-      } else if (hk.id === 'agent') {
-        // двойное нажатие = «агент», одиночное = обычная диктовка
-        let lastAt = 0;
-        let timer = null;
-        globalShortcut.register(accel, () => {
+        },
+        info,
+      );
+    } else if (hk.id === 'voice-command') {
+      // Командный режим: выделение забирается на нажатии, речь — сама команда.
+      // Переключатель, как у «свободных рук»: глобальные сочетания не дают
+      // события отпускания клавиши.
+      registerAccel(
+        accel,
+        () => {
+          showWindowForDictation();
+          mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle', command: true });
+        },
+        info,
+      );
+    } else if (hk.id === 'agent') {
+      // двойное нажатие = «агент», одиночное = обычная диктовка
+      let lastAt = 0;
+      let timer = null;
+      registerAccel(
+        accel,
+        () => {
           const now = Date.now();
           if (now - lastAt < 420) {
             clearTimeout(timer);
@@ -285,62 +939,84 @@ function registerVoiceHotkeys(settings = {}) {
               mainWindow?.webContents.send('hotkey', { type: 'toggle', mode: 'toggle' });
             }
           }, 430);
-        });
-      }
-    } catch (err) {
-      console.warn('[hotkeys] не удалось зарегистрировать', hk.id, accel, err.message);
-      mainWindow?.webContents.send('hotkey:conflict', { id: hk.id, keys: hk.keys, reason: err.message });
+        },
+        info,
+      );
     }
   }
 }
 
-/** Диктовка из трея или с клавиши: окно должно быть видно. */
+/**
+ * Диктовка с клавиши или из трея.
+ *
+ * Окно больше не показываем: состояние видно на плавающем индикаторе, а
+ * всплывающее окно перекрывало чужое приложение. Если человек хочет видеть
+ * окно — он его откроет сам.
+ */
 function showWindowForDictation() {
-  if (!mainWindow?.isVisible()) mainWindow?.show();
-  mainWindow?.showInactive();
-  windowWasHiddenForDictation = true;
+  showWindowIfIndicatorOff();
+}
+
+/** Control+Alt+Space → Ctrl + Alt + Space (как в интерфейсе). */
+function prettyAccel(accel) {
+  return String(accel || '')
+    .split('+')
+    .map((part) => (part === 'Control' ? 'Ctrl' : part))
+    .join(' + ');
 }
 
 function registerShortcuts(settings = {}) {
   globalShortcut.unregisterAll();
+  usedAccels.clear();
+  // Сменили сочетания — история нажатий «для двойного клика» больше не нужна.
+  // Иначе одно нажатие сразу после переназначения считалось вторым и вместо
+  // диктовки открывало «агента».
+  lastDictPress = 0;
+  clearTimeout(dictPressTimer);
   const dictKey = settings.dictationKey || 'Control+Alt+Space';
-  try {
-    globalShortcut.register(dictKey, () => toggleDictation());
-  } catch (err) {
-    console.warn('[hotkeys] dictation failed', err.message);
+  if (dictKey !== trayDictKey) {
+    trayDictKey = dictKey;
+    refreshTrayMenu();
   }
-  registerVoiceHotkeys(settings);
-  try {
-    globalShortcut.register('Control+Shift+V', () => navigate('clipboard'));
-    globalShortcut.register('Control+,', () => sendCommand('settings'));
-    // сочетания из раздела «Буфер обмена» — раньше это были только подписи в UI
-    const clipActions = [
-      ['Shift+Control+A', 'screenshot'],
-      ['Shift+Control+R', 'record'],
-      ['Shift+Control+S', 'note'],
-    ];
-    for (const [accel, action] of clipActions) {
-      globalShortcut.register(accel, () => {
+  const voice = Array.isArray(settings.voiceHotkeys) ? settings.voiceHotkeys : [];
+  // «Агент» по умолчанию висит на том же сочетании, что диктовка: различаем
+  // одиночное и двойное нажатие, иначе включённый агент не работал вовсе.
+  const agentOnSameKey = voice.some(
+    (hk) => hk?.id === 'agent' && hk.enabled && hk.keys?.length && accelerator(hk.keys) === dictKey,
+  );
+  registerAccel(dictKey, () => onDictationPress(agentOnSameKey), { id: 'dictation' });
+  registerVoiceHotkeys({ ...settings, dictationKey: dictKey });
+  registerAccel('Control+Shift+V', () => navigate('clipboard'), { id: 'clipboard-panel' });
+  registerAccel('Control+,', () => sendCommand('settings'), { id: 'settings' });
+  // сочетания из раздела «Буфер обмена» — раньше это были только подписи в UI
+  const clipActions = [
+    ['Shift+Control+A', 'screenshot'],
+    ['Shift+Control+R', 'record'],
+    ['Shift+Control+S', 'note'],
+  ];
+  for (const [accel, action] of clipActions) {
+    registerAccel(
+      accel,
+      () => {
         if (!mainWindow?.isVisible()) mainWindow?.show();
         mainWindow?.webContents.send('clipboard:action', action);
         if (action !== 'panel') mainWindow?.webContents.send('navigate', 'clipboard');
-      });
-    }
-  } catch (err) {
-    console.warn('[hotkeys] служебные сочетания не зарегистрированы', err.message);
+      },
+      { id: `clipboard-${action}` },
+    );
   }
 
   // AI-инструкции из раздела «Горячие клавиши» (пресеты + свои инструкции)
   const actions = Array.isArray(settings.textActions) ? settings.textActions : [];
   for (const action of actions) {
     if (!action?.enabled || !action.keys?.length) continue;
-    try {
-      globalShortcut.register(accelerator(action.keys), () => {
+    registerAccel(
+      accelerator(action.keys),
+      () => {
         mainWindow?.webContents.send('text-action', action.id);
-      });
-    } catch (err) {
-      console.warn('[hotkeys] action failed', action.id, err.message);
-    }
+      },
+      { id: action.id, keys: action.keys },
+    );
   }
 }
 
@@ -401,6 +1077,56 @@ function processName(pid) {
   }
 }
 
+// ── Пароли в буфере обмена ─────────────────────────────────────────────────
+/**
+ * Похоже ли скопированное на пароль или токен.
+ *
+ * Задача не «угадать всё», а не хранить открытым текстом то, что человек
+ * копирует из менеджера паролей: одна строка, без пробелов, 8–80 символов,
+ * минимум три класса символов (строчные, заглавные, цифры, знаки).
+ */
+function looksLikeSecret(text) {
+  const value = String(text || '');
+  if (value.length < 8 || value.length > 80) return false;
+  if (/\s/.test(value)) return false;
+  if (/^https?:\/\//i.test(value)) return false;
+  const classes =
+    Number(/[a-zа-яё]/.test(value)) +
+    Number(/[A-ZА-ЯЁ]/.test(value)) +
+    Number(/[0-9]/.test(value)) +
+    Number(/[^\w\s]/.test(value));
+  return classes >= 3;
+}
+
+/** Системное хранилище (DPAPI на Windows) доступно? */
+function canEncrypt() {
+  try {
+    return Boolean(safeStorage?.isEncryptionAvailable?.());
+  } catch {
+    return false;
+  }
+}
+
+/** Зашифровать строку → base64 или null, если шифрование недоступно. */
+function encryptText(text) {
+  try {
+    if (!canEncrypt()) return null;
+    return safeStorage.encryptString(String(text)).toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+/** Расшифровать base64 → строка или null. */
+function decryptText(cipher) {
+  try {
+    if (!cipher || !canEncrypt()) return null;
+    return safeStorage.decryptString(Buffer.from(String(cipher), 'base64'));
+  } catch {
+    return null;
+  }
+}
+
 // ── Буфер обмена ───────────────────────────────────────────────────────────
 function startClipboardWatch() {
   stopClipboardWatch();
@@ -410,17 +1136,26 @@ function startClipboardWatch() {
 
     const text = clipboard.readText();
     // свой вставленный диктант не пишем в историю буфера
-    const ownText = Boolean(text) && text === lastInsertedText;
+    const ownText =
+      Boolean(text) && text === lastInsertedText && Date.now() - lastInsertedAt < OWN_TEXT_TTL;
     if (ownText) lastClipboardText = text;
     else if (text && text !== lastClipboardText) {
       lastClipboardText = text;
+      // Пароль из менеджера паролей не храним открытым текстом: если системное
+      // хранилище доступно (DPAPI на Windows), в профиль уходит только шифр,
+      // а в окно — маска. Иначе честно помечаем запись как «незашифрованную».
+      const secret = looksLikeSecret(text);
+      const cipher = secret ? encryptText(text) : null;
       foregroundWindow().then((win) => {
         const source = win.app
           ? `${win.app}${win.title ? ` — ${win.title}` : ''}`
           : 'Системный буфер';
         mainWindow?.webContents.send('clipboard:item', {
-          kind: 'text',
-          text,
+          kind: secret && cipher ? 'password' : 'text',
+          // открытый пароль не отправляем в рендерер вовсе
+          text: secret && cipher ? '' : text,
+          cipher: cipher || undefined,
+          encrypted: Boolean(cipher),
           source,
           app: win.app || '',
           windowTitle: win.title || '',
@@ -454,6 +1189,24 @@ function stopClipboardWatch() {
 
 // ── IPC ────────────────────────────────────────────────────────────────────
 function registerIpc() {
+  // whisper-server держит модель в памяти — при выходе его нужно закрыть,
+  // иначе процесс останется висеть после закрытия приложения
+  if (!registerIpc._serverHooked) {
+    registerIpc._serverHooked = true;
+    app.on('before-quit', () => {
+      try {
+        hudWindow?.destroy?.();
+        hudWindow = null;
+      } catch {
+        /* ignore */
+      }
+      try {
+        require('./whisper.cjs').stopServer();
+      } catch {
+        /* ignore */
+      }
+    });
+  }
   // Асинхронное чтение: preload.store.get() ходит через invoke, а не sendSync.
   // Без этого обработчика вызов молча зависал.
   ipcMain.handle('store:get', (_e, key) => store.get(key) ?? null);
@@ -464,7 +1217,28 @@ function registerIpc() {
   ipcMain.on('store:size', (event) => {
     event.returnValue = store.sizeSync();
   });
-  ipcMain.handle('store:set', (_e, key, value) => store.set(key, value));
+  // Ручной выбор модели в настройках закрепляем: дальше приложение не будет
+  // менять его само (иначе «оно передумало» выглядит как поломка).
+  ipcMain.handle('store:set', (_e, key, value) => {
+    try {
+      if (key === 'zs:settings' && value && typeof value === 'object') {
+        const prev = store.get('zs:settings') || {};
+        if ((prev.whisperModel && value.whisperModel && prev.whisperModel !== value.whisperModel) ||
+            (prev.recognitionEngine !== 'whisper' && value.recognitionEngine === 'whisper')) {
+          store.set('zs:modelPinned', true);
+          // Модель выбрали руками — прошлое «мы сами спустились» больше не в счёт
+          try {
+            store.set('zs:autoDowngraded', false);
+          } catch {
+            /* не мешает самой записи */
+          }
+        }
+      }
+    } catch {
+      /* не мешаем самой записи */
+    }
+    return store.set(key, value);
+  });
   ipcMain.handle('store:remove', (_e, key) => store.remove(key));
 
   ipcMain.handle('win:minimize', () => mainWindow?.minimize());
@@ -473,23 +1247,163 @@ function registerIpc() {
     if (mainWindow.isMaximized()) mainWindow.unmaximize();
     else mainWindow.maximize();
   });
+  // Состояние окна для заголовка: приложение может открыться уже развёрнутым
+  // (оно это помнит), и иконка должна сразу показывать «Восстановить».
+  ipcMain.handle('win:state', () => {
+    try {
+      return { maximized: mainWindow?.isMaximized?.() === true };
+    } catch {
+      return { maximized: false };
+    }
+  });
   ipcMain.handle('win:close', () => mainWindow?.close());
   ipcMain.handle('win:badge', (_e, value) => {
     // На Windows бейдж не поддерживается — обновляем подсказку в трее.
-    try {
-      tray?.setToolTip(Number(value) ? `ZSpeakly — ${value} новых` : 'ZSpeakly — офлайн голосовой ввод');
-    } catch {
-      /* ignore */
-    }
+    unreadCount = Math.max(0, Number(value) || 0);
+    updateTrayTooltip();
   });
 
-  ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {
-    const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
-    const status = whisper.status(model);
-    if (!status.available) {
-      logger.error('stt', 'Распознавание недоступно', { model, reason: status.reason });
-      return { ok: false, text: '', reason: status.reason };
+  /**
+   * Подстройка по фактическим замерам, а не по обещаниям каталога.
+   *
+   * Человек жалуется не на «модель small», а на «двадцать секунд речи — двадцать
+   * секунд ожидания». Поэтому меряем реальность: сколько секунд речи и сколько
+   * секунд счёта. Если движок считает медленнее, чем вчетверо быстрее реального
+   * времени (двадцать секунд речи дольше пяти), — после двух таких диктовок
+   * переходим на ступень легче и говорим об этом словами.
+   *
+   * Ручной выбор уважаем: если модель выбрана в настройках, стоит zs:modelPinned
+   * и мы её не трогаем. За сессию не больше двух переключений, чтобы приложение
+   * не «передумывало» каждую минуту.
+   */
+  let slowStrikes = 0;
+  let autoSwitches = 0;
+
+  function downloadedModels() {
+    const st = models.modelStatus();
+    return Object.keys(st.models || {}).filter((id) => (st.models[id]?.available || st.models[id]?.downloaded));
+  }
+
+  function maybeAutoTune(ms, seconds, model) {
+    try {
+      const settings = store?.get('zs:settings') || {};
+      // само правило — в electron/speedTune.cjs: его проверяет смоук, а не
+      // «надеемся, что в бою сработает». Порог там же: вчетверо быстрее
+      // реального времени — это и есть обещанные пять секунд на двадцать.
+      const verdict = speedTune.decide({
+        ms,
+        seconds,
+        model,
+        autoOptimize: settings.autoOptimize !== false,
+        pinned: store?.get('zs:modelPinned') === true,
+        downloaded: downloadedModels(),
+        strikes: slowStrikes,
+        switches: autoSwitches,
+      });
+      slowStrikes = verdict.strikes;
+      if (verdict.reason === 'slow-once' || verdict.reason === 'cap') {
+        logger.info('stt', 'Движок не успевает — ждём подтверждения', {
+          model,
+          ms,
+          seconds: Math.round(seconds * 10) / 10,
+          realtime: Math.round(verdict.realtime * 10) / 10,
+          reason: verdict.reason,
+        });
+      }
+      if (!verdict.switchTo) return '';
+      const lighter = verdict.switchTo;
+      autoSwitches += 1;
+      store.set('zs:settings', { ...settings, whisperModel: lighter });
+      // Запоминаем, что спустились сами: при следующем запуске поднимать
+      // качество обратно на ту же машину — значит спорить с замерами.
+      try {
+        store.set('zs:autoDowngraded', true);
+      } catch {
+        /* не мешает переключению */
+      }
+      const payload = {
+        from: model,
+        to: lighter,
+        reason: 'slow',
+        ms,
+        seconds: Math.round(seconds * 10) / 10,
+        realtime: Math.round(verdict.realtime * 10) / 10,
+      };
+      try {
+        mainWindow?.webContents.send('stt:auto-tune', payload);
+      } catch {
+        /* окна может не быть */
+      }
+      logger.warn('stt', 'Модель переключена на ступень легче: не успевала', {
+        keep: true,
+        from: model,
+        to: lighter,
+        ms,
+        seconds: Math.round(seconds * 10) / 10,
+        realtime: Math.round(verdict.realtime * 10) / 10,
+      });
+      return lighter;
+    } catch {
+      return '';
     }
+  }
+
+  /**
+   * При старте: если на этой машине стоит заведомо тяжёлая модель (например,
+   * small на 2 ядрах), а подходящая уже скачана — переходим на неё сами.
+   * Человеческий выбор уважаем: после ручной смены модели в настройках стоит
+   * zs:modelPinned, и трогать её мы не будем.
+   */
+  applyHardwareModel = function applyHardwareModel() {
+    try {
+      const settings = store?.get('zs:settings') || {};
+      const current = settings.whisperModel || 'base';
+      const st = models.modelStatus();
+      const downloaded = Object.keys(st.models || {}).filter((id) => (st.models[id]?.available || st.models[id]?.downloaded));
+      const decision = hardware.plan({
+        ...hardware.thisMachine(),
+        current,
+        downloaded,
+        pinned: store?.get('zs:modelPinned') === true,
+        autoOptimize: settings.autoOptimize !== false,
+        downgradedByApp: store?.get('zs:autoDowngraded') === true,
+      });
+      if (!decision.switchTo) return '';
+      const pick = decision.pick;
+      store.set('zs:settings', { ...settings, whisperModel: pick.id });
+      // Поднялись — пометка больше не нужна: следующее падение снова её поставит
+      if (decision.up) {
+        try {
+          store.set('zs:autoDowngraded', false);
+        } catch {
+          /* не мешает переключению */
+        }
+      }
+      try {
+        mainWindow?.webContents.send('stt:auto-tune', {
+          from: current,
+          to: pick.id,
+          reason: decision.up ? 'quality' : 'hardware',
+          why: pick.why,
+        });
+      } catch {
+        /* окна может не быть */
+      }
+      logger.info('stt', 'Модель подобрана под железо', { keep: true, from: current, to: pick.id, why: pick.why });
+      return pick.id;
+    } catch {
+      return '';
+    }
+  };
+
+  /** Распознавание PCM: одна запись — один проход whisper (см. `canSplit` ниже). */
+  async function transcribePcm(payload) {
+    const sttSettingsNow = store?.get('zs:settings') || {};
+    const model = sttSettingsNow.whisperModel || payload?.model || 'small';
+    // Язык записи может отличаться от общего из-за правила активного окна.
+    // Одно решение используется для ONNX, Whisper и подсказок.
+    const requestedLang = typeof payload?.lang === 'string' ? payload.lang.trim() : '';
+    const lang = String(requestedLang || sttSettingsNow.language || 'ru').toLowerCase().split(/[-_]/)[0] || 'ru';
     // ВАЖНО: Buffer.from(Int16Array) копирует ПОБАЙТОВО значения (младший байт),
     // а не сырые байты — звук превращался в мусор и whisper возвращал пустоту.
     // Uint8Array/Buffer — уже байты, их можно передавать как есть.
@@ -502,53 +1416,786 @@ function registerIpc() {
       logger.error('stt', 'Пустая запись пришла в распознавание', { bytes: 0 });
       return { ok: false, text: '', reason: 'пустая запись' };
     }
+    // Тишину и «дыхание» в микрофон не отправляем в whisper: на пустом звуке он
+    // выдумывает фразы вроде «Продолжение следует», и это выглядит как поломка.
+    const audio = whisper.analysePcm?.(raw, payload?.sampleRate || 16000);
+    if (audio && audio.seconds < 0.3) {
+      logger.warn('stt', 'Запись короче 0,3 с — не распознаём', { keep: true, seconds: audio.seconds });
+      return { ok: false, text: '', code: 'too-short', reason: 'запись короче 0,3 секунды' };
+    }
+    if (audio && audio.rms < 40 && audio.peak < 250) {
+      logger.warn('stt', 'В записи тишина — не распознаём', { keep: true, rms: audio.rms, peak: audio.peak });
+      return {
+        ok: false,
+        text: '',
+        code: 'silent',
+        reason: 'микрофон не слышит голос — проверьте устройство и уровень записи',
+      };
+    }
     logger.info('stt', 'Начало распознавания', {
       keep: true,
       model,
       bytes: raw.length,
       seconds: payload?.durationMs ? Math.round(payload.durationMs / 100) / 10 : undefined,
     });
+    // Подготовка звука: убрать гул и постоянную составляющую, выровнять
+    // громкость до −18 dBFS. Облачные сервисы делают это до модели; без этого
+    // тихий микрофон для whisper — шум, и текст выходит «кашей».
+    const prepared = audioPrep.preparePcm(raw, {
+      sampleRate: payload?.sampleRate || 16000,
+      silentRms: 40,
+    });
+    if (prepared.gainDb > 0 || prepared.skipped) {
+      logger.info('stt', 'Подготовка звука', {
+        keep: true,
+        gainDb: prepared.gainDb,
+        rmsBefore: prepared.before.rms,
+        rmsAfter: prepared.after.rms,
+        peakAfter: prepared.after.peak,
+        skipped: prepared.skipped || '',
+      });
+    }
+    const prepped = prepared.pcm;
+    // Внутренние паузы сжимаем: длинная тишина посреди фразы и время ест, и
+    // даёт модели повод «додумать» текст. Края обрежем следом.
+    const compacted = audioPrep.compactSilence(prepped, { sampleRate: payload?.sampleRate || 16000 });
+    if (compacted.removedMs > 300) {
+      logger.info('stt', 'Сжатие пауз', {
+        keep: true,
+        removedMs: Math.round(compacted.removedMs),
+        beforeMs: Math.round((prepped.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+        afterMs: Math.round((compacted.pcm.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+      });
+    }
+    const pausesMs = Math.round(compacted.removedMs);
+    // Паузы по краям записи убираем: whisper точнее на коротком чистом фрагменте.
+    const trimStarted = Date.now();
+    const trimmed =
+      whisper.trimSilence?.(compacted.pcm, payload?.sampleRate || 16000) || compacted.pcm;
+    const trimMs = Date.now() - trimStarted;
+    logger.info('stt', 'Обрезка тишины', {
+      keep: true,
+      beforeMs: Math.round((compacted.pcm.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+      afterMs: Math.round((trimmed.length / 2 / (payload?.sampleRate || 16000)) * 1000),
+    });
+    // Русская модель: решение принимает политика (electron/sttEngine.cjs), а не
+    // настройка. Модель локальная, поэтому приватность не меняется — зато она
+    // не путает русские слова и сама ставит знаки препинания.
+    const gigaamStatus = gigaam.status();
+    const parakeetStatus = parakeet.status();
+    const engineChoice = chooseEngine({
+      language: lang,
+      preference: sttSettingsNow.recognitionEngine,
+      gigaam: gigaamStatus,
+      parakeet: { ...parakeetStatus, languages: parakeet.LANGUAGES },
+      seconds: audio?.seconds || 0,
+    });
+    if (engineChoice.engine === 'gigaam') {
+      const srGiga = payload?.sampleRate || 16000;
+      const gigaStarted = Date.now();
+      const resGiga = await gigaam.transcribe(trimmed, {
+        sampleRate: srGiga,
+        onProgress: (done, total) => {
+          try {
+            mainWindow?.webContents.send('stt:progress', { done, total });
+          } catch {
+            /* окно закрыто */
+          }
+        },
+      });
+      if (resGiga.code === 'cancelled') return resGiga;
+      if (resGiga.ok && resGiga.text) {
+        logger.info('stt', 'Распознано русской моделью', {
+          keep: true,
+          ms: resGiga.ms,
+          chunks: resGiga.chunks,
+          chars: resGiga.text.length,
+        });
+        return {
+          ok: true,
+          text: resGiga.text,
+          ms: resGiga.ms,
+          mode: 'gigaam',
+          model: 'gigaam-v3',
+          parts: resGiga.chunks,
+          timeline: { total: Date.now() - gigaStarted, pausesMs, gainDb: prepared.gainDb },
+        };
+      }
+      // Не получилось — говорим об этом в журнал и распознаём прежним движком:
+      // человек должен получить текст, а не пустоту с молчанием в отчёте.
+      logger.warn('stt', 'Русская модель не справилась, распознаём прежним движком', {
+        keep: true,
+        reason: resGiga.reason || 'пустой текст',
+        ms: resGiga.ms,
+      });
+    }
+    if (engineChoice.engine === 'parakeet') {
+      const srPara = payload?.sampleRate || 16000;
+      const paraStarted = Date.now();
+      const resPara = await parakeet.transcribe(trimmed, {
+        sampleRate: srPara,
+        onProgress: (done, total) => {
+          try {
+            mainWindow?.webContents.send('stt:progress', { done, total });
+          } catch {
+            /* окно закрыто */
+          }
+        },
+      });
+      if (resPara.code === 'cancelled') return resPara;
+      if (resPara.ok && resPara.text) {
+        logger.info('stt', 'Распознано европейской моделью', {
+          keep: true,
+          language: lang,
+          ms: resPara.ms,
+          chunks: resPara.chunks,
+          chars: resPara.text.length,
+        });
+        return {
+          ok: true,
+          text: resPara.text,
+          ms: resPara.ms,
+          mode: 'parakeet',
+          model: 'parakeet-tdt-0.6b-v3',
+          parts: resPara.chunks,
+          timeline: { total: Date.now() - paraStarted, pausesMs, gainDb: prepared.gainDb },
+        };
+      }
+      // Не получилось — говорим об этом в журнал и распознаём прежним движком:
+      // человек должен получить текст, а не пустоту с молчанием в отчёте.
+      logger.warn('stt', 'Европейская модель не справилась, распознаём прежним движком', {
+        keep: true,
+        reason: resPara.reason || 'пустой текст',
+        ms: resPara.ms,
+      });
+    }
+    const status = whisper.status(model);
+    if (!status.available) {
+      logger.error('stt', 'Резервное распознавание недоступно', { model, reason: status.reason });
+      return { ok: false, text: '', reason: status.reason };
+    }
     const dir = path.join(app.getPath('temp'), 'zspeakly');
     fs.mkdirSync(dir, { recursive: true });
-    const wav = path.join(dir, `dictation-${Date.now()}.wav`);
+    // Имя уникальное: живая расшифровка и финальный проход могут идти почти
+    // одновременно, и два вызова с одним именем перезаписали бы друг другу звук.
+    const wav = path.join(dir, `dictation-${Date.now()}-${randomUUID().slice(0, 8)}.wav`);
+    const wavStarted = Date.now();
     try {
-      fs.writeFileSync(wav, writeWav(raw, payload?.sampleRate || 16000));
+      fs.writeFileSync(wav, writeWav(trimmed, payload?.sampleRate || 16000));
     } catch (err) {
       return { ok: false, text: '', reason: `не записал wav: ${err.message}` };
     }
-    const prompt = (store?.get('zs:dictionary') || [])
-      .map((d) => d.word)
-      .slice(0, 40)
-      .join(', ');
+    const wavMs = Date.now() - wavStarted;
+    // Подсказка движку: термины с экрана (если локальная модель их назвала) +
+    // словарь. Словарь не передаём, когда тумблер «Применять словарь при
+    // диктовке» выключен: настройка должна работать целиком.
+    const tail = promptTailByLang[lang] || '';
+    const seenPrompt = buildSttPrompt({
+      context: String(payload?.contextPrompt || '').trim(),
+      // Хвост прошлой фразы: маленькая модель не помнит имена и пишет их
+      // «на слух», а подсказка возвращает привычные слова без затрат CPU.
+      // При выключенном словаре подсказок движку не даём вовсе: настройка
+      // «применять словарь при диктовке» означает «не подсказывать ничего».
+      tail: payload?.useDictionary === false ? '' : tail,
+      // Словарь не передаём, когда тумблер «Применять словарь при диктовке»
+      // выключен: настройка должна работать целиком.
+      dictionary: payload?.useDictionary === false ? [] : store?.get('zs:dictionary') || [],
+    });
+    const prompt = seenPrompt.prompt;
+    if (prompt) {
+      // Видно в журнале: сколько слов словаря реально ушло движку. Без этого
+      // «добавил слово, а оно не распознаётся» невозможно объяснить.
+      logger.info('stt', 'Подсказка распознаванию', {
+        keep: true,
+        chars: prompt.length,
+        dictionaryWords: seenPrompt.dictionaryWords,
+        contextChars: seenPrompt.contextChars,
+        tailChars: seenPrompt.tailChars || 0,
+      });
+    }
     try {
       const started = Date.now();
-      const res = await whisper.transcribe(wav, { lang: payload?.lang || 'ru', model, prompt });
+      const sttSettings = store?.get('zs:settings') || {};
+      const keepLoaded = sttSettings.keepModelLoaded === true;
+      // VAD включён по умолчанию: тишина не должна занимать движок. Но на
+      // короткой фразе тишины по краям уже нет (её срезал trimSilence), а VAD
+      // всё равно стоит времени — на записи до 3 секунд он только мешает.
+      const useVad = sttSettings.vadEnabled !== false && (audio?.seconds || 0) > 3;
+      const sr = payload?.sampleRate || 16000;
+      // Сколько проходов движка делает одна диктовка.
+      //
+      // Раньше запись длиннее 15 секунд резалась по паузам на 2–3 фрагмента —
+      // «чтобы whisper не путал фразы через паузу». На деле каждый фрагмент
+      // это отдельный проход: без прогретого сервера ещё и повторная загрузка
+      // весов с диска. Двадцать секунд речи превращались в три прохода и
+      // двадцать секунд ожидания — ровно та жалоба, что пришла от человека.
+      //
+      // Теперь: окно whisper — 30 секунд, поэтому всё, что короче 28 с, идёт
+      // одним проходом. Длиннее — дробим, но только когда есть прогретый
+      // сервер (он считает части без повторной загрузки весов) и частей не
+      // больше трёх. Без сервера whisper-cli сам режет файл на 30-секундные
+      // окна внутри одного процесса: один холодный старт вместо трёх.
+      const spokenSeconds = audio?.seconds || 0;
+      const serverNow = whisper.serverStatus?.() || {};
+      const wasWarm = serverNow.ready === true;
+      const canSplit = keepLoaded && spokenSeconds > 28 && serverNow.ready === true;
+      const parts = canSplit ? whisper.splitBySilence?.(trimmed, sr) || [trimmed] : [trimmed];
+      const MAX_PARTS = 3;
+      let chunks = parts;
+      if (parts.length > MAX_PARTS) {
+        chunks = [];
+        const per = Math.ceil(parts.length / MAX_PARTS);
+        for (let i = 0; i < parts.length; i += per) {
+          chunks.push(Buffer.concat(parts.slice(i, i + per)));
+        }
+      }
+      const totalParts = chunks.length;
+      const reportProgress = (done) => {
+        if (totalParts < 2) return;
+        try {
+          mainWindow?.webContents.send('stt:progress', { done, total: totalParts });
+        } catch {
+          /* окно уже закрыто */
+        }
+      };
+      // Сколько точности можно позволить: решают замеры прошлых проходов, а
+      // не «железо вообще». На слабой машине остаётся быстрый путь, на быстрой
+      // сразу считаем честно — иначе запас простаивал бы.
+      // Человек может попросить честный проход сам — кнопкой «Переспросить
+      // точно»: тот же звук, но с широким перебором. Замеры здесь не решают:
+      // это его время и его выбор.
+      const decodeMode = (store?.get('zs:settings') || {}).decodeMode || 'auto';
+      const auto = decodePlan(decodeHistory, { seconds: spokenSeconds, mode: decodeMode });
+      const plan =
+        payload?.thorough === true ? { ...auto, thorough: true, reason: 'по просьбе человека' } : auto;
+      if (plan.factor !== null) {
+        logger.info('stt', 'Режим распознавания', {
+          keep: true,
+          thorough: plan.thorough,
+          factor: Math.round((plan.factor || 0) * 100) / 100,
+          why: plan.reason,
+        });
+      }
+      let res;
+      if (chunks.length > 1) {
+        // Части длинной записи считаем параллельно, если прогретый сервер сам
+        // умеет несколько запросов (на 8+ логических потоках). На слабой машине
+        // — строго по очереди: два whisper-процесса делят ядра и оба медленнее.
+        const server = whisper.serverStatus?.() || {};
+        const canParallel = server.ready === true && Number(server.processors) > 1;
+        const parallel = canParallel ? Math.min(chunks.length, Number(server.processors)) : 1;
+        const texts = new Array(chunks.length).fill('');
+        const modes = new Array(chunks.length).fill('');
+        let failed = null;
+        let done = 0;
+        const runPart = async (index) => {
+          const partWav = `${wav}.${index}.wav`;
+          try {
+            fs.writeFileSync(partWav, writeWav(chunks[index], sr));
+            const one = await whisper.transcribe(partWav, {
+              lang,
+              model,
+              prompt,
+              keepLoaded,
+              useVad,
+              thorough: plan.thorough,
+            });
+            done += 1;
+            reportProgress(done);
+            if (!one?.ok) {
+              if (!failed) failed = one;
+              return;
+            }
+            if (one.text) texts[index] = String(one.text).trim();
+            modes[index] = one.mode || 'cli';
+          } finally {
+            fs.rmSync(partWav, { force: true });
+          }
+        };
+        if (parallel > 1) {
+          let next = 0;
+          const workers = Array.from({ length: parallel }, async () => {
+            while (next < chunks.length && !failed) {
+              const index = next;
+              next += 1;
+              // eslint-disable-next-line no-await-in-loop
+              await runPart(index);
+            }
+          });
+          await Promise.all(workers);
+        } else {
+          for (let i = 0; i < chunks.length; i += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            await runPart(i);
+            if (failed) break;
+          }
+        }
+        if (failed) {
+          // кусок не распознался — честнее отдать ошибку, чем половину текста
+          logger.warn('stt', 'Фрагмент диктовки не распознан', { keep: true, reason: failed.reason || '' });
+          res = failed;
+        } else {
+          const joined = texts
+            .filter(Boolean)
+            .map((t) => (/[.!?…:;]$/.test(t) ? t : `${t}.`))
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const usedModes = new Set(modes);
+          res = { ok: true, text: joined, parts: texts.length, mode: usedModes.size === 1 ? modes[0] : 'mixed' };
+          logger.info('stt', 'Диктовка распознана по фрагментам', {
+            keep: true,
+            parts: texts.length,
+            chars: joined.length,
+          });
+        }
+      } else {
+        reportProgress(1);
+        res = await whisper.transcribe(wav, {
+          lang,
+          model,
+          prompt,
+          keepLoaded,
+          useVad,
+          thorough: plan.thorough,
+        });
+        // Второй, честный проход — только если первый вышел подозрительным:
+        // пусто, два слова на десять секунд, заглушка или зацикливание.
+        // Облачные сервисы перебирают варианты всегда; мы платим временем
+        // только за те фразы, где точность действительно потерялась.
+        const judge = judgeText(res?.text || '', { seconds: spokenSeconds });
+        // «Быстро» — обещание скорости: второй проход только когда текста нет
+        // совсем. Пустой текст — это не «подозрительно», это провал, его надо
+        // спасать даже в быстром режиме.
+        const retryAllowed = !plan.skipRetry || !String(res?.text || '').trim();
+        if (
+          retryAllowed &&
+          shouldRetry({
+            judge,
+            plan,
+            partial: payload?.partial === true,
+            seconds: spokenSeconds,
+            code: res?.code || '',
+          })
+        ) {
+          logger.warn('stt', 'Текст вышел подозрительным — второй проход', {
+            keep: true,
+            why: judge.why,
+            chars: (res?.text || '').length,
+            seconds: Math.round(spokenSeconds * 10) / 10,
+          });
+          const again = await whisper.transcribe(wav, {
+            lang,
+            model,
+            prompt,
+            keepLoaded: false,
+            useVad,
+            thorough: true,
+          });
+          if (again?.ok && betterText(res?.text || '', again.text || '')) {
+            logger.info('stt', 'Второй проход дал больше текста', {
+              keep: true,
+              before: (res?.text || '').length,
+              after: again.text.length,
+              ms: again.ms || 0,
+            });
+            res = { ...again, secondPass: true };
+          } else {
+            logger.info('stt', 'Второй проход не улучшил текст — оставлен первый', {
+              keep: true,
+              first: (res?.text || '').length,
+              second: (again?.text || '').length,
+            });
+          }
+        }
+      }
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
+      const ms = Date.now() - started;
+      // «Просто повторы»: на тишине и шуме движок зацикливается и выдаёт одну
+      // фразу несколько раз. Сворачиваем повтор до одного вхождения и пишем об
+      // этом в журнал — вставлять петлю в чужое окно нельзя.
+      if (res?.ok && res.text) {
+        const collapsed = collapseRepetition(res.text);
+        if (collapsed !== res.text) {
+          logger.warn('stt', 'Свёрнут повтор движка', {
+            keep: true,
+            was: res.text.length,
+            now: collapsed.length,
+            loop: looksLikeLoop(res.text),
+          });
+          res = { ...res, text: collapsed };
+        }
+      }
+      // Когда модель последний раз была нужна: по этому времени таймер решает,
+      // пора ли освободить память после простоя.
+      lastModelUseAt = Date.now();
+      // Замер для адаптивного режима: сколько стоил этот проход на секунду речи
+      if (res?.ok && spokenSeconds > 0.5) {
+        decodeHistory.push({ ms: ms, seconds: spokenSeconds });
+        if (decodeHistory.length > 8) decodeHistory.shift();
+      }
+      // Хвост этой фразы подскажет слова следующей: имена и термины не будут
+      // каждый раз «на слух». Только для настоящей диктовки, не для черновика.
+      if (res?.ok && res.text && payload?.partial !== true) {
+        const echoFree = stripPromptEcho(res.text, tail);
+        promptTailByLang[lang] = tailForPrompt(echoFree, STT_TAIL_LIMIT);
+        // Если после вырезания подсказки не осталось текста, значит человек
+        // просто повторил те же слова — это не эхо, и выбрасывать их нельзя.
+        if (echoFree !== res.text && echoFree.trim().length >= 2) {
+          res = { ...res, text: echoFree };
+        }
+      }
+      // whisper иногда «дослышит» фразу, которой не было (тишина, музыка).
+      if (res?.ok && whisper.isPhantom?.(res.text)) {
+        logger.warn('stt', 'Отброшена фраза-галлюцинация', { keep: true, chars: res.text.length });
+        return { ok: false, text: '', code: 'phantom', reason: 'в записи не было речи' };
+      }
+      // Где именно ушло время: обрезка тишины, запись wav, сам счёт движка.
+      // Без этого «двадцать секунд» невозможно разложить на причины — а без
+      // разложения любые оптимизации превращаются в угадывание.
+      const timeline = {
+        trimMs,
+        wavMs,
+        computeMs: ms,
+        parts: totalParts,
+        mode: res?.mode || 'cli',
+        warm: wasWarm,
+        model,
+        pausesMs,
+        gainDb: prepared.gainDb,
+      };
       logger[res?.ok ? 'info' : 'error']('stt', res?.ok ? 'Распознавание завершено' : 'Распознавание не удалось', {
         keep: true,
-        ms: Date.now() - started,
+        ms,
+        // режим и число фрагментов: по ним видно, платил ли человек за
+        // холодную загрузку модели (cli) или считал прогретый сервер (server)
+        mode: res?.mode || 'cli',
+        parts: totalParts,
+        trimMs,
+        wavMs,
+        warm: wasWarm,
         chars: String(res?.text || '').length,
         reason: res?.reason || '',
       });
-      return res;
+      if (!res?.ok && res?.code === 'empty') {
+        // whisper-cli отработал, но текста не дал. Показывать человеку его
+        // служебный stderr («read_audio_data: reading audio data…») бессмысленно.
+        logger.warn('stt', 'Движок не расслышал речь', { keep: true, ms });
+        return {
+          ok: false,
+          text: '',
+          code: 'unheard',
+          reason: 'движок не расслышал речь — говорите ближе к микрофону',
+          ms,
+        };
+      }
+      const autoTunedTo = res?.ok ? maybeAutoTune(ms, audio?.seconds || 0, model) : '';
+      return {
+        ...res,
+        ms,
+        // sttMs — то же число для интерфейса: «распознано за 0,8 с» вместо
+        // «обработка» без объяснений
+        sttMs: ms,
+        mode: res?.mode || 'cli',
+        // разложение по этапам: интерфейс показывает «сколько считал движок»,
+        // а диагностика — ещё и сколько стоила подготовка звука
+        timeline,
+        model,
+        // как считали: сразу честно или вторым проходом после подозрительного
+        thorough: plan.thorough === true,
+        secondPass: res?.secondPass === true,
+        autoTunedTo: autoTunedTo || undefined,
+        audio: audio
+          ? {
+              seconds: Math.round(audio.seconds * 10) / 10,
+              rms: audio.rms,
+              gainDb: prepared.gainDb,
+              pausesMs,
+            }
+          : undefined,
+        chunks: totalParts > 1 ? totalParts : undefined,
+      };
     } catch (err) {
       logger.error('stt', 'Исключение в распознавании', { stack: String(err?.stack || err) });
       return { ok: false, text: '', reason: String(err?.message || err) };
     } finally {
       fs.rmSync(wav, { force: true });
     }
+  }
+
+  // Очередь распознавания. Раньше живая расшифровка и итоговый проход шли
+  // одновременно: два whisper-процесса, каждый с моделью в памяти — на слабой
+  // машине это «съело всю оперативку» и не дало текста. Теперь:
+  //  - одновременно выполняется ровно один проход;
+  //  - итоговый проход отменяет живой, а не ждёт его;
+  //  - новый живой проход не встаёт в очередь за итоговым.
+  let sttLock = Promise.resolve();
+  const sttJobs = new Set(); // активный проход и ожидающие его запросы
+  const cancelEngines = (reason) => {
+    const russian = gigaam.cancel?.() || false;
+    const european = parakeet.cancel?.() || false;
+    const legacy = whisper.cancel?.(reason) || false;
+    return russian || european || legacy;
+  };
+
+  ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {
+    const isPartial = payload?.partial === true;
+    if (isPartial && [...sttJobs].some((job) => !job.isPartial && !job.cancelled)) {
+      return { ok: false, text: '', code: 'superseded', reason: '' };
+    }
+    if (!isPartial) {
+      const partials = [...sttJobs].filter((job) => job.isPartial && !job.cancelled);
+      for (const job of partials) job.cancelled = true;
+      if (partials.some((job) => job.active)) cancelEngines('вытеснено итоговым проходом');
+    }
+    const prev = sttLock;
+    let release = () => {};
+    sttLock = new Promise((resolve) => { release = resolve; });
+    const job = { isPartial, active: false, cancelled: false };
+    sttJobs.add(job);
+    try {
+      await prev;
+      if (job.cancelled) return { ok: false, text: '', code: isPartial ? 'superseded' : 'cancelled', reason: '' };
+      job.active = true;
+      const result = await transcribePcm(payload);
+      return job.cancelled ? { ok: false, text: '', code: 'cancelled', reason: 'распознавание отменено' } : result;
+    } finally {
+      sttJobs.delete(job);
+      release();
+    }
+  });
+
+  // Отмена распространяется и на очередь: иначе сразу после остановки одного
+  // прохода следующий неожиданно начнёт распознавать и вставлять текст.
+  ipcMain.handle('stt:cancel', () => {
+    const hadJobs = sttJobs.size > 0;
+    for (const job of sttJobs) job.cancelled = true;
+    return cancelEngines('отменено пользователем') || hadJobs;
   });
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));
-  ipcMain.handle('stt:transcribe', async (_e, payload) => whisper.transcribe(payload?.wav, payload || {}));
 
+  // Вставка текста в активное окно.
+  //
+  // Порядок попыток — от самого надёжного к самому простому, и он же пишется
+  // в журнал вместе с причиной отказа, чтобы «ничего не вставилось» можно было
+  // разобрать по фактам, а не догадками:
+  //   1. свой exe помощника (SendInput) — не зависит от PowerShell и политик;
+  //   2. буфер обмена + Ctrl+V через того же помощника;
+  //   3. прежние пути: резидентный PowerShell-хост и одноразовый PowerShell;
+  //   4. если не вышло ничего — текст остаётся в буфере, и человеку это сказано.
   ipcMain.handle('text:insert', async (_e, text) => {
     const value = String(text || '');
-    if (!value) return false;
+    if (!value) return { ok: false, reason: 'пустой текст' };
     lastInsertedText = value;
+    lastInsertedAt = Date.now();
+    // Окно запоминаем до того, как спрятать своё: после вставки фокус уже
+    // может уехать, а «Отмени» нужно знать, куда именно мы печатали.
+    try {
+      if (process.platform === 'win32' && !mainWindow?.isFocused?.()) {
+        const at = await foregroundWindow();
+        if (at && (at.app || at.title)) {
+          lastInsertTarget = { app: at.app || '', title: at.title || '', at: Date.now() };
+        }
+      }
+    } catch {
+      /* не смогли узнать окно — отмена просто не сработает, вставка важнее */
+    }
+    const started = Date.now();
+    const input = getWinInput();
+    const known = input.status();
+    if (process.platform === 'win32' && !known.ready) await input.ensure();
+
+    // Настройка «Способ вставки»: SendInput не трогает буфер обмена вовсе.
+    const insertMethod = String((store?.get('zs:settings') || {}).insertMethod || 'clipboard');
+    if (insertMethod === 'sendinput' && process.platform === 'win32') {
+      const direct = await insertViaSendInput(value);
+      if (direct === true) {
+        logger.info('insert', 'Текст введён без буфера', { keep: true, ms: Date.now() - started, chars: value.length, method: 'sendinput' });
+        lastClipboardText = clipboard.readText() || '';
+        lastInsertInfo = { at: Date.now(), ok: true, method: 'sendinput', ms: Date.now() - started, reason: '' };
+        return { ok: true, method: 'sendinput', ms: Date.now() - started };
+      }
+      if (direct && typeof direct === 'object' && direct.partial > 0) {
+        // Часть уже в окне: буфером дублировать нельзя, иначе текст задвоится.
+        lastClipboardText = clipboard.readText() || '';
+        lastInsertInfo = {
+          at: Date.now(),
+          ok: false,
+          method: 'sendinput',
+          ms: Date.now() - started,
+          reason: `введено ${direct.partial} из ${direct.total}`,
+        };
+        return { ok: false, method: 'sendinput', partial: direct.partial, total: direct.total, reason: direct.reason || '' };
+      }
+    }
     lastClipboardText = value; // чтобы мониторинг не добавил это в историю
+    // Вставляем через буфер обмена, но чужой буфер не съедаем: копируем текст,
+    // вставляем его в активное окно и возвращаем прежнее содержимое. Иначе
+    // после каждой диктовки у человека пропадало то, что он скопировал.
+    const previousText = clipboard.readText();
+    const previousImage = clipboard.readImage();
+    const hadImage = previousImage && !previousImage.isEmpty();
     clipboard.writeText(value);
-    return pasteToActiveWindow();
+    // Сначала свой помощник: Ctrl+V через SendInput, без PowerShell и без
+    // Add-Type. Именно на этом шаге раньше и ломалось — политика PowerShell
+    // запрещала сценарий, вставка молча не происходила, а уведомление «Готово»
+    // приходило. Теперь отказ виден в журнале с причиной.
+    let pasted = false;
+    let method = '';
+    let reason = '';
+    if (process.platform === 'win32' && input.status().ready) {
+      hideWindowForInsert();
+      const fast = await input.paste();
+      restoreWindowAfterInsert();
+      if (fast?.ok) {
+        pasted = true;
+        method = 'win-input';
+      } else {
+        reason = String(fast?.reason || '');
+      }
+    }
+    // mshta: не зависит от политик PowerShell и не требует сборки помощника
+    if (!pasted) {
+      hideWindowForInsert();
+      pasted = await pasteViaMshta();
+      restoreWindowAfterInsert();
+      method = pasted ? 'mshta' : '';
+      if (!pasted && !reason) reason = 'Ctrl+V через mshta не сработал';
+    }
+    if (!pasted) {
+      pasted = await pasteToActiveWindow();
+      method = pasted ? 'powershell' : '';
+      if (!pasted) reason = reason ? `${reason}; PowerShell не помог` : 'Ctrl+V не сработал (PowerShell)';
+    }
+    if (!pasted) {
+      // Вставка не удалась — и тогда текст ОСТАЁТСЯ в буфере: именно это
+      // обещает тост «Текст скопирован в буфер, нажмите Ctrl+V». Раньше буфер
+      // всё равно восстанавливался через 700 мс, и обещанного текста там не было.
+      lastClipboardText = value;
+      logger.error('insert', 'Вставка не удалась, текст оставлен в буфере', {
+        keep: true,
+        ms: Date.now() - started,
+        chars: value.length,
+        method: method || 'none',
+        reason,
+        helper: input.status().reason || 'готов',
+      });
+      lastInsertInfo = { at: Date.now(), ok: false, method: 'clipboard', ms: Date.now() - started, reason };
+      return { ok: false, method: 'clipboard', reason, helper: input.status() };
+    }
+    logger.info('insert', 'Текст вставлен', { keep: true, ms: Date.now() - started, chars: value.length, method });
+    setTimeout(() => {
+      try {
+        // Если за эти полсекунды человек успел что-то скопировать сам — его
+        // содержимое важнее нашего восстановления, буфер не перетираем.
+        if (clipboard.readText() !== value) {
+          lastClipboardText = clipboard.readText();
+          return;
+        }
+        if (hadImage) clipboard.writeImage(previousImage);
+        else if (previousText) clipboard.writeText(previousText);
+        // буфер вернулся к прежнему значению — мониторинг не должен считать
+        // это новой записью
+        lastClipboardText = previousText || '';
+      } catch {
+        /* ignore */
+      }
+    }, 500);
+    lastInsertInfo = { at: Date.now(), ok: true, method, ms: Date.now() - started, reason: '' };
+    return { ok: true, method, ms: Date.now() - started };
+  });
+  // «Отмени»: убрать последнюю вставку из активного окна.
+  //
+  // Стирание — Backspace на каждый вставленный символ: при наборе по одному
+  // символу Ctrl+Z в чужом приложении снял бы только последнюю букву. Правила
+  // осторожные, потому что назад дороги нет: только Windows, только две минуты
+  // после вставки и только то же приложение на переднем плане.
+  ipcMain.handle('text:undo-last', async () => {
+    let fg = null;
+    try {
+      fg = await foregroundWindow();
+    } catch {
+      fg = null;
+    }
+    // Все «нельзя» собраны в electron/undoLast.cjs — их можно проверить без
+    // Windows: план говорит, сколько символов стирать или почему нет.
+    const plan = planUndo({
+      text: lastInsertedText,
+      at: lastInsertedAt,
+      platform: process.platform,
+      own: Boolean(mainWindow?.isFocused?.()),
+      targetApp: lastInsertTarget.app,
+      currentApp: fg?.app || '',
+    });
+    if (!plan.ok) return plan;
+    const chars = plan.chars;
+    const input = getWinInput();
+    if (!input.status().ready) await input.ensure();
+    if (!input.status().ready) {
+      return { ok: false, reason: `помощник ввода не готов: ${input.status().reason}` };
+    }
+    const started = Date.now();
+    const res = await input.erase(chars);
+    if (!res?.ok) {
+      return {
+        ok: false,
+        reason: res?.reason || `стёрто ${res?.erased ?? 0} из ${chars}`,
+      };
+    }
+    const removed = lastInsertedText;
+    const windowName = lastInsertTarget.app || '';
+    lastInsertedText = '';
+    lastInsertedAt = 0;
+    lastInsertTarget = { app: '', title: '', at: 0 };
+    // Свой же Backspace не должен попасть в историю буфера как «копирование».
+    lastClipboardText = clipboard.readText() || '';
+    logger.info('insert', 'Последняя вставка убрана', {
+      keep: true,
+      chars,
+      window: windowName,
+      ms: Date.now() - started,
+    });
+    return {
+      ok: true,
+      chars,
+      window: windowName,
+      preview: removed.slice(0, 120),
+      ms: Date.now() - started,
+    };
+  });
+
+  // Состояние вставки: чем вставляем, что было в прошлый раз и почему не
+  // вышло. Без этого «текст не вставляется» — неразрешимая жалоба.
+  ipcMain.handle('input:status', async () => {
+    const input = getWinInput();
+    if (process.platform === 'win32' && !input.status().ready) await input.ensure();
+    return {
+      ...input.status(),
+      helper: inputHost.status(),
+      last: lastInsertInfo,
+      platform: process.platform,
+    };
+  });
+
+  // Куда уйдёт текст: наше окно (значит, вставляем прямо в поле) или чужое
+  // приложение с названием — это видно в интерфейсе ещё до вставки.
+  ipcMain.handle('text:target', async () => {
+    const own = Boolean(mainWindow?.isFocused?.());
+    if (own) return { own: true, app: '', title: '' };
+    if (process.platform !== 'win32') return { own: false, app: '', title: '' };
+    // Сначала резидентный помощник: заголовок окна он отдаёт без запуска новых
+    // процессов (иначе на каждую фразу поднимался бы отдельный PowerShell).
+    if (inputHost.available() && inputHost.status().ready) {
+      const fast = await inputHost.target();
+      if (fast?.ok && fast.title) return { own: false, app: '', title: fast.title };
+    }
+    try {
+      const win = await foregroundWindow();
+      return { own: false, app: win.app || '', title: win.title || '' };
+    } catch {
+      return { own: false, app: '', title: '' };
+    }
   });
   ipcMain.handle('text:paste', () => pasteToActiveWindow());
   ipcMain.handle('text:read-selection', () => readSelection());
@@ -567,20 +2214,14 @@ function registerIpc() {
       if (!source) return { ok: false, reason: 'экран недоступен' };
       const image = source.thumbnail;
       clipboard.writeImage(image);
-      const item = {
-        kind: 'image',
-        text: '',
-        image: image.resize({ width: 480 }).toDataURL(),
-        source: `Снимок экрана — ${source.name || 'дисплей'}`,
-        createdAt: Date.now(),
-      };
-      mainWindow?.webContents.send('clipboard:item', item);
-      // превью отдаём и вызывающему: заметка со скриншотом строится из него
+      // Событие clipboard:item здесь НЕ отправляем: рендерер сам добавляет
+      // снимок по ответу (иначе каждый снимок попадал в историю дважды).
       return {
         ok: true,
         width: image.getSize().width,
         height: image.getSize().height,
-        image: item.image,
+        image: image.resize({ width: 480 }).toDataURL(),
+        source: `Снимок экрана — ${source.name || 'дисплей'}`,
       };
     } catch (err) {
       return { ok: false, reason: err.message };
@@ -731,7 +2372,60 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('diag:status', () => logger.status());
+  /**
+   * Снимок «что на этой машине работает»: его видно в интерфейсе и он же
+   * попадает в отчёт. Раньше человек мог лишь догадываться, зарегистрировались
+   * ли глобальные сочетания и включён ли мониторинг буфера.
+   */
+  function systemReport() {
+    try {
+      const os = require('node:os');
+      const st = models.modelStatus();
+      const s = store?.get('zs:settings') || {};
+      const model = s.whisperModel || 'base';
+      let autoLaunch = null;
+      try {
+        autoLaunch = app.getLoginItemSettings?.()?.openAtLogin ?? null;
+      } catch {
+        autoLaunch = null;
+      }
+      return {
+        platform: process.platform,
+        version: app.getVersion?.() || '',
+        cpus: (os.cpus() || []).length,
+        ramGb: Math.round(((os.totalmem() || 0) / 1024 ** 3) * 10) / 10,
+        engine: st.bin ? 'есть' : 'нет',
+        vad: Boolean(st.vad),
+        model,
+        modelDownloaded: Boolean(st.models?.[model]?.available || st.models?.[model]?.downloaded),
+        hotkeys: [...usedAccels],
+        insertMethod: s.insertMethod === 'sendinput' ? 'sendinput' : 'clipboard',
+        insertSupported: process.platform === 'win32',
+        clipboardWatch: Boolean(clipboardTimer),
+        micPreroll: s.micPreroll === true,
+        autoLaunch,
+        // Готовность быстрого пути: прогрета ли модель в памяти и поднят ли
+        // резидентный помощник ввода. Именно эти две вещи решают, будет
+        // вставка мгновенной или «через полминуты».
+        // время запуска окна и загрузки весов — «почему долго» без гаданий
+        startupMs,
+        warmMs,
+        engineWarm: whisper.serverStatus?.().ready === true,
+        engineWarming: whisper.serverStatus?.().warming === true,
+        engineMode: whisper.serverStatus?.().last?.mode || '',
+        lastSttMs: whisper.serverStatus?.().last?.ms || 0,
+        inputHost: inputHost.status(),
+        // Помощник ввода и итог последней вставки: по отчёту видно, собран ли
+        // он и чем закончилась попытка, — иначе «не вставляется» не разобрать.
+        winInput: getWinInput().status(),
+        lastInsert: lastInsertInfo,
+      };
+    } catch (err) {
+      return { error: String(err?.message || err) };
+    }
+  }
+
+  ipcMain.handle('diag:status', () => ({ ...logger.status(), system: systemReport() }));
   ipcMain.handle('diag:recent', (_e, limit) => logger.recent(limit));
   ipcMain.handle('diag:set-enabled', (_e, enabled) => {
     logger.setEnabled(Boolean(enabled));
@@ -753,7 +2447,24 @@ function registerIpc() {
   // Рабочем столе и проводник с выделенным файлом.
   ipcMain.handle('diag:save-report', async () => {
     try {
-      const text = logger.report({ limit: 300 });
+      // снимок настроек: по отчёту должно быть видно, как была настроена
+      // диктовка. Слова словаря и id микрофона не выводятся — только счётчики.
+      const s = store?.get('zs:settings') || {};
+      const text = logger.report({
+        limit: 300,
+        settings: {
+          model: s.whisperModel || 'small',
+          keepModelLoaded: s.keepModelLoaded === true,
+          language: s.language || 'ru',
+          // 'auto' — приложение решает само; true/false — ручной выбор
+          liveWhisper: s.liveWhisper === true ? 'включена вручную' : s.liveWhisper === false ? 'выключена вручную' : 'сама',
+          micPreroll: s.micPreroll === true,
+          insertMethod: s.insertMethod || 'clipboard',
+          customMic: Boolean(s.audioDeviceId && s.audioDeviceId !== 'default'),
+          dictionaryWords: (store?.get('zs:dictionary') || []).length,
+        },
+        system: systemReport(),
+      });
       const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
       const dir = app.getPath('desktop') || app.getPath('documents');
       fs.mkdirSync(dir, { recursive: true });
@@ -812,14 +2523,381 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('models:status', () => models.modelStatus());
+  // Резервная копия данных: в установленной версии файл кладём на Рабочий стол
+  // (как отчёт диагностики) — так пользователь точно знает, где он лежит.
+  ipcMain.handle('data:save-backup', async (_e, json) => {
+    if (typeof json !== 'string' || !json.trim()) return { ok: false, reason: 'пустые данные' };
+    let data;
+    try {
+      data = JSON.parse(json);
+    } catch {
+      return { ok: false, reason: 'данные не похожи на JSON' };
+    }
+    if (!data || typeof data !== 'object') return { ok: false, reason: 'данные не похожи на JSON' };
+    try {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const dir = app.getPath('desktop') || app.getPath('documents');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `zspeakly-backup-${stamp}.json`);
+      fs.writeFileSync(file, json, 'utf8');
+      try {
+        shell.showItemInFolder?.(file);
+      } catch {
+        /* файл всё равно на месте */
+      }
+      return { ok: true, path: file };
+    } catch (err) {
+      return { ok: false, reason: String(err?.message || err) };
+    }
+  });
+
+  registerHudIpc();
+
+  ipcMain.handle('models:warm', async (_e, payload) => {
+    const settings = store?.get('zs:settings') || {};
+    const id = (payload && typeof payload === 'object' ? payload.model : payload) || settings.whisperModel || 'small';
+    const force = Boolean(payload && typeof payload === 'object' && payload.force);
+    // явный клик по тумблеру приходит раньше, чем настройка доедет до диска
+    if (!force && !settings.keepModelLoaded) return { ok: false, reason: 'включите «Держать модель в памяти»' };
+    const res = await whisper.warm(id);
+    logger.info('stt', res.ok ? 'Модель загружена в память' : 'Прогрев модели не удался', {
+      keep: true,
+      model: id,
+      port: res.port || 0,
+      reason: res.reason || '',
+    });
+    return res;
+  });
+
+  // Сравнение моделей на одной записи. Человек говорит фразу один раз, а мы
+  // прогоняем её через скачанные модели и отдаём текст, время и попадания в
+  // словарь. Победителя объявляет интерфейс и только по словарю — приложение
+  // не знает, что человек сказал, и не имеет права решать за него.
+  // Что приложение знает о скорости этой машины: коэффициент, режим и что из
+  // этого следует. Без этого «Слабая машина» была бы словами без цифр.
+  ipcMain.handle('stt:decode-stats', async () => {
+    const mode = (store?.get('zs:settings') || {}).decodeMode || 'auto';
+    const factor = averageFactor(decodeHistory);
+    const plan = decodePlan(decodeHistory, { seconds: 0, mode });
+    return {
+      mode,
+      factor: factor === null ? null : Math.round(factor * 100) / 100,
+      samples: decodeHistory.length,
+      thorough: plan.thorough,
+      reason: plan.reason,
+      slow: plan.slow === true,
+    };
+  });
+
+  ipcMain.handle('models:compare', async (_e, payload) => {
+    const pcmView = payload?.pcm;
+    const raw =
+      pcmView instanceof Uint8Array
+        ? Buffer.from(pcmView.buffer, pcmView.byteOffset, pcmView.byteLength)
+        : Buffer.from(pcmView?.buffer || pcmView || [], pcmView?.byteOffset || 0, pcmView?.byteLength || 0);
+    if (!raw.length) return { ok: false, reason: 'пустая запись' };
+    const models = Array.from(
+      new Set((Array.isArray(payload?.models) ? payload.models : []).map(String).filter(Boolean)),
+    ).slice(0, 3);
+    if (!models.length) return { ok: false, reason: 'нет моделей для сравнения' };
+    const sr = Number(payload?.sampleRate) || 16000;
+    const lang = payload?.lang || 'ru';
+    const prepared = audioPrep.preparePcm(raw, { sampleRate: sr, silentRms: 40 });
+    if (prepared.before.rms < 40 || prepared.before.peak < 250) {
+      return { ok: false, reason: 'в записи тишина — скажите фразу целиком' };
+    }
+    const compacted = audioPrep.compactSilence(prepared.pcm, { sampleRate: sr });
+    const trimmed = whisper.trimSilence?.(compacted.pcm, sr) || compacted.pcm;
+    const dir = path.join(app.getPath('temp'), 'zspeakly');
+    fs.mkdirSync(dir, { recursive: true });
+    const wav = path.join(dir, `compare-${Date.now()}-${randomUUID().slice(0, 8)}.wav`);
+    try {
+      fs.writeFileSync(wav, writeWav(trimmed, sr));
+      const rows = [];
+      for (const model of models) {
+        const st = whisper.status(model);
+        if (!st.available) {
+          rows.push({ model, ok: false, reason: st.reason || 'модель не скачана' });
+          continue;
+        }
+        const started = Date.now();
+        // Сравниваем честно: одинаковый режим для всех, без адаптивных поблажек.
+        const res = await whisper.transcribe(wav, {
+          lang,
+          model,
+          prompt: '',
+          keepLoaded: false,
+          useVad: true,
+        });
+        rows.push({
+          model,
+          ok: Boolean(res?.ok && res.text),
+          text: res?.text || '',
+          ms: res?.ms || Date.now() - started,
+          reason: res?.ok ? '' : res?.reason || 'нет текста',
+        });
+        logger.info('stt', 'Сравнение моделей: проход', {
+          keep: true,
+          model,
+          ms: res?.ms || 0,
+          chars: (res?.text || '').length,
+        });
+      }
+      return {
+        ok: rows.some((row) => row.ok),
+        seconds: Math.round((trimmed.length / 2 / sr) * 10) / 10,
+        rows,
+        reason: rows.some((row) => row.ok) ? '' : 'ни одна модель не дала текст',
+      };
+    } finally {
+      fs.rmSync(wav, { force: true });
+    }
+  });
+
+  ipcMain.handle('models:status', () => {
+    const base = models.modelStatus();
+    // Какую модель whisper возьмёт на самом деле: выбранная может быть не
+    // скачана, тогда работает ближайшая доступная — интерфейс должен это
+    // показывать, а не делать вид, что выбранная уже стоит.
+    const preferred = (store?.get('zs:settings') || {}).whisperModel || 'small';
+    const active = whisper.findModel(preferred);
+    return {
+      ...base,
+      // движок нашёл VAD-модель сам (в комплекте или в профиле)
+      vadActive: Boolean(whisper.findVadModel?.()),
+      preferred,
+      active: active ? path.basename(active).replace(/^ggml-/, '').replace(/\.bin$/, '') : '',
+      // Русская модель: есть ли она, сколько занимает и почему не работает.
+      // Отдельного запроса интерфейсу не нужно — состояние приходит вместе с
+      // состоянием моделей, одной карточкой.
+      russian: gigaam.status(),
+      // Европейская модель: две карточки с моделями не должны требовать двух
+      // запросов — состояние приходит вместе с состоянием моделей.
+      european: { ...parakeet.status(), languages: parakeet.LANGUAGES },
+    };
+  });
+  /**
+   * Удаление модели из профиля. Отдаём и «сколько освободилось», и то,
+   * какая модель станет активной: интерфейс должен переключиться сам,
+   * а не оставить человека с выбранной, но удалённой моделью.
+   */
+  ipcMain.handle('models:delete', (_e, id) => {
+    const res = models.deleteModel(id);
+    if (!res.ok) return res;
+    const settings = store?.get('zs:settings') || {};
+    let switchedTo = '';
+    if (settings.whisperModel === id) {
+      // Выбранная модель удалена: берём ближайшую из оставшихся (findModel сам
+      // знает порядок замены), чтобы диктовка продолжала работать без ручных
+      // действий человека.
+      const left = whisper.findModel(id);
+      const name = left ? path.basename(left).replace(/^ggml-/, '').replace(/\.bin$/, '') : '';
+      if (name && name !== id) {
+        // настройку меняем и здесь (main — источник правды для распознавания),
+        // и в окне (ответ содержит switchedTo, рендерер обновит подпись)
+        switchedTo = name;
+        store.set('zs:settings', { ...settings, whisperModel: name });
+      }
+    }
+    // движок в памяти держал веса удалённой модели — освобождаем
+    try {
+      whisper.stopServer?.();
+    } catch {
+      /* сервера могло не быть */
+    }
+    logger.info('stt', 'Модель удалена', { keep: true, id, freedMb: res.freedMb, switchedTo });
+    return { ...res, switchedTo };
+  });
+
   ipcMain.handle('models:download', async (_e, id) => {
     const res = await models.downloadModel(id, (percent, received, total) => {
       mainWindow?.webContents.send('model:progress', { id, percent, received, total });
     });
     mainWindow?.webContents.send('model:progress', { id, percent: res.ok ? 100 : 0, done: true, ...res });
+    // Только что скачанную модель сразу держим в памяти: иначе первая
+    // диктовка после скачивания снова платит за загрузку весов.
+    if (res.ok) {
+      const cfg = store?.get('zs:settings') || {};
+      if (cfg.keepModelLoaded === true) {
+        whisper
+          .warm(id)
+          .then((warmRes) => {
+            if (warmRes?.ok) logger.info('stt', 'Модель прогрета после скачивания', { keep: true, id });
+          })
+          .catch(() => {});
+      }
+    }
     return res;
   });
+  /**
+   * Первый запуск: в установщике есть движок, но нет модели. Раньше человек
+   * узнавал об этом, наговорив минуту в пустоту. Теперь модель (и движок,
+   * если он почему-то не попал в сборку) докачивается в фоне, прогресс
+   * уходит в окно, а диктовка честно говорит, что ждёт загрузку.
+   */
+  let autoPrep = null;
+  const autoPrepareRecognition = () => {
+    if (autoPrep) return autoPrep;
+    const push = (payload) => {
+      try {
+        mainWindow?.webContents.send('model:progress', { auto: true, ...payload });
+      } catch {
+        /* окна ещё нет */
+      }
+    };
+    autoPrep = (async () => {
+      try {
+        let st = models.modelStatus();
+        if (!st.bin) {
+          logger.warn('stt', 'Движка нет в комплекте — скачиваю', { keep: true });
+          push({ id: 'engine', percent: 0 });
+          const res = await models.downloadEngine((percent) => push({ id: 'engine', percent }));
+          push({ id: 'engine', percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
+          if (!res.ok) return res;
+        }
+        // Движок есть, а сервера распознавания нет (так было в старых
+        // сборках): без него каждая диктовка платит за загрузку весов.
+        // Перекачиваем архив один раз — дальше модель живёт в памяти.
+        if (models.modelStatus().bin && !models.modelStatus().server) {
+          logger.warn('stt', 'В комплекте нет сервера распознавания — докачиваю движок', { keep: true });
+          push({ id: 'engine', percent: 0 });
+          const res = await models.downloadEngine((percent) => push({ id: 'engine', percent }), {
+            force: true,
+          });
+          push({ id: 'engine', percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
+          logger[res.ok ? 'info' : 'warn'](
+            'stt',
+            res.ok ? 'Сервер распознавания установлен' : 'Сервер распознавания не скачался',
+            { keep: true, reason: res.reason || '' },
+          );
+          if (res.canceled || res.cleanupFailed) return res;
+        }
+        // VAD весит меньше мегабайта — качаем сразу, чтобы тишина не попадала
+        // в движок с первой же диктовки
+        if (!models.modelStatus().vad) {
+          const vadRes = await models.downloadVad();
+          logger[vadRes.ok ? 'info' : 'warn'](
+            'stt',
+            vadRes.ok ? 'VAD-модель установлена' : 'VAD-модель не скачалась',
+            { keep: true, reason: vadRes.reason || '' },
+          );
+          if (vadRes.cleanupFailed) {
+            push({ id: 'vad', percent: 0, done: true, ok: false, reason: vadRes.reason || '' });
+          }
+          if (vadRes.canceled || vadRes.cleanupFailed) return vadRes;
+        }
+        st = models.modelStatus();
+        const downloaded = Object.values(st.models).filter((m) => m.available || m.downloaded);
+        if (downloaded.length || st.availableModel) return { ok: true, already: true };
+        // Модели нет вообще: берём ту, что подходит железу, а не «base для всех».
+        const settings0 = store?.get('zs:settings') || {};
+        const hw = hardware.thisMachine();
+        const pick = hardware.pickModel(hw);
+        const preferred = settings0.autoOptimize === false ? settings0.whisperModel || 'base' : pick.id;
+        const id = models.MODELS[preferred] ? preferred : 'base';
+        if (settings0.whisperModel !== id) {
+          try {
+            store.set('zs:settings', { ...settings0, whisperModel: id });
+            mainWindow?.webContents.send('stt:auto-tune', { from: '', to: id, reason: 'hardware', why: pick.why });
+          } catch {
+            /* окна может не быть */
+          }
+        }
+        logger.info('stt', 'Модель не скачана — качаю в фоне', { keep: true, model: id, tier: pick.tier, why: pick.why });
+        push({ id, percent: 0 });
+        const res = await models.downloadModel(id, (percent, received, total) =>
+          push({ id, percent, received, total }),
+        );
+        push({ id, percent: res.ok ? 100 : 0, done: true, ok: res.ok, reason: res.reason || '' });
+        logger[res.ok ? 'info' : 'warn']('stt', res.ok ? 'Модель скачана' : 'Модель не скачалась', {
+          keep: true,
+          model: id,
+          reason: res.reason || '',
+        });
+        // Страховка для автоподбора: лёгкая модель должна уже лежать на диске.
+        // Иначе, когда замеры покажут «не успевает», переключаться будет не на
+        // что — именно так автоподбор раньше и не срабатывал. Качаем в фоне
+        // через полминуты после основной: это десятки мегабайт, диктовку оно
+        // не задерживает.
+        if (res.ok) {
+          const lighter = hardware.lighterModel(id);
+          if (lighter && !(models.modelStatus().models?.[lighter]?.available || models.modelStatus().models?.[lighter]?.downloaded)) {
+            setTimeout(() => {
+              models
+                .downloadModel(lighter, (percent) => push({ id: lighter, percent }))
+                .then((extra) => {
+                  push({ id: lighter, percent: extra.ok ? 100 : 0, done: true, ok: extra.ok, reason: extra.reason || '' });
+                  logger[extra.ok ? 'info' : 'warn'](
+                    extra.ok ? 'Страховочная модель скачана в фоне' : 'Страховочная модель не скачалась',
+                    { keep: true, model: lighter, reason: extra.reason || '' },
+                  );
+                })
+                .catch(() => {});
+            }, 30000);
+          }
+        }
+        return res;
+      } catch (err) {
+        logger.error('stt', 'Автоподготовка распознавания не удалась', { reason: String(err?.message || err) });
+        return { ok: false, reason: String(err?.message || err) };
+      }
+    })().finally(() => { autoPrep = null; });
+    return autoPrep;
+  };
+
+  // интерфейс может попросить «подготовь ещё раз» (после сбоя сети)
+  prepareRecognition = autoPrepareRecognition;
+  ipcMain.handle('models:prepare', () => autoPrepareRecognition());
+
+  // Отмена одна на все загрузки: человек видит кнопку «Отменить скачивание»,
+  // а не три разных, и она обязана остановить ту модель, которая качается
+  // сейчас, — раньше отменялась только обычная, а русская продолжала качать.
+  ipcMain.handle('models:cancel', () => {
+    const legacy = models.cancelDownload();
+    const russian = gigaam.cancelDownload();
+    const european = parakeet.cancelDownload();
+    if (legacy?.ok || russian || european) return { ok: true };
+    return { ok: false, reason: legacy?.reason || 'нечего отменять' };
+  });
+  // Русская модель: скачивание с проверкой размера и хеша каждого файла.
+  // Прогресс идёт тем же событием, что и у остальных моделей, но с id
+  // «russian»: в интерфейсе это одна карточка, а не второй механизм.
+  ipcMain.handle('models:download-russian', async () => {
+    const res = await gigaam.downloadModel({
+      onProgress: ({ received, total, file }) => {
+        const percent = total ? Math.round((received / total) * 100) : 0;
+        mainWindow?.webContents.send('model:progress', { id: 'russian', percent, received, total, file });
+      },
+    });
+    const ok = res.available === true;
+    mainWindow?.webContents.send('model:progress', { id: 'russian', percent: ok ? 100 : 0, done: true, ok });
+    logger.info('stt', ok ? 'Русская модель готова' : 'Русская модель не скачалась', {
+      keep: true,
+      reason: res.reason || '',
+    });
+    return { ok, ...res };
+  });
+  ipcMain.handle('models:cancel-russian', () => gigaam.cancelDownload());
+  // Европейская модель: та же схема, другое событие прогресса («european»),
+  // чтобы две загрузки не путали проценты друг друга.
+  ipcMain.handle('models:download-european', async () => {
+    const res = await parakeet.downloadModel({
+      onProgress: ({ received, total, file }) => {
+        const percent = total ? Math.round((received / total) * 100) : 0;
+        mainWindow?.webContents.send('model:progress', { id: 'european', percent, received, total, file });
+      },
+    });
+    const ok = res.available === true;
+    mainWindow?.webContents.send('model:progress', { id: 'european', percent: ok ? 100 : 0, done: true, ok });
+    logger.info('stt', ok ? 'Европейская модель готова' : 'Европейская модель не скачалась', {
+      keep: true,
+      reason: res.reason || '',
+    });
+    return { ok, ...res };
+  });
+  ipcMain.handle('models:cancel-european', () => parakeet.cancelDownload());
   ipcMain.handle('models:import', async (_e, sourcePath) => models.importModel(sourcePath));
   ipcMain.handle('models:download-engine', async () => {
     const res = await models.downloadEngine((percent) => {
@@ -836,6 +2914,10 @@ function registerIpc() {
   });
   ipcMain.handle('update:download', () => updater?.download() || { status: 'error', reason: 'updater не готов' });
   ipcMain.handle('update:install', () => Boolean(updater?.install()));
+  // Пароли: расшифровка только по запросу из интерфейса («Показать»/«Копировать»).
+  ipcMain.handle('secret:available', () => canEncrypt());
+  ipcMain.handle('secret:reveal', (_e, cipher) => decryptText(cipher));
+
   ipcMain.handle('app:notify', (_e, payload) => showNotification(payload));
 
   // Открыть ссылку в браузере. Белый список: приложение не должно уметь
@@ -853,7 +2935,6 @@ function registerIpc() {
     require('electron').shell.openExternal(url);
     return true;
   });
-  ipcMain.handle('app:noop', () => null);
 
   // Выбор источника для getDisplayMedia (запись экрана / системный звук)
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
@@ -873,8 +2954,11 @@ function registerIpc() {
 }
 
 // Отправка клавиш в активное окно через PowerShell SendKeys (Windows-only)
-function sendKeys(keys) {
-  if (process.platform !== 'win32') return false;
+function sendKeys(keys, onDone) {
+  if (process.platform !== 'win32') {
+    onDone?.(false);
+    return false;
+  }
   const script = `Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 90; [System.Windows.Forms.SendKeys]::SendWait('${keys}')`;
   execFile(
     'powershell.exe',
@@ -882,6 +2966,10 @@ function sendKeys(keys) {
     { windowsHide: true },
     (err) => {
       if (err) console.warn('[sendKeys] failed', err.message);
+      // SendKeys не работает в окнах с повышенными правами и в некоторых играх:
+      // вызывающий код должен узнать, что вставка не удалась, и сказать человеку
+      // «текст в буфере, нажмите Ctrl+V» вместо тишины.
+      onDone?.(!err);
     },
   );
   return true;
@@ -899,6 +2987,19 @@ function readSelection() {
     }
     const previous = clipboard.readText();
     mainWindow?.blur();
+    // С помощником не нужно ждать запуск PowerShell: Ctrl+C уходит сразу,
+    // остаётся только дать приложению положить текст в буфер.
+    if (inputHost.available()) {
+      setTimeout(() => {
+        inputHost.copy().then(() => {
+          setTimeout(() => {
+            const text = clipboard.readText();
+            resolve(text && text !== previous ? text : text || '');
+          }, 160);
+        });
+      }, 60);
+      return;
+    }
     setTimeout(() => {
       sendKeys('^c');
       setTimeout(() => {
@@ -914,6 +3015,7 @@ function readSelection() {
 function replaceSelection(text) {
   return new Promise((resolve) => {
     lastInsertedText = String(text || '');
+    lastInsertedAt = Date.now();
     lastClipboardText = lastInsertedText;
     clipboard.writeText(String(text || ''));
     setTimeout(() => {
@@ -924,6 +3026,51 @@ function replaceSelection(text) {
 }
 
 /**
+ * Поднять помощника ввода заранее. Вызывается при старте приложения и при
+ * начале записи: пока человек говорит, PowerShell успевает запуститься, и
+ * вставка не платит за холодный старт.
+ */
+// Прогрев движка один на всё приложение: и при запуске, и при начале записи.
+// whisper.cjs сам решает, нужен ли новый сервер (если модель уже в памяти —
+// второй не поднимается), поэтому повторный вызов безопасен и дешёвый.
+let warmPromise = null;
+function warmRecognition(model = 'base') {
+  if (warmPromise) return warmPromise;
+  const startedAt = Date.now();
+  warmPromise = whisper
+    .warm(model)
+    .then((res) => {
+      if (res?.ok) {
+        warmMs = Date.now() - startedAt;
+        logger.info('stt', 'Модель в памяти', { keep: true, port: res.port || 0, ms: warmMs });
+      }
+      return res;
+    })
+    .catch(() => null)
+    .finally(() => {
+      // через минуту разрешаем ещё раз: модель могли сменить в настройках
+      setTimeout(() => {
+        warmPromise = null;
+      }, 60_000);
+    });
+  return warmPromise;
+}
+
+function warmInputHost() {
+  try {
+    if (!inputHost.available()) return;
+    if (inputHost.start()) {
+      // PING заодно проверяет, что процесс действительно отвечает
+      inputHost.request('PING').then((res) => {
+        if (!res?.ok) logger.warn('input', 'Помощник ввода не ответил', { reason: res?.reason || '' });
+      });
+    }
+  } catch (err) {
+    logger.warn('input', 'Помощник ввода не поднялся', { reason: String(err?.message || err) });
+  }
+}
+
+/**
  * Вставка в активное окно другого приложения.
  *
  * sendInputEvent бьёт только в наш рендерер, поэтому для чужих окон нужен
@@ -931,43 +3078,149 @@ function replaceSelection(text) {
  * Если в переменной окружения ZSPEAKLY_INPUT=app указан путь к helper.exe
  * (SendInput, вставка за ~30 мс), используется он.
  */
-function pasteToActiveWindow() {
-  if (process.platform !== 'win32') return false;
-
-  // прячем окно, чтобы фокус вернулся туда, где человек печатал
+// Прячем окно, только если фокус был в нём: тогда он вернётся туда, где
+// человек печатал. Если окно и так не в фокусе — ничего не трогаем, иначе
+// после вставки оно всплывало поверх чужого приложения.
+function hideWindowForInsert() {
   try {
-    if (mainWindow?.isFocused?.() && mainWindow.isVisible?.()) mainWindow.hide();
-    else mainWindow?.blur();
-    windowHiddenForInsert = true;
-  } catch {}
-
-  const helper = process.env.ZSPEAKLY_INPUT;
-  if (helper && fs.existsSync(helper)) {
-    execFile(helper, ['ctrl+v'], { windowsHide: true }, (err) => {
-      if (err) {
-        console.warn('[paste] helper failed, fallback', err.message);
-        setTimeout(() => sendKeys('^v'), 120);
-        restoreWindowAfterInsert();
-      }
-    });
-    return true;
+    const focused = Boolean(mainWindow?.isFocused?.() && mainWindow?.isVisible?.());
+    if (focused) mainWindow.hide();
+    else mainWindow?.blur?.();
+    windowHiddenForInsert = focused;
+  } catch {
+    windowHiddenForInsert = false;
   }
-
-  setTimeout(() => {
-    sendKeys('^v');
-    restoreWindowAfterInsert();
-  }, 60);
-  return true;
 }
 
-/** Вернуть окно ZSpeakly, когда вставка уже случилась. */
+/**
+ * Вставка без буфера обмена: SendInput с UNICODE-сканкодами.
+ *
+ * Возвращает:
+ *   true — текст введён целиком;
+ *   { ok: false, partial, total } — введена только часть, повторять нельзя;
+ *   null — SendInput не дал ничего, можно спокойно идти путём буфера.
+ */
+async function insertViaSendInput(value) {
+  hideWindowForInsert();
+  // Сначала резидентный помощник: С# уже скомпилирован, ввод идёт сразу.
+  // Одноразовый PowerShell остаётся запасным путём, если помощника нет.
+  let res = null;
+  if (inputHost.available()) {
+    const fast = await inputHost.type(value);
+    if (fast?.ok) {
+      restoreWindowAfterInsert();
+      return true;
+    }
+    if (fast?.typed > 0) {
+      restoreWindowAfterInsert();
+      return { ok: false, partial: fast.typed, total: fast.total, reason: fast.reason || '' };
+    }
+  }
+  res = await sendUnicodeText({ text: value, execFile });
+  restoreWindowAfterInsert();
+  if (res.ok) return true;
+  if (res.sent > 0) {
+    // Часть символов уже в чужом окне. Буфером дублировать нельзя: текст
+    // задвоится, и человек не поймёт, почему. Пусть интерфейс скажет правду.
+    console.warn('[insert] SendInput ввёл часть текста:', res.sent, 'из', res.total);
+    return { ok: false, partial: res.sent, total: res.total, reason: res.reason || '' };
+  }
+  return null;
+}
+
+/**
+ * Ctrl+V через mshta: `WScript.Shell.SendKeys` — часть Windows, её не касаются
+ * политики PowerShell (ExecutionPolicy, ConstrainedLanguage). Нужен как ещё один
+ * независимый путь: если PowerShell на машине запрещён, вставка всё равно будет.
+ * Сама по себе mshta умеет только аккорды, текст она не печатает — поэтому это
+ * именно запасной путь для «вставить из буфера».
+ */
+function pasteViaMshta() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve(false);
+      return;
+    }
+    const script = 'vbscript:CreateObject("WScript.Shell").SendKeys("^v"):close()';
+    execFile(
+      'mshta.exe',
+      [script],
+      { windowsHide: true, timeout: 8000 },
+      (error) => {
+        if (error) console.warn('[paste] mshta failed', error.message);
+        resolve(!error);
+      },
+    );
+  });
+}
+
+function pasteToActiveWindow() {
+  if (process.platform !== 'win32') return Promise.resolve(false);
+
+  hideWindowForInsert();
+
+  // Резидентный помощник: Ctrl+V уходит из уже работающего процесса. Раньше
+  // здесь на каждую вставку запускался powershell.exe — на слабом ПК это
+  // заметная доля паузы между «замолчал» и «текст появился».
+  if (inputHost.available()) {
+    return inputHost.paste().then((res) => {
+      if (res?.ok) {
+        restoreWindowAfterInsert();
+        return true;
+      }
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          sendKeys('^v', (ok) => {
+            restoreWindowAfterInsert();
+            resolve(ok);
+          });
+        }, 60);
+      });
+    });
+  }
+
+  return new Promise((resolve) => {
+    const helper = process.env.ZSPEAKLY_INPUT;
+    if (helper && fs.existsSync(helper)) {
+      execFile(helper, ['ctrl+v'], { windowsHide: true }, (err) => {
+        if (!err) {
+          restoreWindowAfterInsert();
+          resolve(true);
+          return;
+        }
+        console.warn('[paste] helper failed, fallback', err.message);
+        setTimeout(() => {
+          sendKeys('^v', (ok) => {
+            restoreWindowAfterInsert();
+            resolve(ok);
+          });
+        }, 120);
+      });
+      return;
+    }
+
+    setTimeout(() => {
+      sendKeys('^v', (ok) => {
+        restoreWindowAfterInsert();
+        resolve(ok);
+      });
+    }, 60);
+  });
+}
+
+/**
+ * Вернуть окно ZSpeakly, когда вставка уже случилась.
+ *
+ * Возвращаем без фокуса: раньше окно забирало фокус на себя сразу после
+ * вставки, и текст оказывался в чужом приложении, а курсор — снова в ZSpeakly.
+ * Теперь активным остаётся то приложение, куда диктовали.
+ */
 function restoreWindowAfterInsert() {
   if (!windowHiddenForInsert) return;
   windowHiddenForInsert = false;
   setTimeout(() => {
     try {
-      if (mainWindow && !mainWindow.isVisible?.()) mainWindow.show();
-      mainWindow?.focus?.();
+      if (mainWindow && !mainWindow.isVisible?.()) mainWindow.showInactive();
     } catch {}
   }, 220);
 }
@@ -977,10 +3230,59 @@ function restoreWindowAfterInsert() {
 app.on('before-quit', () => {
   app.isQuitting = true;
   store?.flush?.();
+  // Помощник ввода — отдельный процесс: закрываем его вместе с приложением,
+  // иначе он останется висеть у человека в диспетчере задач.
+  try {
+    inputHost.stop();
+  } catch {
+    /* ignore */
+  }
 });
 
 app.whenReady().then(() => {
   store = new JsonStore();
+
+  // Помощник ввода (PowerShell + SendInput) поднимаем один раз на всё
+  // приложение: дальше вставка и ввод текста идут без холодного старта.
+  setTimeout(() => warmInputHost(), 1500);
+
+  // Память после простоя: если модель держат в памяти, но диктовки не было
+  // десять минут — отпускаем её. На слабой машине это ровно те сотни мегабайт,
+  // которых не хватает браузеру; следующая диктовка просто загрузит модель.
+  const idleTimer = setInterval(() => {
+    try {
+      const cfg = store?.get('zs:settings') || {};
+      const warm = whisper.serverStatus?.().ready === true;
+      if (
+        shouldUnload({
+          lastUsedAt: lastModelUseAt,
+          now: Date.now(),
+          warm,
+          keepLoaded: cfg.keepModelLoaded !== false,
+        })
+      ) {
+        whisper.stopServer?.();
+        lastModelUseAt = 0;
+        logger.info('memory', 'Модель выгружена после 10 минут простоя — память освобождена', {
+          keep: true,
+          idleMs: IDLE_UNLOAD_MS,
+        });
+      }
+    } catch {
+      /* таймер не должен ронять приложение */
+    }
+  }, 60 * 1000);
+  idleTimer.unref?.();
+
+  // После аварийного закрытия во временной папке остаются wav: живая
+  // расшифровка пишет их каждые пару секунд. Свежие не трогаем — они могут
+  // принадлежать работающему экземпляру.
+  try {
+    const swept = cleanupTemp({ dir: path.join(app.getPath('temp'), 'zspeakly') });
+    if (swept.removed) console.info('[temp] удалено старых записей:', swept.removed);
+  } catch {
+    /* уборка не должна мешать запуску */
+  }
 
   // ── Инициализация журнала ─────────────────────────────────────────────
   // Без неё диагностика «включена», но пишет в никуда: файла нет, отправлять
@@ -1022,15 +3324,45 @@ app.whenReady().then(() => {
     store.set('zs:installId', fresh);
     logger.setInstallId(fresh);
   }
+  // Состояние русской модели — в первую же запись журнала: без этого «почему
+  // на русском распознаёт хуже, чем у других» невозможно разобрать постфактум.
+  const russianAtStart = (() => {
+    try {
+      return gigaam.status();
+    } catch {
+      return { available: false, reason: 'неизвестно' };
+    }
+  })();
+  // Состояние европейской модели — там же и по той же причине.
+  const europeanAtStart = (() => {
+    try {
+      return parakeet.status();
+    } catch {
+      return { available: false, reason: 'неизвестно' };
+    }
+  })();
   logger.info('app', 'Запуск ZSpeakly', {
     keep: true,
     version: appVersion,
     engine: engineInfo.available ? 'whisper.cpp' : 'нет',
+    russian: russianAtStart.available ? 'готова' : russianAtStart.reason || 'нет',
+    european: europeanAtStart.available ? 'готова' : europeanAtStart.reason || 'нет',
   });
 
   registerIpc();
   createWindow();
   createTray();
+
+  // Если включено «Держать модель в памяти», грузим её сразу после старта:
+  // первая диктовка должна быть такой же быстрой, как десятая.
+  try {
+    const booleans = store.get('zs:settings') || {};
+    if (booleans.keepModelLoaded !== false && whisper.serverStatus().available) {
+      setTimeout(() => warmRecognition(booleans.whisperModel || 'base'), 900);
+    }
+  } catch {
+    /* ignore */
+  }
 
   updater = createUpdater({
     onStatus: (state) => mainWindow?.webContents.send('update:status', state),

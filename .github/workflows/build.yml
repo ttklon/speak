@@ -57,6 +57,9 @@ jobs:
       - name: Индекс настроек актуален
         run: npm run settings:index:check
 
+      - name: Настройки не пустышки (каждая читается и находится)
+        run: npm run check:settings
+
       - name: Build renderer
         run: npm run build
 
@@ -65,13 +68,204 @@ jobs:
         with:
           name: zspeakly-dist
           path: dist/
-          retention-days: 7
+          # 2 дня: рендерер пересоберётся за минуту, хранить его месяц незачем
+          retention-days: 2
 
   # 2. Сборка установщика для Windows
+      - name: Тест настоящего движка распознавания (whisper.cpp)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # Проверяем не заглушку, а настоящий whisper-cli: аргументы, разбор
+        # результата, удаление .out.txt и отмену прохода. Недоступные сборка
+        # или модель отмечаются предупреждением и пропуском; если сам тест
+        # запустился и упал, его ошибка должна остановить выпуск.
+        run: |
+          set -u
+          # Если подготовка завершится раньше самого теста, фиксируем место
+          # сбоя даже когда GitHub не отдаёт полный журнал задания.
+          trap 'status=$?; echo "::error title=whisper-live::Ошибка подготовки (строка $LINENO, код $status)"' ERR
+          mkdir -p /tmp/wtest && cd /tmp/wtest
+          # Пропуск при ошибке подготовки, а не неожиданный выход bash с -e.
+          if ! url=$(curl -fsS --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" 'https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30' \
+            | grep -o '"browser_download_url": *"[^"]*whisper-bin-ubuntu-x64.tar.gz"' \
+            | sed -n '1{s/.*"\(https[^"]*\)"/\1/;p;}'); then
+            url=""
+          fi
+          if [ -z "$url" ]; then
+            echo "::warning title=whisper.cpp::список релизов недоступен или в нём нет сборки для Linux — тест пропущен"
+            exit 0
+          fi
+          if ! curl -fL --retry 3 --retry-delay 5 "$url" -o w.tar.gz; then
+            echo "::warning title=whisper.cpp::сборка не скачалась (сеть раннера) — тест пропущен"
+            exit 0
+          fi
+          if ! tar xzf w.tar.gz; then
+            echo "::warning title=whisper.cpp::архив не распаковался — тест пропущен"
+            exit 0
+          fi
+          bin=$(find /tmp/wtest -name 'whisper-cli' -type f -print -quit)
+          server=$(find /tmp/wtest -name 'whisper-server' -type f -print -quit)
+          if [ -z "$server" ]; then
+            echo "::warning title=whisper.cpp::whisper-server отсутствует — живой серверный тест пропущен"
+          fi
+          if [ -z "$bin" ]; then
+            echo "::warning title=whisper.cpp::в архиве нет whisper-cli — тест пропущен"
+            exit 0
+          fi
+          cd "$GITHUB_WORKSPACE"
+          if ! git clone --depth 1 -q --filter=blob:none --sparse https://github.com/ggml-org/whisper.cpp /tmp/wmodels; then
+            echo "::warning title=whisper.cpp::тестовые модели недоступны — тест пропущен"
+            exit 0
+          fi
+          git -C /tmp/wmodels sparse-checkout set models
+          model=/tmp/wmodels/models/for-tests-ggml-tiny.bin
+          if [ ! -f "$model" ]; then
+            echo "::warning title=whisper.cpp::тестовая модель не скачалась — тест пропущен"
+            exit 0
+          fi
+          libdir=$(dirname "$(find /tmp/wtest -name 'libwhisper.so*' | head -1)")
+          # VAD-модель: если раннер достанет её с HuggingFace, живой тест проверит
+          # и `--vad` на релизной сборке whisper.cpp. Недоступность — не ошибка.
+          vad=""
+          if curl -fsSL --retry 2 --retry-delay 5 --max-time 120 \
+            'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin' -o /tmp/vad.bin; then
+            if [ "$(stat -c%s /tmp/vad.bin)" -gt 500000 ]; then
+              vad=/tmp/vad.bin
+              echo "::notice title=vad::модель Silero скачана, тест пойдёт с --vad"
+            fi
+          fi
+          if [ -z "$vad" ]; then
+            echo "::warning title=vad::HuggingFace недоступен — живой тест без VAD"
+          fi
+          set -o pipefail
+          # Логи упавших джобов GitHub иногда не отдаёт совсем (EOF), поэтому
+          # причину провала выносим в аннотацию — её видно в интерфейсе.
+          # GitHub запускает bash с -e: временно отключаем его, чтобы успеть
+          # записать причину и затем явно вернуть исходный код теста.
+          trap - ERR
+          set +e
+          ZS_WHISPER_BIN="$bin" ZS_WHISPER_SERVER="$server" ZS_WHISPER_MODEL="$model" ZS_WHISPER_LIB_DIR="$libdir" ZS_WHISPER_VAD="$vad" \
+            LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" npm run test:whisper 2>&1 | tee /tmp/wt.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            tail -c 900 /tmp/wt.log | tr '\n' ' ' | sed 's/%/%25/g' > /tmp/wt-msg.txt
+            echo "::warning title=whisper-live::$(cat /tmp/wt-msg.txt)"
+            exit "$code"
+          fi
+
+  # Отдельный обязательный прогон на PR: полные веса (около 900 МБ) остаются
+  # только на временном диске раннера, в репозиторий и артефакты не попадают.
+  onnx-live:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      ZS_USER_DATA: /tmp/zs-onnx-live
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install ONNX Runtime and application dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Get pinned reference audio
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ZS_USER_DATA"
+          gh api repos/vyorkin/voxtype-gigaam/git/blobs/c17c52d883f4d83163123ba7a4e1582ad2e212f4 -H 'Accept: application/vnd.github.raw+json' > "$ZS_USER_DATA/ru.wav"
+          gh api repos/ggml-org/whisper.cpp/git/blobs/3184d372cd2f8b804d3a540c70ec50d927b335d2 -H 'Accept: application/vnd.github.raw+json' > "$ZS_USER_DATA/jfk.wav"
+          echo '758d148b29204e6f956a62f6cf608b848c9c60fbaa10cc9251a4f76e3db7e1d8  '"$ZS_USER_DATA/ru.wav" | sha256sum -c
+          echo '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  '"$ZS_USER_DATA/jfk.wav" | sha256sum -c
+      - name: GigaAM real preprocessor and reference audio
+        run: node scripts/test-gigaam-preprocessor.mjs "$ZS_USER_DATA/jfk.wav"
+      - name: GigaAM real weights and Russian speech
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-onnx-live.mjs gigaam "$ZS_USER_DATA/ru.wav" --download > /tmp/gigaam-live.log 2>&1
+          code=$?
+          cat /tmp/gigaam-live.log
+          message=$(tail -c 1800 /tmp/gigaam-live.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=GigaAM live::$message"; exit "$code"; fi
+          echo "::notice title=GigaAM live::$message"
+      - name: Parakeet real weights and English speech
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-onnx-live.mjs parakeet "$ZS_USER_DATA/jfk.wav" --download > /tmp/parakeet-live.log 2>&1
+          code=$?
+          cat /tmp/parakeet-live.log
+          message=$(tail -c 1800 /tmp/parakeet-live.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Parakeet live::$message"; exit "$code"; fi
+          echo "::notice title=Parakeet live::$message"
+      # Это виртуальное устройство Chromium с WAV, а не физический микрофон.
+      # UI/запись/ONNX настоящие, но IPC и системная вставка подменены мостом.
+      - name: Virtual microphone and real GigaAM
+        shell: bash
+        env:
+          ZS_CHROME_DEBUG: "1"
+        run: |
+          set +e
+          node scripts/test-virtual-mic.mjs gigaam "$ZS_USER_DATA/ru.wav" > /tmp/virtual-gigaam.log 2>&1
+          code=$?
+          cat /tmp/virtual-gigaam.log
+          message=$({ head -c 1500 /tmp/virtual-gigaam.log; tail -c 1500 /tmp/virtual-gigaam.log; } | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Virtual GigaAM::$message"; exit "$code"; fi
+          echo "::notice title=Virtual GigaAM::$message"
+      - name: Virtual microphone and real Parakeet
+        shell: bash
+        env:
+          ZS_CHROME_DEBUG: "1"
+        run: |
+          set +e
+          node scripts/test-virtual-mic.mjs parakeet "$ZS_USER_DATA/jfk.wav" > /tmp/virtual-parakeet.log 2>&1
+          code=$?
+          cat /tmp/virtual-parakeet.log
+          message=$({ head -c 1500 /tmp/virtual-parakeet.log; tail -c 1500 /tmp/virtual-parakeet.log; } | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Virtual Parakeet::$message"; exit "$code"; fi
+          echo "::notice title=Virtual Parakeet::$message"
+
+      # Отдельный профиль, настоящий Electron/preload/IPC и системный буфер.
+      # Микрофон по-прежнему виртуальный; Linux не имитирует Windows SendInput.
+      - name: Install Electron binary for Linux end-to-end test
+        run: env -u ELECTRON_SKIP_BINARY_DOWNLOAD node node_modules/electron/install.js
+      - name: Build renderer for Electron end-to-end test
+        run: npm run build
+      - name: Electron virtual microphone and real ONNX
+        shell: bash
+        env:
+          ZS_CHROME_DEBUG: "1"
+        run: |
+          set +e
+          xvfb-run -a node scripts/test-electron-virtual-mic.mjs gigaam "$ZS_USER_DATA/ru.wav" > /tmp/electron-gigaam.log 2>&1
+          code=$?
+          cat /tmp/electron-gigaam.log
+          message=$({ head -c 1200 /tmp/electron-gigaam.log; tail -c 2500 /tmp/electron-gigaam.log; } | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron GigaAM::$message"; exit "$code"; fi
+          echo "::notice title=Electron GigaAM::$message"
+          xvfb-run -a node scripts/test-electron-virtual-mic.mjs parakeet "$ZS_USER_DATA/jfk.wav" > /tmp/electron-parakeet.log 2>&1
+          code=$?
+          cat /tmp/electron-parakeet.log
+          message=$({ head -c 1200 /tmp/electron-parakeet.log; tail -c 2500 /tmp/electron-parakeet.log; } | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron Parakeet::$message"; exit "$code"; fi
+          echo "::notice title=Electron Parakeet::$message"
+
   package:
     needs: check
+    # На каждый коммит в рабочую ветку установщик не собираем: 170 МБ артефактов
+    # на коммит — так и переполняется хранилище. Полная упаковка — на main, теги
+    # и ручной запуск (workflow_dispatch), плюс pull_request для проверки.
+    if: >-
+      github.event_name != 'push'
+      || !startsWith(github.ref, 'refs/heads/arena/')
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
@@ -97,6 +291,56 @@ jobs:
 
       - name: Icons
         run: npm run icons
+
+      - name: Загрузка и отмена моделей на Windows
+        run: npx vitest run src/lib/modelDownload.test.js src/lib/whisperDownload.test.js src/lib/engineDownload.test.js src/lib/modelImport.test.js src/lib/modelDiscovery.test.js src/lib/whisperRuntime.test.js src/lib/whisperRuntimeHttp.test.js
+
+      - name: Размер Win32 INPUT у всех реализаций SendInput
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-wininput-layout.cjs > layout.log 2>&1
+          code=$?
+          cat layout.log
+          message=$(tail -c 2500 layout.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Win32 INPUT layout::$message"; exit "$code"; fi
+          echo "::notice title=Win32 INPUT layout::$message"
+
+      - name: Помощник ввода (C# → exe) собирается и отвечает
+        shell: bash
+        # Вставка текста в чужие окна держится на этом помощнике. Собрать его
+        # можно только на Windows, поэтому проверяем здесь: если C# перестанет
+        # компилироваться, сборка упадёт сейчас, а не у человека, который
+        # нажимает «диктовка» и не получает текста.
+        run: node scripts/check-wininput.cjs
+
+      - name: Отказ SendInput на первом и последнем символе (симуляция)
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-wininput-failure.cjs > input-failure.log 2>&1
+          code=$?
+          cat input-failure.log
+          message=$(tail -c 2500 input-failure.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=SendInput simulation::$message"; exit "$code"; fi
+          echo "::notice title=SendInput simulation::$message"
+
+      - name: SendInput в отдельное тестовое окно Windows
+        shell: bash
+        env:
+          ZS_INPUT_INTERACTIVE: "1"
+        run: |
+          set +e
+          node scripts/test-wininput-window.cjs > input-window.log 2>&1
+          code=$?
+          cat input-window.log
+          message=$(tail -c 2500 input-window.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows input window::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' input-window.log; then
+            echo "::warning title=Windows input window::$message"
+          else
+            echo "::notice title=Windows input window::$message"
+          fi
 
       - name: Кэш Electron (переживает сетевые сбои раннера)
         uses: actions/cache@v4
@@ -146,6 +390,90 @@ jobs:
             sleep 25
           done
           echo "::warning title=electron-builder::бинарники не скачались заранее, пробуем в самой упаковке"
+
+      - name: Движок распознавания whisper.cpp в установщик
+        shell: pwsh
+        # Без whisper-cli.exe офлайн-диктовка не работает вовсе: человек
+        # скачивал модель и получал «движок не установлен». Кладём бинарник
+        # в build/bin, package.json отдаёт его в resources/bin.
+        run: |
+          New-Item -ItemType Directory -Force -Path build/bin | Out-Null
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            try {
+              $rel = Invoke-RestMethod -Headers @{ 'User-Agent' = 'ZSpeakly-CI' } `
+                'https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30'
+              $asset = $null
+              foreach ($r in $rel) {
+                $a = $r.assets | Where-Object { $_.name -eq 'whisper-bin-x64.zip' } | Select-Object -First 1
+                if ($a) { $asset = $a; break }
+              }
+              if (-not $asset) { throw 'whisper-bin-x64.zip нет в релизах ggml-org/whisper.cpp' }
+              Write-Host "::notice title=whisper.cpp::качаем $($asset.name) из $($r.tag_name)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile build/whisper.zip
+              Expand-Archive build/whisper.zip -DestinationPath build/whisper -Force
+              Get-ChildItem -Path build/whisper -Recurse -Include *.exe, *.dll |
+                Where-Object { $_.Name -match '^(whisper-cli|whisper-server)\.exe$' -or $_.Extension -eq '.dll' } |
+                ForEach-Object { Copy-Item $_.FullName build/bin -Force }
+              if (Test-Path build/bin/whisper-cli.exe) { $ok = $true }
+            } catch {
+              Write-Host "::warning title=whisper.cpp::попытка $i не удалась: $_"
+              Start-Sleep -Seconds 15
+            }
+          }
+          if (-not $ok) {
+            Write-Host '::warning title=whisper.cpp::бинарник не попал в сборку — приложение докачает его при первом запуске'
+          }
+          if (Test-Path build/bin/whisper-server.exe) {
+            # Именно он держит веса в памяти и прогревается в начале записи:
+            # без него каждая диктовка начинается с загрузки модели.
+            Write-Host '::notice title=whisper.cpp::whisper-server.exe в сборке — прогрев и быстрая диктовка работают'
+          } else {
+            Write-Host '::warning title=whisper.cpp::в архиве нет whisper-server.exe — прогрев недоступен, диктовка пойдёт холодным whisper-cli'
+          }
+          Get-ChildItem build/bin | Select-Object Name, Length
+
+      - name: VAD-модель (Silero) в установщик
+        shell: pwsh
+        # 864 КБ, но именно она отсекает тишину: с ней диктовка отвечает
+        # быстрее и не выдумывает фраз на пустом звуке. Файл кладём в models/,
+        # extraResources отдаёт его в resources/models. Шаг намеренно не валит
+        # сборку: если модели нет, приложение докачает её само (models:prepare).
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          $dest = 'models/ggml-silero-v6.2.0.bin'
+          $url = 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin'
+          for ($i = 1; $i -le 3; $i++) {
+            if (Test-Path $dest) { break }
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $dest -TimeoutSec 120
+              if ((Get-Item $dest).Length -lt 500000) { Remove-Item $dest -Force }
+            } catch {
+              Write-Host "::warning title=vad::HuggingFace, попытка $i`: $($_.Exception.Message)"
+              if (Test-Path $dest) { Remove-Item $dest -Force }
+              Start-Sleep -Seconds 5
+            }
+          }
+          if (-not (Test-Path $dest)) {
+            # Те же веса Silero лежат в пакете silero-vad на PyPI: собираем
+            # ggml-файл сами (формат сверен с официальным whisper.cpp).
+            Write-Host '::notice title=vad::HuggingFace недоступен, собираем модель из пакета silero-vad'
+            $py = 'python'
+            try { & $py --version 2>&1 | Out-Null } catch { $py = 'py' }
+            try {
+              & $py -m pip install --no-deps silero-vad numpy 2>&1 | Out-Null
+              & $py scripts/make-vad-model.py --out $dest 2>&1 | ForEach-Object { Write-Host $_ }
+            } catch {
+              Write-Host "::warning title=vad::сборка из пакета не удалась: $($_.Exception.Message)"
+            }
+          }
+          if (Test-Path $dest) {
+            Get-Item $dest | Select-Object Name, Length
+          } else {
+            Write-Host '::warning title=vad::модель не попала в сборку — приложение докачает её при первом запуске'
+          }
+          exit 0
 
       - name: Build + package (NSIS + portable)
         shell: pwsh
@@ -216,6 +544,138 @@ jobs:
             exit 0
           }
 
+      - name: Проверить ONNX Runtime в собранном приложении
+        shell: bash
+        run: |
+          set +e
+          node scripts/check-packaged-onnx.cjs > packaged-onnx.log 2>&1
+          code=$?
+          cat packaged-onnx.log
+          message=$(tail -c 2200 packaged-onnx.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Packaged ONNX::$message"; exit "$code"; fi
+          echo "::notice title=Packaged ONNX::$message"
+
+      - name: Повторные запуски мастера на чистой Windows
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          $setup = "release/ZSpeakly-Setup-$(node -p "require('./package.json').version").exe"
+          if (-not (Test-Path $setup)) {
+            Write-Host '::warning title=NSIS first start::SKIP: NSIS не собран'
+            exit 0
+          }
+          if (Test-Path "$env:LOCALAPPDATA\Programs\ZSpeakly") { throw 'Установка по умолчанию уже существует' }
+          node -e "const f=require('fs'),p=require('path'),patch=require('./scripts/nsis/patch-builder.cjs').patch; const file=p.join(p.dirname(require.resolve('app-builder-lib/package.json')),'templates/nsis/multiUser.nsh'); const data=f.readFileSync(file,'utf8'); if(patch(data)!==data)throw Error('NSIS template not patched during packaging');"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./scripts/e2e/nsis-gui.ps1 -Setup (Resolve-Path $setup).Path -InstallPath (Join-Path $env:RUNNER_TEMP 'unused') -ProbeCount 20
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host '::notice title=NSIS first start::20 отдельных процессов дошли до мастера без установки; шаблон с ограниченным чтением применён.'
+
+      - name: Electron диктует через виртуальный микрофон в окно Windows
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZS_INPUT_INTERACTIVE: "1"
+          ZS_TEST_ELECTRON: "1"
+          ZS_TEST_WINDOWS_DICTATION: "1"
+        run: |
+          set -euo pipefail
+          root="$(cygpath -u "$RUNNER_TEMP")/zs-onnx-win"
+          mkdir -p "$root"
+          export ZS_USER_DATA="$(cygpath -m "$root")"
+          export ZS_DICTATION_WAV="$(cygpath -m "$root/ru.wav")"
+          gh api repos/vyorkin/voxtype-gigaam/git/blobs/c17c52d883f4d83163123ba7a4e1582ad2e212f4 -H 'Accept: application/vnd.github.raw+json' > "$root/ru.wav"
+          echo '758d148b29204e6f956a62f6cf608b848c9c60fbaa10cc9251a4f76e3db7e1d8  '"$root/ru.wav" | sha256sum -c
+          set +e
+          node scripts/test-onnx-live.mjs gigaam "$ZS_DICTATION_WAV" --download > windows-onnx.log 2>&1
+          code=$?
+          cat windows-onnx.log
+          message=$(tail -c 2500 windows-onnx.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows GigaAM::$message"; exit "$code"; fi
+          echo "::notice title=Windows GigaAM::$message"
+          mkdir -p "$root/human"
+          for pair in 'ru_0052.wav:2613b22b5e407b586db126cb00d8c3b43991f141' 'ru_0053.wav:0e7d2801fcaab8ae2aec72569960b29e60d2fd43' 'ru_0054.wav:75b784a142f4afc22c677495e7c6151a2de01ed0' 'transcripts.csv:7c2d66d383e23f90b555de3502d34299003b0ea8'; do
+            gh api "repos/GeorgeFedoseev/DeepSpeech/git/blobs/${pair#*:}" -H 'Accept: application/vnd.github.raw+json' > "$root/human/${pair%%:*}" || exit 1
+          done
+          (
+            cd "$root/human"
+            printf '%s\n' \
+              'd4168bb9f69c674a629ae5dbeaf59519da3886e77487586135841503c7c7f2f8  ru_0052.wav' \
+              'f43462661863974e68ddd2a07c83a6fbf61ecb088441aa745efddbb0b394ea6f  ru_0053.wav' \
+              '12bcf19b2629c0f751b276498ad4bc61f2bfde2b5877e9d765fbe8926b1333e2  ru_0054.wav' \
+              '196943702e7b2afa89ef257542188ecea5e644ad2b5e11e996a5e20ee171fb75  transcripts.csv' | sha256sum -c
+          ) || exit 1
+          node scripts/test-gigaam-quality.mjs "$(cygpath -m "$root/human")" > gigaam-quality.log 2>&1
+          code=$?
+          cat gigaam-quality.log
+          message=$(tail -c 5000 gigaam-quality.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Human speech GigaAM::$message"; exit "$code"; fi
+          echo "::notice title=Human speech GigaAM::$message"
+          node scripts/test-wininput-window.cjs > electron-input.log 2>&1
+          code=$?
+          cat electron-input.log
+          message=$(tail -c 2500 electron-input.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows Electron input::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' electron-input.log; then
+            echo "::warning title=Windows Electron input::$message"
+          else
+            echo "::notice title=Windows Electron input::$message"
+          fi
+          ZS_TEST_PACKAGED=1 node scripts/test-wininput-window.cjs > packaged-input.log 2>&1
+          code=$?
+          cat packaged-input.log
+          message=$(tail -c 2500 packaged-input.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Packaged Windows dictation::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' packaged-input.log; then
+            echo "::warning title=Packaged Windows dictation::$message"
+          else
+            echo "::notice title=Packaged Windows dictation::$message"
+          fi
+          node scripts/test-nsis-lifecycle.cjs > nsis-lifecycle.log 2>&1
+          code=$?
+          cat nsis-lifecycle.log
+          message=$(tail -c 3500 nsis-lifecycle.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=NSIS lifecycle::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' nsis-lifecycle.log; then
+            echo "::warning title=NSIS lifecycle::$message"
+          else
+            echo "::notice title=NSIS lifecycle::$message"
+          fi
+
+      - name: Windows GUI и обновление опубликованной версии
+        # Даже если предыдущая проверка установщика упала, собираем отдельную
+        # диагностику GUI; исходная ошибка при этом не скрывается.
+        if: always() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZS_INPUT_INTERACTIVE: "1"
+        run: |
+          set -euo pipefail
+          setup="release/ZSpeakly-Setup-$(node -p "require('./package.json').version").exe"
+          if [ ! -f "$setup" ]; then
+            echo '::warning title=Previous upgrade::SKIP: NSIS не собран, проверка GUI и обновления не выполнена'
+            exit 0
+          fi
+          root="$(cygpath -u "$RUNNER_TEMP")/zs-onnx-win"
+          export ZS_USER_DATA="$(cygpath -m "$root")"
+          export ZS_DICTATION_WAV="$(cygpath -m "$root/ru.wav")"
+          mkdir -p "$root/previous"
+          gh release download v1.38.0 --repo ttklon/speak --pattern 'ZSpeakly-Setup-1.38.0.exe' --dir "$root/previous"
+          echo '4595bdecd37e412d7db0d0b001fa27cce03f7f2ec3bd10a1d8a7f92107252a11  '"$root/previous/ZSpeakly-Setup-1.38.0.exe" | sha256sum -c
+          export ZS_PREVIOUS_INSTALLER="$(cygpath -m "$root/previous/ZSpeakly-Setup-1.38.0.exe")"
+          set +e
+          node scripts/test-previous-upgrade.cjs > previous-upgrade.log 2>&1
+          code=$?
+          cat previous-upgrade.log
+          message=$(tail -c 5000 previous-upgrade.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Previous upgrade::$message"; exit "$code"; fi
+          if grep -Eq 'SKIP:|WARNING:' previous-upgrade.log; then
+            echo "::warning title=Previous upgrade::$message"
+          else
+            echo "::notice title=Previous upgrade::$message"
+          fi
+
       - name: Verify artifacts
         shell: pwsh
         run: |
@@ -244,7 +704,9 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest.yml
-          retention-days: 30
+          # 2 дня: установщик весит ~170 МБ, а прежние 30 дней забивали
+          # хранилище Actions на многие гигабайты
+          retention-days: 2
 
       - name: Summary
         if: always()

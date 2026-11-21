@@ -1,45 +1,68 @@
 import { useState } from 'react';
-import { ChevronRight, Sparkles, User } from 'lucide-react';
+import { ChevronRight, Search, Sparkles, User } from 'lucide-react';
 import Icon from '../ui/Icon.jsx';
 import { NAV } from '../../lib/config.js';
 import { navigate } from '../../lib/router.js';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 
-export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPresets }) {
-  const { profile } = useAppData();
+export default function Sidebar({ page, onOpenSettings, onOpenPresets, onOpenCommands }) {
+  const { profile, settings } = useAppData();
   const { push } = useToast();
   const [hovered, setHovered] = useState(null);
 
+  // Имя задаётся при первом запуске и живёт в настройках; профиль может быть
+  // пустым (старые установки) — тогда подпись совпадает с приветствием «Привет, Имя».
+  const displayName = profile?.name || settings.userName || '';
   const go = (id) => navigate(id);
 
   return (
     <aside className="sidebar">
+      {/* Поиск и команды: Ctrl+K — для тех, кто знает, кнопка — для тех, кто нет */}
+      <button
+        type="button"
+        className="sidebar__search"
+        onClick={onOpenCommands}
+        title="Поиск и команды (Ctrl + K)"
+      >
+        <Search size={13} strokeWidth={1.7} />
+        <span>Поиск и команды</span>
+        <kbd className="sidebar__search-key">Ctrl K</kbd>
+      </button>
+
       <nav className="sidebar__nav" aria-label="Основная навигация">
-        {NAV.map((item) => (
+        {NAV.map((item, index) => (
           <button
             key={item.id}
             type="button"
             className={`nav-item ${page === item.id ? 'is-active' : ''}`}
+            title={`${item.label} · Ctrl + ${index + 1}`}
             onClick={() => go(item.id)}
             onMouseEnter={() => setHovered(item.id)}
             onMouseLeave={() => setHovered(null)}
           >
             <Icon name={item.icon} size={15} strokeWidth={1.6} className="nav-item__icon" />
             <span className="nav-item__label">{item.label}</span>
-            {item.badge ? <span className="badge-new">{item.badge}</span> : null}
+            {item.badge && !(item.id === 'clipboard' && settings.seenClipboard) ? (
+              <span className="badge-new">{item.badge}</span>
+            ) : null}
           </button>
         ))}
       </nav>
 
       <div className="sidebar__bottom">
-        <button type="button" className="plan-card plan-card--action" onClick={onOpenPresets}>
-          <div className="plan-card__title">AI-инструкции</div>
-          <div className="plan-card__limit">Выдели текст — нажми клавиши</div>
-          <p className="plan-card__text">Переписать, сократить, перевести. Офлайн, без лимитов.</p>
-          <span className="btn btn--white btn--sm btn--block">
-            <Sparkles size={12} /> Открыть
-          </span>
+        {/* Раньше здесь стояла промо-плитка в четыре строки с большой белой
+            кнопкой: место в боковой панели занимала реклама раздела, а не
+            навигация. Теперь это обычная строка меню, как «Настройки». */}
+        <button
+          type="button"
+          className="sidebar__link sidebar__link--presets"
+          onClick={onOpenPresets}
+          title="Инструкции по выделенному тексту"
+        >
+          <Sparkles size={14} strokeWidth={1.6} />
+          <span>AI-инструкции</span>
+          <ChevronRight size={13} className="sidebar__link-arrow" />
         </button>
 
         <button type="button" className="sidebar__link sidebar__link--settings" onClick={onOpenSettings}>
@@ -48,9 +71,16 @@ export default function Sidebar({ page, onOpenSettings, onOpenProfile, onOpenPre
           <ChevronRight size={13} className="sidebar__link-arrow" />
         </button>
 
-        <button type="button" className="profile" onClick={onOpenProfile} title="Профиль">
-          <span className="profile__avatar">{(profile?.name || 'Z')[0].toUpperCase()}</span>
-          <span className="profile__email">{profile?.name || 'локальный профиль'}</span>
+        {/* Имя менялось в двух местах: здесь (окно «Аккаунт») и в настройках.
+            Осталось одно — настройки, раздел «Приложение»: строки про имя. */}
+        <button
+          type="button"
+          className="profile"
+          onClick={() => onOpenSettings('app')}
+          title="Имя и профиль — в настройках"
+        >
+          <span className="profile__avatar">{(displayName || 'Z')[0].toUpperCase()}</span>
+          <span className="profile__email">{displayName || 'локальный профиль'}</span>
           <User size={12} className="profile__logout" />
         </button>
       </div>

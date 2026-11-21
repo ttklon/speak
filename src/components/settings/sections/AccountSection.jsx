@@ -8,7 +8,7 @@ import { useToast } from '../../../state/ToastProvider.jsx';
  * Почта, подписка и credits из видео-обзора намеренно убраны.
  */
 export default function AccountSection() {
-  const { profile, setProfile, stats, settings, updateSettings } = useAppData();
+  const { profile, setProfile, settings, updateSettings } = useAppData();
   const { push } = useToast();
   const [name, setName] = useState(settings.userName || profile.name);
 
@@ -29,31 +29,21 @@ export default function AccountSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">Профиль</h2>
-      <p className="settings-section__desc">
-        ZSpeakly не создаёт учётную запись в облаке: имя и данные хранятся только на этом компьютере.
-      </p>
-
-      <div className="setting-row">
-        <div className="setting-row__label">Как вас называть</div>
-        <input
-          className="input settings-inline-input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') save();
-          }}
-          placeholder="Ваше имя"
-        />
-      </div>
-      <div className="setting-row">
-        <div className="setting-row__label">Слов продиктовано</div>
-        <span className="setting-row__value">{(stats.wordsTotal + 9000).toLocaleString('ru-RU')}</span>
-      </div>
-      <div className="setting-row">
-        <div className="setting-row__label">Секунд речи</div>
-        <span className="setting-row__value">{Math.round(stats.secondsTotal || 143).toLocaleString('ru-RU')}</span>
+      <div className="settings-group">
+        <div className="settings-group__title">Имя</div>
+        <div className="setting-row">
+          <div className="setting-row__label">Как вас называть</div>
+          <input
+            className="input settings-inline-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={save}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save();
+            }}
+            placeholder="Ваше имя"
+          />
+        </div>
       </div>
 
       <div className="settings-group">

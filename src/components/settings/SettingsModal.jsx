@@ -1,43 +1,64 @@
-import { useMemo, useState } from 'react';
-import { CircleUser, Info, LayoutGrid, ShieldCheck, SlidersHorizontal, Wifi, Bug } from 'lucide-react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { Bug, LayoutGrid, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
-import { Button, Select } from '../ui/Controls.jsx';
-import { Toggle } from '../ui/Toggle.jsx';
-import AccountSection from './sections/AccountSection.jsx';
-import AppSection from './sections/AppSection.jsx';
-import FeaturesSection from './sections/FeaturesSection.jsx';
-import DataSection from './sections/DataSection.jsx';
-import DiagnosticsSection from './sections/DiagnosticsSection.jsx';
-import NetworkSection from './sections/NetworkSection.jsx';
-import AboutSection from './sections/AboutSection.jsx';
+import { Button } from '../ui/Controls.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { SETTING_ENTRIES } from './settingsIndex.js';
+import { SETTINGS_SECTIONS, resolveSection } from '../../lib/settingsSections.js';
+import { observeSettingRow } from './observeSettingRow.js';
+import SectionErrorBoundary from './SectionErrorBoundary.jsx';
 
-const SECTIONS = [
-  { id: 'account', label: 'Аккаунт', icon: CircleUser },
-  { id: 'app', label: 'Приложение', icon: LayoutGrid },
-  { id: 'features', label: 'Функции', icon: SlidersHorizontal },
-  { id: 'data', label: 'Данные и разрешения', icon: ShieldCheck },
-  { id: 'diagnostics', label: 'Диагностика', icon: Bug },
-  { id: 'network', label: 'Сеть', icon: Wifi },
-  { id: 'about', label: 'О программе', icon: Info },
-];
+// Секции настроек грузятся по требованию: на старте приложения они не нужны,
+// а тянут за собой диагностику, сравнение моделей и менеджер моделей.
+// Они не входят в начальный файл интерфейса.
+const AccountSection = lazy(() => import('./sections/AccountSection.jsx'));
+const AppSection = lazy(() => import('./sections/AppSection.jsx'));
+const FeaturesSection = lazy(() => import('./sections/FeaturesSection.jsx'));
+const DataSection = lazy(() => import('./sections/DataSection.jsx'));
+const DiagnosticsSection = lazy(() => import('./sections/DiagnosticsSection.jsx'));
+const NetworkSection = lazy(() => import('./sections/NetworkSection.jsx'));
+const AboutSection = lazy(() => import('./sections/AboutSection.jsx'));
+
+// Названия разделов живут в lib/settingsSections.js: по ним же проверяются
+// подсказки «Настройки → Раздел» в ошибках и тостах.
+const SECTION_ICONS = {
+  dictation: SlidersHorizontal,
+  app: LayoutGrid,
+  data: ShieldCheck,
+  diagnostics: Bug,
+};
+const SECTIONS = SETTINGS_SECTIONS.map((section) => ({ ...section, icon: SECTION_ICONS[section.id] }));
 
 export default function SettingsModal({ open, section, onSectionChange, onClose }) {
   const { settings } = useAppData();
   const [query, setQuery] = useState('');
+  const [pendingJump, setPendingJump] = useState(null);
+  const mainRef = useRef(null);
+  const active = SECTIONS.find((s) => s.id === resolveSection(section)) || SECTIONS[0];
 
   // поиск ищет и по названиям разделов, и по конкретным строкам внутри них:
   // раньше запрос «звук» давал пустой экран
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
+    // Совпадение в названии важнее совпадения в описании: на «микрофон»
+    // первой должна стоять строка «Микрофон», а не «Плавающий индикатор».
+    const score = (e) => {
+      const title = e.title.toLowerCase();
+      if (title === q) return 0;
+      if (title.startsWith(q)) return 1;
+      if (title.includes(q)) return 2;
+      if (e.sectionLabel.toLowerCase().includes(q)) return 3;
+      return 4;
+    };
     return SETTING_ENTRIES.filter(
       (e) =>
         e.title.toLowerCase().includes(q) ||
         e.sectionLabel.toLowerCase().includes(q) ||
         (e.desc || '').toLowerCase().includes(q),
-    ).slice(0, 12);
+    )
+      .sort((a, b) => score(a) - score(b))
+      .slice(0, 12);
   }, [query]);
 
   const filtered = useMemo(() => {
@@ -48,30 +69,59 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
     return SECTIONS.filter((s) => s.label.toLowerCase().includes(q) || withHits.has(s.id));
   }, [query, matches]);
 
-  // переход к найденной строке: открываем раздел и подсвечиваем совпадение
+  useEffect(() => {
+    if (!open) setPendingJump(null);
+  }, [open]);
+
+  // Следим за появлением строки после загрузки раздела. При закрытии,
+  // переходе в другой раздел или новом поиске наблюдатель отменяется.
+  useEffect(() => {
+    if (!open || !pendingJump || resolveSection(pendingJump.section) !== active.id || !mainRef.current) return undefined;
+    let target;
+    let timer;
+    const stop = observeSettingRow(mainRef.current, pendingJump.title, (row) => {
+      target = row;
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.classList.add('is-highlight');
+      timer = setTimeout(() => row.classList.remove('is-highlight'), 1600);
+    });
+    return () => {
+      stop();
+      clearTimeout(timer);
+      target?.classList.remove('is-highlight');
+    };
+  }, [open, pendingJump, active.id]);
+
   const jumpTo = (entry) => {
+    setPendingJump({ ...entry });
     onSectionChange(entry.section);
     setQuery('');
-    setTimeout(() => {
-      const target = [...document.querySelectorAll('.settings-main .setting-row')].find((row) =>
-        row.textContent.toLowerCase().includes(entry.title.toLowerCase()),
-      );
-      target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      target?.classList.add('is-highlight');
-      setTimeout(() => target?.classList.remove('is-highlight'), 1600);
-    }, 120);
   };
 
-  const active = SECTIONS.find((s) => s.id === section) || SECTIONS[0];
+  const changeSection = (id) => {
+    setPendingJump(null);
+    onSectionChange(id);
+  };
 
+  // Четыре раздела вместо семи: смежное стоит рядом, а не за отдельной вкладкой.
+  // «Сеть» — это настройки локальной модели, значит место ей в «Диктовке»;
+  // имя и «О программе» — в «Приложении».
   const body = {
-    account: <AccountSection />,
-    app: <AppSection />,
-    features: <FeaturesSection />,
-    data: <DataSection onOpenSection={onSectionChange} />,
+    dictation: (
+      <>
+        <FeaturesSection />
+        <NetworkSection />
+      </>
+    ),
+    app: (
+      <>
+        <AccountSection />
+        <AppSection />
+        <AboutSection />
+      </>
+    ),
+    data: <DataSection onOpenSection={changeSection} />,
     diagnostics: <DiagnosticsSection />,
-    network: <NetworkSection />,
-    about: <AboutSection />,
   }[active.id];
 
   return (
@@ -116,7 +166,7 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
                   key={s.id}
                   type="button"
                   className={`settings-nav ${active.id === s.id ? 'is-active' : ''}`}
-                  onClick={() => onSectionChange(s.id)}
+                  onClick={() => changeSection(s.id)}
                 >
                   <IconCmp size={14} strokeWidth={1.7} />
                   <span>{s.label}</span>
@@ -125,7 +175,19 @@ export default function SettingsModal({ open, section, onSectionChange, onClose 
             })}
           </nav>
         </div>
-        <div className="settings-main">{body}</div>
+        <div className="settings-main" ref={mainRef}>
+          {/* Один заголовок на вкладку: раньше внутри «Приложения» стояли три
+              одинаковых по весу заголовка, и было непонятно, где что. */}
+          <header className="settings-main__head">
+            <h2 className="settings-section__title">{active.label}</h2>
+            <p className="settings-section__desc">{active.desc}</p>
+          </header>
+          <SectionErrorBoundary key={active.id}>
+            <Suspense fallback={<p className="settings-loading" role="status">Загрузка раздела…</p>}>
+              {body}
+            </Suspense>
+          </SectionErrorBoundary>
+        </div>
       </div>
       <div className="settings-footer">
         <span className="settings-foot__hint">

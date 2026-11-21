@@ -45,8 +45,15 @@ function emit(level, scope, message, data) {
   };
   const b = bridge();
   if (b?.log) {
-    // main сам решает, писать ли на диск и отправлять ли наружу
-    b.log(entry).catch?.(() => {});
+    // main сам решает, писать ли на диск и отправлять ли наружу.
+    // Сам журнал ошибок падать не должен: раньше синхронный мост без промиса
+    // ронял именно того, кто сообщает об ошибке.
+    try {
+      const sent = b.log(entry);
+      if (sent && typeof sent.catch === 'function') sent.catch(() => {});
+    } catch {
+      /* мост недоступен — молчим, чтобы не уронить интерфейс */
+    }
   } else {
     localPush(entry);
     if (level === 'error') console.error(`[${scope}] ${message}`, data || '');

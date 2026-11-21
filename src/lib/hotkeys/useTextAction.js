@@ -12,43 +12,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../../state/ToastProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
-import { readClipboard, writeClipboard } from '../clipboard.js';
+import { readSelectionText, writeSelectionText } from './selection.js';
 import { runInstruction } from '../ai/instructions.js';
 import { analyzeStyle, applyStyle, stylePrompt } from '../ai/style.js';
 import { truncate } from '../utils.js';
 
-function native() {
-  return typeof window !== 'undefined' ? window.zspeakly?.native : null;
-}
-
-/** Забрать выделенный текст: нативное копирование или обычный буфер. */
-async function readSelection() {
-  const bridge = native();
-  if (bridge?.readSelection) {
-    const selected = await bridge.readSelection();
-    if (selected) return selected;
-  }
-  try {
-    return await readClipboard();
-  } catch {
-    return '';
-  }
-}
-
-/** Вернуть текст в активное приложение: вставка или запись в буфер. */
-async function writeSelection(text) {
-  const bridge = native();
-  if (bridge?.replaceSelection) {
-    const ok = await bridge.replaceSelection(text);
-    return ok ? 'inserted' : 'failed';
-  }
-  try {
-    await writeClipboard(text);
-    return 'copied';
-  } catch {
-    return 'failed';
-  }
-}
+/**
+ * Чтение и запись выделения живут в отдельном модуле: тот же код нужен
+ * командному режиму («выделил — сказал, что сделать»).
+ */
+const readSelection = readSelectionText;
+const writeSelection = writeSelectionText;
 
 export function useTextAction() {
   const { push } = useToast();
@@ -84,7 +58,10 @@ export function useTextAction() {
           source,
           settings,
         );
-        const result = profile && raw ? applyStyle(raw, profile) : raw;
+        // движок может вернуть текст с честной пометкой (частичный перевод)
+        const rawText = typeof raw === 'string' ? raw : String(raw?.text || '');
+        const note = typeof raw === 'object' && raw ? String(raw.note || '') : '';
+        const result = profile && rawText ? applyStyle(rawText, profile) : rawText;
         if (!result || result === source) {
           push({
             title: 'Изменений нет',
@@ -96,8 +73,8 @@ export function useTextAction() {
         const where = await writeSelection(result);
         push({
           title: where === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${instruction.title}`,
-          description: truncate(result, 90),
-          tone: where === 'failed' ? 'warn' : 'success',
+          description: [truncate(result, 90), note].filter(Boolean).join(' — '),
+          tone: where === 'failed' || note ? 'warn' : 'success',
         });
       } catch (err) {
         push({ title: 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });

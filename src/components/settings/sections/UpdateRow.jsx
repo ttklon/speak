@@ -43,8 +43,35 @@ export default function UpdateRow() {
       return;
     }
     setState({ status: 'checking', version: null, percent: 0, reason: '' });
-    const res = await bridge.checkUpdates();
-    if (res?.status) setState((prev) => ({ ...prev, ...res }));
+    // Ошибка сети/обновлятора не должна оставлять кнопку в «Проверяю…» навсегда.
+    try {
+      const res = await bridge.checkUpdates();
+      if (res?.status) setState((prev) => ({ ...prev, ...res }));
+      else setState({ status: 'error', version: null, percent: 0, reason: 'главный процесс не ответил' });
+    } catch (err) {
+      setState({ status: 'error', version: null, percent: 0, reason: String(err?.message || err) });
+    }
+  };
+
+  // Скачивание и установка тоже могут отказать (нет сети, нет прав) — сообщаем.
+  const download = async () => {
+    try {
+      const res = await bridge?.downloadUpdate?.();
+      if (res?.status && res.status !== 'downloaded' && res.status !== 'downloading') {
+        setState((prev) => ({ ...prev, ...res }));
+      }
+    } catch (err) {
+      push({ title: 'Не удалось скачать обновление', description: String(err?.message || err), tone: 'warn' });
+    }
+  };
+
+  const install = async () => {
+    try {
+      const ok = await bridge?.installUpdate?.();
+      if (!ok) push({ title: 'Перезапуск не удался', description: 'Закройте приложение вручную и запустите снова.', tone: 'warn' });
+    } catch (err) {
+      push({ title: 'Перезапуск не удался', description: String(err?.message || err), tone: 'warn' });
+    }
   };
 
   const busy = state.status === 'checking' || state.status === 'downloading';
@@ -55,7 +82,7 @@ export default function UpdateRow() {
         Проверить обновления
       </Button>
       {state.status === 'available' ? (
-        <Button variant="white" size="sm" onClick={() => bridge?.downloadUpdate?.()}>
+        <Button variant="white" size="sm" onClick={download}>
           Скачать {state.version}
         </Button>
       ) : null}
@@ -63,7 +90,7 @@ export default function UpdateRow() {
         <span className="settings-foot__hint">Скачиваю… {state.percent}%</span>
       ) : null}
       {state.status === 'downloaded' ? (
-        <Button variant="white" size="sm" onClick={() => bridge?.installUpdate?.()}>
+        <Button variant="white" size="sm" onClick={install}>
           Перезапустить и обновить
         </Button>
       ) : null}
