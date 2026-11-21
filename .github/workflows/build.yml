@@ -231,6 +231,29 @@ jobs:
           if [ "$code" -ne 0 ]; then echo "::error title=Virtual Parakeet::$message"; exit "$code"; fi
           echo "::notice title=Virtual Parakeet::$message"
 
+      # Отдельный профиль, настоящий Electron/preload/IPC и системный буфер.
+      # Микрофон по-прежнему виртуальный; Linux не имитирует Windows SendInput.
+      - name: Build renderer for Electron end-to-end test
+        run: npm run build
+      - name: Electron virtual microphone and real ONNX
+        shell: bash
+        env:
+          ZS_CHROME_DEBUG: "1"
+        run: |
+          set +e
+          xvfb-run -a node scripts/test-electron-virtual-mic.mjs gigaam "$ZS_USER_DATA/ru.wav" > /tmp/electron-gigaam.log 2>&1
+          code=$?
+          cat /tmp/electron-gigaam.log
+          message=$({ head -c 1200 /tmp/electron-gigaam.log; tail -c 2500 /tmp/electron-gigaam.log; } | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron GigaAM::$message"; exit "$code"; fi
+          echo "::notice title=Electron GigaAM::$message"
+          xvfb-run -a node scripts/test-electron-virtual-mic.mjs parakeet "$ZS_USER_DATA/jfk.wav" > /tmp/electron-parakeet.log 2>&1
+          code=$?
+          cat /tmp/electron-parakeet.log
+          message=$({ head -c 1200 /tmp/electron-parakeet.log; tail -c 2500 /tmp/electron-parakeet.log; } | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron Parakeet::$message"; exit "$code"; fi
+          echo "::notice title=Electron Parakeet::$message"
+
   package:
     needs: check
     # На каждый коммит в рабочую ветку установщик не собираем: 170 МБ артефактов

@@ -12,8 +12,10 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('scripts/test-onnx-live.mjs parakeet');
     expect(job).toContain('scripts/test-virtual-mic.mjs gigaam');
     expect(job).toContain('scripts/test-virtual-mic.mjs parakeet');
+    expect(job).toContain('scripts/test-electron-virtual-mic.mjs gigaam');
+    expect(job).toContain('scripts/test-electron-virtual-mic.mjs parakeet');
     expect(job).toContain('sha256sum -c');
-    expect(job.match(/exit "\$code"/g)).toHaveLength(4);
+    expect(job.match(/exit "\$code"/g)).toHaveLength(6);
     expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
   });
 
