@@ -39,6 +39,7 @@ function run(file, args, opts = {}) {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   assert.equal(result.status, 0, `${opts.label || file}: ${result.error?.message || `код ${result.status}, сигнал ${result.signal}`}`);
+  return result.stdout || '';
 }
 function verifyProfile(stage) {
   assert.ok(fs.existsSync(profile), `${stage}: профиль исчез`);
@@ -72,7 +73,7 @@ try {
   assert.ok(fs.existsSync(uninstall), `установщик не создал ${uninstall}`);
   verifyProfile('установка');
   run(process.execPath, ['scripts/check-packaged-onnx.cjs', path.join(installDir, 'resources')], { label: 'проверка установленного ONNX' });
-  run(process.execPath, ['scripts/test-wininput-window.cjs'], {
+  const firstDictation = run(process.execPath, ['scripts/test-wininput-window.cjs'], {
     timeout: 240000, label: 'диктовка установленного приложения',
     env: { ZS_TEST_ELECTRON: '1', ZS_TEST_PACKAGED: '1', ZS_TEST_WINDOWS_DICTATION: '1', ZS_TEST_PACKAGED_EXE: exe },
   });
@@ -81,16 +82,26 @@ try {
   // от первой установки, если цитированный аргумент был разобран неверно.
   const oldExe = exe;
   const nextDir = path.join(root, 'updated app');
-  run(installer, ['/S', `/D=${nextDir}`], { label: 'повторная установка с кавычками' });
+  run(installer, ['--updated', '/S', `/D=${nextDir}`], { label: 'повторная установка с кавычками' });
   installDir = nextDir;
   exe = path.join(installDir, 'ZSpeakly.exe');
   uninstall = path.join(installDir, 'Uninstall ZSpeakly.exe');
   assert.ok(fs.existsSync(exe), 'после повторной установки нет приложения в новом каталоге');
   assert.ok(!fs.existsSync(oldExe), 'старая установка не удалена при смене каталога');
   verifyProfile('повторная установка');
+  const secondDictation = run(process.execPath, ['scripts/test-wininput-window.cjs'], {
+    timeout: 240000, label: 'диктовка после повторной установки',
+    env: { ZS_TEST_ELECTRON: '1', ZS_TEST_PACKAGED: '1', ZS_TEST_WINDOWS_DICTATION: '1', ZS_TEST_PACKAGED_EXE: exe },
+  });
   removeInstallation();
   verifyProfile('удаление');
-  console.log('NSIS: установка, диктовка, повторная установка и удаление завершены.');
+  if (firstDictation.includes('SKIP:') || secondDictation.includes('SKIP:')) {
+    console.log('SKIP: часть проверок окна не выполнена; установка и удаление проверены.');
+  } else {
+    assert.match(firstDictation, /Виртуальная диктовка Windows \+ приложение после NSIS/);
+    assert.match(secondDictation, /Виртуальная диктовка Windows \+ приложение после NSIS/);
+    console.log('NSIS: установка, диктовка до и после повторной установки, удаление завершены.');
+  }
 } finally {
   if (installAttempted && !uninstalled && fs.existsSync(uninstall)) {
     try { removeInstallation(); } catch (error) { console.error(`Очистка установки не удалась: ${error.message}`); }
