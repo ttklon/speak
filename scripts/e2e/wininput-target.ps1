@@ -42,6 +42,7 @@ $timer.Add_Tick({
       }
       'clear' { $box.Clear() }
       'clipboard' { [System.Windows.Forms.Clipboard]::SetText([string]$data.text) }
+      'readClipboard' { $out.text = [System.Windows.Forms.Clipboard]::GetText() }
       'close' { $timer.Stop(); $form.Close() }
       default { throw 'unknown command' }
     }

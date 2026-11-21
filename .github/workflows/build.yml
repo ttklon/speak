@@ -544,6 +544,24 @@ jobs:
             exit 0
           }
 
+      - name: Electron IPC вставляет текст в отдельное окно Windows
+        shell: bash
+        env:
+          ZS_INPUT_INTERACTIVE: "1"
+          ZS_TEST_ELECTRON: "1"
+        run: |
+          set +e
+          node scripts/test-wininput-window.cjs > electron-input.log 2>&1
+          code=$?
+          cat electron-input.log
+          message=$(tail -c 2500 electron-input.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows Electron input::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' electron-input.log; then
+            echo "::warning title=Windows Electron input::$message"
+          else
+            echo "::notice title=Windows Electron input::$message"
+          fi
+
       - name: Verify artifacts
         shell: pwsh
         run: |

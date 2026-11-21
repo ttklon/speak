@@ -96,6 +96,52 @@ async function main() {
       await assertText(text, `${label} Ctrl+V`);
       console.log(`${label}: Ctrl+V доставлен в отдельное WinForms-окно`);
     }
+    if (process.env.ZS_TEST_ELECTRON === '1') {
+      const executable = require('electron');
+      assert.ok(fs.existsSync(executable), 'нет Electron для проверки IPC');
+      assert.ok(fs.existsSync('dist/index.html'), 'сначала соберите интерфейс');
+      const profile = path.join(dir, 'profile');
+      fs.mkdirSync(profile);
+      const settings = { onboarded: true, speedFix151: true, micPreroll: false,
+        keepModelLoaded: false, clipboardMonitor: false, checkUpdates: false,
+        soundFeedback: false, closeToTray: false, autoOptimize: false };
+      fs.writeFileSync(path.join(profile, 'profile.json'), JSON.stringify({
+        'zs.settings': settings, 'zs:settings': settings,
+      }));
+      const { default: puppeteer } = await import('puppeteer-core');
+      let browser;
+      try {
+        browser = await puppeteer.launch({
+          executablePath: executable, headless: false, ignoreDefaultArgs: true,
+          env: { ...process.env, ZS_E2E_PROFILE: profile, ZSPEAKLY_DEV_URL: 'none' },
+          args: [path.resolve('scripts/e2e/electron-entry.cjs')], timeout: 60000,
+        });
+        const pageTarget = await browser.waitForTarget((t) => t.type() === 'page' && t.url().includes('index.html'), { timeout: 30000 });
+        const page = await pageTarget.page();
+        await page.waitForSelector('.app-window', { timeout: 30000 });
+        await page.waitForFunction(() => Boolean(window.zspeakly?.isElectron && window.zspeakly?.native?.insertText), { timeout: 15000 });
+        for (const mode of ['sendinput', 'clipboard']) {
+          const text = `Electron ${mode}: Привет, café!`;
+          const previous = `До вставки ${mode}`;
+          await command('clear');
+          await command('clipboard', previous);
+          await page.evaluate(async (method) => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: method });
+          }, mode);
+          assert.equal(await active(), true, `перед Electron ${mode} потерян фокус`);
+          const result = await page.evaluate((value) => window.zspeakly.native.insertText(value), text);
+          assert.equal(result.ok, true, `Electron ${mode}: ${JSON.stringify(result)}`);
+          await assertText(text, `Electron ${mode}`);
+          await sleep(1200);
+          const after = await command('readClipboard');
+          assert.equal(after.text, previous, `Electron ${mode}: прежний буфер не сохранён`);
+          console.log(`Electron IPC ${mode}: текст получен окном, прежний буфер сохранён (метод ${result.method})`);
+        }
+      } finally {
+        if (browser) await browser.close();
+      }
+    }
   } finally {
     host.stop();
     try { if (fs.existsSync(path.join(dir, 'ready'))) await command('close'); } catch { /* target мог упасть */ }
