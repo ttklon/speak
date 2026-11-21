@@ -50,6 +50,8 @@ function run(file, args, opts = {}) {
 function installedVersion() {
   const archive = path.join(installDir, 'resources', 'app.asar');
   assert.ok(fs.existsSync(archive), `нет ${archive}`);
+  // У обновлённого архива тот же путь, но другие смещения файлов.
+  asar.uncache(archive);
   return JSON.parse(asar.extractFile(archive, 'package.json').toString('utf8')).version;
 }
 async function checkProfile(version) {
