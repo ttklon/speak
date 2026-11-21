@@ -71,7 +71,7 @@ const longPcm = Buffer.concat(Array.from({ length: copies }, () => [pcm, silence
 const longResult = await engine.transcribe(longPcm, { sampleRate: 16000 });
 assert.equal(longResult.ok, true, `длинная запись: ${longResult.reason}`);
 assert.ok(longResult.chunks > 1, `длинная запись не разбита: ${longResult.chunks}`);
-const keyword = name === 'gigaam' ? /привет/gu : /country/gi;
+const keyword = name === 'gigaam' ? /привет/giu : /country/gi;
 assert.ok((longResult.text.match(keyword) || []).length >= 2, `потерялись повторённые фразы: ${longResult.text}`);
 console.log(`Длинная запись: ${(longPcm.length / 32000).toFixed(1)} с, ${longResult.chunks} фрагментов; тест ${name} пройден.`);
 engine.unload();
