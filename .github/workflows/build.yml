@@ -195,7 +195,9 @@ jobs:
           node scripts/test-ui.mjs > windows-full-ui.log 2>&1
           code=$?
           cat windows-full-ui.log
-          message=$(tail -c 6000 windows-full-ui.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          # Annotations have a size limit. Keep the *end* (including the
+          # fatal error/summary), not the beginning of an oversized message.
+          message=$(tail -c 1400 windows-full-ui.log | tr '\r\n' '  ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Windows full UI::$message"; exit "$code"; fi
           echo "::notice title=Windows full UI::$message"
       - name: Upload Windows full test logs

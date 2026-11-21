@@ -47,7 +47,12 @@ $timer.Add_Tick({
       default { throw 'unknown command' }
     }
     $json = ConvertTo-Json -Compress -InputObject $out
-    [IO.File]::WriteAllText((Join-Path $Directory ('response-' + $data.id + '.json')), $json, $utf8)
+    # Файл ответа виден читателю только после завершения записи: иначе Node
+    # может открыть пустой или частичный JSON между созданием и WriteAllText.
+    $response = Join-Path $Directory ('response-' + $data.id + '.json')
+    $temporary = Join-Path $Directory ('response-' + $data.id + '.tmp')
+    [IO.File]::WriteAllText($temporary, $json, $utf8)
+    [IO.File]::Move($temporary, $response)
   } catch {
     [IO.File]::WriteAllText((Join-Path $Directory 'error.txt'), $_.Exception.ToString(), $utf8)
   }
