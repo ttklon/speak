@@ -205,9 +205,10 @@ export function AppDataProvider({ children }) {
 
   /** Пользователь поправил расшифровку — сохраняем исправленный текст. */
   const updateDictation = useCallback(
-    (id, patch) =>
+    (id, patch, { expectedText } = {}) =>
       setDictations((prev) =>
-        prev.map((d) => (d.id === id ? { ...d, ...patch, editedAt: Date.now() } : d)),
+        prev.map((d) => (d.id === id && (expectedText === undefined || d.text === expectedText)
+          ? { ...d, ...patch, editedAt: Date.now() } : d)),
       ),
     [setDictations],
   );

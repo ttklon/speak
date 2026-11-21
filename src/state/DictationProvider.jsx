@@ -166,6 +166,9 @@ export function DictationProvider({ children }) {
   const hudHiddenByUser = useRef(false);
 
   const recRef = useRef(null);
+  // После остановки микрофона распознаватель ещё ждёт итоговый ответ.
+  const processingRecRef = useRef(null);
+  const sessionRef = useRef(null);
   // сторож тишины текущей записи (только для режима «переключатель»)
   const silenceRef = useRef(null);
   // Язык этой записи: решается один раз по активному окну. Общий язык из
@@ -263,16 +266,20 @@ export function DictationProvider({ children }) {
   const finish = useCallback(
     async (
       text,
-      { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0, sttMeta = null } = {},
+      { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0, sttMeta = null, isCancelled = () => false } = {},
     ) => {
       // защита от двойного завершения (web-движок + фолбэк); держим до конца
       // второй стадии, иначе модель успевала запуститься дважды
-      if (finishing.current) return null;
-      finishing.current = true;
+      if (finishing.current || isCancelled()) return null;
+      const finishLock = { isCancelled };
+      finishing.current = finishLock;
+      // Идентификатор создаём до асинхронной полировки: её поздний ответ
+      // должен относиться к этой записи, а не к последней на момент ответа.
+      const itemId = `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       // страховка: если вторая стадия почему-то не вернётся, диктовка не должна
       // навсегда остаться «занятой»
       const hardReset = setTimeout(() => {
-        finishing.current = false;
+        if (finishing.current === finishLock) finishing.current = false;
       }, 9000);
       // после завершения держим флаг ещё 700 мс: движок и кнопка «стоп»
       // присылают результат почти одновременно, и без паузы диктовка
@@ -280,8 +287,8 @@ export function DictationProvider({ children }) {
       const release = () => {
         clearTimeout(hardReset);
         setTimeout(() => {
-          finishing.current = false;
-        }, 700);
+          if (finishing.current === finishLock) finishing.current = false;
+        }, isCancelled() ? 0 : 700);
       };
       const raw = text || finalRef.current || draftRef.current;
       // настройка «Применять словарь при диктовке»: раньше тумблер в разделе
@@ -372,6 +379,7 @@ export function DictationProvider({ children }) {
         } catch (err) {
           diag.warn('stt', 'Команда голосом: модель не ответила', { reason: String(err?.message || err) });
         }
+        if (isCancelled()) { release(); return null; }
         if (!result || result.trim() === selection.trim()) {
           pushToast({
             title: COMMAND_ERRORS['no-change'].title,
@@ -384,6 +392,7 @@ export function DictationProvider({ children }) {
           return null;
         }
         const placed = await writeSelectionText(result);
+        if (isCancelled()) { release(); return null; }
         const item = {
           text: result,
           durationMs: Math.max(400, Date.now() - startedAt.current),
@@ -451,6 +460,7 @@ export function DictationProvider({ children }) {
         } catch (err) {
           res = { ok: false, reason: String(err?.message || err) };
         }
+        if (isCancelled()) { release(); return null; }
         if (res?.ok) {
           const undoneId = lastItemId.current;
           if (undoneId && updateDictation) updateDictation(undoneId, { undone: true });
@@ -532,18 +542,19 @@ export function DictationProvider({ children }) {
           timedOut = true;
           gate.record({ timedOut: true, ms: 0 });
         }
+        if (isCancelled()) { release(); return null; }
         if (timedOut) {
           // Не блокируем вставку: текст уже готов и правильный. Когда модель
           // всё-таки ответит — обновим запись в истории, чтобы человек видел
           // «как надо», но в чужое окно второй раз ничего не печатаем.
           polishPromise
             .then((late) => {
-              if (!late) return;
+              if (!late || isCancelled()) return;
               const improved = formatForApp(cleanLines(late), where.style);
               if (!improved || improved === cleaned) return;
-              const id = lastItemId.current;
-              if (id && updateDictation) updateDictation(id, { text: improved, words: words(improved) });
-              diag.info('stt', 'Модель улучшила диктовку после вставки', {
+              // Не переписываем ручную правку пользователя, сделанную после вставки.
+              if (updateDictation) updateDictation(itemId, { text: improved, words: words(improved) }, { expectedText: cleaned });
+              diag.info('stt', 'Модель вернула позднюю правку диктовки', {
                 before: cleaned.length,
                 after: improved.length,
               });
@@ -618,7 +629,7 @@ export function DictationProvider({ children }) {
         words: words(cleaned),
         createdAt: Date.now(),
         // id нужен, чтобы «эффект печати» точно понял, что пришёл новый текст
-        id: `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: itemId,
         language: resolveSessionLang(),
         source: 'dictation',
         // сколько заняло распознавание (только для whisper.cpp) — видно в диагностике
@@ -943,6 +954,8 @@ export function DictationProvider({ children }) {
   const start = useCallback(
     (opts = {}) => {
       if (recRef.current) return;
+      const session = { cancelled: false };
+      sessionRef.current = session;
       sessionOpts.current = opts;
       // новая диктовка — снова показываем плавающее окно, даже если прошлое скрыли
       hudHiddenByUser.current = false;
@@ -1151,6 +1164,7 @@ export function DictationProvider({ children }) {
           }
         },
         onEnd: async ({ text, ms, spoken, mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs }) => {
+          if (session.cancelled) return;
           recRef.current = null;
           setState('processing');
           setLevel(0);
@@ -1161,8 +1175,9 @@ export function DictationProvider({ children }) {
             sttMs: ms,
             spokenSeconds: spoken || 0,
             sttMeta: { mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs },
+            isCancelled: () => session.cancelled,
           });
-          if (opts.onResult) opts.onResult(item);
+          if (!session.cancelled && opts.onResult) opts.onResult(item);
         },
       });
       recRef.current = recognizer;
@@ -1213,6 +1228,8 @@ export function DictationProvider({ children }) {
       return;
     }
     const fallbackText = rec.text || draftRef.current;
+    const processing = { rec, cancelled: false, session: sessionRef.current };
+    processingRecRef.current = processing;
     recRef.current = null;
     setPaused(false);
     // запись завершена — пауз больше нет, длительность дальше считать нечего
@@ -1228,15 +1245,20 @@ export function DictationProvider({ children }) {
       result = rec.stop?.();
       if (result && typeof result.then === 'function') result = await result;
     } catch (err) {
+      if (processing.cancelled) return;
       console.warn('[dictation] stop failed', err);
       diag.error('stt', 'Не удалось завершить запись', { reason: String(err?.message || err) });
       setError({ code: 'stop-failed', title: 'Не удалось завершить запись', hint: String(err) });
       setState('idle');
       return;
+    } finally {
+      if (processingRecRef.current === processing) processingRecRef.current = null;
     }
+    if (processing.cancelled || processing.session?.cancelled || result?.code === 'cancelled') return;
 
     const text = (result && result.text) || fallbackText || '';
-    const item = await finish(text);
+    const item = await finish(text, { isCancelled: () => Boolean(processing.session?.cancelled) });
+    if (processing.session?.cancelled) return;
     if (!item && text.trim()) return;
     if (!text.trim()) setState('idle');
   }, [finish]);
@@ -1434,8 +1456,13 @@ export function DictationProvider({ children }) {
   }, [last, retrying, updateDictation]);
 
   const cancelProcessing = useCallback(() => {
+    if (sessionRef.current) sessionRef.current.cancelled = true;
+    if (finishing.current?.isCancelled?.()) finishing.current = false;
+    const processing = processingRecRef.current;
+    if (processing) processing.cancelled = true;
     try {
-      window.zspeakly?.native?.cancelTranscribe?.();
+      if (processing?.rec?.abort) processing.rec.abort();
+      else window.zspeakly?.native?.cancelTranscribe?.();
     } catch {
       /* ignore */
     }
@@ -1478,6 +1505,7 @@ export function DictationProvider({ children }) {
 
   /** Отменить начатую запись без распознавания и без истории. */
   const cancel = useCallback(() => {
+    if (sessionRef.current) sessionRef.current.cancelled = true;
     try {
       recRef.current?.abort?.();
     } catch {

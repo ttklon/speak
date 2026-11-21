@@ -107,6 +107,25 @@ function fakeUnpack({ delayedClose = false, includeCli = true } = {}) {
 }
 
 describe('подготовка движка Whisper', () => {
+  it('после установки сервера поверх старого комплекта использует установленную пару', async () => {
+    const oldResources = process.resourcesPath;
+    const resources = join(dir, 'resources');
+    mkdirSync(join(resources, 'bin'), { recursive: true });
+    writeFileSync(join(resources, 'bin', 'whisper-cli.exe'), 'старый встроенный CLI');
+    process.resourcesPath = resources;
+    const whisper = require('../../electron/whisper.cjs');
+    try {
+      expect(models.modelStatus().server).toBe(false);
+      fakeUnpack();
+      expect(await bounded(models.downloadEngine(undefined, { force: true }))).toMatchObject({ ok: true, server: true });
+      expect(whisper.findBinary()).toBe(join(dir, 'bin', 'whisper-cli.exe'));
+      expect(readFileSync(whisper.findBinary(), 'utf8')).toBe('новая сборка');
+      expect(models.modelStatus().server).toBe(true);
+    } finally {
+      if (oldResources === undefined) delete process.resourcesPath; else process.resourcesPath = oldResources;
+    }
+  });
+
   it('отменяет поиск до ответа и запрещает другую загрузку до окончания', async () => {
     behavior = 'wait';
     const first = models.downloadEngine(undefined, { force: true });

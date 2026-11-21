@@ -204,6 +204,12 @@ export function createRecognizer(opts = {}) {
     let recorder = null;
     let text = '';
     let stopped = false;
+    let aborted = false;
+    let confirmedMs = 0;
+    let preBroken = false;
+    let preClosed = false;
+    let wakeAbort;
+    const abortSignal = new Promise((resolve) => { wakeAbort = resolve; });
     // живая расшифровка: whisper не отдаёт слова по мере речи, поэтому раз в
     // intervalMs отправляем накопленный звук заново и показываем, что вышло
     const streamInterval = Number(opts.streamIntervalMs) || 0;
@@ -286,12 +292,13 @@ export function createRecognizer(opts = {}) {
      */
     const queuePreChunk = (cut) => {
       preChain = preChain.then(async () => {
-        if (stopped || !recorder) return;
+        if (stopped || preBroken || preClosed || !recorder) return;
         // Отдаём чуть больше, чем «новый» звук: слово, разрезанное границей,
         // должно целиком попасть хотя бы в один кусок.
         const fromMs = Math.max(0, cut.fromMs - tracker.overlapMs);
         const snap = recorder.snapshot?.({ fromMs, toMs: cut.atMs, maxSeconds: 0 });
         if (!snap?.pcm?.length || snap.durationMs < 800) {
+          preBroken = true;
           tracker.rollback(cut.fromMs);
           return;
         }
@@ -307,18 +314,25 @@ export function createRecognizer(opts = {}) {
             contextPrompt: '',
             pre: true,
           });
+          // После таймаута/отмены ответ больше не относится к итоговой записи.
+          if (preClosed || aborted) return;
           if (res?.mode) lastMode = res.mode;
           if (res?.ok && String(res.text || '').trim()) {
+            confirmedMs = cut.atMs;
             preText = mergeOverlap(preText, String(res.text).trim());
             preCount += 1;
             preMs += Number(res.ms) || 0;
           } else {
             // Пусто — значит кусок не распознан. Возвращаем границу, иначе
             // этот звук не попадёт ни в кусок, ни в хвост.
+            preBroken = true;
             tracker.rollback(cut.fromMs);
           }
         } catch {
-          tracker.rollback(cut.fromMs);
+          if (!preClosed && !aborted) {
+            preBroken = true;
+            tracker.rollback(cut.fromMs);
+          }
         }
       });
     };
@@ -336,7 +350,7 @@ export function createRecognizer(opts = {}) {
               // Уровень микрофона — единственный сигнал, по которому видно
               // паузу. Дальше решает чистый модуль chunks.js: он скажет,
               // можно ли уже отдать кусок движку.
-              if (!shouldPreChunk(lastMode)) return;
+              if (preBroken || preClosed || aborted || !shouldPreChunk(lastMode)) return;
               const atMs = recorder
                 ? Math.round((recorder.frames / (recorder.sampleRate || 16000)) * 1000)
                 : 0;
@@ -346,6 +360,12 @@ export function createRecognizer(opts = {}) {
             // предролл «горячего микрофона»: звук до нажатия хоткея
             preroll: opts.preroll || null,
           });
+          // Пользователь мог отменить, пока браузер спрашивал разрешение.
+          if (aborted) {
+            recorder?.abort?.();
+            recorder = null;
+            return;
+          }
           // выбранный микрофон пропал — пишем с системного, но не молчим
           if (recorder?.fellBack) {
             onNotice?.({
@@ -359,6 +379,7 @@ export function createRecognizer(opts = {}) {
           onStart?.();
           scheduleStream();
         } catch (err) {
+          if (aborted) return;
           // нет микрофона или отказали в доступе — сообщаем честно
           // Причина от браузера (NotAllowedError, NotFoundError) важнее
           // технического «Permission denied» — человеку нужен следующий шаг.
@@ -385,12 +406,20 @@ export function createRecognizer(opts = {}) {
         stopStream();
         // Досчитываем уже отправленный кусок: если оборвать его отменой, этот
         // звук пропадёт — он не попадёт ни в хвост, ни в результат.
-        await Promise.race([preChain, new Promise((resolve) => setTimeout(resolve, 6000))]);
+        let preTimer;
+        await Promise.race([preChain, abortSignal, new Promise((resolve) => { preTimer = setTimeout(resolve, 6000); })]);
+        clearTimeout(preTimer);
+        // Отправленная граница может ещё не быть подтверждена результатом.
+        // С этого момента поздний ответ куска игнорируется, а хвост начинается
+        // с последней подтверждённой границы, не с очереди отправки.
+        preClosed = true;
+        if (aborted) return { text: '', code: 'cancelled' };
         try {
-          await native.cancelTranscribe?.();
+          await Promise.race([native.cancelTranscribe?.(), abortSignal]);
         } catch {
           /* отмена — не ошибка */
         }
+        if (aborted) return { text: '', code: 'cancelled' };
         const { pcm, durationMs } = recorder.stop();
         if (!pcm?.length) {
           onError?.({ code: 'no-audio', title: 'Запись пустая', hint: 'Микрофон ничего не передал. Проверьте устройство в настройках.' });
@@ -402,7 +431,6 @@ export function createRecognizer(opts = {}) {
           onEnd?.({ text: '' });
           return { text: '', reason: 'too-short' };
         }
-        rememberRecordedAudio(pcm, durationMs, langCode());
         let res;
         // подсказка с экрана берётся в последний момент: локальная модель могла
         // ответить уже после старта записи
@@ -411,7 +439,7 @@ export function createRecognizer(opts = {}) {
         // Что уже распознано заранее — то второй раз не считаем. После паузы
         // сюда попадает только хвост; без пауз предварительных кусков нет, и
         // хвост равен всей записи (поведение как раньше).
-        const committedMs = Math.min(Number(tracker.committedMs) || 0, durationMs);
+        const committedMs = Math.min(confirmedMs, durationMs);
         const RATE = 16000;
         // Хвост тоже с перекрытием: на его стыке с последним куском может быть
         // половина слова, и `mergeOverlap` снимет дубль.
@@ -424,6 +452,7 @@ export function createRecognizer(opts = {}) {
         // Хвост короче трети секунды — там нет слов, только дыхание: отдаём
         // то, что уже распознали, и не тратим проход движка.
         if (preText && tailPcm.length < RATE * 0.3) {
+          rememberRecordedAudio(pcm, durationMs, langCode());
           text = preText;
           onFinal?.({ text, last: text });
           onEnd?.({
@@ -440,7 +469,7 @@ export function createRecognizer(opts = {}) {
         try {
           // pcm уходит как Int16Array: main превращает его в сырые байты сам,
           // иначе whisper получает мусор вместо звука (был именно такой баг)
-          res = await native.transcribePcm?.({
+          res = await Promise.race([native.transcribePcm?.({
             pcm: tailPcm,
             durationMs: tailMs || durationMs,
             lang: langCode(),
@@ -451,14 +480,17 @@ export function createRecognizer(opts = {}) {
             // Продолжение, а не новая фраза: хвост должен подхватить стиль и
             // термины уже распознанного куска.
             contextPrompt: preText ? `${preText} ${contextPrompt}`.trim() : contextPrompt,
-          });
+          }), abortSignal.then(() => ({ ok: false, code: 'cancelled' }))]);
         } catch (err) {
+          if (aborted) return { text: '', code: 'cancelled' };
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });
           onEnd?.({ text: '' });
           return { text: '', reason: String(err?.message || err) };
         }
+        if (aborted || res?.code === 'cancelled') return { text: '', code: 'cancelled' };
         if (res?.mode) lastMode = res.mode;
         if (res?.ok && res.text) {
+          rememberRecordedAudio(pcm, durationMs, langCode());
           // Полный текст — заранее распознанные куски плюс хвост. Один проход
           // по хвосту вместо всей фразы и есть выигрыш во времени.
           text = preText ? mergeOverlap(preText, res.text) : res.text;
@@ -490,6 +522,7 @@ export function createRecognizer(opts = {}) {
             pausesMs: Number(res.audio?.pausesMs) || 0,
           });
         } else if (preText) {
+          rememberRecordedAudio(pcm, durationMs, langCode());
           // Хвост не распознался (шум, обрывок), но заранее посчитанное уже
           // есть: отдавать пустоту и «ничего не распознано» было бы потерей.
           text = preText;
@@ -536,6 +569,9 @@ export function createRecognizer(opts = {}) {
         return Boolean(recorder?.paused);
       },
       abort() {
+        aborted = true;
+        preClosed = true;
+        wakeAbort();
         stopped = true;
         stopStream();
         recorder?.abort?.();

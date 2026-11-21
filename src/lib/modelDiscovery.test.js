@@ -55,6 +55,27 @@ describe('файлы Whisper в комплекте и профиле', () => {
     expect(await models.downloadVad()).toMatchObject({ ok: true, already: true, path: vad });
     expect(await models.downloadModel('base-q5_1')).toMatchObject({ ok: true, already: true, path: model });
   });
+  it('после установки сервера выбирает CLI и сервер одного комплекта', () => {
+    put(join(resources, 'bin'), 'whisper-cli.exe');
+    const cli = put(join(root, 'profile', 'bin'), 'whisper-cli.exe');
+    put(join(root, 'profile', 'bin'), 'whisper-server.exe');
+    expect(whisper.findBinary()).toBe(cli);
+    expect(whisper.serverStatus().available).toBe(true);
+  });
+  it('не объявляет сервер из чужого комплекта частью одинокого CLI', () => {
+    put(join(resources, 'bin'), 'whisper-cli.exe');
+    put(join(root, 'profile', 'bin'), 'whisper-server.exe');
+    expect(whisper.findBinary()).toBe(join(resources, 'bin', 'whisper-cli.exe'));
+    expect(whisper.serverStatus().available).toBe(false);
+  });
+  it('новый комплект приложения имеет приоритет над старым полным комплектом профиля', () => {
+    const cli = put(join(resources, 'bin'), 'whisper-cli.exe');
+    put(join(resources, 'bin'), 'whisper-server.exe');
+    put(join(root, 'profile', 'bin'), 'whisper-cli.exe');
+    put(join(root, 'profile', 'bin'), 'whisper-server.exe');
+    expect(whisper.findBinary()).toBe(cli);
+    expect(whisper.serverStatus().available).toBe(true);
+  });
   it('учитывает в статусе поддерживаемую старую модель, не входящую в каталог загрузок', () => {
     put(join(resources, 'models'), 'ggml-large-v3.bin');
     expect(models.modelStatus().availableModel).toBe(true);

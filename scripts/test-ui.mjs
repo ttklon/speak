@@ -1635,6 +1635,128 @@ async function scenarioModelRewrite(browser) {
   record('сценарии', 'модель: без ошибок консоли', errors.length === 0, errors[0] || '');
 }
 
+// Медленная модель не должна переписать более новую диктовку своим старым ответом.
+async function scenarioLatePolish(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiModel: 'qwen2.5:0.5b', aiDictationRewrite: true, liveWhisper: false },
+    patchNative: () => {
+      let calls = 0;
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: ++calls === 1 ? 'первая запись про рыбу' : 'вторая запись про кошек' });
+      window.zspeakly.native.httpPost = async ({ body }) => {
+        if (body.prompt.includes('рыбу')) return new Promise((resolve) => { window.__resolveLatePolish = resolve; });
+        return { ok: true, data: { response: 'Вторая запись про кошек!' } };
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /рыбу/i.test(r.rawText || r.text)), { timeout: 10000 });
+    await sleep(2400);
+    await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /кошек/i.test(r.rawText || r.text)), { timeout: 10000 });
+    await page.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Первая запись про рыбу!' } }));
+    await sleep(500);
+    const rows = await page.evaluate(() => window.__e2e.read('zs.dictations') || []);
+    const first = rows.find((r) => /рыбу/i.test(r.rawText || r.text));
+    const second = rows.find((r) => /кошек/i.test(r.rawText || r.text));
+    record('сценарии', 'поздняя полировка относится к исходной диктовке',
+      /рыбу/.test(first?.text || '') && /кошек/.test(second?.text || '') && /!/.test(first?.text || ''),
+      rows.slice(0, 2).map((r) => r.text).join(' | '));
+    const errors = takeErrors(page);
+    record('сценарии', 'поздняя полировка без ошибок консоли', errors.length === 0, errors[0] || '');
+  } catch (err) {
+    const state = await page.evaluate(() => ({ rows: (window.__e2e.read('zs.dictations') || []).map((r) => r.text), text: document.body.innerText.slice(0, 120), deferred: Boolean(window.__resolveLatePolish) }));
+    throw new Error(`${err.message}; ${JSON.stringify(state)}`);
+  } finally { await page.close(); }
+}
+
+async function scenarioCancelPolish(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true, liveWhisper: false },
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'отменённая диктовка про рыбу' });
+      window.zspeakly.native.httpPost = async () => new Promise((resolve) => { window.__resolveLatePolish = resolve; });
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
+    await page.waitForFunction(() => Boolean(window.__resolveLatePolish), { timeout: 5000 });
+    await clickText(page, 'ОТМЕНИТЬ');
+    await page.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Отменённая диктовка про рыбу!' } }));
+    await sleep(1500);
+    const state = await page.evaluate(() => ({
+      inserted: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').map((c) => c.args?.[0]),
+      history: (window.__e2e.read('zs.dictations') || []).filter((r) => /отменённая диктовка/i.test(r.rawText || r.text)).map((r) => r.text),
+    }));
+    record('сценарии', 'отмена во время полировки не вставляет и не сохраняет диктовку',
+      state.inserted.length === 0 && state.history.length === 0, JSON.stringify(state));
+    const errors = takeErrors(page);
+    record('сценарии', 'отмена полировки без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally { await page.close(); }
+}
+
+async function scenarioCancelPolishRestart(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true, liveWhisper: false },
+    patchNative: () => {
+      let calls = 0;
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: ++calls === 1 ? 'первая отменённая запись' : 'вторая новая запись' });
+      window.zspeakly.native.httpPost = async ({ body }) => body.prompt.includes('отменённая')
+        ? new Promise((resolve) => { window.__resolveLatePolish = resolve; })
+        : { ok: true, data: { response: 'Вторая новая запись!' } };
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.click('.hero__mic'); await sleep(800); await page.click('.hero__mic');
+    await page.waitForFunction(() => Boolean(window.__resolveLatePolish), { timeout: 5000 });
+    await clickText(page, 'ОТМЕНИТЬ');
+    await page.click('.hero__mic'); await sleep(500); await page.click('.hero__mic');
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /вторая новая запись/i.test(r.text)), { timeout: 5000 });
+    await page.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Первая отменённая запись!' } }));
+    await sleep(500);
+    const rows = await page.evaluate(() => window.__e2e.read('zs.dictations') || []);
+    record('сценарии', 'сразу после отмены полировки следующая диктовка не теряется',
+      rows.some((r) => /вторая новая запись/i.test(r.text)) && !rows.some((r) => /первая отменённая запись/i.test(r.text)),
+      rows.slice(0, 2).map((r) => r.text).join(' | '));
+    const errors = takeErrors(page);
+    record('сценарии', 'быстрый повтор после отмены без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally { await page.close(); }
+}
+
+async function scenarioLatePolishEdit(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true, liveWhisper: false },
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'первая запись про рыбу' });
+      window.zspeakly.native.httpPost = async () => new Promise((resolve) => { window.__resolveLatePolish = resolve; });
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /рыбу/i.test(r.rawText || r.text)), { timeout: 10000 });
+    await page.click('.recent__row'); await sleep(150);
+    await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Исправить/.test(b.innerText))?.click());
+    await page.waitForSelector('.modal textarea');
+    const textarea = await page.$('.modal textarea');
+    await textarea.click({ clickCount: 3 });
+    await textarea.type('Человек исправил эту запись.');
+    await page.evaluate(() => [...document.querySelectorAll('.modal button')].find((b) => /Сохранить/i.test(b.innerText))?.click());
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /Человек исправил эту запись/.test(r.text)), { timeout: 5000 });
+    const before = await page.evaluate(() => (window.__e2e.read('zs.dictations') || []).slice(0, 2).map((r) => ({ id: r.id, text: r.text })));
+    await page.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Первая запись про рыбу!' } }));
+    await sleep(500);
+    const rows = await page.evaluate(() => window.__e2e.read('zs.dictations') || []);
+    record('сценарии', 'поздняя полировка не затирает ручную правку',
+      rows.some((r) => r.text === 'Человек исправил эту запись.'), JSON.stringify({ before, after: rows.slice(0, 2).map((r) => ({ id: r.id, text: r.text })) }));
+    const errors = takeErrors(page);
+    record('сценарии', 'полировка после ручной правки без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally { await page.close(); }
+}
+
 // Вставка в чужое окно не удалась (окно с правами администратора): текст
 // остаётся в буфере, и об этом сказано — иначе диктовка выглядит сломанной.
 async function scenarioInsertFailed(browser) {
@@ -1993,6 +2115,17 @@ async function scenarioPauseAndCancel(browser) {
   await sleep(600);
   const idle = await text();
   record('сценарии', 'отмена распознавания возвращает готовность', /Начать диктовку/i.test(idle) && !/ТРАНСКРИПЦИЯ/i.test(idle));
+  // Мок намеренно игнорирует cancel и возвращает текст с задержкой: его нельзя
+  // вставлять или добавлять в историю, даже если движок ответил после отмены.
+  await sleep(2600);
+  const cancelled = await page.evaluate(() => ({
+    insertions: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+    history: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+    body: document.body.innerText,
+  }));
+  record('сценарии', 'поздний ответ после отмены не вставляется и не попадает в историю',
+    cancelled.insertions === 0 && !cancelled.history.some((item) => /Текст после паузы и отмены/i.test(item.text || '')) &&
+      !/Текст после паузы и отмены/i.test(cancelled.body), `вставок: ${cancelled.insertions}`);
 
   // обычный проход до конца — отмена не должна ломать следующие диктовки
   await page.evaluate(() => window.__sttCalls = []);
@@ -6804,6 +6937,10 @@ async function main() {
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],
       ['переписывание моделью', scenarioModelRewrite],
+      ['поздняя полировка', scenarioLatePolish],
+      ['поздняя полировка после правки', scenarioLatePolishEdit],
+      ['отмена полировки', scenarioCancelPolish],
+      ['повтор после отмены полировки', scenarioCancelPolishRestart],
       ['пропавший микрофон', scenarioMissingMic],
       ['вставка не удалась', scenarioInsertFailed],
       ['обещания плашки', scenarioHudPromise],

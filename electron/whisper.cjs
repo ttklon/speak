@@ -2,9 +2,9 @@
  * Офлайн-распознавание речи через whisper.cpp.
  *
  * ZSpeakly ищет `whisper-cli.exe` (или whisper.exe / main.exe) в:
- *   1) resources/bin (рядом с установленным приложением),
- *   2) %APPDATA%\ZSpeakly\bin,
- *   3) PATH.
+ *   1) полный комплект resources/bin (рядом с установленным приложением),
+ *   2) полный комплект %APPDATA%\ZSpeakly\bin, если в комплекте нет сервера,
+ *   3) иначе первый найденный CLI в resources, профиле, приложении или PATH.
  * Модель — ggml-*.bin в %APPDATA%\ZSpeakly\models или resources/models.
  *
  * Если движка нет, ZSpeakly честно сообщает об этом: в приложении остаётся
@@ -25,29 +25,32 @@ function candidates(...paths) {
   return paths.filter(Boolean);
 }
 
+function binaryIn(dir, names) {
+  if (!dir) return null;
+  for (const name of names) {
+    const file = path.join(dir, name);
+    try { if (fs.existsSync(file)) return file; } catch { /* недоступный путь */ }
+  }
+  return null;
+}
+
 function findBinary(names = BIN_NAMES) {
-  const roots = candidates(
-    process.resourcesPath && path.join(process.resourcesPath, 'bin'),
-    path.join(app.getPath('userData'), 'bin'),
-    app.getAppPath?.() && path.join(app.getAppPath(), 'bin'),
-  );
-  for (const dir of roots) {
-    for (const name of names) {
-      const p = path.join(dir, name);
-      if (fs.existsSync(p)) return p;
+  const bundled = process.resourcesPath && path.join(process.resourcesPath, 'bin');
+  const profile = path.join(app.getPath('userData'), 'bin');
+  const appBin = app.getAppPath?.() && path.join(app.getAppPath(), 'bin');
+  const roots = candidates(bundled, profile, appBin, ...(process.env.PATH || '').split(path.delimiter).filter(Boolean));
+  if (names === BIN_NAMES) {
+    // Если старая установка содержит только CLI, принудительная установка
+    // сервера в профиль должна выбрать оба файла нового комплекта вместе.
+    // Полный комплект приложения остаётся первым: профиль может быть старее.
+    if (binaryIn(bundled, BIN_NAMES) && !binaryIn(bundled, SERVER_NAMES) &&
+        binaryIn(profile, BIN_NAMES) && binaryIn(profile, SERVER_NAMES)) {
+      return binaryIn(profile, BIN_NAMES);
     }
   }
-  // PATH
-  const pathDirs = (process.env.PATH || '').split(path.delimiter);
-  for (const dir of pathDirs) {
-    for (const name of names) {
-      const p = path.join(dir, name);
-      try {
-        if (fs.existsSync(p)) return p;
-      } catch {
-        /* ignore */
-      }
-    }
+  for (const dir of roots) {
+    const found = binaryIn(dir, names);
+    if (found) return found;
   }
   return null;
 }
@@ -274,7 +277,7 @@ function status(preferredModel = 'small') {
 // настройкой «Держать модель в памяти»; если сервера в комплекте нет или он не
 // поднялся, всё честно возвращается к обычному запуску whisper-cli.
 
-let serverState = null; // { proc, port, modelPath, modelIdentity, readyAt }
+let serverState = null; // { proc, port, modelPath, modelIdentity, bin, binIdentity }
 let serverCooldownUntil = 0;
 let serverGeneration = 0;
 
@@ -289,7 +292,15 @@ function modelIdentity(file) {
 }
 
 function serverBinary() {
-  return findBinary(SERVER_NAMES);
+  const cli = findBinary();
+  // Сервер и CLI запускаются с DLL своего каталога; не смешиваем версии из
+  // комплекта приложения и из загруженного в профиль архива.
+  return cli ? binaryIn(path.dirname(cli), SERVER_NAMES) : null;
+}
+
+function serverMatchesBinary(state) {
+  const current = serverBinary();
+  return Boolean(current && state?.bin === current && state.binIdentity && state.binIdentity === modelIdentity(current));
 }
 
 function serverStatus() {
@@ -299,7 +310,8 @@ function serverStatus() {
     running,
     // ready — сервер уже ответил на запрос, значит модель в памяти и можно
     // считать без холодного старта. running без ready = ещё грузит веса.
-    ready: Boolean(running && serverState.ready === true),
+    ready: Boolean(running && serverState.ready === true && serverMatchesBinary(serverState) &&
+      serverState.modelIdentity === modelIdentity(serverState.modelPath)),
     warming: Boolean(warming),
     port: serverState?.port || 0,
     model: serverState?.modelPath ? path.basename(serverState.modelPath) : '',
@@ -374,14 +386,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Запустить whisper-server и дождаться готовности. Возвращает state или null;
  * повторный вызов (без VAD-флагов) нужен, если сборка whisper.cpp не знает --vad.
  */
-async function startServer(bin, args, { port, modelPath, modelVersion, deadlineMs = 20000 }) {
+async function startServer(bin, args, { port, modelPath, modelVersion, binVersion, deadlineMs = 20000 }) {
   let proc;
   try {
     proc = spawn(bin, args, { windowsHide: true });
   } catch {
     return null;
   }
-  const state = { proc, port, modelPath, modelIdentity: modelVersion };
+  const state = { proc, port, modelPath, modelIdentity: modelVersion, bin, binIdentity: binVersion };
   serverState = state;
   let stderr = '';
   proc.stderr?.on('data', (d) => {
@@ -460,8 +472,9 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
   const bin = serverBinary();
   if (!bin) return null;
   const modelVersion = modelIdentity(modelPath);
-  if (!modelVersion) return null;
-  if (serverState && serverState.modelPath === modelPath && serverState.modelIdentity === modelVersion && serverState.proc?.exitCode === null) {
+  const binVersion = modelIdentity(bin);
+  if (!modelVersion || !binVersion) return null;
+  if (serverState && serverState.modelPath === modelPath && serverState.modelIdentity === modelVersion && serverMatchesBinary(serverState) && serverState.proc?.exitCode === null) {
     // Сервер уже есть. Готовый — отдаём как есть, а тот, что ещё грузит веса,
     // не выдаём за готовый: иначе вызывающий сделает запрос в пустоту и решит,
     // что модель прогрета.
@@ -487,10 +500,10 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
     ];
     for (const args of attempts) {
       // eslint-disable-next-line no-await-in-loop
-      const state = await startServer(bin, args, { port, modelPath, modelVersion, deadlineMs });
+      const state = await startServer(bin, args, { port, modelPath, modelVersion, binVersion, deadlineMs });
       if (generation !== serverGeneration) return null;
       if (state) {
-        if (serverState !== state || modelIdentity(modelPath) !== modelVersion) {
+        if (serverState !== state || modelIdentity(modelPath) !== modelVersion || !serverMatchesBinary(state)) {
           if (serverState === state) stopServer();
           return null;
         }
@@ -533,7 +546,7 @@ async function warm(model) {
   // платил эти секунды своей первой фразой.
   if (warmedFor !== modelPath) {
     const warmup = await warmupInference(server).catch(() => null);
-    if (serverState !== server || server.proc?.exitCode !== null || modelIdentity(modelPath) !== server.modelIdentity) {
+    if (serverState !== server || server.proc?.exitCode !== null || modelIdentity(modelPath) !== server.modelIdentity || !serverMatchesBinary(server)) {
       return { ok: false, reason: 'прогрев прерван или модель изменилась' };
     }
     if (!warmup?.ok) return { ok: false, reason: 'не удалось выполнить пробный проход' };
@@ -623,7 +636,7 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
   // сервер в фоне для следующей диктовки.
   const ready = serverStatus();
   const version = modelIdentity(modelPath);
-  if (!ready.ready || !serverState || serverState.modelPath !== modelPath || !version || serverState.modelIdentity !== version) {
+  if (!ready.ready || !serverState || serverState.modelPath !== modelPath || !version || serverState.modelIdentity !== version || !serverMatchesBinary(serverState)) {
     // Поднимаем сервер для СЛЕДУЮЩЕЙ диктовки, но не одновременно с текущим
     // проходом: два процесса whisper делят ядра и оба становятся медленнее.
     scheduleServerWarm(modelPath, threads);
@@ -731,7 +744,7 @@ function transcribe(
     }
     const canShareServer = keepLoaded && serverState?.ready && serverState.proc?.exitCode === null &&
       serverState.modelPath === modelPath && serverState.modelIdentity === modelIdentity(modelPath) &&
-      [...activeRuns].every((run) => run.kind === 'server');
+      serverMatchesBinary(serverState) && [...activeRuns].every((run) => run.kind === 'server');
     if (isBusy() && !canShareServer) {
       resolve({ ok: false, text: '', code: 'busy', reason: 'распознавание уже выполняется' });
       return;

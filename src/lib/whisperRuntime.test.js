@@ -279,6 +279,32 @@ describe('жизненный цикл прогретого Whisper', () => {
     expect(whisper.serverStatus().running).toBe(false);
   });
 
+  it('после замены сервера прогревает новый исполняемый файл', async () => {
+    expect(await bounded(whisper.warm('small'))).toMatchObject({ ok: true });
+    const serverFile = join(root, 'bin', 'whisper-server.exe');
+    writeFileSync(`${serverFile}.new`, 'другая версия');
+    renameSync(`${serverFile}.new`, serverFile);
+    expect(whisper.serverStatus().ready).toBe(false);
+    expect(await bounded(whisper.warm('small'))).toMatchObject({ ok: true });
+    expect(children.filter((item) => String(item.file).includes('whisper-server'))).toHaveLength(2);
+  });
+
+  it('после установки сервера запускает сервер и CLI из одного профиля', async () => {
+    const oldResources = process.resourcesPath;
+    const resources = join(root, 'resources');
+    mkdirSync(join(resources, 'bin'), { recursive: true });
+    writeFileSync(join(resources, 'bin', 'whisper-cli.exe'), 'встроенный старый CLI');
+    process.resourcesPath = resources;
+    try {
+      expect(await bounded(whisper.warm('small'))).toMatchObject({ ok: true });
+      expect(children[0].file).toBe(join(root, 'bin', 'whisper-server.exe'));
+      expect(await bounded(whisper.transcribe(wav, { model: 'small', keepLoaded: false }))).toMatchObject({ ok: true, mode: 'cli' });
+      expect(children[1].file).toBe(join(root, 'bin', 'whisper-cli.exe'));
+    } finally {
+      if (oldResources === undefined) delete process.resourcesPath; else process.resourcesPath = oldResources;
+    }
+  });
+
   it('ошибка запуска CLI после серверного fallback возвращается, не зависая', async () => {
     rmSync(join(root, 'bin', 'whisper-server.exe'));
     cliMode = 'throw-first';
