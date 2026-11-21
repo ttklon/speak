@@ -339,8 +339,9 @@ async function transcribeChunk(s, samples, onFrame) {
     for (let i = 0; i < dim; i++) frameVector[i] = flat[i * totalFrames + frame];
     const out = await s.decoderJoint.run({
       encoder_outputs: { type: 'float32', data: frameVector, dims: [1, dim, 1] },
-      targets: { type: 'int64', data: BigInt64Array.from([BigInt(lastToken)]), dims: [1, 1] },
-      target_length: { type: 'int64', data: BigInt64Array.from([1n]), dims: [1] },
+      // Декодер NeMo принимает int32, хотя длины на входе энкодера — int64.
+      targets: { type: 'int32', data: Int32Array.from([lastToken]), dims: [1, 1] },
+      target_length: { type: 'int32', data: Int32Array.from([1]), dims: [1] },
       input_states_1: { type: 'float32', data: state1, dims: [layers, 1, size] },
       input_states_2: { type: 'float32', data: state2, dims: [layers, 1, size] },
     });

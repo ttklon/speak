@@ -3106,6 +3106,12 @@ await check('TDT-декодирование: пропуск кадров и по
       };
     }),
     decoderJoint: session(async (feeds) => {
+      // Контракт настоящего decoder_joint-model.int8.onnx (не int64).
+      for (const key of ['targets', 'target_length']) {
+        if (feeds[key].type !== 'int32' || !(feeds[key].data instanceof Int32Array)) {
+          throw new Error(`${key} должен быть int32`);
+        }
+      }
       const frameNumber = Math.round(feeds.encoder_outputs.data[0]);
       seenFrames.push(frameNumber);
       const step = plan[frameNumber];
