@@ -58,6 +58,16 @@ try {
   installAttempted = true;
   // /D= последний и не заключён в кавычки: правило NSIS даже для путей с пробелами.
   run(installer, ['/S', `/D=${installDir}`], { verbatim: true, label: 'установка NSIS' });
+  if (!fs.existsSync(exe)) {
+    const entries = fs.readdirSync(root, { withFileTypes: true });
+    console.log(`Содержимое тестового каталога: ${entries.map((e) => e.name).join(', ') || '(пусто)'}`);
+    for (const entry of entries.filter((e) => e.isDirectory())) {
+      const folder = path.join(root, entry.name);
+      console.log(`${folder}: ${fs.readdirSync(folder).slice(0, 15).join(', ') || '(пусто)'}`);
+    }
+    const defaultDir = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'ZSpeakly');
+    console.log(`Каталог по умолчанию: ${defaultDir}, exe=${fs.existsSync(path.join(defaultDir, 'ZSpeakly.exe'))}`);
+  }
   assert.ok(fs.existsSync(exe), `установщик не создал ${exe}`);
   assert.ok(fs.existsSync(uninstall), `установщик не создал ${uninstall}`);
   verifyProfile('установка');
