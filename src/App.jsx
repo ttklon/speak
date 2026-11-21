@@ -118,14 +118,17 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
+  // Сохраняем ограничение частоты и между повторными запусками эффекта в StrictMode.
+  const lastStorageWarning = useRef({ at: -Infinity, code: null });
   // Ошибки localStorage, IPC и отложенной записи профиля нельзя замалчивать.
   // Событие из main не содержит содержимое профиля и путь к нему.
   useEffect(() => {
-    let lastAt = -Infinity;
     const warn = (source, code) => {
       const now = Date.now();
-      if (now - lastAt < 30_000) return;
-      lastAt = now;
+      const last = lastStorageWarning.current;
+      // Более серьёзная ошибка резервной копии не должна скрываться за предыдущей.
+      if (now - last.at < 30_000 && !(code === 'BACKUP_FAILED' && last.code !== code)) return;
+      lastStorageWarning.current = { at: now, code };
       const description = code === 'BACKUP_FAILED'
         ? 'Профиль не удалось прочитать или сохранить его копию. Исходный файл не перезаписывается; изменения будут потеряны при закрытии. Проверьте доступ и место на диске.'
         : source === 'electron'

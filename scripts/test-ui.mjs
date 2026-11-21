@@ -5101,6 +5101,12 @@ async function scenarioElectronStorageError(browser) {
   const text = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
   record('сценарии', 'Electron: сбой записи профиля предупреждает о риске потери данных',
     /Не удалось сохранить данные/i.test(text) && /в памяти/i.test(text) && /диск/i.test(text), text.slice(0, 180));
+  await emit(page, 'store:error', { ok: false, code: 'ENOSPC', message: 'ЛИЧНЫЙ_ТЕКСТ C:\\private\\profile.json' });
+  await emit(page, 'store:error', { ok: false, code: 'ENOSPC' });
+  await sleep(150);
+  const warnings = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).filter((t) => /Не удалось сохранить данные/i.test(t)));
+  record('сценарии', 'Electron: повторные ошибки не спамят и не раскрывают сообщение ошибки',
+    warnings.length === 1 && !warnings.join(' ').includes('ЛИЧНЫЙ_ТЕКСТ') && !warnings.join(' ').includes('profile.json'), `предупреждений: ${warnings.length}`);
   const errors = takeErrors(page);
   record('сценарии', 'Electron: предупреждение о хранилище без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
@@ -5110,8 +5116,8 @@ async function scenarioElectronStorageError(browser) {
     patchNative: () => { window.zspeakly.store.statusSync = () => ({ ok: false, code: 'EACCES' }); },
   });
   const initial = await late.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
-  record('сценарии', 'Electron: ошибка до подписки видна после запуска интерфейса',
-    /Не удалось сохранить данные/i.test(initial) && /в памяти/i.test(initial), initial.slice(0, 180));
+  record('сценарии', 'Electron: ошибка до подписки видна после запуска интерфейса без дубликатов',
+    (initial.match(/Не удалось сохранить данные/gi) || []).length === 1 && /в памяти/i.test(initial), initial.slice(0, 180));
   await late.close();
 
   const corrupt = await openPage(browser, '#/home', {
