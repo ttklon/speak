@@ -4,6 +4,17 @@ import { describe, expect, it } from 'vitest';
 const workflow = readFileSync('.github/workflows/build.yml', 'utf8');
 
 describe('проверка настоящего движка в CI', () => {
+  it('настоящие ONNX-модели проверяются на речи и ошибка теста не скрыта', () => {
+    const job = workflow.split('  onnx-live:')[1]?.split('\n  package:')[0];
+    expect(job).toBeTruthy();
+    expect(job).toContain('scripts/test-gigaam-preprocessor.mjs');
+    expect(job).toContain('scripts/test-onnx-live.mjs gigaam');
+    expect(job).toContain('scripts/test-onnx-live.mjs parakeet');
+    expect(job).toContain('sha256sum -c');
+    expect(job.match(/exit "\$code"/g)).toHaveLength(2);
+    expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
+  });
+
   it('ошибка выполненного теста не подавляется настройкой шага', () => {
     const step = workflow.split('      - name: Тест настоящего движка распознавания (whisper.cpp)')[1]?.split('\n  package:')[0];
     expect(step).toBeTruthy();

@@ -60,5 +60,18 @@ assert.ok(first.chunks >= 1, 'не указан обработанный фра�
 const second = await engine.transcribe(pcm, { sampleRate: 16000 });
 assert.equal(second.ok, true, `повтор не удался: ${second.reason}`);
 for (const word of expected) assert.match(second.text.toLocaleLowerCase(), word);
-console.log(`Повтор с загруженной моделью: ${second.ms} мс; тест ${name} пройден.`);
+console.log(`Повтор с загруженной моделью: ${second.ms} мс.`);
+
+// Проверяем нарезку и склейку настоящими весами. Повторяем известный образец,
+// вставляя тишину между копиями: длина превышает двадцать секунд, и это не
+// превращается в проверку произвольной речи или точности на длинных записях.
+const silence = Buffer.alloc(16000 * 2 / 2);
+const copies = Math.ceil((21 * 32000) / (pcm.length + silence.length));
+const longPcm = Buffer.concat(Array.from({ length: copies }, () => [pcm, silence]).flat());
+const longResult = await engine.transcribe(longPcm, { sampleRate: 16000 });
+assert.equal(longResult.ok, true, `длинная запись: ${longResult.reason}`);
+assert.ok(longResult.chunks > 1, `длинная запись не разбита: ${longResult.chunks}`);
+const keyword = name === 'gigaam' ? /привет/gu : /country/gi;
+assert.ok((longResult.text.match(keyword) || []).length >= 2, `потерялись повторённые фразы: ${longResult.text}`);
+console.log(`Длинная запись: ${(longPcm.length / 32000).toFixed(1)} с, ${longResult.chunks} фрагментов; тест ${name} пройден.`);
 engine.unload();
