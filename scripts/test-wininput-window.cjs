@@ -145,6 +145,13 @@ async function main() {
   } finally {
     host.stop();
     try { if (fs.existsSync(path.join(dir, 'ready'))) await command('close'); } catch { /* target мог упасть */ }
+    // Дать форме выполнить finally и восстановить исходный системный буфер.
+    if (target.exitCode === null) {
+      await Promise.race([
+        new Promise((resolve) => target.once('exit', resolve)),
+        sleep(3000),
+      ]);
+    }
     if (target.exitCode === null) target.kill();
     fs.rmSync(dir, { recursive: true, force: true });
   }
