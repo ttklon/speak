@@ -555,6 +555,22 @@ jobs:
           if [ "$code" -ne 0 ]; then echo "::error title=Packaged ONNX::$message"; exit "$code"; fi
           echo "::notice title=Packaged ONNX::$message"
 
+      - name: Повторные запуски мастера на чистой Windows
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          $setup = "release/ZSpeakly-Setup-$(node -p "require('./package.json').version").exe"
+          if (-not (Test-Path $setup)) {
+            Write-Host '::warning title=NSIS first start::SKIP: NSIS не собран'
+            exit 0
+          }
+          if (Test-Path "$env:LOCALAPPDATA\Programs\ZSpeakly") { throw 'Установка по умолчанию уже существует' }
+          node -e "const f=require('fs'),p=require('path'),patch=require('./scripts/nsis/patch-builder.cjs').patch; const file=p.join(p.dirname(require.resolve('app-builder-lib/package.json')),'templates/nsis/multiUser.nsh'); const data=f.readFileSync(file,'utf8'); if(patch(data)!==data)throw Error('NSIS template not patched during packaging');"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./scripts/e2e/nsis-gui.ps1 -Setup (Resolve-Path $setup).Path -InstallPath (Join-Path $env:RUNNER_TEMP 'unused') -ProbeCount 20
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host '::notice title=NSIS first start::20 отдельных процессов дошли до мастера без установки; шаблон с ограниченным чтением применён.'
+
       - name: Electron диктует через виртуальный микрофон в окно Windows
         shell: bash
         env:

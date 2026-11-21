@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Setup, [Parameter(Mandatory=$true)][string]$InstallPath)
+param([Parameter(Mandatory=$true)][string]$Setup, [Parameter(Mandatory=$true)][string]$InstallPath, [int]$ProbeCount = 0)
 $ErrorActionPreference = 'Stop'
 if ($env:CI -ne 'true' -or $env:GITHUB_ACTIONS -ne 'true') { throw 'Only use in a disposable GitHub Actions Windows runner.' }
 Add-Type -TypeDefinition @'
@@ -49,6 +49,31 @@ public static class NsisGui {
   public static void Click(IntPtr h) { PostMessage(h, 0x00F5, IntPtr.Zero, IntPtr.Zero); }
 }
 '@
+if ($ProbeCount -gt 0) {
+  if ($ProbeCount -gt 50) { throw 'ProbeCount exceeds 50' }
+  # Stop before interacting with the wizard or installing files. Each fresh
+  # process must reach its own dialog without the first-install startup crash.
+  for ($i = 1; $i -le $ProbeCount; $i++) {
+    $probe = Start-Process -FilePath $Setup -PassThru
+    try {
+      $until = (Get-Date).AddSeconds(30)
+      $seen = $false
+      while ((Get-Date) -lt $until) {
+        $probe.Refresh()
+        if ($probe.HasExited) { throw "Fresh installer $i exited before its window: $($probe.ExitCode)" }
+        if ([NsisGui]::FindWindow($probe.Id) -ne [IntPtr]::Zero) { $seen = $true; break }
+        Start-Sleep -Milliseconds 150
+      }
+      if (-not $seen) { throw "Fresh installer $i did not show a window" }
+      Write-Output "Fresh installer $i reached its wizard"
+    } finally {
+      $probe.Refresh()
+      if (-not $probe.HasExited) { Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue; $probe.WaitForExit() }
+    }
+  }
+  Write-Output "PASS: $ProbeCount first-install wizard starts without a crash; no installation performed."
+  exit 0
+}
 $p = Start-Process -FilePath $Setup -PassThru
 $deadline = (Get-Date).AddMinutes(4)
 $lastSignature = ''

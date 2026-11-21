@@ -73,6 +73,10 @@ async function checkProfile(version) {
     const errors = [];
     page.on('pageerror', (err) => errors.push(String(err.message || err)));
     await page.waitForSelector('.app-window', { timeout: 30000 });
+    // Проверяем не только raw IPC: React должен показать прежнюю диктовку.
+    await page.waitForFunction((expected) =>
+      Array.from(document.querySelectorAll('.recent__text')).some((el) => el.textContent.includes(expected)),
+    { timeout: 30000 }, text);
     const data = await page.evaluate(async () => ({
       nonce: window.zspeakly.store.getSync('zs:test-id'),
       dictations: await window.zspeakly.store.get('zs.dictations'),
@@ -86,7 +90,7 @@ async function checkProfile(version) {
     assert.equal(data.settings.onboarded, true, 'настройки первого запуска потеряны');
     assert.equal(errors.length, 0, errors.join('; '));
     await new Promise((resolve) => setTimeout(resolve, 800));
-    console.log(`Открыта ${version}: история, словарь и настройки прочитаны через настоящий IPC.`);
+    console.log(`Открыта ${version}: история показана в UI, словарь и настройки прочитаны через настоящий IPC.`);
   } finally { if (browser) await browser.close(); }
 }
 (async () => {
