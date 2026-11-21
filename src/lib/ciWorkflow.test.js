@@ -32,6 +32,9 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('ZS_TEST_WINDOWS_DICTATION: "1"');
     expect(job).toContain('ZS_TEST_PACKAGED=1 node scripts/test-wininput-window.cjs');
     expect(job).toContain('::error title=Packaged Windows dictation');
+    expect(job).toContain('scripts/test-nsis-lifecycle.cjs');
+    expect(job).toContain('::error title=NSIS lifecycle');
+    expect(job).toContain('::warning title=NSIS lifecycle');
     expect(job).toContain('scripts/test-onnx-live.mjs gigaam "$ZS_DICTATION_WAV" --download');
     expect(job).toContain('::error title=Windows GigaAM');
     expect(job).toContain('::warning title=Windows input window');

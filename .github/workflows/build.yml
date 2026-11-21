@@ -597,6 +597,16 @@ jobs:
           else
             echo "::notice title=Packaged Windows dictation::$message"
           fi
+          node scripts/test-nsis-lifecycle.cjs > nsis-lifecycle.log 2>&1
+          code=$?
+          cat nsis-lifecycle.log
+          message=$(tail -c 3500 nsis-lifecycle.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=NSIS lifecycle::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' nsis-lifecycle.log; then
+            echo "::warning title=NSIS lifecycle::$message"
+          else
+            echo "::notice title=NSIS lifecycle::$message"
+          fi
 
       - name: Verify artifacts
         shell: pwsh

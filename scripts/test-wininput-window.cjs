@@ -100,7 +100,9 @@ async function main() {
       const dictation = process.env.ZS_TEST_WINDOWS_DICTATION === '1';
       const packaged = process.env.ZS_TEST_PACKAGED === '1';
       if (packaged) assert.equal(process.env.CI, 'true', 'проверка сборки допускается только на выделенном CI');
-      const executable = packaged ? path.resolve('release/win-unpacked/ZSpeakly.exe') : require('electron');
+      const executable = packaged
+        ? path.resolve(process.env.ZS_TEST_PACKAGED_EXE || 'release/win-unpacked/ZSpeakly.exe')
+        : require('electron');
       assert.ok(fs.existsSync(executable), `нет Electron для проверки IPC: ${executable}`);
       assert.ok(fs.existsSync('dist/index.html'), 'сначала соберите интерфейс');
       const profile = path.join(dir, 'profile');
@@ -204,7 +206,8 @@ async function main() {
           assert.equal(inputStatus.last.ok, true, JSON.stringify(inputStatus.last));
           await sleep(1200);
           assert.equal((await command('readClipboard')).text, previous, 'буфер не восстановлен после диктовки');
-          console.log(`Виртуальная диктовка Windows + ${packaged ? 'упакованное приложение' : 'Electron из исходников'} + GigaAM → WinForms: ${entry.text}; метод ${inputStatus.last.method}, буфер сохранён.`);
+          const build = process.env.ZS_TEST_PACKAGED_EXE ? 'приложение после NSIS' : packaged ? 'упакованное приложение' : 'Electron из исходников';
+          console.log(`Виртуальная диктовка Windows + ${build} + GigaAM → WinForms: ${entry.text}; метод ${inputStatus.last.method}, буфер сохранён.`);
         }
       } finally {
         if (browser) await browser.close();
