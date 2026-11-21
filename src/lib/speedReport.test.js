@@ -133,6 +133,7 @@ describe('отчёт о скорости диктовки', () => {
     expect(engineWord('gigaam')).toBe('русская модель');
     expect(engineWord('parakeet')).toBe('модель европейских языков');
     expect(engineWord('server')).toBe('прогретый сервер');
+    expect(engineWord('mixed')).toBe('сервер и whisper-cli');
     expect(engineWord('')).toBe('');
   });
 

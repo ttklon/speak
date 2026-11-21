@@ -384,7 +384,7 @@ async function transcribeInner(pcm, options = {}) {
     // Отмена посреди длинной записи должна срабатывать сразу, а не после
     // последнего куска: иначе кнопка «Отменить» врёт.
     if (transcribeCancelled) {
-      return { ok: false, text: '', ms: Date.now() - started, chunks: ranges.length, reason: 'отменено' };
+      return { ok: false, text: '', ms: Date.now() - started, chunks: ranges.length, code: 'cancelled', reason: 'отменено' };
     }
     const piece = samples.subarray(range.offset, range.offset + range.count);
     let chunkText;
@@ -472,7 +472,12 @@ function reset() {
 async function transcribe(pcm, options = {}) {
   transcribeActive = true;
   try {
-    return await transcribeInner(pcm, options);
+    const result = await transcribeInner(pcm, options);
+    // ONNX-операцию нельзя мгновенно прервать, но её запоздалый результат
+    // нельзя отдавать или запускать запасной движок после отмены.
+    return transcribeCancelled
+      ? { ok: false, text: '', ms: result.ms || 0, chunks: result.chunks || 0, code: 'cancelled', reason: 'отменено' }
+      : result;
   } finally {
     transcribeActive = false;
   }

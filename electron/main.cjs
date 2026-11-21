@@ -1502,6 +1502,7 @@ function registerIpc() {
           }
         },
       });
+      if (resGiga.code === 'cancelled') return resGiga;
       if (resGiga.ok && resGiga.text) {
         logger.info('stt', 'Распознано русской моделью', {
           keep: true,
@@ -1540,6 +1541,7 @@ function registerIpc() {
           }
         },
       });
+      if (resPara.code === 'cancelled') return resPara;
       if (resPara.ok && resPara.text) {
         logger.info('stt', 'Распознано европейской моделью', {
           keep: true,
@@ -1631,7 +1633,7 @@ function registerIpc() {
       const spokenSeconds = audio?.seconds || 0;
       const serverNow = whisper.serverStatus?.() || {};
       const wasWarm = serverNow.ready === true;
-      const canSplit = spokenSeconds > 28 && serverNow.ready === true;
+      const canSplit = keepLoaded && spokenSeconds > 28 && serverNow.ready === true;
       const parts = canSplit ? whisper.splitBySilence?.(trimmed, sr) || [trimmed] : [trimmed];
       const MAX_PARTS = 3;
       let chunks = parts;
@@ -1678,6 +1680,7 @@ function registerIpc() {
         const canParallel = server.ready === true && Number(server.processors) > 1;
         const parallel = canParallel ? Math.min(chunks.length, Number(server.processors)) : 1;
         const texts = new Array(chunks.length).fill('');
+        const modes = new Array(chunks.length).fill('');
         let failed = null;
         let done = 0;
         const runPart = async (index) => {
@@ -1699,6 +1702,7 @@ function registerIpc() {
               return;
             }
             if (one.text) texts[index] = String(one.text).trim();
+            modes[index] = one.mode || 'cli';
           } finally {
             fs.rmSync(partWav, { force: true });
           }
@@ -1732,7 +1736,8 @@ function registerIpc() {
             .join(' ')
             .replace(/\s+/g, ' ')
             .trim();
-          res = { ok: true, text: joined, parts: texts.length };
+          const usedModes = new Set(modes);
+          res = { ok: true, text: joined, parts: texts.length, mode: usedModes.size === 1 ? modes[0] : 'mixed' };
           logger.info('stt', 'Диктовка распознана по фрагментам', {
             keep: true,
             parts: texts.length,
@@ -1920,39 +1925,47 @@ function registerIpc() {
   //  - итоговый проход отменяет живой, а не ждёт его;
   //  - новый живой проход не встаёт в очередь за итоговым.
   let sttLock = Promise.resolve();
-  let sttMode = null; // 'partial' | 'final'
+  const sttJobs = new Set(); // активный проход и ожидающие его запросы
+  const cancelEngines = (reason) => {
+    const russian = gigaam.cancel?.() || false;
+    const european = parakeet.cancel?.() || false;
+    const legacy = whisper.cancel?.(reason) || false;
+    return russian || european || legacy;
+  };
 
   ipcMain.handle('stt:transcribe-pcm', async (_e, payload) => {
     const isPartial = payload?.partial === true;
-    if (isPartial && sttMode === 'final') {
+    if (isPartial && [...sttJobs].some((job) => !job.isPartial && !job.cancelled)) {
       return { ok: false, text: '', code: 'superseded', reason: '' };
     }
-    if (!isPartial && sttMode === 'partial') {
-      whisper.cancel?.('вытеснено итоговым проходом');
+    if (!isPartial) {
+      const partials = [...sttJobs].filter((job) => job.isPartial && !job.cancelled);
+      for (const job of partials) job.cancelled = true;
+      if (partials.some((job) => job.active)) cancelEngines('вытеснено итоговым проходом');
     }
     const prev = sttLock;
     let release = () => {};
-    sttLock = new Promise((resolve) => {
-      release = resolve;
-    });
-    sttMode = isPartial ? 'partial' : 'final';
+    sttLock = new Promise((resolve) => { release = resolve; });
+    const job = { isPartial, active: false, cancelled: false };
+    sttJobs.add(job);
     try {
       await prev;
-      return await transcribePcm(payload);
+      if (job.cancelled) return { ok: false, text: '', code: isPartial ? 'superseded' : 'cancelled', reason: '' };
+      job.active = true;
+      const result = await transcribePcm(payload);
+      return job.cancelled ? { ok: false, text: '', code: 'cancelled', reason: 'распознавание отменено' } : result;
     } finally {
-      if (sttMode === (isPartial ? 'partial' : 'final')) sttMode = null;
+      sttJobs.delete(job);
       release();
     }
   });
 
-  // «Отменить распознавание»: человек не обязан ждать большую модель.
+  // Отмена распространяется и на очередь: иначе сразу после остановки одного
+  // прохода следующий неожиданно начнёт распознавать и вставлять текст.
   ipcMain.handle('stt:cancel', () => {
-    // Отменить надо тот движок, который сейчас считает: русский, европейский
-    // или прежний.
-    const russian = gigaam.cancel ? gigaam.cancel() : false;
-    const european = parakeet.cancel ? parakeet.cancel() : false;
-    const legacy = whisper.cancel ? whisper.cancel('отменено пользователем') : false;
-    return russian || european || legacy;
+    const hadJobs = sttJobs.size > 0;
+    for (const job of sttJobs) job.cancelled = true;
+    return cancelEngines('отменено пользователем') || hadJobs;
   });
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));

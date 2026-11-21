@@ -104,7 +104,11 @@ jobs:
             echo "::warning title=whisper.cpp::архив не распаковался — тест пропущен"
             exit 0
           fi
-          bin=$(find /tmp/wtest -name 'whisper-cli' -type f | head -1)
+          bin=$(find /tmp/wtest -name 'whisper-cli' -type f -print -quit)
+          server=$(find /tmp/wtest -name 'whisper-server' -type f -print -quit)
+          if [ -z "$server" ]; then
+            echo "::warning title=whisper.cpp::whisper-server отсутствует — живой серверный тест пропущен"
+          fi
           if [ -z "$bin" ]; then
             echo "::warning title=whisper.cpp::в архиве нет whisper-cli — тест пропущен"
             exit 0
@@ -141,7 +145,7 @@ jobs:
           # записать причину и затем явно вернуть исходный код теста.
           trap - ERR
           set +e
-          ZS_WHISPER_BIN="$bin" ZS_WHISPER_MODEL="$model" ZS_WHISPER_LIB_DIR="$libdir" ZS_WHISPER_VAD="$vad" \
+          ZS_WHISPER_BIN="$bin" ZS_WHISPER_SERVER="$server" ZS_WHISPER_MODEL="$model" ZS_WHISPER_LIB_DIR="$libdir" ZS_WHISPER_VAD="$vad" \
             LD_LIBRARY_PATH="$libdir:${LD_LIBRARY_PATH:-}" npm run test:whisper 2>&1 | tee /tmp/wt.log
           code=${PIPESTATUS[0]}
           set -e
@@ -188,7 +192,7 @@ jobs:
         run: npm run icons
 
       - name: Загрузка и отмена моделей на Windows
-        run: npx vitest run src/lib/modelDownload.test.js src/lib/whisperDownload.test.js src/lib/engineDownload.test.js src/lib/modelImport.test.js src/lib/modelDiscovery.test.js
+        run: npx vitest run src/lib/modelDownload.test.js src/lib/whisperDownload.test.js src/lib/engineDownload.test.js src/lib/modelImport.test.js src/lib/modelDiscovery.test.js src/lib/whisperRuntime.test.js src/lib/whisperRuntimeHttp.test.js
 
       - name: Помощник ввода (C# → exe) собирается и отвечает
         shell: bash

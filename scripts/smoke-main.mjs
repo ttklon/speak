@@ -1176,10 +1176,12 @@ await check('живая расшифровка и финальный прохо�
   spawnCalls.length = 0;
   const pcm = speechPcm(500);
   const payload = { pcm, durationMs: 500, lang: 'ru', model: 'small', useDictionary: false };
-  await Promise.all([
-    handlers.get('stt:transcribe-pcm')({}, { ...payload, partial: true }),
-    handlers.get('stt:transcribe-pcm')({}, payload),
-  ]);
+  const partial = handlers.get('stt:transcribe-pcm')({}, { ...payload, partial: true });
+  // Дождаться фактического запуска: ещё не начатый промежуточный запрос
+  // теперь справедливо вытесняется итоговым без создания WAV.
+  await new Promise((resolve) => setImmediate(resolve));
+  const final = handlers.get('stt:transcribe-pcm')({}, payload);
+  await Promise.all([partial, final]);
   const files = spawnCalls
     .filter((c) => String(c.file).includes('whisper'))
     .map((c) => c.args[c.args.indexOf('-f') + 1])
@@ -1865,6 +1867,133 @@ await check('отмена распознавания: канал есть и б�
   if (!handlers.has('stt:cancel')) throw new Error('канал stt:cancel не зарегистрирован');
   const res = await handlers.get('stt:cancel')({});
   if (res !== false) throw new Error(`без активного прохода ожидалось false, получено ${res}`);
+});
+
+await check('отмена во время операции ONNX отбрасывает позднюю ошибку', async () => {
+  for (const name of ['gigaam', 'parakeet']) {
+    const engine = require(path.resolve(`electron/${name}.cjs`));
+    let started, release;
+    const ready = new Promise((resolve) => { started = resolve; });
+    const pending = new Promise((resolve) => { release = resolve; });
+    engine.setTestDeps({ files: [], sessions: { preprocessor: { run: async () => { started(); await pending; throw new Error('поздняя ошибка операции'); } } } });
+    try {
+      const task = engine.transcribe(speechPcm(1200), { sampleRate: 16000 });
+      await ready;
+      if (!engine.cancel()) throw new Error(`${name}: отмена не принята`);
+      release();
+      const result = await task;
+      if (result.ok || result.code !== 'cancelled' || result.text) throw new Error(`${name}: ${JSON.stringify(result)}`);
+      if (engine.cancel()) throw new Error(`${name}: проход остался активным`);
+    } finally {
+      release(); engine.reset();
+    }
+  }
+});
+
+await check('отмена GigaAM и Parakeet не запускает Whisper, ошибка допускает fallback', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const giga = require(path.resolve('electron/gigaam.cjs'));
+  const para = require(path.resolve('electron/parakeet.cjs'));
+  const saved = { whisper: whisper.transcribe, gs: giga.status, gt: giga.transcribe, gc: giga.cancel, ps: para.status, pt: para.transcribe, pc: para.cancel };
+  const settingsBefore = handlers.get('store:get')({}, 'zs:settings');
+  let whisperCalls = 0;
+  whisper.transcribe = async () => { whisperCalls++; return { ok: true, text: 'запасное распознавание' }; };
+  try {
+    for (const [engine, other, language] of [[giga, para, 'ru'], [para, giga, 'en']]) {
+      engine.status = () => ({ available: true }); other.status = () => ({ available: false });
+      await handlers.get('store:set')({}, 'zs:settings', { ...settingsBefore, language, keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false });
+      let started, finish;
+      const ready = new Promise((resolve) => { started = resolve; });
+      engine.transcribe = () => { started(); return new Promise((resolve) => { finish = resolve; }); };
+      engine.cancel = () => { finish?.({ ok: false, text: '', reason: 'отменено', code: 'cancelled' }); return true; };
+      const before = whisperCalls;
+      const task = handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(1600), sampleRate: 16000, lang: language });
+      await ready;
+      if (!handlers.get('stt:cancel')({})) throw new Error(`отмена ${language} не принята`);
+      const cancelled = await task;
+      if (cancelled.ok || cancelled.code !== 'cancelled' || whisperCalls !== before) throw new Error(`отмена ${language}: ${JSON.stringify({ cancelled, whisperCalls, before })}`);
+      engine.transcribe = async () => ({ ok: false, reason: 'ошибка модели' });
+      const fallback = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(1600), sampleRate: 16000, lang: language });
+      if (!fallback.ok || whisperCalls !== before + 1) throw new Error(`fallback ${language}: ${JSON.stringify({ fallback, whisperCalls, before })}`);
+    }
+  } finally {
+    whisper.transcribe = saved.whisper; giga.status = saved.gs; giga.transcribe = saved.gt; giga.cancel = saved.gc;
+    para.status = saved.ps; para.transcribe = saved.pt; para.cancel = saved.pc;
+    await handlers.get('store:set')({}, 'zs:settings', settingsBefore);
+  }
+});
+
+await check('очередь диктовок: отмена и несколько итоговых проходов', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const giga = require(path.resolve('electron/gigaam.cjs'));
+  const para = require(path.resolve('electron/parakeet.cjs'));
+  const saved = { wt: whisper.transcribe, wc: whisper.cancel, gs: giga.status, ps: para.status };
+  const settingsBefore = handlers.get('store:get')({}, 'zs:settings');
+  let calls = 0, releases = [], started = [];
+  whisper.transcribe = () => { calls++; started.splice(0).forEach((f) => f()); return new Promise((resolve) => releases.push(resolve)); };
+  whisper.cancel = () => { const done = releases.shift(); if (!done) return false; done({ ok: false, code: 'cancelled' }); return true; };
+  giga.status = () => ({ available: false }); para.status = () => ({ available: false });
+  const nextStart = () => new Promise((resolve) => started.push(resolve));
+  const invoke = (partial = false) => handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(1600), sampleRate: 16000, lang: 'ru', partial });
+  try {
+    await handlers.get('store:set')({}, 'zs:settings', { ...settingsBefore, keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false });
+    let ready = nextStart(); const first = invoke(); await ready;
+    const second = invoke();
+    if (!handlers.get('stt:cancel')({})) throw new Error('отмена очереди не принята');
+    const results = await Promise.all([first, second]);
+    if (calls !== 1 || results.some((r) => r.code !== 'cancelled')) throw new Error(`отмена очереди: ${JSON.stringify({ calls, results })}`);
+    ready = nextStart(); const third = invoke(); await ready;
+    const fourth = invoke();
+    releases.shift()({ ok: true, text: 'готова первая запись' });
+    await third;
+    const partial = await invoke(true);
+    if (partial.code !== 'superseded') throw new Error(`живой проход встал за итоговым: ${JSON.stringify(partial)}`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (calls !== 3) throw new Error(`второй итоговый не стартовал: ${calls}`);
+    releases.shift()({ ok: true, text: 'готова вторая запись' });
+    if (!(await fourth).ok) throw new Error('второй итоговый не завершился');
+  } finally {
+    releases.splice(0).forEach((f) => f({ ok: false, code: 'cancelled' }));
+    whisper.transcribe = saved.wt; whisper.cancel = saved.wc; giga.status = saved.gs; para.status = saved.ps;
+    await handlers.get('store:set')({}, 'zs:settings', settingsBefore);
+  }
+});
+
+await check('длинная диктовка: параллельные фрагменты только с включённым сервером', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const giga = require(path.resolve('electron/gigaam.cjs'));
+  const para = require(path.resolve('electron/parakeet.cjs'));
+  const saved = { transcribe: whisper.transcribe, serverStatus: whisper.serverStatus, split: whisper.splitBySilence, giga: giga.status, para: para.status };
+  const settingsBefore = handlers.get('store:get')({}, 'zs:settings');
+  let calls = 0, running = 0, peak = 0, splits = 0, phase = 'cold';
+  whisper.serverStatus = () => ({ ready: true, processors: 2 });
+  whisper.splitBySilence = (pcm) => { splits++; return [pcm.subarray(0, pcm.length / 2), pcm.subarray(pcm.length / 2)]; };
+  whisper.transcribe = async () => {
+    const n = ++calls; running++; peak = Math.max(peak, running);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    running--;
+    return { ok: true, mode: phase === 'cold' || (phase === 'mixed' && n === 2) ? 'cli' : 'server', text: phase === 'cold' ? 'отдельная короткая фраза' : n === 1 ? 'утром запланировали встречу' : 'вечером подготовили отчёт', ms: 30 };
+  };
+  giga.status = () => ({ available: false }); para.status = () => ({ available: false });
+  try {
+    await handlers.get('store:set')({}, 'zs:settings', { ...settingsBefore, keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false });
+    const raw = speechPcm(30000);
+    const cold = await handlers.get('stt:transcribe-pcm')({}, { pcm: raw, sampleRate: 16000, lang: 'ru' });
+    if (!cold.ok || calls !== 1 || splits !== 0 || peak !== 1) throw new Error(`без сервера: ${JSON.stringify({ cold, calls, splits, peak })}`);
+    calls = 0; peak = 0; phase = 'warm';
+    await handlers.get('store:set')({}, 'zs:settings', { ...settingsBefore, keepModelLoaded: true, decodeMode: 'fast', autoOptimize: false });
+    const warm = await handlers.get('stt:transcribe-pcm')({}, { pcm: raw, sampleRate: 16000, lang: 'ru' });
+    if (!warm.ok || warm.mode !== 'server' || calls !== 2 || splits !== 1 || peak !== 2 || !/утром запланировали/.test(warm.text) || !/вечером подготовили/.test(warm.text)) {
+      throw new Error(`сервер: ${JSON.stringify({ warm, calls, splits, peak })}`);
+    }
+    calls = 0; peak = 0; phase = 'mixed';
+    const mixed = await handlers.get('stt:transcribe-pcm')({}, { pcm: raw, sampleRate: 16000, lang: 'kk' });
+    if (!mixed.ok || mixed.mode !== 'mixed' || calls !== 2 || peak !== 2) throw new Error(`смешанный проход: ${JSON.stringify({ mixed, calls, peak })}`);
+  } finally {
+    whisper.transcribe = saved.transcribe; whisper.serverStatus = saved.serverStatus; whisper.splitBySilence = saved.split;
+    giga.status = saved.giga; para.status = saved.para;
+    await handlers.get('store:set')({}, 'zs:settings', settingsBefore);
+  }
 });
 
 await check('одновременно работает один проход: живой не мешает итоговому', async () => {

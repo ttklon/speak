@@ -88,6 +88,10 @@ if (!bin || !model) {
 // Кладём по путям, которые ищет приложение: userData/bin и userData/models
 const binName = path.basename(bin);
 fs.copyFileSync(bin, path.join(userData, 'bin', binName));
+const serverEnv = process.env.ZS_WHISPER_SERVER || '';
+if (serverEnv && fs.existsSync(serverEnv)) {
+  fs.copyFileSync(serverEnv, path.join(userData, 'bin', path.basename(serverEnv)));
+}
 // имя модели должно быть каноническим: приложение ищет ggml-<id>.bin
 const modelId = path.basename(model).replace(/^for-tests-/, '').replace(/^ggml-/, '').replace(/\.bin$/, '');
 fs.copyFileSync(model, path.join(userData, 'models', `ggml-${modelId}.bin`));
@@ -187,6 +191,33 @@ if (!cancelled) {
   check(cancelled === true, 'отмена принята');
   check(stopped?.code === 'cancelled', 'проход завершился по отмене', `code=${stopped?.code}`);
   check(stopped?.ok === false, 'отменённый проход не выдаёт текст');
+}
+
+// Живой сервер с официальной тестовой моделью проверяет запуск, протокол и
+// обработку ответа, но не качество распознавания реальных весов.
+if (serverEnv && fs.existsSync(serverEnv)) {
+  const warm = await whisper.warm(modelId);
+  check(warm.ok === true, 'whisper-server запускается и проходит прогрев', warm.reason || '');
+  if (warm.ok) {
+    const serverResult = await whisper.transcribe(wav, { lang: 'ru', model: modelId, timeout: 120000, keepLoaded: true });
+    check(serverResult.mode === 'server', 'диктовка проходит через настоящий сервер', `mode=${serverResult.mode || '—'}`);
+    check(serverResult.ok ? !/^\s*\{/.test(serverResult.text || '') : serverResult.code === 'empty',
+      'пустой JSON не превращается в текст', `ok=${serverResult.ok} code=${serverResult.code || '—'}`);
+    const longWav = path.join(userData, 'server-long.wav');
+    writeSilenceWav(longWav, 120);
+    const running = whisper.transcribe(longWav, { lang: 'ru', model: modelId, timeout: 120000, keepLoaded: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const accepted = whisper.cancel('тест сервера');
+    const result = await Promise.race([
+      running,
+      new Promise((resolve) => setTimeout(() => resolve({ code: 'still-running' }), 8000)),
+    ]);
+    if (accepted) check(result.code === 'cancelled' && result.ok === false, 'отмена серверного запроса завершает проход');
+    else console.log('  · сервер уже завершил проход — отмена пропущена');
+  }
+  whisper.stopServer();
+} else {
+  console.log('  · whisper-server не предоставлен — живой серверный тест пропущен');
 }
 
 fs.rmSync(userData, { recursive: true, force: true });

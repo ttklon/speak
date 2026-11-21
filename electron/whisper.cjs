@@ -274,8 +274,19 @@ function status(preferredModel = 'small') {
 // настройкой «Держать модель в памяти»; если сервера в комплекте нет или он не
 // поднялся, всё честно возвращается к обычному запуску whisper-cli.
 
-let serverState = null; // { proc, port, modelPath, readyAt }
+let serverState = null; // { proc, port, modelPath, modelIdentity, readyAt }
 let serverCooldownUntil = 0;
+let serverGeneration = 0;
+
+// Замена файла под тем же именем не должна оставлять в работе старые веса.
+// Метаданные — не проверка содержимого или хеш, но обнаруживают обычную замену
+// через rename и изменение файла; файл может исчезнуть между двумя проверками.
+function modelIdentity(file) {
+  try {
+    const st = fs.statSync(file, { bigint: true });
+    return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+  } catch { return ''; }
+}
 
 function serverBinary() {
   return findBinary(SERVER_NAMES);
@@ -307,11 +318,13 @@ function rememberRun(mode, ms, parts) {
 let warming = false;
 
 function stopServer() {
+  serverGeneration += 1;
   warmedFor = '';
-  if (!serverState) {
-    warmScheduledFor = '';
-    return;
-  }
+  warming = false;
+  if (warmTimer) clearTimeout(warmTimer);
+  warmTimer = null;
+  warmScheduledFor = '';
+  if (!serverState) return;
   const { proc } = serverState;
   serverState = null;
   warming = false;
@@ -322,27 +335,34 @@ function stopServer() {
   }
 }
 
-function httpJson({ port, method = 'GET', urlPath, body, headers = {}, timeout = 60000 }) {
+function httpJson({ port, method = 'GET', urlPath, body, headers = {}, timeout = 60000, onRequest }) {
   return new Promise((resolve) => {
     const req = http.request(
       { host: '127.0.0.1', port, method, path: urlPath, headers, timeout },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
+        // Сервер может закрыться после заголовков: тогда request сам не всегда
+        // выдаёт ошибку, а ответа end уже не будет.
+        res.on('aborted', () => resolve({ ok: false, status: 0, text: '', data: null, error: 'ответ сервера прерван' }));
+        res.on('error', (err) => resolve({ ok: false, status: 0, text: '', data: null, error: err.message }));
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8');
           let data = null;
+          let parsed = false;
           try {
             data = JSON.parse(text);
+            parsed = true;
           } catch {
             data = null;
           }
-          resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, text, data });
+          resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, text, data, parsed });
         });
       },
     );
     req.on('timeout', () => req.destroy(new Error('таймаут сервера распознавания')));
     req.on('error', (err) => resolve({ ok: false, status: 0, text: '', data: null, error: err.message }));
+    onRequest?.(req);
     if (body) req.write(body);
     req.end();
   });
@@ -354,14 +374,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Запустить whisper-server и дождаться готовности. Возвращает state или null;
  * повторный вызов (без VAD-флагов) нужен, если сборка whisper.cpp не знает --vad.
  */
-async function startServer(bin, args, { port, modelPath, deadlineMs = 20000 }) {
+async function startServer(bin, args, { port, modelPath, modelVersion, deadlineMs = 20000 }) {
   let proc;
   try {
     proc = spawn(bin, args, { windowsHide: true });
   } catch {
     return null;
   }
-  const state = { proc, port, modelPath };
+  const state = { proc, port, modelPath, modelIdentity: modelVersion };
   serverState = state;
   let stderr = '';
   proc.stderr?.on('data', (d) => {
@@ -383,10 +403,17 @@ async function startServer(bin, args, { port, modelPath, deadlineMs = 20000 }) {
   while (Date.now() < deadline) {
     if (proc.exitCode !== null) break;
     const ping = await httpJson({ port, urlPath: '/', timeout: 1500 });
+    if (serverState !== state) return null;
+    if (proc.exitCode !== null) break;
     if (ping.status) return state;
     await sleep(250);
   }
-  if (serverState === state) stopServer();
+  // Не отменяем всю операцию прогрева: вызывающий может попробовать
+  // следующий набор аргументов. Внешний stopServer() меняет поколение.
+  if (serverState === state) {
+    serverState = null;
+    try { proc.kill(); } catch { /* уже завершился */ }
+  }
   return null;
 }
 
@@ -432,13 +459,16 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
   if (Date.now() < serverCooldownUntil) return null;
   const bin = serverBinary();
   if (!bin) return null;
-  if (serverState && serverState.modelPath === modelPath && serverState.proc?.exitCode === null) {
+  const modelVersion = modelIdentity(modelPath);
+  if (!modelVersion) return null;
+  if (serverState && serverState.modelPath === modelPath && serverState.modelIdentity === modelVersion && serverState.proc?.exitCode === null) {
     // Сервер уже есть. Готовый — отдаём как есть, а тот, что ещё грузит веса,
     // не выдаём за готовый: иначе вызывающий сделает запрос в пустоту и решит,
     // что модель прогрета.
     return serverState.ready ? serverState : null;
   }
   stopServer();
+  const generation = serverGeneration;
   const port = 17800 + Math.floor(Math.random() * 400);
   const vadModel = findVadModel();
   const deadlineMs = modelLoadBudgetMs(modelPath);
@@ -457,8 +487,13 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
     ];
     for (const args of attempts) {
       // eslint-disable-next-line no-await-in-loop
-      const state = await startServer(bin, args, { port, modelPath, deadlineMs });
+      const state = await startServer(bin, args, { port, modelPath, modelVersion, deadlineMs });
+      if (generation !== serverGeneration) return null;
       if (state) {
+        if (serverState !== state || modelIdentity(modelPath) !== modelVersion) {
+          if (serverState === state) stopServer();
+          return null;
+        }
         state.ready = true;
         state.processors = processors;
         return state;
@@ -469,7 +504,7 @@ async function ensureServer(modelPath, { threads = 4 } = {}) {
     serverCooldownUntil = Date.now() + 20000;
     return null;
   } finally {
-    warming = false;
+    if (generation === serverGeneration) warming = false;
   }
 }
 
@@ -497,7 +532,11 @@ async function warm(model) {
   // только запуск процесса: делаем пустой проход на тишине, чтобы человек не
   // платил эти секунды своей первой фразой.
   if (warmedFor !== modelPath) {
-    await warmupInference(server).catch(() => {});
+    const warmup = await warmupInference(server).catch(() => null);
+    if (serverState !== server || server.proc?.exitCode !== null || modelIdentity(modelPath) !== server.modelIdentity) {
+      return { ok: false, reason: 'прогрев прерван или модель изменилась' };
+    }
+    if (!warmup?.ok) return { ok: false, reason: 'не удалось выполнить пробный проход' };
     warmedFor = modelPath;
   }
   return { ok: true, port: server.port, warmed: true };
@@ -519,7 +558,7 @@ async function warmupInference(server) {
     },
     { name: 'file', filename: 'warmup.wav', buffer: wav },
   );
-  await httpJson({
+  return httpJson({
     port: server.port,
     method: 'POST',
     urlPath: '/inference',
@@ -576,14 +615,15 @@ function scheduleServerWarm(modelPath, threads) {
   warmTimer = setTimeout(tick, 300);
 }
 
-async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout = 120000, threads = 4, modelPath } = {}) {
+async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout = 120000, threads = 4, modelPath, onRequest, isCanceled } = {}) {
   // ВАЖНО: в проходе распознавания сервер не ждём. Раньше здесь стоял
   // ensureServer() с ожиданием до 8 секунд — и если сервер не поднимался,
   // короткая фраза «думала» эти 8 секунд, а потом шла в обычный whisper-cli.
   // Теперь берём уже прогретый сервер, а если его нет — сразу CLI, поднимая
   // сервер в фоне для следующей диктовки.
   const ready = serverStatus();
-  if (!ready.running || !serverState || serverState.modelPath !== modelPath) {
+  const version = modelIdentity(modelPath);
+  if (!ready.ready || !serverState || serverState.modelPath !== modelPath || !version || serverState.modelIdentity !== version) {
     // Поднимаем сервер для СЛЕДУЮЩЕЙ диктовки, но не одновременно с текущим
     // проходом: два процесса whisper делят ядра и оба становятся медленнее.
     scheduleServerWarm(modelPath, threads);
@@ -624,7 +664,9 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
     body,
     headers: { 'Content-Type': contentType, 'Content-Length': body.length },
     timeout,
+    onRequest,
   });
+  if (isCanceled?.()) return null;
   if (!res.ok) {
     // сервер мог упасть — следующий раз пойдём обычным путём
     if (!res.status) {
@@ -633,7 +675,10 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
     }
     return null;
   }
-  const text = String(res.data?.text || res.text || '').trim();
+  // Пустое поле text — пустой результат, а не сырой JSON для вставки.
+  const text = (res.parsed
+    ? (typeof res.data?.text === 'string' ? res.data.text : typeof res.data === 'string' ? res.data : '')
+    : res.text || '').trim();
   return { text, ms: Date.now() - startedAt };
 }
 
@@ -644,10 +689,12 @@ async function transcribeViaServer(wavPath, { lang = 'ru', prompt = '', timeout 
  *    мегабайт под модель, и на слабой машине это выглядело как «зажрал
  *    оперативку и ничего не распознал».
  */
-let activeRun = null;
+// Длинная диктовка может отправить несколько фрагментов одному серверу.
+// CLI работает один, серверные запросы учитываем отдельно и отменяем вместе.
+const activeRuns = new Set();
 
 function isBusy() {
-  return Boolean(activeRun);
+  return activeRuns.size > 0;
 }
 
 /**
@@ -655,24 +702,13 @@ function isBusy() {
  * прервали. Ожидающий промис transcribe() завершится с code:'cancelled'.
  */
 function cancel(reason = 'распознавание отменено') {
-  const run = activeRun;
-  if (!run) return false;
-  activeRun = null;
-  run.cancelled = true;
-  try {
-    run.child?.kill();
-  } catch {
-    /* ignore */
-  }
-  try {
-    run.req?.destroy();
-  } catch {
-    /* ignore */
-  }
-  try {
-    run.finish({ ok: false, text: '', code: 'cancelled', reason });
-  } catch {
-    /* ignore */
+  const runs = [...activeRuns];
+  if (!runs.length) return false;
+  for (const run of runs) {
+    run.cancelled = true;
+    try { run.child?.kill(); } catch { /* процесс уже завершён */ }
+    try { run.req?.destroy(); } catch { /* запрос уже закрыт */ }
+    try { run.finish({ ok: false, text: '', code: 'cancelled', reason }); } catch { /* уже завершён */ }
   }
   return true;
 }
@@ -693,16 +729,47 @@ function transcribe(
       resolve({ ok: false, text: '', reason: 'whisper.cpp недоступен' });
       return;
     }
+    const canShareServer = keepLoaded && serverState?.ready && serverState.proc?.exitCode === null &&
+      serverState.modelPath === modelPath && serverState.modelIdentity === modelIdentity(modelPath) &&
+      [...activeRuns].every((run) => run.kind === 'server');
+    if (isBusy() && !canShareServer) {
+      resolve({ ok: false, text: '', code: 'busy', reason: 'распознавание уже выполняется' });
+      return;
+    }
     const threads = threadCount();
 
     // Серверный режим: модель уже в памяти — текст приходит без холодного старта.
     if (keepLoaded) {
-      transcribeViaServer(wavPath, { lang, prompt, timeout, threads, modelPath }).then((fast) => {
-        // Пустой ответ сервера — это тоже ответ: повторять тот же проход через
-        // whisper-cli значило бы ждать вдвое дольше и грузить модель второй раз.
+      let settled = false;
+      const run = { kind: 'server', cancelled: false, req: null, finish: null };
+      run.finish = (value) => {
+        if (settled) return;
+        settled = true;
+        activeRuns.delete(run);
+        resolve(value);
+      };
+      activeRuns.add(run);
+      const fallback = () => {
+        if (settled || run.cancelled) return;
+        activeRuns.delete(run);
+        // Нельзя параллельно запускать CLI, пока другой серверный фрагмент
+        // ещё выполняется: модель загрузится второй раз и съест память.
+        if (isBusy()) {
+          run.finish({ ok: false, text: '', code: 'busy', reason: 'сервер недоступен во время параллельного распознавания' });
+          return;
+        }
+        runCli();
+      };
+      transcribeViaServer(wavPath, {
+        lang, prompt, timeout, threads, modelPath,
+        onRequest: (req) => { run.req = req; },
+        isCanceled: () => run.cancelled,
+      }).then((fast) => {
+        if (settled || run.cancelled) return;
+        // Пустой ответ сервера — тоже ответ; не повторяем проход через CLI.
         if (fast) {
           rememberRun('server', fast.ms || 0, 1);
-          resolve({
+          run.finish({
             ok: Boolean(fast.text),
             text: fast.text || '',
             mode: 'server',
@@ -710,9 +777,9 @@ function transcribe(
             code: fast.text ? undefined : 'empty',
           });
         } else {
-          runCli();
+          fallback();
         }
-      });
+      }, fallback);
       return;
     }
     runCli();
@@ -738,16 +805,21 @@ function transcribe(
       outBase: `${wavPath}.out`,
     });
 
-    const child = spawn(bin, args, { windowsHide: true });
+    let child;
+    try { child = spawn(bin, args, { windowsHide: true }); }
+    catch (err) {
+      resolve({ ok: false, text: '', reason: err.message, mode: 'cli', ms: Date.now() - callStarted });
+      return;
+    }
     let stderr = '';
     let stdout = '';
     let settled = false;
-    const run = { child, finish: null, cancelled: false };
+    const run = { kind: 'cli', child, finish: null, cancelled: false };
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (activeRun === run) activeRun = null;
+      activeRuns.delete(run);
       // Сколько занял именно этот проход: цифру видно в диагностике и HUD,
       // иначе «медленно» остаётся разговором без доказательств.
       const ms = Date.now() - callStarted;
@@ -755,10 +827,10 @@ function transcribe(
       resolve(value && typeof value === 'object' ? { ms, mode: value.mode || 'cli', ...value } : value);
     };
     run.finish = finish;
-    activeRun = run;
+    activeRuns.add(run);
     const timer = setTimeout(() => {
       try {
-        child.kill();
+        run.child?.kill();
       } catch {
         /* ignore */
       }
@@ -767,8 +839,6 @@ function transcribe(
 
     // Один повтор без VAD: флаг поддержан не всеми сборками whisper.cpp.
     function retryWithoutVad() {
-      clearTimeout(timer);
-      if (activeRun === run) activeRun = null;
       const again = cliArgs({
         modelPath,
         wavPath,
@@ -776,10 +846,15 @@ function transcribe(
         threads,
         prompt,
         vadModel: '',
-        audioCtx: computeAudioCtx(wavPath),
+        beamSize: thorough ? 5 : 3,
+        fallback: thorough,
+        audioCtx,
         outBase: `${wavPath}.out`,
       });
-      const child2 = spawn(bin, again, { windowsHide: true });
+      let child2;
+      try { child2 = spawn(bin, again, { windowsHide: true }); }
+      catch (err) { finish({ ok: false, text: '', reason: err.message }); return; }
+      run.child = child2;
       let err2 = '';
       child2.stderr?.on('data', (d) => {
         err2 += d.toString();
@@ -787,6 +862,7 @@ function transcribe(
       });
       child2.on('error', (err) => finish({ ok: false, text: '', reason: err.message }));
       child2.on('close', (code2) => {
+        if (settled) return;
         try {
           const txt = `${wavPath}.out.txt`;
           if (fs.existsSync(txt)) {
@@ -817,6 +893,7 @@ function transcribe(
       finish({ ok: false, text: '', reason: err.message });
     });
     child.on('close', (code) => {
+      if (settled) return;
       // 1) файл -otxt, если сборка его пишет
       try {
         const txt = `${wavPath}.out.txt`;

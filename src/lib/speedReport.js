@@ -36,6 +36,7 @@ const round1 = (value) => Math.round(Number(value) * 10) / 10;
  */
 export const ENGINE_WORDS = {
   server: 'прогретый сервер',
+  mixed: 'сервер и whisper-cli',
   cli: 'whisper-cli',
   gigaam: 'русская модель',
   parakeet: 'модель европейских языков',
