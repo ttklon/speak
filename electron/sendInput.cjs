@@ -36,9 +36,21 @@ public static class ZsSendInput {
     public IntPtr dwExtraInfo;
   }
 
+  // Win32 проверяет размер полного INPUT, а не только KEYBDINPUT.
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+  }
+
   [StructLayout(LayoutKind.Explicit)]
   public struct INPUTUNION {
     [FieldOffset(0)] public KEYBDINPUT ki;
+    [FieldOffset(0)] public MOUSEINPUT mi;
   }
 
   [StructLayout(LayoutKind.Sequential)]

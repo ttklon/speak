@@ -44,9 +44,22 @@ public static class ZsInput {
     public IntPtr dwExtraInfo;
   }
 
+  // Полный union нужен даже для клавиатуры: MOUSEINPUT определяет размер
+  // INPUT, который проверяет Windows (40 байт на x64, 28 на x86).
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+  }
+
   [StructLayout(LayoutKind.Explicit)]
   public struct INPUTUNION {
     [FieldOffset(0)] public KEYBDINPUT ki;
+    [FieldOffset(0)] public MOUSEINPUT mi;
   }
 
   [StructLayout(LayoutKind.Sequential)]

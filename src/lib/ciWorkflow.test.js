@@ -19,6 +19,16 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
   });
 
+  it('Windows проверяет реальный ABI и симулированные отказы ввода', () => {
+    const job = workflow.split('  package:')[1]?.split('\n  release:')[0];
+    expect(job).toContain('scripts/test-wininput-layout.cjs');
+    expect(job).toContain('scripts/test-wininput-failure.cjs');
+    expect(job).toContain('scripts/test-wininput-window.cjs');
+    expect(job).toContain('ZS_INPUT_INTERACTIVE: "1"');
+    expect(job).toContain('::warning title=Windows input window');
+    expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
+  });
+
   it('ошибка выполненного теста не подавляется настройкой шага', () => {
     const step = workflow.split('      - name: Тест настоящего движка распознавания (whisper.cpp)')[1]?.split('\n  package:')[0];
     expect(step).toBeTruthy();

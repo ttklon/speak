@@ -50,21 +50,9 @@ async function main() {
   if (!ping.ok) fail(`помощник не отвечает: ${JSON.stringify(ping)}`);
   log(`ответ на ping: ${JSON.stringify(ping).slice(0, 120)}`);
 
-  // 2. Ввод текста. В CI переднего окна может не быть — тогда SendInput честно
-  // вернёт отказ, и это не ошибка. Ошибка — только исключение или «ни одного
-  // символа при наличии окна».
-  const typed = await input.type('Проверка ZSpeakly');
-  if (typed.ok) {
-    log(`ввод: ${typed.typed} символов`);
-  } else if (typeof typed.typed === 'number' && typed.typed >= 0) {
-    log(`ввод: принято частично (${typed.typed} символов) — в CI переднего окна может не быть`);
-  } else {
-    fail(`помощник не смог ввести текст: ${JSON.stringify(typed)}`);
-  }
-
-  // 3. Ctrl+V тем же путём: важно, что вызов не падает.
-  const pasted = await input.paste();
-  log(`Ctrl+V: ${pasted.ok ? 'отправлен' : `отказ (${pasted.reason || 'без причины'})`}`);
+  // Не посылаем клавиши в неизвестное активное окно: отдельная проверка
+  // test-wininput-window.cjs создаёт цель и проверяет её фокус перед вводом.
+  // Возврат SendInput сам по себе не доказывает, что поле получило текст.
 
   fs.rmSync(dir, { recursive: true, force: true });
   log('помощник ввода проверен на этой Windows');

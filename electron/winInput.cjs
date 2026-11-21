@@ -35,7 +35,7 @@ const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
 
 /** Версия помощника: меняем текст программы — меняем версию. */
-const HELPER_VERSION = '4';
+const HELPER_VERSION = '5';
 
 // C# под .NET Framework 4 (csc.exe — это C# 5): без интерполяции строк и
 // прочих новых возможностей, иначе старый компилятор не поймёт.
@@ -57,10 +57,23 @@ public static class ZsInput
     public IntPtr dwExtraInfo;
   }
 
+  // MOUSEINPUT задаёт размер всего объединения INPUT даже при вводе клавиш.
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT
+  {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+  }
+
   [StructLayout(LayoutKind.Explicit)]
   public struct INPUTUNION
   {
     [FieldOffset(0)] public KEYBDINPUT ki;
+    [FieldOffset(0)] public MOUSEINPUT mi;
   }
 
   [StructLayout(LayoutKind.Sequential)]
@@ -124,12 +137,10 @@ public static class ZsInput
       if (ch == '\n')
       {
         ok = Send(new INPUT[] { Virtual(VK_RETURN, false), Virtual(VK_RETURN, true) });
-        typed++;
       }
       else if (ch == '\t')
       {
         ok = Send(new INPUT[] { Virtual(VK_TAB, false), Virtual(VK_TAB, true) });
-        typed++;
       }
       else if (ch == '\r')
       {
@@ -141,9 +152,9 @@ public static class ZsInput
         // KEYEVENTF_UNICODE.
         ushort scan = (ushort)ch;
         ok = Send(new INPUT[] { Unicode(scan, false), Unicode(scan, true) });
-        typed++;
       }
       if (!ok) break;
+      typed++;
       Thread.Sleep(1);
     }
     return typed;
@@ -237,8 +248,10 @@ public static class ZsInput
         string base64 = args.Length > 1 ? args[1] : "";
         string text = Encoding.UTF8.GetString(Convert.FromBase64String(base64));
         int typed = TypeText(text);
-        bool complete = typed == text.Length;
-        Console.WriteLine("{\"ok\":" + (complete ? "true" : "false") + ",\"typed\":" + typed + ",\"total\":" + text.Length + "}");
+        // CR пропускаем при отправке CRLF, поэтому он не входит в total.
+        int total = text.Replace("\r", "").Length;
+        bool complete = typed == total;
+        Console.WriteLine("{\"ok\":" + (complete ? "true" : "false") + ",\"typed\":" + typed + ",\"total\":" + total + "}");
         return complete ? 0 : 1;
       }
       Console.WriteLine("{\"ok\":false,\"reason\":\"unknown-command\"}");

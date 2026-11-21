@@ -314,6 +314,34 @@ jobs:
         # нажимает «диктовка» и не получает текста.
         run: node scripts/check-wininput.cjs
 
+      - name: Отказ SendInput на первом и последнем символе (симуляция)
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-wininput-failure.cjs > input-failure.log 2>&1
+          code=$?
+          cat input-failure.log
+          message=$(tail -c 2500 input-failure.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=SendInput simulation::$message"; exit "$code"; fi
+          echo "::notice title=SendInput simulation::$message"
+
+      - name: SendInput в отдельное тестовое окно Windows
+        shell: bash
+        env:
+          ZS_INPUT_INTERACTIVE: "1"
+        run: |
+          set +e
+          node scripts/test-wininput-window.cjs > input-window.log 2>&1
+          code=$?
+          cat input-window.log
+          message=$(tail -c 2500 input-window.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows input window::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' input-window.log; then
+            echo "::warning title=Windows input window::$message"
+          else
+            echo "::notice title=Windows input window::$message"
+          fi
+
       - name: Кэш Electron (переживает сетевые сбои раннера)
         uses: actions/cache@v4
         with:
