@@ -185,9 +185,25 @@ jobs:
       - name: GigaAM real preprocessor and reference audio
         run: node scripts/test-gigaam-preprocessor.mjs "$ZS_USER_DATA/jfk.wav"
       - name: GigaAM real weights and Russian speech
-        run: node scripts/test-onnx-live.mjs gigaam "$ZS_USER_DATA/ru.wav" --download
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-onnx-live.mjs gigaam "$ZS_USER_DATA/ru.wav" --download > /tmp/gigaam-live.log 2>&1
+          code=$?
+          cat /tmp/gigaam-live.log
+          message=$(tail -c 1800 /tmp/gigaam-live.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=GigaAM live::$message"; exit "$code"; fi
+          echo "::notice title=GigaAM live::$message"
       - name: Parakeet real weights and English speech
-        run: node scripts/test-onnx-live.mjs parakeet "$ZS_USER_DATA/jfk.wav" --download
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-onnx-live.mjs parakeet "$ZS_USER_DATA/jfk.wav" --download > /tmp/parakeet-live.log 2>&1
+          code=$?
+          cat /tmp/parakeet-live.log
+          message=$(tail -c 1800 /tmp/parakeet-live.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Parakeet live::$message"; exit "$code"; fi
+          echo "::notice title=Parakeet live::$message"
 
   package:
     needs: check
