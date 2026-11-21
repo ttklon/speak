@@ -24,7 +24,6 @@ const audioPrep = require('./audioPrep.cjs');
 const {
   judgeText,
   betterText,
-  stripPromptEcho,
   tailForPrompt,
   shouldRetry,
 } = require('./textQuality.cjs');
@@ -32,7 +31,7 @@ const { averageFactor, decodePlan } = require('./adaptiveDecode.cjs');
 const { aliasesFor } = require('./dictionaryAliases.cjs');
 const { IDLE_UNLOAD_MS, shouldUnload } = require('./idleMemory.cjs');
 const { resolveWindowBounds, boundsToSave } = require('./windowBounds.cjs');
-const { collapseRepetition, looksLikeLoop } = require('./textGuard.cjs');
+const { processWhisperText } = require('./whisperTextPolicy.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
 const {
@@ -1811,20 +1810,22 @@ function registerIpc() {
       }
       // Пишем только факт и причину — распознанный текст остаётся на устройстве.
       const ms = Date.now() - started;
-      // «Просто повторы»: на тишине и шуме движок зацикливается и выдаёт одну
-      // фразу несколько раз. Сворачиваем повтор до одного вхождения и пишем об
-      // этом в журнал — вставлять петлю в чужое окно нельзя.
+      // Повтор и начало следующей фразы могут быть намеренными. В режиме
+      // сохранения текста эвристики не имеют права вырезать их из ответа.
       if (res?.ok && res.text) {
-        const collapsed = collapseRepetition(res.text);
-        if (collapsed !== res.text) {
+        const processed = processWhisperText(res.text, payload?.useDictionary === false ? '' : tail, {
+          preserve: sttSettings.preserveText === true,
+          partial: payload?.partial === true,
+        });
+        if (processed.collapsed) {
           logger.warn('stt', 'Свёрнут повтор движка', {
             keep: true,
             was: res.text.length,
-            now: collapsed.length,
-            loop: looksLikeLoop(res.text),
+            now: processed.text.length,
+            loop: processed.loop,
           });
-          res = { ...res, text: collapsed };
         }
+        if (processed.text !== res.text) res = { ...res, text: processed.text };
       }
       // Когда модель последний раз была нужна: по этому времени таймер решает,
       // пора ли освободить память после простоя.
@@ -1837,13 +1838,7 @@ function registerIpc() {
       // Хвост этой фразы подскажет слова следующей: имена и термины не будут
       // каждый раз «на слух». Только для настоящей диктовки, не для черновика.
       if (res?.ok && res.text && payload?.partial !== true) {
-        const echoFree = stripPromptEcho(res.text, tail);
-        promptTailByLang[lang] = tailForPrompt(echoFree, STT_TAIL_LIMIT);
-        // Если после вырезания подсказки не осталось текста, значит человек
-        // просто повторил те же слова — это не эхо, и выбрасывать их нельзя.
-        if (echoFree !== res.text && echoFree.trim().length >= 2) {
-          res = { ...res, text: echoFree };
-        }
+        promptTailByLang[lang] = tailForPrompt(res.text, STT_TAIL_LIMIT);
       }
       // whisper иногда «дослышит» фразу, которой не было (тишина, музыка).
       if (res?.ok && whisper.isPhantom?.(res.text)) {

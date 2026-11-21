@@ -1995,6 +1995,39 @@ await check('выбор Whisper не подменяется доступными
   }
 });
 
+await check('Whisper: сохранение текста и выключенная подсказка не вырезают слова', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const before = handlers.get('store:get')({}, 'zs:settings');
+  const saved = { status: whisper.status, transcribe: whisper.transcribe };
+  let text = '';
+  whisper.status = () => ({ available: true });
+  whisper.transcribe = async () => ({ ok: true, text, mode: 'cli' });
+  const invoke = (useDictionary = true) => handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(600), sampleRate: 16000, lang: 'zz', useDictionary,
+  });
+  const settings = { ...before, recognitionEngine: 'whisper', keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false };
+  try {
+    await handlers.get('store:set')({}, 'zs:settings', { ...settings, preserveText: true });
+    text = 'Алло алло алло приветики';
+    let result = await invoke();
+    if (result.text !== text) throw new Error(`свёрнут повтор: ${JSON.stringify(result)}`);
+    text = 'обсуждали Zoom и Telegram';
+    await invoke();
+    text = 'обсуждали Zoom и Telegram, а завтра Docker.';
+    result = await invoke();
+    if (result.text !== text) throw new Error(`вырезано начало фразы: ${JSON.stringify(result)}`);
+    await handlers.get('store:set')({}, 'zs:settings', { ...settings, preserveText: false });
+    text = 'обсуждали Zoom и Telegram';
+    await invoke();
+    text = 'обсуждали Zoom и Telegram, а завтра Docker.';
+    result = await invoke(false);
+    if (result.text !== text) throw new Error(`вырезана непереданная подсказка: ${JSON.stringify(result)}`);
+  } finally {
+    whisper.status = saved.status; whisper.transcribe = saved.transcribe;
+    await handlers.get('store:set')({}, 'zs:settings', before);
+  }
+});
+
 await check('очередь диктовок: отмена и несколько итоговых проходов', async () => {
   const whisper = require(path.resolve('electron/whisper.cjs'));
   const giga = require(path.resolve('electron/gigaam.cjs'));
