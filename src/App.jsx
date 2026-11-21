@@ -126,14 +126,18 @@ export default function App() {
     const warn = (source, code) => {
       const now = Date.now();
       const last = lastStorageWarning.current;
-      // Более серьёзная ошибка резервной копии не должна скрываться за предыдущей.
-      if (now - last.at < 30_000 && !(code === 'BACKUP_FAILED' && last.code !== code)) return;
+      // Защита профиля важнее обычной ошибки и не должна ею скрываться.
+      const protectedProfile = code === 'BACKUP_FAILED' || code === 'PROFILE_UNREADABLE';
+      const lastProtected = last.code === 'BACKUP_FAILED' || last.code === 'PROFILE_UNREADABLE';
+      if (now - last.at < 30_000 && !(protectedProfile && !lastProtected)) return;
       lastStorageWarning.current = { at: now, code };
       const description = code === 'BACKUP_FAILED'
-        ? 'Профиль не удалось прочитать или сохранить его копию. Исходный файл не перезаписывается; изменения будут потеряны при закрытии. Проверьте доступ и место на диске.'
-        : source === 'electron'
-          ? 'Изменения могут остаться только в памяти и потеряться при закрытии. Проверьте место на диске и права доступа.'
-          : 'Не удалось записать данные в браузере. Проверьте доступное место и настройки хранилища.';
+        ? 'Профиль не удалось прочитать и сохранить его копию. Исходный файл не перезаписывается; изменения будут потеряны при закрытии. Проверьте доступ и место на диске.'
+        : code === 'PROFILE_UNREADABLE'
+          ? 'Профиль не удалось прочитать. Создана резервная копия; исходный файл не перезаписывается. Новые изменения будут потеряны при закрытии. Проверьте и восстановите профиль.'
+          : source === 'electron'
+            ? 'Изменения могут остаться только в памяти и потеряться при закрытии. Проверьте место на диске и права доступа.'
+            : 'Не удалось записать данные в браузере. Проверьте доступное место и настройки хранилища.';
       push({ title: 'Не удалось сохранить данные', description, tone: 'warn', ttl: 12_000 });
     };
     const onStorageError = (event) => warn(event.detail?.source);

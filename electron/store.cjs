@@ -14,24 +14,34 @@ class JsonStore {
     this.cache = {};
     this.timer = null;
     this.lastWriteError = null;
-    this.writeProtected = false;
+    this.writeProtectionCode = null;
     this.onError = typeof onError === 'function' ? onError : null;
     this.load();
   }
 
   load() {
     try {
-      if (!fs.existsSync(this.dir)) fs.mkdirSync(this.dir, { recursive: true });
-      if (fs.existsSync(this.file)) {
-        const raw = fs.readFileSync(this.file, 'utf8');
-        this.cache = raw ? JSON.parse(raw) : {};
+      fs.mkdirSync(this.dir, { recursive: true });
+      let raw;
+      try {
+        raw = fs.readFileSync(this.file, 'utf8');
+      } catch (err) {
+        // Только отсутствие файла означает новый профиль. existsSync скрывает
+        // ошибки доступа и может ошибочно представить существующий файл пустым.
+        if (err?.code === 'ENOENT') return;
+        throw err;
       }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('некорректный формат профиля');
+      }
+      this.cache = parsed;
     } catch (err) {
       console.error('[store] load failed', err);
       this.cache = {};
-      // Профиль мог испортиться при аварийном выключении или ручной правке.
-      // Молча затирать его нельзя: человек потерял бы историю диктовок без
-      // единого шанса её достать. Откладываем копию рядом — она ещё пригодится.
+      // Даже успешная копия не восстанавливает профиль. Не перезаписываем
+      // оригинал в этой сессии и сообщаем об этом интерфейсу.
+      this.writeProtectionCode = 'PROFILE_UNREADABLE';
       try {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         let backup;
@@ -49,12 +59,9 @@ class JsonStore {
         console.warn('[store] битый профиль сохранён как', backup);
       } catch (copyErr) {
         console.warn('[store] не удалось сохранить копию битого профиля', copyErr.message);
-        // Нельзя заменять исходный профиль пустым, если не удалось сохранить
-        // копию или даже определить, существует ли файл. До перезапуска все
-        // изменения остаются только в памяти.
-        this.writeProtected = true;
-        this.reportError('BACKUP_FAILED');
+        this.writeProtectionCode = 'BACKUP_FAILED';
       }
+      this.reportError(this.writeProtectionCode);
     }
   }
 
@@ -87,8 +94,8 @@ class JsonStore {
   flush() {
     clearTimeout(this.timer);
     this.timer = null;
-    if (this.writeProtected) {
-      this.reportError('BACKUP_FAILED');
+    if (this.writeProtectionCode) {
+      this.reportError(this.writeProtectionCode);
       return false;
     }
     try {

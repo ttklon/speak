@@ -115,6 +115,9 @@ describe('воркер: приёмник журналов', () => {
   it('не принимает мусор вместо событий', () => {
     expect(worker.parseBatch({ events: [{ level: 'error' }] })).toEqual([]);
     expect(worker.parseBatch(null)).toEqual([]);
+    expect(worker.parseBatch({ events: [null, 12, [], 'test', { message: 'ок' }] })).toEqual([
+      expect.objectContaining({ message: 'ок' }),
+    ]);
   });
 
   it('хранит события без внешней базы и отдаёт их списком', async () => {

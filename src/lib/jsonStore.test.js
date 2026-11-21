@@ -76,6 +76,46 @@ describe('профиль Electron: сбой записи', () => {
     expect(store.get('dictations')).toEqual(['новая запись']);
   });
 
+  it.each(['', 'null', '[]', '42', '"строка"', '{незаконченный'])('не заменяет нечитаемый профиль и при успешной копии: %s', (raw) => {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, raw);
+    const notify = vi.fn();
+    const store = new JsonStore('profile.json', { onError: notify });
+    expect(store.status()).toEqual({ ok: false, code: 'PROFILE_UNREADABLE' });
+    const backup = fs.readdirSync(dir).find((f) => f.startsWith('profile.json.broken-'));
+    expect(backup).toBeTruthy();
+    expect(fs.readFileSync(path.join(dir, backup), 'utf8')).toBe(raw);
+    store.set('new', 'value');
+    vi.advanceTimersByTime(180);
+    expect(store.flush()).toBe(false);
+    expect(store.status()).toEqual({ ok: false, code: 'PROFILE_UNREADABLE' });
+    expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+    expect(notify).toHaveBeenCalledWith({ ok: false, code: 'PROFILE_UNREADABLE' });
+  });
+
+  it('при ошибке чтения не заменяет даже корректный файл, скопированный в резерв', () => {
+    const file = path.join(dir, 'profile.json');
+    const raw = JSON.stringify({ history: ['важное'] });
+    fs.writeFileSync(file, raw);
+    const read = vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw Object.assign(new Error('запрещено'), { code: 'EACCES' });
+    });
+    const store = new JsonStore();
+    read.mockRestore();
+    expect(store.status()).toEqual({ ok: false, code: 'PROFILE_UNREADABLE' });
+    store.set('history', ['новое']);
+    expect(store.flush()).toBe(false);
+    expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+  });
+
+  it('отсутствующий профиль создаётся и успешно читается после перезапуска', () => {
+    const store = new JsonStore();
+    expect(store.status()).toEqual({ ok: true });
+    store.set('history', ['сохранено']);
+    expect(store.flush()).toBe(true);
+    expect(new JsonStore().get('history')).toEqual(['сохранено']);
+  });
+
   it('не затирает прежнюю резервную копию при двух ошибках в одну секунду', () => {
     const file = path.join(dir, 'profile.json');
     fs.writeFileSync(file, '{первый');

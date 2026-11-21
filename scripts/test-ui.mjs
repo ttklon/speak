@@ -5128,6 +5128,15 @@ async function scenarioElectronStorageError(browser) {
   record('сценарии', 'Electron: невозможность сохранить копию профиля объясняет защиту исходного файла',
     /Исходный файл не перезаписывается/i.test(warning) && /потеряны при закрытии/i.test(warning), warning.slice(0, 220));
   await corrupt.close();
+
+  const backedUp = await openPage(browser, '#/home', {
+    settle: 400,
+    patchNative: () => { window.zspeakly.store.statusSync = () => ({ ok: false, code: 'PROFILE_UNREADABLE' }); },
+  });
+  const backedUpWarning = await backedUp.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
+  record('сценарии', 'Electron: копия не выдаётся за восстановление нечитаемого профиля',
+    /Создана резервная копия/i.test(backedUpWarning) && /исходный файл не перезаписывается/i.test(backedUpWarning) && /потеряны при закрытии/i.test(backedUpWarning), backedUpWarning.slice(0, 220));
+  await backedUp.close();
 }
 
 async function scenarioDiagnostics(browser) {
