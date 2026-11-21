@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { readWav } from './lib/engine-cli.mjs';
+import { createPaddedWav } from './lib/virtual-mic-wav.mjs';
 
 const [name, file] = process.argv.slice(2);
 if (!['gigaam', 'parakeet'].includes(name) || !file || !fs.existsSync(file) || !process.env.ZS_USER_DATA) {
@@ -39,6 +40,7 @@ const settings = {
 fs.writeFileSync(path.join(profile, 'profile.json'), JSON.stringify({
   'zs.settings': settings, 'zs:settings': settings, 'zs.dictations': [],
 }));
+const padded = createPaddedWav(source.pcm, source.sampleRate);
 let browser;
 try {
   browser = await puppeteer.launch({
@@ -51,7 +53,7 @@ try {
       path.resolve('scripts/e2e/electron-entry.cjs'),
       '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-      `--use-file-for-fake-audio-capture=${wav}%noloop`,
+      `--use-file-for-fake-audio-capture=${padded.file}%noloop`,
     ],
     timeout: 60000,
   });
@@ -68,7 +70,7 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Начать диктовку/.test(b.innerText)), { timeout: 15000 });
   await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /Начать диктовку/.test(b.innerText)).click());
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Слушаю/.test(b.innerText)), { timeout: 10000 });
-  await new Promise((resolve) => setTimeout(resolve, Math.ceil(seconds * 1000) + 700));
+  await new Promise((resolve) => setTimeout(resolve, Math.ceil(padded.seconds * 1000) + 700));
   await page.evaluate(() => {
     const stop = document.querySelector('[aria-label="Остановить запись"]') || [...document.querySelectorAll('button')].find((b) => /Слушаю/.test(b.innerText));
     if (!stop) throw new Error('кнопка остановки не найдена');
@@ -102,4 +104,5 @@ try {
 } finally {
   if (browser) await browser.close();
   fs.rmSync(profile, { recursive: true, force: true });
+  padded.cleanup();
 }

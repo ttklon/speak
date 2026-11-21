@@ -15,6 +15,7 @@ import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { installMockBridge } from './e2e/mock-bridge.mjs';
 import { stubElectron, loadEngine, readWav } from './lib/engine-cli.mjs';
+import { createPaddedWav } from './lib/virtual-mic-wav.mjs';
 
 const [name, file, ...flags] = process.argv.slice(2);
 if (!['gigaam', 'parakeet'].includes(name) || !file || !existsSync(file)) {
@@ -39,6 +40,7 @@ assert.ok(chrome, 'не найден Chromium: укажите CHROME_PATH');
 const base = (process.env.ZS_BASE_URL || 'http://127.0.0.1:5189').replace(/\/$/, '');
 const port = new URL(base).port || '5189';
 let vite, browser;
+const padded = createPaddedWav(input.pcm, input.sampleRate);
 const records = [];
 // Сравниваем огибающие по 20 мс с допуском на сдвиг и ресемплинг браузера.
 // Так синус тестового устройства не пройдёт вместо выбранного файла.
@@ -94,7 +96,7 @@ try {
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
       // Без noloop Chromium начинает фразу заново после конца файла — лишние
       // слова тестовой записи ошибочно выглядят как галлюцинация модели.
-      `--use-file-for-fake-audio-capture=${wav}%noloop`, '--autoplay-policy=no-user-gesture-required',
+      `--use-file-for-fake-audio-capture=${padded.file}%noloop`, '--autoplay-policy=no-user-gesture-required',
     ],
   });
   const page = await browser.newPage();
@@ -151,7 +153,7 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Начать диктовку/.test(b.innerText)), { timeout: 15000 });
   await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /Начать диктовку/.test(b.innerText)).click());
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Слушаю/.test(b.innerText)), { timeout: 10000 });
-  await new Promise((resolve) => setTimeout(resolve, Math.ceil(seconds * 1000) + 700));
+  await new Promise((resolve) => setTimeout(resolve, Math.ceil(padded.seconds * 1000) + 700));
   await page.evaluate(() => {
     const stop = document.querySelector('[aria-label="Остановить запись"]') || [...document.querySelectorAll('button')].find((b) => /Слушаю/.test(b.innerText));
     if (!stop) throw new Error('Кнопка остановки не найдена');
@@ -182,4 +184,5 @@ try {
   if (browser) await browser.close();
   if (vite) vite.kill('SIGTERM');
   engine?.unload();
+  padded.cleanup();
 }
