@@ -544,6 +544,17 @@ jobs:
             exit 0
           }
 
+      - name: Проверить ONNX Runtime в собранном приложении
+        shell: bash
+        run: |
+          set +e
+          node scripts/check-packaged-onnx.cjs > packaged-onnx.log 2>&1
+          code=$?
+          cat packaged-onnx.log
+          message=$(tail -c 2200 packaged-onnx.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Packaged ONNX::$message"; exit "$code"; fi
+          echo "::notice title=Packaged ONNX::$message"
+
       - name: Electron диктует через виртуальный микрофон в окно Windows
         shell: bash
         env:
