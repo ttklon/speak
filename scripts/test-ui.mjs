@@ -110,8 +110,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SEED_SETTINGS = {
   onboarded: true,
   userName: 'Тест',
-  // профиль «после миграции 1.5.1»: иначе миграция умолчаний перезапишет
-  // whisperModel/liveWhisper, которые сценарий задаёт намеренно
+  // Профиль после исторической миграции; отдельный сценарий проверяет
+  // профиль до неё и сохранение выбранного уровня модели.
   speedFix151: true,
   theme: 'dark',
   language: 'ru',
@@ -4142,7 +4142,7 @@ async function scenarioSpeedReport(browser) {
 async function scenarioOldModelName(browser) {
   const page = await openPage(browser, '#/settings?section=features&from=home', {
     settle: 700,
-    settings: { whisperModel: 'small' },
+    settings: { whisperModel: 'small', speedFix151: false, modelTiers165: false },
   });
   takeErrors(page);
   const body = await page.evaluate(() => document.body.innerText);
@@ -4151,11 +4151,10 @@ async function scenarioOldModelName(browser) {
     const s = raw || JSON.parse(localStorage.getItem('zs.settings') || '{}');
     return s?.whisperModel || '';
   });
-  const tiers = ['base-q5_1', 'small-q5_1', 'large-v3-turbo-q5_0'];
   record(
     'сценарии',
-    'старое имя модели переводится на существующий режим',
-    tiers.includes(saved) && !/старая модель/i.test(body),
+    'старый small переводится в свой режим без понижения до base',
+    saved === 'small-q5_1' && !/старая модель/i.test(body),
     String(saved),
   );
   // Русская модель — отдельная карточка со своим классом: она не «четвёртый

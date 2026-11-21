@@ -4,10 +4,10 @@ import { migrateSettings, SPEED_FIX_MARKER, MODEL_TIER_FIX_MARKER } from './sett
 import { TIER_MODELS } from './modelTiers.js';
 
 describe('миграция настроек 1.5.1', () => {
-  it('старые умолчания переводятся на быстрые: base вместо small, живая расшифровка — «сама»', () => {
+  it('старый small переводится в соответствующий режим, живая расшифровка — «сама»', () => {
     const prev = { whisperModel: 'small', liveWhisper: true, keepModelLoaded: undefined };
     const next = migrateSettings(prev, DEFAULT_SETTINGS);
-    expect(next.whisperModel).toBe('base-q5_1');
+    expect(next.whisperModel).toBe('small-q5_1');
     // раньше здесь было жёсткое false; теперь решение принимает
     // lib/liveDraftPolicy.js, и выбор человека не выключается навсегда
     expect(next.liveWhisper).toBe('auto');
@@ -34,6 +34,19 @@ describe('миграция настроек 1.5.1', () => {
     const next = migrateSettings(prev, DEFAULT_SETTINGS);
     expect(next.whisperModel).toBe('small');
     expect(next.liveWhisper).toBe(true);
+  });
+
+  it.each([undefined, false, true])('старый small не понижается при маркере скорости %s', (marker) => {
+    const old = { whisperModel: 'small', [SPEED_FIX_MARKER]: marker };
+    const next = migrateSettings(old, DEFAULT_SETTINGS);
+    expect(next.whisperModel).toBe('small-q5_1');
+    expect(next[MODEL_TIER_FIX_MARKER]).toBe(true);
+    expect(migrateSettings(next, DEFAULT_SETTINGS)).toEqual(next);
+  });
+
+  it('не пытается восстановить уже мигрированный base: нельзя знать, что выбрал пользователь', () => {
+    const prev = { whisperModel: 'base-q5_1', [SPEED_FIX_MARKER]: true, [MODEL_TIER_FIX_MARKER]: true };
+    expect(migrateSettings(prev, DEFAULT_SETTINGS).whisperModel).toBe('base-q5_1');
   });
 
   it('остальные настройки сохраняются, а новые поля берутся из умолчаний', () => {
