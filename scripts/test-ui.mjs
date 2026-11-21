@@ -5136,6 +5136,24 @@ async function scenarioElectronStorageError(browser) {
   record('сценарии', 'Electron: копия не выдаётся за восстановление нечитаемого профиля',
     /Создана резервная копия/i.test(backedUpWarning) && /исходный файл не перезаписывается/i.test(backedUpWarning) && /потеряны при закрытии/i.test(backedUpWarning), backedUpWarning.slice(0, 220));
   await backedUp.close();
+
+  for (const key of ['zs:settings', 'zs:dictionary']) {
+    const rejected = await openPage(browser, '#/home', {
+      settle: 500,
+      patchArg: key,
+      patchNative: (rejectedKey) => {
+        const store = window.zspeakly.store;
+        const set = store.set;
+        store.set = (key, value) => key === rejectedKey ? Promise.reject(new Error('private failure')) : set(key, value);
+      },
+    });
+    const rejectedWarning = await rejected.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
+    const rejectedErrors = takeErrors(rejected);
+    record('сценарии', `Electron: отказ синхронизации ${key} предупреждает без необработанной ошибки`,
+      /Не удалось сохранить данные/i.test(rejectedWarning) && !rejectedWarning.includes('private failure') && rejectedErrors.length === 0,
+      rejectedErrors[0] || rejectedWarning.slice(0, 140));
+    await rejected.close();
+  }
 }
 
 async function scenarioDiagnostics(browser) {

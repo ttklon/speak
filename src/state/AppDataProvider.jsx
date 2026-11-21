@@ -164,11 +164,8 @@ export function AppDataProvider({ children }) {
   useEffect(() => {
     const bridge = typeof window !== 'undefined' ? window.zspeakly?.store : null;
     if (!bridge?.set) return;
-    try {
-      bridge.set('zs:settings', settings);
-    } catch (err) {
-      console.warn('[settings] не удалось передать настройки в главный процесс', err);
-    }  }, [settings]);
+    write('zs:settings', settings);
+  }, [settings]);
 
   // Словарь нужен main-процессу: слова уходят в whisper как prompt, иначе
   // имена и термины распознаются «как слышится». Раньше main читал zs:dictionary,
@@ -176,13 +173,9 @@ export function AppDataProvider({ children }) {
   useEffect(() => {
     const bridge = typeof window !== 'undefined' ? window.zspeakly?.store : null;
     if (!bridge?.set) return;
-    try {
-      // Порядок важен: main обрезает подсказку до лимита, и в неё должны
-      // попасть закреплённые и часто диктуемые слова, а не самые новые.
-      bridge.set('zs:dictionary', rankDictionary(dictionary));
-    } catch (err) {
-      console.warn('[dictionary] не удалось передать словарь в главный процесс', err);
-    }
+    // Порядок важен: main обрезает подсказку до лимита, и в неё должны
+    // попасть закреплённые и часто диктуемые слова, а не самые новые.
+    write('zs:dictionary', rankDictionary(dictionary));
   }, [dictionary]);
 
   useEffect(() => {
