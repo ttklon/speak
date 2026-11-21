@@ -92,7 +92,9 @@ try {
     args: [
       '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--mute-audio',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-      `--use-file-for-fake-audio-capture=${wav}`, '--autoplay-policy=no-user-gesture-required',
+      // Без noloop Chromium начинает фразу заново после конца файла — лишние
+      // слова тестовой записи ошибочно выглядят как галлюцинация модели.
+      `--use-file-for-fake-audio-capture=${wav}%noloop`, '--autoplay-policy=no-user-gesture-required',
     ],
   });
   const page = await browser.newPage();
@@ -129,6 +131,14 @@ try {
       keepModelLoaded: false, diagnostics: false, checkUpdates: false,
     }));
     localStorage.setItem('mockstore:zs.dictations', '[]');
+    // Наблюдаем настоящие MediaStreamTrack, не заменяя устройство или звук.
+    const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    window.__virtualMicTracks = [];
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      const stream = await originalGetUserMedia(constraints);
+      window.__virtualMicTracks.push(...stream.getTracks());
+      return stream;
+    };
     window.zspeakly.native.transcribePcm = async (payload) => {
       const bytes = new Uint8Array(payload.pcm.buffer, payload.pcm.byteOffset, payload.pcm.byteLength);
       let str = '';
@@ -154,8 +164,10 @@ try {
   const outcome = await page.evaluate(() => ({
     history: window.__e2e.read('zs.dictations'),
     inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').map((c) => c.args?.[0]),
+    tracks: (window.__virtualMicTracks || []).map((t) => t.readyState),
   }));
   assert.equal(errors.length, 0, `ошибка страницы: ${errors.join('; ')}`);
+  assert.ok(outcome.tracks.length > 0 && outcome.tracks.every((s) => s === 'ended'), `микрофон остался открыт: ${outcome.tracks}`);
   assert.ok(records.length > 0, 'звук не дошёл до распознавателя');
   assert.ok(records.some((r) => r.bytes >= 32000 && r.rms > 100 && r.peak > 1000), 'PCM пустой или слишком тихий');
   assert.ok(records.some((r) => r.correlation > 0.4), 'поступил звук не из контрольного WAV');
