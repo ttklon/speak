@@ -611,6 +611,26 @@ jobs:
           message=$(tail -c 5000 gigaam-quality.log | tr '\r\n' '  ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Human speech GigaAM::$message"; exit "$code"; fi
           echo "::notice title=Human speech GigaAM::$message"
+          # Реальные модели Whisper для сравнения с теми же человеческими
+          # записями; веса вне репозитория, закреплены по SHA-256.
+          mkdir -p "$root/models"
+          for model in base-q5_1 small-q5_1; do
+            curl --fail --location --retry 3 --connect-timeout 30 --max-time 600 \
+              "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-$model.bin" \
+              -o "$root/models/ggml-$model.bin" || exit 1
+          done
+          (
+            cd "$root/models"
+            printf '%s\n' \
+              '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898  ggml-base-q5_1.bin' \
+              'ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb  ggml-small-q5_1.bin' | sha256sum -c
+          ) || exit 1
+          node scripts/test-whisper-quality.mjs "$(cygpath -m "$root/human")" > whisper-quality.log 2>&1
+          code=$?
+          cat whisper-quality.log
+          message=$(tail -c 5000 whisper-quality.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Human speech Whisper::$message"; exit "$code"; fi
+          echo "::notice title=Human speech Whisper::$message"
           node scripts/test-wininput-window.cjs > electron-input.log 2>&1
           code=$?
           cat electron-input.log
