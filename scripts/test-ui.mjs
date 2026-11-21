@@ -23,7 +23,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { installMockBridge } from './e2e/mock-bridge.mjs';
 // демо-наборы больше не подставляются приложением — тесты кладут их сами
@@ -34,7 +34,7 @@ const BASE = (process.env.ZS_BASE_URL || 'http://127.0.0.1:5173').replace(/\/$/,
 // прямо с диска (loadFile → file://). Тест делает то же, иначе против preview
 // адрес отдаёт index.html приложения и проверка падает не по делу.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const HUD_FILE = `file://${join(ROOT, 'electron', 'hud.html')}`;
+const HUD_FILE = pathToFileURL(join(ROOT, 'electron', 'hud.html')).href;
 const HEADLESS = process.env.HEADED !== '1';
 
 const C = {
@@ -87,7 +87,8 @@ const alive = async (url) => {
 async function ensureServer() {
   if (await alive(BASE)) return null;
   console.log(C.dim(`dev-сервер не отвечает — поднимаю ${BASE}`));
-  const proc = spawn('npx', ['vite', '--host', '0.0.0.0', '--port', new URL(BASE).port || '5173', '--strictPort'], {
+  // Запуск через Node работает и на Windows (без npx.cmd и shell-кавычек).
+  const proc = spawn(process.execPath, [join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '0.0.0.0', '--port', new URL(BASE).port || '5173', '--strictPort'], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -6891,7 +6892,8 @@ const CHROME_ARGS = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
   '--disable-gpu',
-  '--single-process',
+  // Изоляция renderer-процессов предотвращает потерю браузера в долгом прогоне.
+  ...(process.env.ZS_SINGLE_PROCESS === '1' ? ['--single-process'] : []),
   '--mute-audio',
   // фейковый микрофон: без него MediaRecorder в headless молчит и диктовку не проверить
   '--use-fake-device-for-media-stream',

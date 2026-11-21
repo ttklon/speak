@@ -4,6 +4,17 @@ import { describe, expect, it } from 'vitest';
 const workflow = readFileSync('.github/workflows/build.yml', 'utf8');
 
 describe('проверка настоящего движка в CI', () => {
+  it('Windows запускает все unit-тесты и полный интерфейс без фильтра сценариев', () => {
+    const job = workflow.split('  windows-full-ui:')[1]?.split('\n  onnx-live:')[0];
+    expect(job).toContain('runs-on: windows-latest');
+    expect(job).toContain('npm test > windows-all-tests.log');
+    expect(job).toContain('node scripts/test-ui.mjs > windows-full-ui.log');
+    expect(job).not.toContain('ZS_ONLY');
+    expect(job).not.toContain('ZS_SKIP_CRAWL');
+    expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
+    expect(job).toContain('::error title=Windows full UI');
+  });
+
   it('настоящие ONNX-модели проверяются на речи и ошибка теста не скрыта', () => {
     const job = workflow.split('  onnx-live:')[1]?.split('\n  package:')[0];
     expect(job).toBeTruthy();

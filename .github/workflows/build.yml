@@ -155,6 +155,57 @@ jobs:
             exit "$code"
           fi
 
+  # Полный Windows-прогон интерфейса и всех unit-тестов. Это Chromium с
+  # подменённым IPC, а не проверка всех возможностей установленного Electron.
+  windows-full-ui:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: All unit tests on Windows
+        shell: bash
+        run: |
+          set +e
+          npm test > windows-all-tests.log 2>&1
+          code=$?
+          cat windows-all-tests.log
+          message=$(tail -c 4000 windows-all-tests.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows all unit tests::$message"; exit "$code"; fi
+          echo "::notice title=Windows all unit tests::$message"
+      - name: Full UI crawl and all scenarios on Windows
+        shell: bash
+        run: |
+          set -u
+          chrome="$(cygpath -u "$PROGRAMFILES")/Google/Chrome/Application/chrome.exe"
+          if [ ! -f "$chrome" ]; then echo '::error title=Windows UI::Google Chrome отсутствует'; exit 1; fi
+          export CHROME_PATH="$(cygpath -m "$chrome")"
+          export ZS_BASE_URL='http://127.0.0.1:5187'
+          set +e
+          node scripts/test-ui.mjs > windows-full-ui.log 2>&1
+          code=$?
+          cat windows-full-ui.log
+          message=$(tail -c 6000 windows-full-ui.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows full UI::$message"; exit "$code"; fi
+          echo "::notice title=Windows full UI::$message"
+      - name: Upload Windows full test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-full-ui-logs
+          path: |
+            windows-all-tests.log
+            windows-full-ui.log
+          retention-days: 2
+
   # Отдельный обязательный прогон на PR: полные веса (около 900 МБ) остаются
   # только на временном диске раннера, в репозиторий и артефакты не попадают.
   onnx-live:
