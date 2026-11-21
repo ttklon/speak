@@ -18,6 +18,7 @@ public static class NsisGui {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder b, int n);
   [DllImport("user32.dll", EntryPoint="GetWindowLongW")] static extern int GetWindowLong(IntPtr h, int i);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, string l);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, StringBuilder l);
   [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   public class Item {
@@ -44,7 +45,12 @@ public static class NsisGui {
     EnumChildWindows(parent, delegate(IntPtr h, IntPtr l) { items.Add(Info(h)); return true; }, IntPtr.Zero);
     return items.ToArray();
   }
-  public static void SetText(IntPtr h, string value) { SendMessage(h, 0x000C, IntPtr.Zero, value); }
+  public static bool SetText(IntPtr h, string value) { return SendMessage(h, 0x000C, IntPtr.Zero, value) != IntPtr.Zero; }
+  public static string ReadText(IntPtr h) {
+    StringBuilder text = new StringBuilder(2048);
+    SendMessage(h, 0x000D, new IntPtr(text.Capacity), text);
+    return text.ToString();
+  }
   public static void Uncheck(IntPtr h) { SendMessage(h, 0x00F1, IntPtr.Zero, IntPtr.Zero); }
   public static void Click(IntPtr h) { PostMessage(h, 0x00F5, IntPtr.Zero, IntPtr.Zero); }
 }
@@ -79,6 +85,7 @@ $deadline = (Get-Date).AddMinutes(4)
 $lastSignature = ''
 $lastClick = [DateTime]::MinValue
 $directorySeen = $false
+$waitingForDirectory = [DateTime]::MinValue
 $clicks = 0
 try {
   while ((Get-Date) -lt $deadline) {
@@ -95,9 +102,13 @@ try {
       $items = @([NsisGui]::Children($window) | Where-Object { $_.Visible })
       $edit = $items | Where-Object { $_.Class -eq 'Edit' -and $_.Id -eq 1019 } | Select-Object -First 1
       if ($null -ne $edit -and -not $directorySeen) {
-        [NsisGui]::SetText($edit.Handle, $InstallPath)
+        if (-not [NsisGui]::SetText($edit.Handle, $InstallPath)) { throw 'Could not enter installation path' }
+        $entered = [NsisGui]::ReadText($edit.Handle)
+        if (-not [String]::Equals($entered, $InstallPath, [StringComparison]::OrdinalIgnoreCase)) {
+          throw "Installation path was not accepted: $entered"
+        }
         $directorySeen = $true
-        Write-Output "Directory page: entered $InstallPath"
+        Write-Output "Directory page: entered and verified $InstallPath"
       }
       # Do not let the finish page start the app outside its isolated profile.
       foreach ($item in $items) {
@@ -105,7 +116,22 @@ try {
       }
       $signature = (($items | ForEach-Object { "$($_.Id):$($_.Class):$($_.Text):$($_.Enabled)" }) -join '|')
       $next = $items | Where-Object { $_.Class -eq 'Button' -and $_.Id -eq 1 -and $_.Enabled } | Select-Object -First 1
-      if ($null -ne $next -and (($signature -ne $lastSignature) -or ((Get-Date) - $lastClick).TotalSeconds -gt 8)) {
+      # NSIS иногда показывает заголовок/кнопку раньше, чем дочернее Edit.
+      # Не жмём Install и не покидаем страницу каталога до проверки пути.
+      $locationTitle = $items | Where-Object { $_.Class -eq 'Static' -and $_.Text -match 'Choose Install Location|Выбор места установки' } | Select-Object -First 1
+      $installButton = $null -ne $next -and $next.Text -match 'Install|Установ'
+      $mustWait = -not $directorySeen -and ($null -ne $locationTitle -or $installButton)
+      if ($mustWait) {
+        if ($waitingForDirectory -eq [DateTime]::MinValue) {
+          $waitingForDirectory = Get-Date
+          Write-Output "Waiting for directory field; controls: $signature"
+        } elseif (((Get-Date) - $waitingForDirectory).TotalSeconds -gt 15) {
+          throw "Directory field not ready; refusing to install. Controls: $signature"
+        }
+      } else {
+        $waitingForDirectory = [DateTime]::MinValue
+      }
+      if (-not $mustWait -and $null -ne $next -and (($signature -ne $lastSignature) -or ((Get-Date) - $lastClick).TotalSeconds -gt 8)) {
         Write-Output "Wizard button: $($next.Text); controls: $($signature.Substring(0,[Math]::Min(500,$signature.Length)))"
         [NsisGui]::Click($next.Handle)
         $lastSignature = $signature

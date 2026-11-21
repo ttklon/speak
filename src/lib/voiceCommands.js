@@ -277,6 +277,7 @@ export function applyVoiceCommands(text, { language = 'ru' } = {}) {
   const tokens = tokenize(source);
   const parts = [];
   let capitalizeNext = false;
+  let matchedCommand = false;
 
   let i = 0;
   while (i < tokens.length) {
@@ -305,6 +306,7 @@ export function applyVoiceCommands(text, { language = 'ru' } = {}) {
     }
 
     if (matched) {
+      matchedCommand = true;
       const end = i + matched.words.length;
       const act = matched.act;
       if (act.kind === 'tail') pushTail(parts, act.value);
@@ -343,6 +345,19 @@ export function applyVoiceCommands(text, { language = 'ru' } = {}) {
       parts.push({ kind: 'word', text: token.raw });
     }
     i += 1;
+  }
+
+  // Без распознанной команды не пересобираем текст посимвольно: это ломает
+  // домены, пути, код и исходные переносы. Обычный текст требует лишь
+  // минимального оформления первой буквы и конечного знака.
+  if (!matchedCommand) {
+    return source.split('\n').map((line) => {
+      let result = line.trim().replace(/[ \t]{2,}/g, ' ');
+      if (!result) return '';
+      result = result.replace(/^[а-яёa-z]/u, (ch) => ch.toUpperCase());
+      if (/[\p{L}\p{N})»\]]$/u.test(result) && !/[.!?…][)»\]]$/.test(result)) result += '.';
+      return result;
+    }).join('\n').trim();
   }
 
   const lines = render(parts)

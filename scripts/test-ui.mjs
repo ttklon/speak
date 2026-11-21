@@ -1525,7 +1525,6 @@ async function scenarioFloatingHud(browser) {
 // Постобработка — не тумблер с 1.6.0: правила чистят текст всегда, а профиль
 // со старым значением `aiProcessing: false` приложение исправляет само.
 async function scenarioCleanupToggle(browser) {
-  const messy = 'э-э  ну , привет   как дела';
   const run = async (aiProcessing) => {
     const page = await openPage(browser, '#/home', {
       settings: { aiProcessing },
@@ -1550,8 +1549,8 @@ async function scenarioCleanupToggle(browser) {
   const off = await run(false);
   record(
     'сценарии',
-    'постобработка: чистка убирает паразитов и ставит точку',
-    on.stored !== messy && /Привет как дела/.test(on.stored) && !/э-э|ну/i.test(on.stored),
+    'постобработка: неоднозначные слова не удаляются',
+    /э-э/i.test(on.stored) && /ну/i.test(on.stored) && /привет как дела/i.test(on.stored),
     on.stored,
   );
   const forced = await page_evaluate_processing(browser);
@@ -1593,7 +1592,7 @@ async function scenarioModelRewrite(browser) {
         native.transcribePcm = async () => ({ ok: true, text: 'ну привет как дела у меня', engine: 'whisper' });
         native.httpPost = async () => {
           if (arg && arg.broken) return { ok: false, status: 0 };
-          return { ok: true, data: { response: 'Привет, как дела у меня?' } };
+          return { ok: true, data: { response: 'Ну, привет как дела у меня.' } };
         };
       },
     });
@@ -1619,19 +1618,19 @@ async function scenarioModelRewrite(browser) {
   record(
     'сценарии',
     'модель: включённая галочка доводит диктовку после правил',
-    on.stored === 'Привет, как дела у меня?',
+    on.stored === 'Ну, привет как дела у меня.',
     on.stored,
   );
   record(
     'сценарии',
     'модель: молчание Ollama не ломает диктовку, но о нём сказано',
-    broken.stored === 'Привет как дела у меня.' && /Модель не ответила/.test(broken.toast || ''),
+    broken.stored === 'Ну привет как дела у меня.' && /Модель не ответила/.test(broken.toast || ''),
     `${broken.stored} · ${(broken.toast || '').slice(0, 40)}`,
   );
   record(
     'сценарии',
     'модель: выключенная галочка не ходит в сеть',
-    off.stored === 'Привет как дела у меня.' && !off.calls.includes('http:post'),
+    off.stored === 'Ну привет как дела у меня.' && !off.calls.includes('http:post'),
     `${off.stored} · ${off.calls.slice(-2).join(',')}`,
   );
   const errors = [...on.errors, ...off.errors, ...broken.errors];
@@ -1643,6 +1642,9 @@ async function scenarioModelRewrite(browser) {
 async function scenarioDictationIntegrity(browser) {
   const cases = [
     { raw: 'Алло, алло, приветики.', response: 'Алло, алло, приветики.', expected: 'Алло, алло, приветики.' },
+    { raw: 'Это значит верно.', response: 'Это значит верно.', expected: 'Это значит верно.' },
+    { raw: 'Цена 1,5 рубля.', response: 'Цена 1.5 рубля.', expected: 'Цена 1,5 рубля.' },
+    { raw: 'Сайт example.com открыт.', response: 'Сайт example. com открыт.', expected: 'Сайт example.com открыт.' },
     {
       raw: 'Здорово, братан! Суперкрутой AI, SaaS, B2B проект для 100% 100% заработка.',
       response: 'Здорово, братан! Суперкрутой AI, SaaS, не B2B проект для 100% 100% заработка.',
@@ -1664,7 +1666,7 @@ async function scenarioDictationIntegrity(browser) {
       await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length > 0, { timeout: 10000 });
       const text = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
       const errors = takeErrors(page);
-      record('сценарии', 'диктовка сохраняет повторы и не добавляет отрицание', text === sample.expected && errors.length === 0, text || errors[0] || '');
+      record('сценарии', 'диктовка сохраняет слова, повторы и значимые знаки', text === sample.expected && errors.length === 0, text || errors[0] || '');
     } finally { await page.close(); }
   }
 }
@@ -1689,13 +1691,13 @@ async function scenarioLatePolish(browser) {
     await sleep(2400);
     await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
     await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /кошек/i.test(r.rawText || r.text)), { timeout: 10000 });
-    await page.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Первая запись про рыбу!' } }));
+    await page.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Первая запись, про рыбу.' } }));
     await sleep(500);
     const rows = await page.evaluate(() => window.__e2e.read('zs.dictations') || []);
     const first = rows.find((r) => /рыбу/i.test(r.rawText || r.text));
     const second = rows.find((r) => /кошек/i.test(r.rawText || r.text));
     record('сценарии', 'поздняя полировка относится к исходной диктовке',
-      /рыбу/.test(first?.text || '') && /кошек/.test(second?.text || '') && /!/.test(first?.text || ''),
+      /рыбу/.test(first?.text || '') && /кошек/.test(second?.text || '') && /запись,/.test(first?.text || ''),
       rows.slice(0, 2).map((r) => r.text).join(' | '));
     const errors = takeErrors(page);
     record('сценарии', 'поздняя полировка без ошибок консоли', errors.length === 0, errors[0] || '');
@@ -1817,7 +1819,7 @@ async function scenarioInsertFailed(browser) {
     'вставка не удалась: текст в истории и честный тост «нажмите Ctrl+V»',
     // main отвечает объектом с причиной; интерфейс обязан её показать, а не
     // молчать — молчание и было жалобой «ничего не работает».
-    /нажмите Ctrl\+V/i.test(state.toast) && state.stored === 'Привет как дела.',
+    /нажмите Ctrl\+V/i.test(state.toast) && state.stored === 'Ну привет как дела.',
     `${state.stored} · ${state.toast.slice(0, 80)}`,
   );
 

@@ -151,6 +151,13 @@ describe('язык и границы', () => {
     expect(ru('Привет, как дела? Хорошо!')).toBe('Привет, как дела? Хорошо!');
   });
 
+  it('без команд не разрывает адреса, пути, код и исходные переносы', () => {
+    expect(ru('Сайт example.com открыт.')).toBe('Сайт example.com открыт.');
+    expect(ru('JSON.parse(value)')).toBe('JSON.parse(value).');
+    expect(ru('путь /home/user\n\nследующая строка')).toBe('Путь /home/user.\n\nСледующая строка.');
+    expect(ru('Цена 1,5 рубля.')).toBe('Цена 1,5 рубля.');
+  });
+
   it('пустой текст и пробелы', () => {
     expect(ru('')).toBe('');
     expect(ru('   ')).toBe('');

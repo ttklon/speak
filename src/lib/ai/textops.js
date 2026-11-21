@@ -288,17 +288,26 @@ export const OPS = {
 };
 
 /**
- * Чистка многострочного текста.
- *
- * OPS.clean рассчитан на одну фразу: он схлопывает двойные пробелы и добавит
- * точку в конце. Если человек сказал «с новой строки», переносы — часть
- * текста, поэтому каждую строку чистим отдельно, а переносы сохраняем.
+ * Чистка обычной диктовки, не инструкции на переписывание. OPS.clean умеет
+ * удалять «значит», повторы и другие потенциально значимые слова. Без аудио
+ * нельзя надёжно определить, была ли это запинка, поэтому принимаем её итог
+ * только если исходная строка сохранилась (кроме регистра, пробелов и новой
+ * конечной точки). Иначе оставляем строку целиком. Явные AI-инструкции по
+ * сокращению и прочим преобразованиям по-прежнему используют OPS напрямую.
  */
 export function cleanLines(text) {
+  const comparable = (line) => line.trim().replace(/[ \t]+/g, ' ').toLowerCase();
   const lines = String(text || '')
     .split('\n')
-    .map((line) => (line.trim() ? OPS.clean(line) : ''));
-  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    .map((line) => {
+      const source = line.trim();
+      if (!source) return '';
+      const candidate = OPS.clean(source);
+      const before = comparable(source);
+      const after = comparable(candidate);
+      return after === before || after === `${before}.` ? candidate : source;
+    });
+  return lines.join('\n').trim();
 }
 
 /**
@@ -349,6 +358,34 @@ export function saneRewrite(source, out) {
   const before = tokens(a);
   const after = tokens(b);
   if (before.length !== after.length || before.some((token, i) => token !== after[i])) return null;
+
+  // Слова сами по себе не сохраняют смысл: «1,5» и «1.5», адреса,
+  // математические знаки и уже сказанная пунктуация тоже имеют значение.
+  // Сверяем знаки между одинаковыми словами на своих местах; новые обычные
+  // знаки допускаем только там, где их не было, но не между двумя числами.
+  const parts = (text) => {
+    const matches = [...text.matchAll(/[\p{L}\p{N}]+/gu)];
+    const gaps = [];
+    let end = 0;
+    for (const match of matches) {
+      gaps.push(text.slice(end, match.index));
+      end = match.index + match[0].length;
+    }
+    gaps.push(text.slice(end));
+    return { words: matches.map((match) => match[0]), gaps };
+  };
+  const original = parts(a);
+  const proposed = parts(b);
+  if (original.words.length !== proposed.words.length) return null;
+  for (let i = 0; i < original.gaps.length; i += 1) {
+    const oldGap = original.gaps[i];
+    const newGap = proposed.gaps[i];
+    const oldMarks = oldGap.replace(/\s/gu, '');
+    const newMarks = newGap.replace(/\s/gu, '');
+    if (oldMarks && (oldMarks !== newMarks || (!/\s/u.test(oldGap) && /\s/u.test(newGap)))) return null;
+    if (!oldMarks && newMarks && !/^[,.;:!?…]+$/u.test(newMarks)) return null;
+    if (i > 0 && i < original.words.length && /^\d+$/u.test(original.words[i - 1]) && /^\d+$/u.test(original.words[i]) && oldMarks !== newMarks) return null;
+  }
   return b;
 }
 
