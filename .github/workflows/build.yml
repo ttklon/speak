@@ -265,7 +265,7 @@ jobs:
       github.event_name != 'push'
       || !startsWith(github.ref, 'refs/heads/arena/')
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
@@ -606,6 +606,38 @@ jobs:
             echo "::warning title=NSIS lifecycle::$message"
           else
             echo "::notice title=NSIS lifecycle::$message"
+          fi
+
+      - name: Windows GUI и обновление опубликованной версии
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZS_INPUT_INTERACTIVE: "1"
+        run: |
+          set -euo pipefail
+          setup="release/ZSpeakly-Setup-$(node -p "require('./package.json').version").exe"
+          if [ ! -f "$setup" ]; then
+            echo '::warning title=Previous upgrade::SKIP: NSIS не собран, проверка GUI и обновления не выполнена'
+            exit 0
+          fi
+          root="$(cygpath -u "$RUNNER_TEMP")/zs-onnx-win"
+          export ZS_USER_DATA="$(cygpath -m "$root")"
+          export ZS_DICTATION_WAV="$(cygpath -m "$root/ru.wav")"
+          mkdir -p "$root/previous"
+          gh release download v1.38.0 --repo ttklon/speak --pattern 'ZSpeakly-Setup-1.38.0.exe' --dir "$root/previous"
+          echo '4595bdecd37e412d7db0d0b001fa27cce03f7f2ec3bd10a1d8a7f92107252a11  '"$root/previous/ZSpeakly-Setup-1.38.0.exe" | sha256sum -c
+          export ZS_PREVIOUS_INSTALLER="$(cygpath -m "$root/previous/ZSpeakly-Setup-1.38.0.exe")"
+          set +e
+          node scripts/test-previous-upgrade.cjs > previous-upgrade.log 2>&1
+          code=$?
+          cat previous-upgrade.log
+          message=$(tail -c 5000 previous-upgrade.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Previous upgrade::$message"; exit "$code"; fi
+          if grep -q 'SKIP:' previous-upgrade.log; then
+            echo "::warning title=Previous upgrade::$message"
+          else
+            echo "::notice title=Previous upgrade::$message"
           fi
 
       - name: Verify artifacts
