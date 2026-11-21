@@ -295,6 +295,9 @@ jobs:
       - name: Загрузка и отмена моделей на Windows
         run: npx vitest run src/lib/modelDownload.test.js src/lib/whisperDownload.test.js src/lib/engineDownload.test.js src/lib/modelImport.test.js src/lib/modelDiscovery.test.js src/lib/whisperRuntime.test.js src/lib/whisperRuntimeHttp.test.js
 
+      - name: Размер Win32 INPUT у всех реализаций SendInput
+        run: node scripts/test-wininput-layout.cjs
+
       - name: Помощник ввода (C# → exe) собирается и отвечает
         shell: bash
         # Вставка текста в чужие окна держится на этом помощнике. Собрать его
