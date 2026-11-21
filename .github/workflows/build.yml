@@ -631,6 +631,12 @@ jobs:
           message=$(tail -c 5000 whisper-quality.log | tr '\r\n' '  ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Human speech Whisper::$message"; exit "$code"; fi
           echo "::notice title=Human speech Whisper::$message"
+          node scripts/test-whisper-context.mjs "$(cygpath -m "$root/human")" > whisper-context.log 2>&1
+          code=$?
+          cat whisper-context.log
+          message=$(tail -c 5000 whisper-context.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Whisper context and VAD::$message"; exit "$code"; fi
+          echo "::notice title=Whisper context and VAD::$message"
           node scripts/test-wininput-window.cjs > electron-input.log 2>&1
           code=$?
           cat electron-input.log
