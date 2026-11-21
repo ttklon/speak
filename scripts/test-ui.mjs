@@ -148,8 +148,10 @@ async function openPage(browser, route = '#/home', opts = {}) {
       return;
     }
     if (msg.type() !== 'error') return;
-    const text = `${msg.text()}`.slice(0, 400);
-    if (/favicon/i.test(text)) return;
+    // Chromium часто пишет только «Failed to load resource: 404»; URL в
+    // location позволяет отличить отсутствующую иконку от поломанного кода.
+    const location = msg.location();
+    const text = `${msg.text()}${location?.url ? ` (${location.url})` : ''}`.slice(0, 500);
     errors.push(text);
   });
   page.on('pageerror', (err) => errors.push(`pageerror: ${String(err && err.message)}`.slice(0, 400)));
