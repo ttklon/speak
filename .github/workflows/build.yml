@@ -544,13 +544,28 @@ jobs:
             exit 0
           }
 
-      - name: Electron IPC вставляет текст в отдельное окно Windows
+      - name: Electron диктует через виртуальный микрофон в окно Windows
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           ZS_INPUT_INTERACTIVE: "1"
           ZS_TEST_ELECTRON: "1"
+          ZS_TEST_WINDOWS_DICTATION: "1"
         run: |
+          set -euo pipefail
+          root="$(cygpath -u "$RUNNER_TEMP")/zs-onnx-win"
+          mkdir -p "$root"
+          export ZS_USER_DATA="$(cygpath -m "$root")"
+          export ZS_DICTATION_WAV="$(cygpath -m "$root/ru.wav")"
+          gh api repos/vyorkin/voxtype-gigaam/git/blobs/c17c52d883f4d83163123ba7a4e1582ad2e212f4 -H 'Accept: application/vnd.github.raw+json' > "$root/ru.wav"
+          echo '758d148b29204e6f956a62f6cf608b848c9c60fbaa10cc9251a4f76e3db7e1d8  '"$root/ru.wav" | sha256sum -c
           set +e
+          node scripts/test-onnx-live.mjs gigaam "$ZS_DICTATION_WAV" --download > windows-onnx.log 2>&1
+          code=$?
+          cat windows-onnx.log
+          message=$(tail -c 2500 windows-onnx.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows GigaAM::$message"; exit "$code"; fi
+          echo "::notice title=Windows GigaAM::$message"
           node scripts/test-wininput-window.cjs > electron-input.log 2>&1
           code=$?
           cat electron-input.log

@@ -97,24 +97,42 @@ async function main() {
       console.log(`${label}: Ctrl+V доставлен в отдельное WinForms-окно`);
     }
     if (process.env.ZS_TEST_ELECTRON === '1') {
+      const dictation = process.env.ZS_TEST_WINDOWS_DICTATION === '1';
       const executable = require('electron');
       assert.ok(fs.existsSync(executable), 'нет Electron для проверки IPC');
       assert.ok(fs.existsSync('dist/index.html'), 'сначала соберите интерфейс');
       const profile = path.join(dir, 'profile');
       fs.mkdirSync(profile);
-      const settings = { onboarded: true, speedFix151: true, micPreroll: false,
+      const settings = { onboarded: true, speedFix151: true, language: 'ru', micPreroll: false,
+        liveWhisper: false, aiDictationRewrite: false,
         keepModelLoaded: false, clipboardMonitor: false, checkUpdates: false,
         soundFeedback: false, closeToTray: false, autoOptimize: false };
       fs.writeFileSync(path.join(profile, 'profile.json'), JSON.stringify({
         'zs.settings': settings, 'zs:settings': settings,
       }));
       const { default: puppeteer } = await import('puppeteer-core');
-      let browser;
+      let browser, padded;
       try {
+        const args = [path.resolve('scripts/e2e/electron-entry.cjs')];
+        if (dictation) {
+          assert.ok(process.env.ZS_USER_DATA && process.env.ZS_DICTATION_WAV, 'не заданы модель и WAV');
+          const modelRoot = path.resolve(process.env.ZS_USER_DATA, 'models');
+          assert.ok(fs.existsSync(path.join(modelRoot, 'gigaam')), 'нет модели GigaAM');
+          // Junction не требует прав разработчика Windows. Данные лежат вне профиля.
+          fs.symlinkSync(modelRoot, path.join(profile, 'models'), 'junction');
+          const { readWav } = await import('./lib/engine-cli.mjs');
+          const { createPaddedWav } = await import('./lib/virtual-mic-wav.mjs');
+          const wav = readWav(process.env.ZS_DICTATION_WAV);
+          assert.equal(wav.sampleRate, 16000);
+          assert.ok(wav.pcm.length >= 32000 && wav.pcm.length <= 15 * 32000);
+          padded = createPaddedWav(wav.pcm, wav.sampleRate);
+          args.push('--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+            `--use-file-for-fake-audio-capture=${padded.file}%noloop`);
+        }
         browser = await puppeteer.launch({
           executablePath: executable, headless: false, ignoreDefaultArgs: true,
           env: { ...process.env, ZS_E2E_PROFILE: profile, ZSPEAKLY_DEV_URL: 'none' },
-          args: [path.resolve('scripts/e2e/electron-entry.cjs')], timeout: 60000,
+          args, timeout: 60000,
         });
         const pageTarget = await browser.waitForTarget((t) => t.type() === 'page' && t.url().includes('index.html'), { timeout: 30000 });
         const page = await pageTarget.page();
@@ -138,8 +156,45 @@ async function main() {
           assert.equal(after.text, previous, `Electron ${mode}: прежний буфер не сохранён`);
           console.log(`Electron IPC ${mode}: текст получен окном, прежний буфер сохранён (метод ${result.method})`);
         }
+        if (dictation) {
+          const status = await page.evaluate(() => window.zspeakly.native.modelsStatus());
+          assert.equal(status.russian.available, true, `GigaAM недоступна: ${status.russian.reason}`);
+          const previous = 'Сохранённый системный буфер';
+          await command('clear');
+          await command('clipboard', previous);
+          await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Начать диктовку/.test(b.innerText)), { timeout: 15000 });
+          await page.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'clipboard' });
+            [...document.querySelectorAll('button')].find((b) => /Начать диктовку/.test(b.innerText)).click();
+          });
+          await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Слушаю/.test(b.innerText)), { timeout: 15000 });
+          assert.equal(await active(), true, 'во время записи тестовое окно не получило фокус');
+          await sleep(Math.ceil(padded.seconds * 1000) + 700);
+          assert.equal((await command('state')).foreground, true, 'до остановки записи фокус потерян');
+          await page.evaluate(() => {
+            const stop = [...document.querySelectorAll('button')].find((b) => /Слушаю/.test(b.innerText));
+            if (!stop) throw new Error('не найдена кнопка остановки');
+            stop.click();
+          });
+          await page.waitForFunction(() => {
+            const list = window.zspeakly.store.getSync('zs.dictations');
+            return Array.isArray(list) && list.length > 0;
+          }, { timeout: 90000 });
+          const entry = (await page.evaluate(() => window.zspeakly.store.get('zs.dictations')))[0];
+          assert.equal(entry.sttMode, 'gigaam', JSON.stringify(entry));
+          assert.match(entry.text, /привет/iu);
+          assert.match(entry.text, /распознаван/iu);
+          await assertText(entry.text, 'диктовка GigaAM в окно Windows');
+          const inputStatus = await page.evaluate(() => window.zspeakly.native.inputStatus());
+          assert.equal(inputStatus.last.ok, true, JSON.stringify(inputStatus.last));
+          await sleep(1200);
+          assert.equal((await command('readClipboard')).text, previous, 'буфер не восстановлен после диктовки');
+          console.log(`Виртуальная диктовка Windows + Electron IPC + GigaAM → WinForms: ${entry.text}; метод ${inputStatus.last.method}, буфер сохранён.`);
+        }
       } finally {
         if (browser) await browser.close();
+        padded?.cleanup();
       }
     }
   } finally {

@@ -26,6 +26,9 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('scripts/test-wininput-window.cjs');
     expect(job).toContain('ZS_INPUT_INTERACTIVE: "1"');
     expect(job).toContain('ZS_TEST_ELECTRON: "1"');
+    expect(job).toContain('ZS_TEST_WINDOWS_DICTATION: "1"');
+    expect(job).toContain('scripts/test-onnx-live.mjs gigaam "$ZS_DICTATION_WAV" --download');
+    expect(job).toContain('::error title=Windows GigaAM');
     expect(job).toContain('::warning title=Windows input window');
     expect(job).toContain('::warning title=Windows Electron input');
     expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
