@@ -609,7 +609,9 @@ jobs:
           fi
 
       - name: Windows GUI и обновление опубликованной версии
-        if: github.event_name == 'pull_request'
+        # Даже если предыдущая проверка установщика упала, собираем отдельную
+        # диагностику GUI; исходная ошибка при этом не скрывается.
+        if: always() && github.event_name == 'pull_request'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
