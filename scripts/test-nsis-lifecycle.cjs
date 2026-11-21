@@ -22,9 +22,9 @@ if (!fs.existsSync(installer)) {
 const dataDir = path.join(process.env.APPDATA, 'ZSpeakly');
 assert.ok(!fs.existsSync(dataDir), `отказ: существует профиль ${dataDir}, его нельзя менять`);
 const root = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'zs-nsis-'));
-const installDir = path.join(root, 'installed app'); // намеренно проверяем путь с пробелом
-const exe = path.join(installDir, 'ZSpeakly.exe');
-const uninstall = path.join(installDir, 'Uninstall ZSpeakly.exe');
+let installDir = path.join(root, 'installed app'); // намеренно проверяем путь с пробелом
+let exe = path.join(installDir, 'ZSpeakly.exe');
+let uninstall = path.join(installDir, 'Uninstall ZSpeakly.exe');
 const profile = path.join(dataDir, 'profile.json');
 const marker = JSON.stringify({ 'zs.settings': { onboarded: true }, 'zs.dictations': [{ id: 'ci-sentinel', text: 'история должна сохраниться' }] });
 let installAttempted = false;
@@ -77,9 +77,16 @@ try {
     env: { ZS_TEST_ELECTRON: '1', ZS_TEST_PACKAGED: '1', ZS_TEST_WINDOWS_DICTATION: '1', ZS_TEST_PACKAGED_EXE: exe },
   });
   // Node сам заключает /D= с пробелом в кавычки — так делает и автообновление.
-  // Повтор той же версии проверяет цитированный путь и обновление поверх установки.
-  run(installer, ['/S', `/D=${installDir}`], { label: 'повторная установка с кавычками' });
-  assert.ok(fs.existsSync(exe), 'после повторной установки нет приложения');
+  // Другой путь доказывает, что EXE действительно создан заново, а не остался
+  // от первой установки, если цитированный аргумент был разобран неверно.
+  const oldExe = exe;
+  const nextDir = path.join(root, 'updated app');
+  run(installer, ['/S', `/D=${nextDir}`], { label: 'повторная установка с кавычками' });
+  installDir = nextDir;
+  exe = path.join(installDir, 'ZSpeakly.exe');
+  uninstall = path.join(installDir, 'Uninstall ZSpeakly.exe');
+  assert.ok(fs.existsSync(exe), 'после повторной установки нет приложения в новом каталоге');
+  assert.ok(!fs.existsSync(oldExe), 'старая установка не удалена при смене каталога');
   verifyProfile('повторная установка');
   removeInstallation();
   verifyProfile('удаление');
