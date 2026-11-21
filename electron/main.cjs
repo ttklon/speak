@@ -269,7 +269,9 @@ function createWindow() {
   });
 
   mainWindow.on('close', (e) => {
-    rememberWindowBounds(mainWindow, 0);
+    // При полноценном выходе размеры уже сохранены до проверки записи;
+    // иначе после неё появилась бы новая отложенная запись.
+    if (!app.isQuitting) rememberWindowBounds(mainWindow, 0);
     const closeToTray = store?.get('zs:settings')?.closeToTray !== false;
     if (closeToTray && !app.isQuitting) {
       e.preventDefault();
@@ -1188,24 +1190,6 @@ function stopClipboardWatch() {
 
 // ── IPC ────────────────────────────────────────────────────────────────────
 function registerIpc() {
-  // whisper-server держит модель в памяти — при выходе его нужно закрыть,
-  // иначе процесс останется висеть после закрытия приложения
-  if (!registerIpc._serverHooked) {
-    registerIpc._serverHooked = true;
-    app.on('before-quit', () => {
-      try {
-        hudWindow?.destroy?.();
-        hudWindow = null;
-      } catch {
-        /* ignore */
-      }
-      try {
-        require('./whisper.cjs').stopServer();
-      } catch {
-        /* ignore */
-      }
-    });
-  }
   // Асинхронное чтение: preload.store.get() ходит через invoke, а не sendSync.
   // Без этого обработчика вызов молча зависал.
   ipcMain.handle('store:get', (_e, key) => store.get(key) ?? null);
@@ -3225,16 +3209,61 @@ function restoreWindowAfterInsert() {
 
 
 // ── Жизненный цикл ─────────────────────────────────────────────────────────
-app.on('before-quit', () => {
-  app.isQuitting = true;
-  store?.flush?.();
-  // Помощник ввода — отдельный процесс: закрываем его вместе с приложением,
-  // иначе он останется висеть у человека в диспетчере задач.
-  try {
-    inputHost.stop();
-  } catch {
-    /* ignore */
+let quitDialogOpen = false;
+let allowQuitWithoutSaving = false;
+
+// Вызывается до закрытия окон и ещё раз непосредственно перед выходом:
+// между этими событиями main может получить дополнительные изменения.
+function confirmUnsavedQuit(event) {
+  if (quitDialogOpen) {
+    event.preventDefault();
+    return false;
   }
+  if (!store || store.flush()) return true;
+
+  let choice = 0; // закрытие диалога или ошибка — безопасный вариант
+  quitDialogOpen = true;
+  try {
+    choice = dialog.showMessageBoxSync({
+      type: 'warning',
+      title: 'Данные не сохранены',
+      message: 'Не удалось сохранить данные профиля.',
+      detail: 'Изменения могут быть потеряны при выходе. Останьтесь в приложении, чтобы сохранить важный текст отдельно и проверить доступ к диску.',
+      buttons: ['Остаться', 'Выйти без сохранения'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+  } catch (err) {
+    console.error('[store] не удалось показать предупреждение при выходе', err);
+  } finally {
+    quitDialogOpen = false;
+  }
+  if (choice === 1) {
+    allowQuitWithoutSaving = true;
+    return true;
+  }
+  event.preventDefault();
+  app.isQuitting = false;
+  try {
+    if (!mainWindow) createWindow();
+    mainWindow?.show();
+    mainWindow?.focus();
+  } catch (err) {
+    console.error('[store] не удалось открыть окно после отмены выхода', err);
+  }
+  return false;
+}
+
+app.on('before-quit', (event) => {
+  if (quitDialogOpen) {
+    event.preventDefault();
+    return;
+  }
+  allowQuitWithoutSaving = false;
+  // Размер окна записываем до flush, а не в close после него.
+  rememberWindowBounds(mainWindow, 0);
+  if (confirmUnsavedQuit(event)) app.isQuitting = true;
 });
 
 app.whenReady().then(() => {
@@ -3413,7 +3442,15 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('will-quit', () => {
+app.on('will-quit', (event) => {
+  if (!allowQuitWithoutSaving && !confirmUnsavedQuit(event)) return;
+  // Освобождаем ресурсы только когда выход не отменён.
+  try {
+    hudWindow?.destroy?.();
+    hudWindow = null;
+  } catch { /* окно уже закрыто */ }
+  try { whisper.stopServer(); } catch { /* процесс уже закрыт */ }
+  try { inputHost.stop(); } catch { /* процесс уже закрыт */ }
   globalShortcut.unregisterAll();
   stopClipboardWatch();
 });

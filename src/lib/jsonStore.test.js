@@ -51,6 +51,21 @@ describe('профиль Electron: сбой записи', () => {
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ history: ['новое'] });
   });
 
+  it('не перезаписывает профиль при повторном flush без изменений', () => {
+    const file = path.join(dir, 'profile.json');
+    const raw = '{"history":["важное"]}';
+    fs.writeFileSync(file, raw);
+    const store = new JsonStore();
+    const rename = vi.spyOn(fs, 'renameSync');
+    expect(store.flush()).toBe(true);
+    expect(rename).not.toHaveBeenCalled();
+    store.set('history', ['новое']);
+    expect(store.flush()).toBe(true);
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(store.flush()).toBe(true);
+    expect(rename).toHaveBeenCalledTimes(1);
+  });
+
   it('не скрывает ошибку записи temp и не передаёт исключение или путь в событие', () => {
     const notify = vi.fn();
     const store = new JsonStore('profile.json', { onError: notify });
@@ -81,6 +96,8 @@ describe('профиль Electron: сбой записи', () => {
     fs.writeFileSync(file, raw);
     const notify = vi.fn();
     const store = new JsonStore('profile.json', { onError: notify });
+    expect(store.status()).toEqual({ ok: false, code: 'PROFILE_UNREADABLE' });
+    expect(store.flush()).toBe(true); // нет новых изменений, но защита и предупреждение остаются
     expect(store.status()).toEqual({ ok: false, code: 'PROFILE_UNREADABLE' });
     const backup = fs.readdirSync(dir).find((f) => f.startsWith('profile.json.broken-'));
     expect(backup).toBeTruthy();

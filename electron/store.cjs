@@ -13,6 +13,7 @@ class JsonStore {
     this.file = path.join(this.dir, fileName);
     this.cache = {};
     this.timer = null;
+    this.dirty = false;
     this.lastWriteError = null;
     this.writeProtectionCode = null;
     this.onError = typeof onError === 'function' ? onError : null;
@@ -71,12 +72,14 @@ class JsonStore {
 
   set(key, value) {
     this.cache[key] = value;
+    this.dirty = true;
     this.scheduleFlush();
     return true;
   }
 
   remove(key) {
     delete this.cache[key];
+    this.dirty = true;
     this.scheduleFlush();
     return true;
   }
@@ -94,6 +97,7 @@ class JsonStore {
   flush() {
     clearTimeout(this.timer);
     this.timer = null;
+    if (!this.dirty) return true;
     if (this.writeProtectionCode) {
       this.reportError(this.writeProtectionCode);
       return false;
@@ -102,6 +106,7 @@ class JsonStore {
       const tmp = `${this.file}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(this.cache), 'utf8');
       fs.renameSync(tmp, this.file);
+      this.dirty = false;
       this.lastWriteError = null;
       return true;
     } catch (err) {

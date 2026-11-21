@@ -292,6 +292,8 @@ jobs:
         run: env -u ELECTRON_SKIP_BINARY_DOWNLOAD node node_modules/electron/install.js
       - name: Build renderer for Electron end-to-end test
         run: npm run build
+      - name: Electron quit with simulated storage failure
+        run: xvfb-run -a node scripts/test-electron-quit.cjs
       - name: Electron virtual microphone and real ONNX
         shell: bash
         env:
@@ -598,6 +600,10 @@ jobs:
             Write-Host "::notice title=package::собран ZIP: $zip"
             exit 0
           }
+
+      - name: Выход Electron при имитации сбоя записи
+        if: github.event_name == 'pull_request'
+        run: node scripts/test-electron-quit.cjs
 
       - name: Проверить ONNX Runtime в собранном приложении
         shell: bash

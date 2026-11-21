@@ -17,6 +17,9 @@ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-smoke-'));
 
 const handlers = new Map();
 const onHandlers = new Map();
+const appListeners = new Map();
+const quitDialogs = [];
+let quitDialogChoice = 0;
 const registered = [];
 const sentEvents = [];
 const sentInputEvents = [];
@@ -115,7 +118,10 @@ const electronStub = {
   app: {
     isPackaged: false,
     requestSingleInstanceLock: () => true,
-    on: () => {},
+    on: (event, fn) => {
+      if (!appListeners.has(event)) appListeners.set(event, []);
+      appListeners.get(event).push(fn);
+    },
     whenReady: () => Promise.resolve(),
     quit: () => {},
     getVersion: () => '1.5.0',
@@ -195,7 +201,14 @@ const electronStub = {
     availableFormats: () => ['text/plain'],
   },
   shell: { openExternal: () => {}, openPath: () => {} },
-  dialog: { showErrorBox: () => {} },
+  dialog: {
+    showErrorBox: () => {},
+    showMessageBoxSync: (options) => {
+      quitDialogs.push(options);
+      if (quitDialogChoice === 'throw') throw new Error('dialog unavailable');
+      return quitDialogChoice;
+    },
+  },
   screen: {
     getPrimaryDisplay: () => ({
       size: { width: 1920, height: 1080 },
@@ -431,6 +444,65 @@ await check('профиль: ошибка диска доходит до окн�
     if (recovered.returnValue?.ok !== true) throw new Error(`не восстановилось: ${JSON.stringify(recovered)}`);
   } finally {
     fs.renameSync = originalRename;
+  }
+});
+await check('выход: ошибка записи позволяет остаться, восстановиться или выйти без сохранения', async () => {
+  const profile = path.join(userData, 'profile.json');
+  const rename = fs.renameSync;
+  const emitApp = (name) => {
+    const event = { prevented: false, preventDefault() { this.prevented = true; } };
+    for (const fn of appListeners.get(name) || []) fn(event);
+    return event;
+  };
+  try {
+    await handlers.get('store:set')({}, 'zs:quit-test', 'QUIT_PRIVATE_SENTINEL');
+    fs.renameSync = (from, to) => {
+      if (to === profile) throw Object.assign(new Error('личный путь'), { code: 'ENOSPC' });
+      return rename(from, to);
+    };
+    quitDialogChoice = 0;
+    const before = quitDialogs.length;
+    electronStub.app.isQuitting = true; // выход из трея ставит флаг заранее
+    const stayed = emitApp('before-quit');
+    if (!stayed.prevented || electronStub.app.isQuitting) throw new Error('выход не отменён');
+    if (!findMainWindow()?.isVisible()) throw new Error('окно не показано');
+    const options = quitDialogs[before];
+    if (!options || options.defaultId !== 0 || options.cancelId !== 0 || options.buttons?.length !== 2) throw new Error('нет безопасного выбора');
+    if (JSON.stringify(options).includes('личный путь') || JSON.stringify(options).includes('QUIT_PRIVATE_SENTINEL')) throw new Error('утечка в диалог');
+    if (await handlers.get('store:get')({}, 'zs:quit-test') !== 'QUIT_PRIVATE_SENTINEL') throw new Error('изменение пропало из кэша');
+
+    quitDialogChoice = 'throw';
+    if (!emitApp('before-quit').prevented || electronStub.app.isQuitting) throw new Error('ошибка диалога не отменяет выход');
+    quitDialogChoice = 1;
+    if (emitApp('before-quit').prevented || !electronStub.app.isQuitting) throw new Error('явный выход без сохранения не разрешён');
+
+    fs.renameSync = rename;
+    quitDialogChoice = 0;
+    const win = findMainWindow();
+    win._bounds = { x: 10, y: 20, width: 800, height: 600 };
+    if (emitApp('before-quit').prevented) throw new Error('после восстановления выход заблокирован');
+    const saved = JSON.parse(fs.readFileSync(profile, 'utf8'));
+    if (saved['zs:quit-test'] !== 'QUIT_PRIVATE_SENTINEL') throw new Error('повторная запись не сохранилась');
+    if (saved['ui:windowBounds']?.x !== 10) throw new Error('размеры окна не сохранены до flush');
+    const afterSuccess = quitDialogs.length;
+    win._bounds = { x: 100, y: 200, width: 800, height: 600 };
+    win.emit('close', { preventDefault() {} });
+    if ((await handlers.get('store:get')({}, 'ui:windowBounds'))?.x !== 10) throw new Error('close создал новую отложенную запись');
+    if (quitDialogs.length !== afterSuccess) throw new Error('неожиданный диалог при закрытии');
+
+    // Изменение, пришедшее между before-quit и will-quit, тоже проверяется.
+    await handlers.get('store:set')({}, 'zs:late-quit', 'не терять');
+    fs.renameSync = (from, to) => {
+      if (to === profile) throw Object.assign(new Error('нет места'), { code: 'ENOSPC' });
+      return rename(from, to);
+    };
+    if (!emitApp('will-quit').prevented || electronStub.app.isQuitting) throw new Error('поздний сбой не отменил выход');
+  } finally {
+    fs.renameSync = rename;
+    electronStub.app.isQuitting = false;
+    quitDialogChoice = 0;
+    await handlers.get('store:remove')({}, 'zs:quit-test');
+    await handlers.get('store:remove')({}, 'zs:late-quit');
   }
 });
 await check('hotkey:set регистрирует глобальные сочетания', () => {
@@ -3260,6 +3332,36 @@ await check('движок выбирается по языку: русский, 
   }
   const why = chooseEngine({ language: 'en', parakeet: { available: false, reason: 'нет модуля расчёта', languages: parakeet.LANGUAGES } });
   if (!why.why.includes('нет модуля')) throw new Error('причина отказа потерялась');
+});
+
+await check('поздний сбой при выходе восстанавливает окно, если оно уже закрыто', async () => {
+  const profile = path.join(userData, 'profile.json');
+  const rename = fs.renameSync;
+  const event = () => ({ prevented: false, preventDefault() { this.prevented = true; } });
+  const emit = (name) => {
+    const e = event();
+    for (const fn of appListeners.get(name) || []) fn(e);
+    return e;
+  };
+  try {
+    const before = emit('before-quit');
+    if (before.prevented) throw new Error('обычный выход остановлен');
+    await handlers.get('store:set')({}, 'zs:late-reopen', 'ещё в памяти');
+    const count = windowInstances.length;
+    findMainWindow().emit('closed');
+    fs.renameSync = (from, to) => {
+      if (to === profile) throw Object.assign(new Error('нет места'), { code: 'ENOSPC' });
+      return rename(from, to);
+    };
+    quitDialogChoice = 0;
+    if (!emit('will-quit').prevented) throw new Error('выход не отменён');
+    if (windowInstances.length !== count + 1 || !windowInstances.at(-1).isVisible()) throw new Error('окно не восстановлено');
+    if (await handlers.get('store:get')({}, 'zs:late-reopen') !== 'ещё в памяти') throw new Error('кэш потерян');
+  } finally {
+    fs.renameSync = rename;
+    electronStub.app.isQuitting = false;
+    await handlers.get('store:remove')({}, 'zs:late-reopen');
+  }
 });
 
 console.log(`\nOK (${ok.length}):`);
