@@ -296,7 +296,15 @@ jobs:
         run: npx vitest run src/lib/modelDownload.test.js src/lib/whisperDownload.test.js src/lib/engineDownload.test.js src/lib/modelImport.test.js src/lib/modelDiscovery.test.js src/lib/whisperRuntime.test.js src/lib/whisperRuntimeHttp.test.js
 
       - name: Размер Win32 INPUT у всех реализаций SendInput
-        run: node scripts/test-wininput-layout.cjs
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-wininput-layout.cjs > layout.log 2>&1
+          code=$?
+          cat layout.log
+          message=$(tail -c 2500 layout.log | tr '\n' ' ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Win32 INPUT layout::$message"; exit "$code"; fi
+          echo "::notice title=Win32 INPUT layout::$message"
 
       - name: Помощник ввода (C# → exe) собирается и отвечает
         shell: bash
