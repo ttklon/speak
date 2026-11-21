@@ -55,6 +55,7 @@
     "appId": "app.zspeakly.desktop",
     "productName": "ZSpeakly",
     "asar": true,
+    "afterPack": "scripts/nsis/patch-builder.cjs",
     "directories": {
       "output": "release",
       "buildResources": "icons"

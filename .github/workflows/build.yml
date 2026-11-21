@@ -636,7 +636,7 @@ jobs:
           cat previous-upgrade.log
           message=$(tail -c 5000 previous-upgrade.log | tr '\r\n' '  ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Previous upgrade::$message"; exit "$code"; fi
-          if grep -q 'SKIP:' previous-upgrade.log; then
+          if grep -Eq 'SKIP:|WARNING:' previous-upgrade.log; then
             echo "::warning title=Previous upgrade::$message"
           else
             echo "::notice title=Previous upgrade::$message"

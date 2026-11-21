@@ -44,6 +44,13 @@ function run(file, args, opts = {}) {
     timeout: opts.timeout || 180000, maxBuffer: 5 * 1024 * 1024, env: { ...process.env, ...opts.env } });
   if (r.stdout) process.stdout.write(r.stdout);
   if (r.stderr) process.stderr.write(r.stderr);
+  // Опубликованная 1.38 может падать на старом дефекте NSIS при запуске.
+  // Повторяем только до появления окна и только для этого кода; не скрываем сбой.
+  if (opts.allowOldStartupCrash && r.status !== 0 &&
+      (r.stderr || '').includes('Installer exited with code -1073741819') &&
+      !(r.stdout || '').includes('Wizard button:') && !fs.existsSync(exe)) {
+    return 'OLD_INSTALLER_STARTUP_CRASH';
+  }
   assert.equal(r.status, 0, `${opts.label || file}: ${r.error?.message || `код ${r.status}; ${r.signal}`}`);
   return r.stdout || '';
 }
@@ -85,10 +92,15 @@ async function checkProfile(version) {
 (async () => {
   let cleaned = false;
   try {
-    const output = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', path.resolve('scripts/e2e/nsis-gui.ps1'), '-Setup', previousInstaller, '-InstallPath', installDir],
-    { timeout: 300000, label: 'графический установщик v1.38.0' });
-    assert.match(output, /GUI completed/);
+    let output;
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      output = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', path.resolve('scripts/e2e/nsis-gui.ps1'), '-Setup', previousInstaller, '-InstallPath', installDir],
+      { timeout: 300000, label: 'графический установщик v1.38.0', allowOldStartupCrash: true });
+      if (output !== 'OLD_INSTALLER_STARTUP_CRASH') break;
+      console.log(`WARNING: опубликованный установщик 1.38.0 упал с 0xC0000005 до открытия окна; попытка ${attempt}/4.`);
+    }
+    assert.match(output, /GUI completed/, 'публикация 1.38.0 не запустилась после четырёх попыток');
     assert.ok(fs.existsSync(exe), `GUI не установил ${exe}`);
     assert.equal(installedVersion(), '1.38.0');
     await checkProfile('1.38.0');
