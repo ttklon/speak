@@ -163,7 +163,7 @@ jobs:
     timeout-minutes: 25
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      ZS_USER_DATA: ${{ runner.temp }}/zs-onnx-live
+      ZS_USER_DATA: /tmp/zs-onnx-live
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
