@@ -233,7 +233,9 @@ export function dropSelfCorrections(text = '') {
       .replace(/\s+([.,;:!?…])/g, '$1');
     fixes += 1;
   }
-  return { text: dropStutter(current.trim()), fixes };
+  // Повтор не обязательно запинка: «алло, алло», «очень очень» и повторённое
+  // число могут быть сказаны намеренно. Без аудио удалить его безопасно нельзя.
+  return { text: current.trim(), fixes };
 }
 
 export default dropSelfCorrections;

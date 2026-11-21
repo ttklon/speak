@@ -550,7 +550,7 @@ export function DictationProvider({ children }) {
           polishPromise
             .then((late) => {
               if (!late || isCancelled()) return;
-              const improved = formatForApp(cleanLines(late), where.style);
+              const improved = formatForApp(late, where.style);
               if (!improved || improved === cleaned) return;
               // Не переписываем ручную правку пользователя, сделанную после вставки.
               if (updateDictation) updateDictation(itemId, { text: improved, words: words(improved) }, { expectedText: cleaned });
@@ -563,7 +563,9 @@ export function DictationProvider({ children }) {
           diag.warn('stt', 'Модель не успела за бюджет — вставлены офлайн-правила', { budget });
         }
         if (better) {
-          cleaned = cleanLines(better);
+          // Ответ модели уже проверен на сохранение слов. Повторная чистка
+          // после проверки могла бы снова удалить то, что человек произнёс.
+          cleaned = better;
           diag.info('stt', 'Диктовку довела локальная модель', {
             before,
             after: cleaned.length,

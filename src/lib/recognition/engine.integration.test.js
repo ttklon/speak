@@ -276,6 +276,42 @@ describe('диктовка целиком: что получает челове�
     expect(started).not.toHaveBeenCalled(); expect(error).not.toHaveBeenCalled();
   });
 
+  it('не добавляет звук после остановки во время ожидания отмены движка', async () => {
+    let finishCancel;
+    native.cancelTranscribe.mockImplementationOnce(() => new Promise((resolve) => { finishCancel = resolve; }));
+    answers = [{ ok: true, text: 'До остановки.', mode: 'cli' }];
+    const recognizer = createRecognizer();
+    await recognizer.start(); await speak(0, 2000);
+    const stopping = recognizer.stop();
+    for (let i = 0; i < 10 && !finishCancel; i++) await Promise.resolve();
+    expect(finishCancel).toBeTypeOf('function');
+    await speak(2000, 5000);
+    finishCancel(true);
+    expect(await stopping).toMatchObject({ text: 'До остановки.' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].pcm.length).toBe(16000 * 2);
+    expect(calls[0].durationMs).toBe(2000);
+  });
+
+  it('не добавляет звук после остановки во время ожидания предварительного куска', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    calls.length = 0;
+    let finishPre;
+    native.transcribePcm.mockImplementationOnce((payload) => { calls.push(payload); return new Promise((resolve) => { finishPre = resolve; }); });
+    answers = [{ ok: true, text: 'Остаток.', mode: 'server' }];
+    const recognizer = createRecognizer();
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000);
+    expect(finishPre).toBeTypeOf('function');
+    const stopping = recognizer.stop();
+    await speak(8000, 11000);
+    finishPre({ ok: true, text: 'Начало.', mode: 'server' });
+    await stopping;
+    expect(calls).toHaveLength(2);
+    const expectedMs = 8000 - Math.max(0, calls[0].durationMs - 400);
+    expect(calls[1].pcm.length).toBe(Math.round(expectedMs * 16));
+  });
+
   it('отмена при ожидании предварительного куска не запускает итоговый проход', async () => {
     answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
     const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();

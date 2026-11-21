@@ -145,6 +145,34 @@ describe('вторая стадия чистки диктовки моделью
     expect(saneRewrite('перезвони в 12 45', 'Перезвони.')).toBeNull();
   });
 
+  it('не допускает добавления отрицания, изменения терминов и потери повторов', () => {
+    const text = 'Здорово, братан! Суперкрутой AI, SaaS, B2B проект для 100% 100% заработка.';
+    expect(saneRewrite(text, 'Здорово, братан! Суперкрутой AI, SaaS, не B2B проект для 100% 100% заработка.')).toBeNull();
+    expect(saneRewrite(text, 'Здорово, братан! Суперкрутой AI, Сос, B2B проект для 100% 100% заработка.')).toBeNull();
+    expect(saneRewrite(text, 'Здорово, братан! Суперкрутой AI, SaaS, B2B проект для 100% заработка.')).toBeNull();
+    expect(saneRewrite('Это не проект.', 'Это проект.')).toBeNull();
+    expect(saneRewrite('Цена 100%', 'Цена 100')).toBeNull();
+    expect(saneRewrite('Долг -5', 'Долг 5')).toBeNull();
+    expect(saneRewrite('Всё готово', 'Все готово')).toBeNull();
+    expect(saneRewrite('Алло, алло, приветики.', 'Алло, алло! Приветики.')).toBe('Алло, алло! Приветики.');
+  });
+
+  it('при добавлении отрицания полировка не отдаёт опасный ответ', async () => {
+    resetLlmBackoff();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ response: 'Это не B2B проект.' }),
+    });
+    try {
+      expect(await polishDictation('Это B2B проект.', {
+        aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true,
+      })).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+      resetLlmBackoff();
+    }
+  });
+
   it('polishDictation молчит, пока настройка не включена', async () => {
     const out = await polishDictation('ну привет как дела', {
       aiEndpoint: 'http://localhost:11434',
@@ -159,7 +187,7 @@ describe('вторая стадия чистки диктовки моделью
       ok: true,
       json: async () => ({ response: 'Привет, как дела?' }),
     });
-    const out = await polishDictation('ну привет как дела', {
+    const out = await polishDictation('привет как дела', {
       aiEndpoint: 'http://localhost:11434',
       aiModel: 'qwen2.5:0.5b',
       aiDictationRewrite: true,
@@ -206,10 +234,12 @@ describe('заикание в распознанном тексте', () => {
     expect(dropStutter('да, да, конечно')).toBe('да, да, конечно');
   });
 
-  it('намеренные повторы не трогаются', () => {
+  it('намеренные повторы и двойное отрицание не трогаются', () => {
     expect(dropStutter('очень очень хорошо')).toBe('очень очень хорошо');
     expect(dropStutter('ну ну')).toBe('ну ну');
     expect(dropStutter('да да')).toBe('да да');
+    expect(OPS.clean('это не не важно')).toBe('Это не не важно.');
+    expect(OPS.clean('ни никуда')).toBe('Ни никуда.');
   });
 
   it('диктовка целиком: и заикание, и паразиты, и знаки', () => {

@@ -1635,6 +1635,37 @@ async function scenarioModelRewrite(browser) {
   record('сценарии', 'модель: без ошибок консоли', errors.length === 0, errors[0] || '');
 }
 
+// Реальные фразы из жалобы подаются как готовый STT-результат: это проверка
+// конвейера текста с мок-мостом, не проверка качества микрофона или модели.
+async function scenarioDictationIntegrity(browser) {
+  const cases = [
+    { raw: 'Алло, алло, приветики.', response: 'Алло, алло, приветики.', expected: 'Алло, алло, приветики.' },
+    {
+      raw: 'Здорово, братан! Суперкрутой AI, SaaS, B2B проект для 100% 100% заработка.',
+      response: 'Здорово, братан! Суперкрутой AI, SaaS, не B2B проект для 100% 100% заработка.',
+      expected: 'Здорово, братан! Суперкрутой AI, SaaS, B2B проект для 100% 100% заработка.',
+    },
+  ];
+  for (const sample of cases) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true, liveWhisper: false },
+      patchArg: sample,
+      patchNative: (arg) => {
+        window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: arg.raw });
+        window.zspeakly.native.httpPost = async () => ({ ok: true, data: { response: arg.response } });
+      },
+    });
+    takeErrors(page);
+    try {
+      await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length > 0, { timeout: 10000 });
+      const text = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
+      const errors = takeErrors(page);
+      record('сценарии', 'диктовка сохраняет повторы и не добавляет отрицание', text === sample.expected && errors.length === 0, text || errors[0] || '');
+    } finally { await page.close(); }
+  }
+}
+
 // Медленная модель не должна переписать более новую диктовку своим старым ответом.
 async function scenarioLatePolish(browser) {
   const page = await openPage(browser, '#/home', {
@@ -6949,6 +6980,7 @@ async function main() {
       ['плавающий индикатор (Electron)', scenarioFloatingHud],
       ['постобработка текста', scenarioCleanupToggle],
       ['переписывание моделью', scenarioModelRewrite],
+      ['точность текста диктовки', scenarioDictationIntegrity],
       ['поздняя полировка', scenarioLatePolish],
       ['поздняя полировка после правки', scenarioLatePolishEdit],
       ['отмена полировки', scenarioCancelPolish],
