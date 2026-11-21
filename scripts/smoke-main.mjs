@@ -1869,6 +1869,52 @@ await check('отмена распознавания: канал есть и б�
   if (res !== false) throw new Error(`без активного прохода ожидалось false, получено ${res}`);
 });
 
+await check('язык записи выбирает подходящий движок, ONNX работает без Whisper', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const giga = require(path.resolve('electron/gigaam.cjs'));
+  const para = require(path.resolve('electron/parakeet.cjs'));
+  const saved = { ws: whisper.status, wt: whisper.transcribe, gs: giga.status, gt: giga.transcribe, ps: para.status, pt: para.transcribe };
+  const settingsBefore = handlers.get('store:get')({}, 'zs:settings');
+  let gigaCalls = 0, paraCalls = 0, whisperCalls = [];
+  let whisperReady = true, gigaReady = true, paraReady = true, failOnnx = false;
+  whisper.status = () => ({ available: whisperReady, reason: whisperReady ? '' : 'whisper не установлен' });
+  whisper.transcribe = async (_wav, options) => { whisperCalls.push(options.lang); return { ok: true, text: 'ответ обычной модели', mode: 'cli' }; };
+  giga.status = () => ({ available: gigaReady });
+  para.status = () => ({ available: paraReady });
+  giga.transcribe = async () => { gigaCalls++; return failOnnx ? { ok: false, reason: 'ошибка ONNX' } : { ok: true, text: 'русская модель', chunks: 1 }; };
+  para.transcribe = async () => { paraCalls++; return failOnnx ? { ok: false, reason: 'ошибка ONNX' } : { ok: true, text: 'европейская модель', chunks: 1 }; };
+  const invoke = (lang, ms = 1600) => handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(ms), sampleRate: 16000, ...(lang === undefined ? {} : { lang }), partial: true });
+  try {
+    await handlers.get('store:set')({}, 'zs:settings', { ...settingsBefore, language: 'ru', keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false });
+    let res = await invoke('en-US');
+    if (!res.ok || res.mode !== 'parakeet' || gigaCalls !== 0 || paraCalls !== 1) throw new Error(`английский поверх русского: ${JSON.stringify({ res, gigaCalls, paraCalls })}`);
+    res = await invoke('ja');
+    if (!res.ok || res.mode !== 'cli' || whisperCalls.at(-1) !== 'ja') throw new Error(`японский: ${JSON.stringify({ res, whisperCalls })}`);
+    res = await invoke('auto');
+    if (!res.ok || res.mode !== 'cli' || whisperCalls.at(-1) !== 'auto') throw new Error(`автоязык: ${JSON.stringify({ res, whisperCalls })}`);
+    await handlers.get('store:set')({}, 'zs:settings', { ...settingsBefore, language: 'en', keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false });
+    res = await invoke('ru');
+    if (!res.ok || res.mode !== 'gigaam') throw new Error(`русский поверх английского: ${JSON.stringify(res)}`);
+    res = await invoke(undefined);
+    if (!res.ok || res.mode !== 'parakeet') throw new Error(`язык настроек: ${JSON.stringify(res)}`);
+    whisperReady = false;
+    res = await invoke('en');
+    if (!res.ok || res.mode !== 'parakeet') throw new Error(`Parakeet без Whisper: ${JSON.stringify(res)}`);
+    res = await invoke('ru');
+    if (!res.ok || res.mode !== 'gigaam') throw new Error(`GigaAM без Whisper: ${JSON.stringify(res)}`);
+    failOnnx = true;
+    const count = whisperCalls.length;
+    res = await invoke('ru');
+    if (res.ok || !/whisper не установлен/i.test(res.reason) || whisperCalls.length !== count) throw new Error(`нет резервного движка: ${JSON.stringify(res)}`);
+    failOnnx = false;
+    res = await invoke('en', 500);
+    if (res.ok || !/whisper не установлен/i.test(res.reason)) throw new Error(`короткий звук без Whisper: ${JSON.stringify(res)}`);
+  } finally {
+    whisper.status = saved.ws; whisper.transcribe = saved.wt; giga.status = saved.gs; giga.transcribe = saved.gt; para.status = saved.ps; para.transcribe = saved.pt;
+    await handlers.get('store:set')({}, 'zs:settings', settingsBefore);
+  }
+});
+
 await check('отмена во время операции ONNX отбрасывает позднюю ошибку', async () => {
   for (const name of ['gigaam', 'parakeet']) {
     const engine = require(path.resolve(`electron/${name}.cjs`));

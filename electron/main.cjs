@@ -1397,12 +1397,12 @@ function registerIpc() {
 
   /** Распознавание PCM: одна запись — один проход whisper (см. `canSplit` ниже). */
   async function transcribePcm(payload) {
-    const model = (store?.get('zs:settings') || {}).whisperModel || payload?.model || 'small';
-    const status = whisper.status(model);
-    if (!status.available) {
-      logger.error('stt', 'Распознавание недоступно', { model, reason: status.reason });
-      return { ok: false, text: '', reason: status.reason };
-    }
+    const sttSettingsNow = store?.get('zs:settings') || {};
+    const model = sttSettingsNow.whisperModel || payload?.model || 'small';
+    // Язык записи может отличаться от общего из-за правила активного окна.
+    // Одно решение используется для ONNX, Whisper и подсказок.
+    const requestedLang = typeof payload?.lang === 'string' ? payload.lang.trim() : '';
+    const lang = String(requestedLang || sttSettingsNow.language || 'ru').toLowerCase().split(/[-_]/)[0] || 'ru';
     // ВАЖНО: Buffer.from(Int16Array) копирует ПОБАЙТОВО значения (младший байт),
     // а не сырые байты — звук превращался в мусор и whisper возвращал пустоту.
     // Uint8Array/Buffer — уже байты, их можно передавать как есть.
@@ -1480,11 +1480,10 @@ function registerIpc() {
     // Русская модель: решение принимает политика (electron/sttEngine.cjs), а не
     // настройка. Модель локальная, поэтому приватность не меняется — зато она
     // не путает русские слова и сама ставит знаки препинания.
-    const sttSettingsNow = store?.get('zs:settings') || {};
     const gigaamStatus = gigaam.status();
     const parakeetStatus = parakeet.status();
     const engineChoice = chooseEngine({
-      language: sttSettingsNow.language,
+      language: lang,
       gigaam: gigaamStatus,
       parakeet: { ...parakeetStatus, languages: parakeet.LANGUAGES },
       seconds: audio?.seconds || 0,
@@ -1545,7 +1544,7 @@ function registerIpc() {
       if (resPara.ok && resPara.text) {
         logger.info('stt', 'Распознано европейской моделью', {
           keep: true,
-          language: sttSettingsNow.language || 'ru',
+          language: lang,
           ms: resPara.ms,
           chunks: resPara.chunks,
           chars: resPara.text.length,
@@ -1568,6 +1567,11 @@ function registerIpc() {
         ms: resPara.ms,
       });
     }
+    const status = whisper.status(model);
+    if (!status.available) {
+      logger.error('stt', 'Резервное распознавание недоступно', { model, reason: status.reason });
+      return { ok: false, text: '', reason: status.reason };
+    }
     const dir = path.join(app.getPath('temp'), 'zspeakly');
     fs.mkdirSync(dir, { recursive: true });
     // Имя уникальное: живая расшифровка и финальный проход могут идти почти
@@ -1583,7 +1587,6 @@ function registerIpc() {
     // Подсказка движку: термины с экрана (если локальная модель их назвала) +
     // словарь. Словарь не передаём, когда тумблер «Применять словарь при
     // диктовке» выключен: настройка должна работать целиком.
-    const lang = payload?.lang || 'ru';
     const tail = promptTailByLang[lang] || '';
     const seenPrompt = buildSttPrompt({
       context: String(payload?.contextPrompt || '').trim(),
@@ -1688,7 +1691,7 @@ function registerIpc() {
           try {
             fs.writeFileSync(partWav, writeWav(chunks[index], sr));
             const one = await whisper.transcribe(partWav, {
-              lang: payload?.lang || 'ru',
+              lang,
               model,
               prompt,
               keepLoaded,
@@ -1747,7 +1750,7 @@ function registerIpc() {
       } else {
         reportProgress(1);
         res = await whisper.transcribe(wav, {
-          lang: payload?.lang || 'ru',
+          lang,
           model,
           prompt,
           keepLoaded,
@@ -1780,7 +1783,7 @@ function registerIpc() {
             seconds: Math.round(spokenSeconds * 10) / 10,
           });
           const again = await whisper.transcribe(wav, {
-            lang: payload?.lang || 'ru',
+            lang,
             model,
             prompt,
             keepLoaded: false,

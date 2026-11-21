@@ -51,74 +51,82 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     stream = await navigator.mediaDevices.getUserMedia(micConstraints({ cleanup: cleanupAudio }));
     fellBack = true;
   }
-  // Просим 16 кГц сразу: тогда ресемплинг делает движок с фильтром. Если
-  // система не даёт — пишем в родной частоте и ресемплим сами (с low-pass).
-  const { ctx, native } = createAudioContext(Ctx);
-  if (!ctx) throw new Error('Микрофон недоступен в этом окружении');
-  const source = ctx.createMediaStreamSource(stream);
-  // Окно 1024 отсчёта: при 16 кГц это 64 мс. Раньше стояло 4096, и на 16 кГц
-  // это 256 мс — столько звука в конце фразы могло не дойти до движка (буфер,
-  // не набравшийся к отпусканию клавиши, терялся), а в начале — уйти на разгон.
-  const processor = ctx.createScriptProcessor(1024, 1, 1);
-
+  let ctx, native, source, processor, silent;
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const node of [processor, source, silent]) {
+      try {
+        node?.disconnect();
+      } catch { /* остальные ресурсы тоже нужно освободить */ }
+    }
+    try {
+      for (const track of stream.getTracks()) {
+        try {
+          track.stop();
+        } catch { /* продолжить освобождение */ }
+      }
+    } catch { /* поток мог быть уже закрыт */ }
+    try {
+      Promise.resolve(ctx?.close()).catch(() => {});
+    } catch { /* контекст уже закрыт */ }
+  };
   const chunks = [];
   let frames = 0;
   let aborted = false;
-  // Пауза: микрофон остаётся открытым, но звук не копится. Так человек может
-  // собраться с мыслью, не начиная диктовку заново.
   let paused = false;
   let smoothLevel = 0;
+  try {
+    // Просим 16 кГц сразу, иначе ресемплим из родной частоты.
+    ({ ctx, native } = createAudioContext(Ctx));
+    if (!ctx) throw new Error('Микрофон недоступен в этом окружении');
+    source = ctx.createMediaStreamSource(stream);
+    // 1024 отсчёта уменьшают потери буферизованного звука в конце фразы.
+    processor = ctx.createScriptProcessor(1024, 1, 1);
 
-  // Предролл: первые сотни миллисекунд уже записаны до старта — кладём их
-  // первыми, иначе начало фразы пропадает на открытии устройства.
-  if (preroll?.samples?.length) {
-    const prepared = resampleAudio(preroll.samples, preroll.sampleRate || ctx.sampleRate, ctx.sampleRate);
-    if (prepared.length) {
-      chunks.push(prepared);
-      frames += prepared.length;
-    }
-  }
-
-  processor.onaudioprocess = (event) => {
-    if (aborted) return;
-    if (paused) {
-      if (smoothLevel !== 0) {
-        smoothLevel = 0;
-        onLevel?.(0);
+    // Предролл: первые сотни миллисекунд уже записаны до старта — кладём их
+    // первыми, иначе начало фразы пропадает на открытии устройства.
+    if (preroll?.samples?.length) {
+      const prepared = resampleAudio(preroll.samples, preroll.sampleRate || ctx.sampleRate, ctx.sampleRate);
+      if (prepared.length) {
+        chunks.push(prepared);
+        frames += prepared.length;
       }
-      return;
     }
-    const input = event.inputBuffer.getChannelData(0);
-    const copy = new Float32Array(input.length);
-    copy.set(input);
-    chunks.push(copy);
-    frames += copy.length;
 
-    let sum = 0;
-    for (let i = 0; i < copy.length; i += 1) sum += copy[i] * copy[i];
-    const rms = Math.sqrt(sum / copy.length);
-    smoothLevel = smoothLevel * 0.7 + Math.min(1, rms * 4) * 0.3;
-    onLevel?.(smoothLevel);
-  };
+    processor.onaudioprocess = (event) => {
+      if (aborted) return;
+      if (paused) {
+        if (smoothLevel !== 0) {
+          smoothLevel = 0;
+          onLevel?.(0);
+        }
+        return;
+      }
+      const input = event.inputBuffer.getChannelData(0);
+      const copy = new Float32Array(input.length);
+      copy.set(input);
+      chunks.push(copy);
+      frames += copy.length;
 
-  // ScriptProcessor требует подключения к destination, иначе не вызывается
-  const silent = ctx.createGain();
-  silent.gain.value = 0;
-  source.connect(processor);
-  processor.connect(silent);
-  silent.connect(ctx.destination);
+      let sum = 0;
+      for (let i = 0; i < copy.length; i += 1) sum += copy[i] * copy[i];
+      const rms = Math.sqrt(sum / copy.length);
+      smoothLevel = smoothLevel * 0.7 + Math.min(1, rms * 4) * 0.3;
+      onLevel?.(smoothLevel);
+    };
 
-  const cleanup = () => {
-    try {
-      processor.disconnect();
-      source.disconnect();
-      silent.disconnect();
-    } catch {
-      /* ignore */
-    }
-    stream.getTracks().forEach((t) => t.stop());
-    ctx.close().catch(() => {});
-  };
+    // ScriptProcessor требует подключения к destination, иначе не вызывается
+    silent = ctx.createGain();
+    silent.gain.value = 0;
+    source.connect(processor);
+    processor.connect(silent);
+    silent.connect(ctx.destination);
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 
   // Склеивает уже записанное в PCM 16 кГц — для промежуточной расшифровки,
   // не останавливая микрофон. Хвост длиннее maxSeconds отбрасываем: whisper

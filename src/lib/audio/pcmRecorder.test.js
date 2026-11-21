@@ -63,6 +63,32 @@ describe('запись в PCM для whisper', () => {
     await expect(startPcmRecording()).rejects.toThrow(/недоступен/);
   });
 
+  it.each(['constructor', 'source', 'processor', 'gain', 'source.connect', 'processor.connect', 'gain.connect'])(
+    'освобождает микрофон и созданные узлы при ошибке %s', async (stage) => {
+      const track = { stop: vi.fn() };
+      const nodes = [];
+      const close = vi.fn(async () => {});
+      const node = (name) => {
+        const n = { gain: { value: 1 }, connect: vi.fn(() => { if (stage === `${name}.connect`) throw new Error(stage); }), disconnect: vi.fn() };
+        nodes.push(n);
+        return n;
+      };
+      class Ctx {
+        constructor() { if (stage === 'constructor') throw new Error(stage); this.sampleRate = 16000; this.destination = {}; }
+        createMediaStreamSource() { if (stage === 'source') throw new Error(stage); return node('source'); }
+        createScriptProcessor() { if (stage === 'processor') throw new Error(stage); return node('processor'); }
+        createGain() { if (stage === 'gain') throw new Error(stage); return node('gain'); }
+        close = close;
+      }
+      window.AudioContext = Ctx;
+      vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
+      await expect(startPcmRecording()).rejects.toThrow(stage);
+      expect(track.stop).toHaveBeenCalledTimes(1);
+      if (stage !== 'constructor') expect(close).toHaveBeenCalledTimes(1);
+      for (const n of nodes) expect(n.disconnect).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('пишет 16 кГц моно и считает длительность по реальной частоте', async () => {
     const { rec, audio } = await record();
     expect(rec.sampleRate).toBe(48000);
@@ -147,6 +173,13 @@ describe('запись в PCM для whisper', () => {
     audio.feed(4800);
     expect(rec.frames).toBe(before);
     expect(audio.tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('повторная отмена не закрывает микрофон дважды', async () => {
+    const { rec, audio } = await record();
+    rec.abort();
+    rec.abort();
+    expect(audio.tracks[0].stop).toHaveBeenCalledTimes(1);
   });
 
   it('пустая запись не даёт мусорных сэмплов', async () => {
