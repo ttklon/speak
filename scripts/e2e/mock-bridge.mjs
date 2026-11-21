@@ -93,6 +93,8 @@ export function installMockBridge() {
     for (const fn of subscriptions.get(channel) || []) fn(payload);
   };
   const noopSubscription = subscribe;
+  store.statusSync = () => ({ ok: true });
+  store.onError = subscribe('store:error');
 
   const native = {
     // плавающий индикатор диктовки (в Electron — отдельное окно поверх всех)

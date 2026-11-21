@@ -71,6 +71,24 @@ describe('хранилище в Electron', () => {
     expect(localStorage.length).toBe(0);
   });
 
+  it('асинхронный отказ IPC записи и удаления доходит до интерфейса', async () => {
+    const events = [];
+    const listener = (event) => events.push(event.detail);
+    window.addEventListener('zs:storage-error', listener);
+    window.zspeakly = { isElectron: true, store: {
+      set: () => Promise.reject(new Error('IPC закрыт')),
+      remove: () => Promise.resolve(false),
+    } };
+    expect(write('zs.dictations', [])).toBe(true); // запрос принят, ответ позже
+    expect(remove('zs.dictations')).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    window.removeEventListener('zs:storage-error', listener);
+    expect(events).toHaveLength(2);
+    expect(events.every((event) => event.source === 'electron')).toBe(true);
+    expect(events.map((event) => event.reason)).toEqual(['IPC закрыт', 'мост отклонил удаление']);
+  });
+
   it('мост упал — приложение не падает', () => {
     window.zspeakly = {
       isElectron: true,

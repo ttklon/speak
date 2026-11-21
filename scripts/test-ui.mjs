@@ -5093,6 +5093,37 @@ async function scenarioStorageFull(browser) {
   await page.close();
 }
 
+async function scenarioElectronStorageError(browser) {
+  const page = await openPage(browser, '#/home', { settle: 400 });
+  takeErrors(page);
+  await emit(page, 'store:error', { ok: false, code: 'ENOSPC' });
+  await sleep(300);
+  const text = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
+  record('сценарии', 'Electron: сбой записи профиля предупреждает о риске потери данных',
+    /Не удалось сохранить данные/i.test(text) && /в памяти/i.test(text) && /диск/i.test(text), text.slice(0, 180));
+  const errors = takeErrors(page);
+  record('сценарии', 'Electron: предупреждение о хранилище без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+
+  const late = await openPage(browser, '#/home', {
+    settle: 400,
+    patchNative: () => { window.zspeakly.store.statusSync = () => ({ ok: false, code: 'EACCES' }); },
+  });
+  const initial = await late.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
+  record('сценарии', 'Electron: ошибка до подписки видна после запуска интерфейса',
+    /Не удалось сохранить данные/i.test(initial) && /в памяти/i.test(initial), initial.slice(0, 180));
+  await late.close();
+
+  const corrupt = await openPage(browser, '#/home', {
+    settle: 400,
+    patchNative: () => { window.zspeakly.store.statusSync = () => ({ ok: false, code: 'BACKUP_FAILED' }); },
+  });
+  const warning = await corrupt.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
+  record('сценарии', 'Electron: невозможность сохранить копию профиля объясняет защиту исходного файла',
+    /Исходный файл не перезаписывается/i.test(warning) && /потеряны при закрытии/i.test(warning), warning.slice(0, 220));
+  await corrupt.close();
+}
+
 async function scenarioDiagnostics(browser) {
   const page = await openPage(browser, '#/settings?section=diagnostics&from=home', { settle: 500 });
   takeErrors(page);
@@ -7024,6 +7055,7 @@ async function main() {
       ['микрофон', scenarioMic],
       ['данные: резервная копия', scenarioBackup],
       ['хранилище заполнено', scenarioStorageFull],
+      ['ошибка хранилища Electron', scenarioElectronStorageError],
       ['диагностика', scenarioDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['модель в памяти', scenarioWarmModel],

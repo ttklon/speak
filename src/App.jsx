@@ -118,23 +118,34 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
-  // Место в localStorage кончается — раньше запись тихо терялась. Говорим
-  // об этом один раз в 30 секунд, чтобы не заваливать тостами.
+  // Ошибки localStorage, IPC и отложенной записи профиля нельзя замалчивать.
+  // Событие из main не содержит содержимое профиля и путь к нему.
   useEffect(() => {
-    let lastAt = 0;
-    const onStorageError = (event) => {
+    let lastAt = -Infinity;
+    const warn = (source, code) => {
       const now = Date.now();
       if (now - lastAt < 30_000) return;
       lastAt = now;
-      push({
-        title: 'Не удалось сохранить данные',
-        description: 'Место в браузере закончилось. Удалите крупные записи буфера или снимки.',
-        tone: 'warn',
-        ttl: 10_000,
-      });
+      const description = code === 'BACKUP_FAILED'
+        ? 'Профиль не удалось прочитать или сохранить его копию. Исходный файл не перезаписывается; изменения будут потеряны при закрытии. Проверьте доступ и место на диске.'
+        : source === 'electron'
+          ? 'Изменения могут остаться только в памяти и потеряться при закрытии. Проверьте место на диске и права доступа.'
+          : 'Не удалось записать данные в браузере. Проверьте доступное место и настройки хранилища.';
+      push({ title: 'Не удалось сохранить данные', description, tone: 'warn', ttl: 12_000 });
     };
+    const onStorageError = (event) => warn(event.detail?.source);
     window.addEventListener('zs:storage-error', onStorageError);
-    return () => window.removeEventListener('zs:storage-error', onStorageError);
+    let off;
+    try {
+      const store = window.zspeakly?.store;
+      off = store?.onError?.((status) => warn('electron', status?.code));
+      const status = store?.statusSync?.();
+      if (status?.ok === false) warn('electron', status.code);
+    } catch { warn('electron'); }
+    return () => {
+      window.removeEventListener('zs:storage-error', onStorageError);
+      off?.();
+    };
   }, [push]);
 
   // AI-инструкции должны срабатывать в любом приложении и на любой странице,

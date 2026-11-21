@@ -1216,6 +1216,9 @@ function registerIpc() {
   ipcMain.on('store:size', (event) => {
     event.returnValue = store.sizeSync();
   });
+  ipcMain.on('store:status', (event) => {
+    event.returnValue = store.status();
+  });
   // Ручной выбор модели в настройках закрепляем: дальше приложение не будет
   // менять его само (иначе «оно передумало» выглядит как поломка).
   ipcMain.handle('store:set', (_e, key, value) => {
@@ -3235,7 +3238,12 @@ app.on('before-quit', () => {
 });
 
 app.whenReady().then(() => {
-  store = new JsonStore();
+  store = new JsonStore('profile.json', {
+    onError: (status) => {
+      // Окно может ещё не существовать; при старте renderer читает status.
+      try { mainWindow?.webContents.send('store:error', status); } catch { /* окно закрыто */ }
+    },
+  });
 
   // Помощник ввода (PowerShell + SendInput) поднимаем один раз на всё
   // приложение: дальше вставка и ввод текста идут без холодного старта.

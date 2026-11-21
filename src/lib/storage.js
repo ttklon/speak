@@ -32,27 +32,31 @@ export function read(key) {
   return readRaw(key);
 }
 
-/** Асинхронный вариант — если понадобится неблокирующий доступ. */
+function reportStorageError(key, err, source) {
+  try {
+    window.dispatchEvent(new CustomEvent('zs:storage-error', {
+      detail: { key, reason: String(err?.message || err || 'ошибка записи'), source },
+    }));
+  } catch { /* событие не обязательно */ }
+}
+
+/** true означает принятие запроса, а не гарантию записи на диск. */
 export function write(key, value) {
   try {
     const b = bridge();
     if (b) {
-      b.set(key, value);
+      const pending = b.set(key, value);
+      if (pending === false) throw new Error('мост отклонил запись');
+      if (pending?.then) Promise.resolve(pending).then((ok) => {
+        if (ok === false) reportStorageError(key, 'мост отклонил запись', 'electron');
+      }, (err) => reportStorageError(key, err, 'electron'));
       return true;
     }
     localStorage.setItem(PREFIX + key, JSON.stringify(value));
     return true;
   } catch (err) {
     console.warn('[storage] write failed', key, err);
-    // localStorage в браузере кончается на крупных картинках буфера: раньше
-    // запись просто исчезала. Сообщаем интерфейсу — он покажет тост.
-    try {
-      window.dispatchEvent(
-        new CustomEvent('zs:storage-error', { detail: { key, reason: String(err?.message || err) } }),
-      );
-    } catch {
-      /* событие не обязательно */
-    }
+    reportStorageError(key, err, isElectron() ? 'electron' : 'browser');
     return false;
   }
 }
@@ -61,12 +65,17 @@ export function remove(key) {
   try {
     const b = bridge();
     if (b) {
-      b.remove(key);
+      const pending = b.remove(key);
+      if (pending === false) throw new Error('мост отклонил удаление');
+      if (pending?.then) Promise.resolve(pending).then((ok) => {
+        if (ok === false) reportStorageError(key, 'мост отклонил удаление', 'electron');
+      }, (err) => reportStorageError(key, err, 'electron'));
       return true;
     }
     localStorage.removeItem(PREFIX + key);
     return true;
-  } catch {
+  } catch (err) {
+    reportStorageError(key, err, isElectron() ? 'electron' : 'browser');
     return false;
   }
 }

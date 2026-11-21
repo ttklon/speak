@@ -407,6 +407,32 @@ await check('отмена скачивания модели отвечает б�
 await check('store:get работает синхронно', () => {
   if (!onHandlers.has('store:get')) throw new Error('нет store:get');
 });
+await check('профиль: ошибка диска доходит до окна и статус сбрасывается после успешной записи', async () => {
+  const originalRename = fs.renameSync;
+  const profile = path.join(userData, 'profile.json');
+  const before = sentEvents.length;
+  try {
+    fs.renameSync = (from, to) => {
+      if (to === profile) throw Object.assign(new Error('ошибка диска'), { code: 'ENOSPC' });
+      return originalRename(from, to);
+    };
+    await handlers.get('store:set')({}, 'zs:smoke-storage', 'test');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const event = sentEvents.slice(before).find((entry) => entry.ch === 'store:error');
+    if (!event || event.payload?.code !== 'ENOSPC') throw new Error(`нет уведомления: ${JSON.stringify(event)}`);
+    const status = {};
+    onHandlers.get('store:status')(status);
+    if (status.returnValue?.ok !== false) throw new Error(`нет ошибки статуса: ${JSON.stringify(status)}`);
+    fs.renameSync = originalRename;
+    await handlers.get('store:remove')({}, 'zs:smoke-storage');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const recovered = {};
+    onHandlers.get('store:status')(recovered);
+    if (recovered.returnValue?.ok !== true) throw new Error(`не восстановилось: ${JSON.stringify(recovered)}`);
+  } finally {
+    fs.renameSync = originalRename;
+  }
+});
 await check('hotkey:set регистрирует глобальные сочетания', () => {
   const res = handlers.get('hotkey:set')({}, { dictationKey: 'Control+Alt+Space', textActions: [
     { id: 'to-english', keys: ['Ctrl', 'Alt', 'E'], enabled: true },

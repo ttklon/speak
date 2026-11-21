@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     set: (key, value) => ipcRenderer.invoke('store:set', key, value),
     remove: (key) => ipcRenderer.invoke('store:remove', key),
     sizeSync: () => ipcRenderer.sendSync('store:size'),
+    statusSync: () => ipcRenderer.sendSync('store:status'),
+    onError: (cb) => on('store:error', cb),
   },
 
   window: {
