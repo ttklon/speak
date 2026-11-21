@@ -208,22 +208,26 @@ jobs:
       # UI/запись/ONNX настоящие, но IPC и системная вставка подменены мостом.
       - name: Virtual microphone and real GigaAM
         shell: bash
+        env:
+          ZS_CHROME_DEBUG: "1"
         run: |
           set +e
           node scripts/test-virtual-mic.mjs gigaam "$ZS_USER_DATA/ru.wav" > /tmp/virtual-gigaam.log 2>&1
           code=$?
           cat /tmp/virtual-gigaam.log
-          message=$(tail -c 1800 /tmp/virtual-gigaam.log | tr '\n' ' ' | sed 's/%/%25/g')
+          message=$({ head -c 1500 /tmp/virtual-gigaam.log; tail -c 1500 /tmp/virtual-gigaam.log; } | tr '\n' ' ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Virtual GigaAM::$message"; exit "$code"; fi
           echo "::notice title=Virtual GigaAM::$message"
       - name: Virtual microphone and real Parakeet
         shell: bash
+        env:
+          ZS_CHROME_DEBUG: "1"
         run: |
           set +e
           node scripts/test-virtual-mic.mjs parakeet "$ZS_USER_DATA/jfk.wav" > /tmp/virtual-parakeet.log 2>&1
           code=$?
           cat /tmp/virtual-parakeet.log
-          message=$(tail -c 1800 /tmp/virtual-parakeet.log | tr '\n' ' ' | sed 's/%/%25/g')
+          message=$({ head -c 1500 /tmp/virtual-parakeet.log; tail -c 1500 /tmp/virtual-parakeet.log; } | tr '\n' ' ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Virtual Parakeet::$message"; exit "$code"; fi
           echo "::notice title=Virtual Parakeet::$message"
 

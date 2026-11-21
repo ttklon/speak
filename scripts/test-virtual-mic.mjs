@@ -88,8 +88,9 @@ try {
   browser = await puppeteer.launch({
     executablePath: chrome,
     headless: true,
+    dumpio: process.env.ZS_CHROME_DEBUG === '1',
     args: [
-      '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process', '--mute-audio',
+      '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--mute-audio',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
       `--use-file-for-fake-audio-capture=${wav}`, '--autoplay-policy=no-user-gesture-required',
     ],
