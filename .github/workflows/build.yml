@@ -170,6 +170,7 @@ jobs:
           node-version: "22"
           cache: npm
       - name: Install
+        id: windows-install
         run: npm ci --no-audit --no-fund
       - name: All unit tests on Windows
         shell: bash
@@ -182,6 +183,7 @@ jobs:
           if [ "$code" -ne 0 ]; then echo "::error title=Windows all unit tests::$message"; exit "$code"; fi
           echo "::notice title=Windows all unit tests::$message"
       - name: Full UI crawl and all scenarios on Windows
+        if: ${{ !cancelled() && steps.windows-install.outcome == 'success' }}
         shell: bash
         run: |
           set -u

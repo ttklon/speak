@@ -9,6 +9,8 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('runs-on: windows-latest');
     expect(job).toContain('npm test > windows-all-tests.log');
     expect(job).toContain('node scripts/test-ui.mjs > windows-full-ui.log');
+    // Unit failure must not prevent the independent UI suite from running.
+    expect(job).toContain("if: ${{ !cancelled() && steps.windows-install.outcome == 'success' }}");
     expect(job).not.toContain('ZS_ONLY');
     expect(job).not.toContain('ZS_SKIP_CRAWL');
     expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);

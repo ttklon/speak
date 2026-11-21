@@ -171,7 +171,8 @@ describe('в текстах интерфейса нет жаргона', () => {
   it('ни один видимый текст не требует знать название технологии', () => {
     const offenders = [];
     for (const file of sourceFiles()) {
-      if (ALLOWED.test(file)) continue;
+      // Один формат пути для Windows и POSIX, иначе исключение движка не работает.
+      if (ALLOWED.test(file.replace(/\\/g, '/'))) continue;
       for (const line of codeLines(fs.readFileSync(file, 'utf8'))) {
         for (const what of jargonIn(line)) {
           offenders.push(`${path.relative(ROOT, file)}: ${what} — ${line.slice(0, 70)}`);

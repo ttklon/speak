@@ -345,7 +345,10 @@ describe('подготовка движка Whisper', () => {
     const quote = (value) => value.replace(/'/g, "''");
     cp.execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       `$ErrorActionPreference = 'Stop'; Compress-Archive -LiteralPath '${quote(join(source, 'whisper-cli.exe'))}','${quote(join(source, 'whisper-server.exe'))}' -DestinationPath '${quote(fixture)}' -Force`], { timeout: 30000 });
-    const zipEntries = cp.execFileSync('tar.exe', ['-tf', fixture], { encoding: 'utf8' });
+    // Не используем tar.exe из PATH: Git for Windows может подставить GNU tar,
+    // который считает C: именем удалённого хоста. Проверяем ZIP через .NET.
+    const zipEntries = cp.execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [IO.Compression.ZipFile]::OpenRead('${quote(fixture)}'); try { $z.Entries.FullName } finally { $z.Dispose() }`], { encoding: 'utf8', timeout: 30000 });
     archive = readFileSync(fixture);
     let unpacked = [], unpackError = '';
     cp.execFile = (file, args, options, callback) => originalExec(file, args, options, (err, stdout, stderr) => {
