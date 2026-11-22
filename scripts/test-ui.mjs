@@ -5699,6 +5699,26 @@ async function scenarioElectronStorageError(browser) {
     /Создана резервная копия/i.test(backedUpWarning) && /исходный файл не перезаписывается/i.test(backedUpWarning) && /потеряны при закрытии/i.test(backedUpWarning), backedUpWarning.slice(0, 220));
   await backedUp.close();
 
+  for (const [code, expected] of [['RECOVERY_PENDING', /profile\.json\.tmp/i], ['RECOVERY_UNCHECKED', /Не удалось проверить временный файл/i]]) {
+    const pending = await openPage(browser, '#/home', {
+      settle: 400,
+      patchArg: code,
+      patchNative: (statusCode) => { window.zspeakly.store.statusSync = () => ({ ok: false, code: statusCode }); },
+    });
+    const initial = await pending.evaluate(() => ({
+      warning: document.querySelector('.profile-warning')?.innerText || '',
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+    }));
+    await pending.evaluate(() => document.querySelector('.toast__close')?.click());
+    const stillVisible = await pending.evaluate(() => Boolean(document.querySelector('.profile-warning')?.innerText));
+    const pendingErrors = takeErrors(pending);
+    record('сценарии', `Electron: ${code} не скрывает риск и защищает временный файл`,
+      expected.test(initial.warning) && /не сохранятся при закрытии/i.test(initial.warning) &&
+      expected.test(initial.toast) && stillVisible && pendingErrors.length === 0,
+      JSON.stringify({ warning: initial.warning, stillVisible, error: pendingErrors[0] }));
+    await pending.close();
+  }
+
   for (const key of ['zs:settings', 'zs:dictionary']) {
     const rejected = await openPage(browser, '#/home', {
       settle: 500,

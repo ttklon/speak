@@ -18,6 +18,21 @@ class JsonStore {
     this.writeProtectionCode = null;
     this.onError = typeof onError === 'function' ? onError : null;
     this.load();
+    if (!this.writeProtectionCode) this.checkPendingWrite();
+  }
+
+  // Остаток temp может содержать единственную копию незавершённой записи.
+  // Автоматически выбирать его вместо профиля нельзя: он может быть частичным,
+  // устаревшим или не содержать подтверждённого пользователем состояния.
+  checkPendingWrite() {
+    try {
+      fs.lstatSync(`${this.file}.tmp`);
+      this.writeProtectionCode = 'RECOVERY_PENDING';
+    } catch (err) {
+      if (err?.code === 'ENOENT') return;
+      this.writeProtectionCode = 'RECOVERY_UNCHECKED';
+    }
+    this.reportError(this.writeProtectionCode);
   }
 
   load() {

@@ -28,6 +28,7 @@ export default function App() {
   const { settings, updateSettings, presets, instructions, voiceHotkeys } = useAppData();
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [storageProtection, setStorageProtection] = useState(null);
   const [settingsSection, setSettingsSection] = useState('dictation');
   // Палитра команд: одна строка на всё приложение (Ctrl+K).
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -127,17 +128,22 @@ export default function App() {
       const now = Date.now();
       const last = lastStorageWarning.current;
       // Защита профиля важнее обычной ошибки и не должна ею скрываться.
-      const protectedProfile = code === 'BACKUP_FAILED' || code === 'PROFILE_UNREADABLE';
-      const lastProtected = last.code === 'BACKUP_FAILED' || last.code === 'PROFILE_UNREADABLE';
-      if (now - last.at < 30_000 && !(protectedProfile && !lastProtected)) return;
+      const protectedCodes = ['BACKUP_FAILED', 'PROFILE_UNREADABLE', 'RECOVERY_PENDING', 'RECOVERY_UNCHECKED'];
+      const protectedProfile = protectedCodes.includes(code);
+      if (protectedProfile) setStorageProtection(code);
+      if (now - last.at < 30_000 && !(protectedProfile && code !== last.code)) return;
       lastStorageWarning.current = { at: now, code };
       const description = code === 'BACKUP_FAILED'
         ? 'Профиль не удалось прочитать и сохранить его копию. Исходный файл не перезаписывается; изменения будут потеряны при закрытии. Проверьте доступ и место на диске.'
         : code === 'PROFILE_UNREADABLE'
           ? 'Профиль не удалось прочитать. Создана резервная копия; исходный файл не перезаписывается. Новые изменения будут потеряны при закрытии. Проверьте и восстановите профиль.'
-          : source === 'electron'
-            ? 'Изменения могут остаться только в памяти и потеряться при закрытии. Проверьте место на диске и права доступа.'
-            : 'Не удалось записать данные в браузере. Проверьте доступное место и настройки хранилища.';
+          : code === 'RECOVERY_PENDING'
+            ? 'Найден незавершённый файл profile.json.tmp. Профиль и временный файл не перезаписываются; новые изменения будут потеряны при закрытии. Сохраните оба файла отдельно и проверьте их перед восстановлением.'
+            : code === 'RECOVERY_UNCHECKED'
+              ? 'Не удалось проверить временный файл профиля. Запись заблокирована; новые изменения будут потеряны при закрытии. Проверьте доступ к папке профиля и сохраните файлы отдельно.'
+              : source === 'electron'
+                ? 'Изменения могут остаться только в памяти и потеряться при закрытии. Проверьте место на диске и права доступа.'
+                : 'Не удалось записать данные в браузере. Проверьте доступное место и настройки хранилища.';
       push({ title: 'Не удалось сохранить данные', description, tone: 'warn', ttl: 12_000 });
     };
     const onStorageError = (event) => warn(event.detail?.source);
@@ -283,6 +289,17 @@ export default function App() {
     <div className="app-shell">
       <div className="app-window">
         <TitleBar />
+        {storageProtection ? (
+          <div className="profile-warning" role="alert">
+            <strong>Профиль защищён от записи.</strong>{' '}
+            {storageProtection === 'RECOVERY_PENDING'
+              ? 'Найден незавершённый profile.json.tmp. Сохраните профиль и временный файл отдельно и проверьте их перед восстановлением.'
+              : storageProtection === 'RECOVERY_UNCHECKED'
+                ? 'Не удалось проверить временный файл. Проверьте доступ к папке профиля и сохраните файлы отдельно.'
+                : 'Исходный профиль не перезаписывается. Сохраните важные данные отдельно и проверьте файлы профиля.'}{' '}
+            Новые изменения не сохранятся при закрытии.
+          </div>
+        ) : null}
         <div className="app-body">
           <Sidebar
             page={page(route)}

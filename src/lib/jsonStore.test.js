@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 const Module = require('node:module');
@@ -108,6 +109,125 @@ describe('профиль Electron: сбой записи', () => {
     expect(store.status()).toEqual({ ok: false, code: 'PROFILE_UNREADABLE' });
     expect(fs.readFileSync(file, 'utf8')).toBe(raw);
     expect(notify).toHaveBeenCalledWith({ ok: false, code: 'PROFILE_UNREADABLE' });
+  });
+
+  it('после прерванной замены бережёт исходный профиль и временный файл до ручной проверки', () => {
+    const file = path.join(dir, 'profile.json');
+    const previous = JSON.stringify({ history: ['последняя сохранённая'] });
+    const pending = JSON.stringify({ history: ['ещё не подтверждена'] });
+    fs.writeFileSync(file, previous);
+    fs.writeFileSync(`${file}.tmp`, pending);
+    const store = new JsonStore();
+    expect(store.get('history')).toEqual(['последняя сохранённая']);
+    expect(store.status()).toEqual({ ok: false, code: 'RECOVERY_PENDING' });
+    store.set('history', ['новая сессия']);
+    expect(store.flush()).toBe(false);
+    expect(fs.readFileSync(file, 'utf8')).toBe(previous);
+    expect(fs.readFileSync(`${file}.tmp`, 'utf8')).toBe(pending);
+  });
+
+  it('не стирает единственный временный файл, если исходного профиля нет', () => {
+    const file = path.join(dir, 'profile.json');
+    const pending = '{"history":["важное"]}';
+    fs.writeFileSync(`${file}.tmp`, pending);
+    const store = new JsonStore();
+    expect(store.status()).toEqual({ ok: false, code: 'RECOVERY_PENDING' });
+    store.set('history', ['новая']);
+    expect(store.flush()).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readFileSync(`${file}.tmp`, 'utf8')).toBe(pending);
+    fs.unlinkSync(`${file}.tmp`);
+    const restarted = new JsonStore();
+    restarted.set('history', ['после проверки']);
+    expect(restarted.flush()).toBe(true);
+  });
+
+  it.each([true, false])('реальное завершение процесса до rename сохраняет temp (исходный файл: %s)', (hasOriginal) => {
+    const file = path.join(dir, 'profile.json');
+    const original = JSON.stringify({ history: ['старая версия'] });
+    if (hasOriginal) fs.writeFileSync(file, original);
+    const script = `
+      const Module = require('node:module');
+      const fs = require('node:fs');
+      const originalLoad = Module._load;
+      Module._load = function(name, ...args) {
+        if (name === 'electron') return { app: { getPath: () => process.argv[1] } };
+        return originalLoad.call(this, name, ...args);
+      };
+      const { JsonStore } = require(process.argv[2]);
+      Module._load = originalLoad;
+      fs.renameSync = () => process.exit(91);
+      const store = new JsonStore();
+      store.set('history', ['новая версия']);
+      store.flush();
+      process.exit(93);
+    `;
+    const child = spawnSync(process.execPath, ['-e', script, dir, require.resolve('../../electron/store.cjs')], { encoding: 'utf8', timeout: 10000 });
+    expect(child.status, child.stderr).toBe(91);
+    expect(fs.existsSync(file)).toBe(hasOriginal);
+    if (hasOriginal) expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    expect(JSON.parse(fs.readFileSync(`${file}.tmp`, 'utf8')).history).toEqual(['новая версия']);
+    const reopened = new JsonStore();
+    expect(reopened.status()).toEqual({ ok: false, code: 'RECOVERY_PENDING' });
+    reopened.set('history', ['вторая попытка']);
+    expect(reopened.flush()).toBe(false);
+    expect(JSON.parse(fs.readFileSync(`${file}.tmp`, 'utf8')).history).toEqual(['новая версия']);
+  });
+
+  it('реальное завершение сразу после rename оставляет новую версию доступной', () => {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, JSON.stringify({ history: ['старая версия'] }));
+    const script = `
+      const Module = require('node:module');
+      const fs = require('node:fs');
+      const originalLoad = Module._load;
+      Module._load = function(name, ...args) {
+        if (name === 'electron') return { app: { getPath: () => process.argv[1] } };
+        return originalLoad.call(this, name, ...args);
+      };
+      const { JsonStore } = require(process.argv[2]);
+      Module._load = originalLoad;
+      const rename = fs.renameSync;
+      fs.renameSync = (...args) => { rename(...args); process.exit(92); };
+      const store = new JsonStore();
+      store.set('history', ['новая версия']);
+      store.flush();
+      process.exit(93);
+    `;
+    const child = spawnSync(process.execPath, ['-e', script, dir, require.resolve('../../electron/store.cjs')], { encoding: 'utf8', timeout: 10000 });
+    expect(child.status, child.stderr).toBe(92);
+    expect(fs.existsSync(`${file}.tmp`)).toBe(false);
+    const reopened = new JsonStore();
+    expect(reopened.status()).toEqual({ ok: true });
+    expect(reopened.get('history')).toEqual(['новая версия']);
+  });
+
+  it('повреждённый профиль и сохранившийся temp оба остаются нетронутыми', () => {
+    const file = path.join(dir, 'profile.json');
+    const original = '{сломан';
+    const pending = '{"history":["возможное восстановление"]}';
+    fs.writeFileSync(file, original);
+    fs.writeFileSync(`${file}.tmp`, pending);
+    const store = new JsonStore();
+    expect(store.status()).toEqual({ ok: false, code: 'PROFILE_UNREADABLE' });
+    store.set('history', ['новое']);
+    expect(store.flush()).toBe(false);
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    expect(fs.readFileSync(`${file}.tmp`, 'utf8')).toBe(pending);
+    expect(fs.readdirSync(dir).some((name) => name.startsWith('profile.json.broken-'))).toBe(true);
+  });
+
+  it('если не удалось проверить временный файл, не рискует переписать его', () => {
+    const storeFile = path.join(dir, 'profile.json');
+    const raw = '{"history":["важное"]}';
+    fs.writeFileSync(storeFile, raw);
+    vi.spyOn(fs, 'lstatSync').mockImplementation(() => { throw Object.assign(new Error('доступ'), { code: 'EACCES' }); });
+    const store = new JsonStore();
+    expect(store.get('history')).toEqual(['важное']);
+    expect(store.status()).toEqual({ ok: false, code: 'RECOVERY_UNCHECKED' });
+    store.set('history', ['новое']);
+    expect(store.flush()).toBe(false);
+    expect(fs.readFileSync(storeFile, 'utf8')).toBe(raw);
   });
 
   it('при ошибке чтения не заменяет даже корректный файл, скопированный в резерв', () => {

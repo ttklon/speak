@@ -2528,12 +2528,30 @@ function registerIpc() {
       let file = null;
       for (let index = 0; index < 1000; index += 1) {
         const candidate = path.join(dir, `zspeakly-backup-${stamp}${index ? `-${index}` : ''}.json`);
+        let fd;
         try {
-          fs.writeFileSync(candidate, json, { encoding: 'utf8', flag: 'wx' });
+          fd = fs.openSync(candidate, 'wx');
+        } catch (err) {
+          if (err?.code === 'EEXIST') continue;
+          throw err;
+        }
+        try {
+          fs.writeFileSync(fd, json, 'utf8');
+          fs.closeSync(fd);
+          fd = undefined;
           file = candidate;
           break;
         } catch (err) {
-          if (err?.code !== 'EEXIST') throw err;
+          if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch { /* закрытие могло уже выполниться */ }
+          }
+          try {
+            fs.unlinkSync(candidate);
+          } catch {
+            // Диск или права могут не позволить убрать неудачную копию.
+            throw new Error('запись копии прервалась; частичный файл мог остаться на рабочем столе');
+          }
+          throw err;
         }
       }
       if (!file) throw new Error('не удалось подобрать свободное имя копии');

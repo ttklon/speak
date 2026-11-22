@@ -33,6 +33,20 @@ body.web .app-shell {
   align-items: center;
 }
 
+/* Предупреждение не исчезает вместе с тостом: запись профиля заблокирована
+   до перезапуска, даже если человек продолжает диктовать и менять настройки. */
+.profile-warning {
+  flex: none;
+  padding: 9px 16px;
+  background: #fff3cf;
+  color: #4d3300;
+  border-bottom: 1px solid #d5a83a;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 35vh;
+  overflow: auto;
+}
+
 /* ── Title bar ─────────────────────────────────────────────── */
 .titlebar {
   height: var(--titlebar-h);

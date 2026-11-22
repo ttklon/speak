@@ -1138,6 +1138,60 @@ await check('повторное сохранение копии не перез�
   }
 });
 
+await check('сбой записи копии не оставляет частичный файл и не меняет прошлую копию', async () => {
+  const save = handlers.get('data:save-backup');
+  const original = JSON.stringify({ app: 'ZSpeakly', dictations: [{ text: 'надёжная копия' }] });
+  const existing = await save({}, original);
+  if (!existing?.ok) throw new Error('не удалось создать исходную копию');
+  const before = fs.readdirSync(userData).filter((name) => name.startsWith('zspeakly-backup-')).sort();
+  const realWrite = fs.writeFileSync;
+  let injected = false;
+  try {
+    fs.writeFileSync = function (file, data, options) {
+      if (!injected && (typeof file === 'number' || String(file).includes('zspeakly-backup-'))) {
+        realWrite.call(this, file, '{"partial":', options);
+        injected = true;
+        throw Object.assign(new Error('имитация заполненного диска'), { code: 'ENOSPC' });
+      }
+      return realWrite.call(this, file, data, options);
+    };
+    const result = await save({}, JSON.stringify({ app: 'ZSpeakly', dictations: [{ text: 'новая копия' }] }));
+    const after = fs.readdirSync(userData).filter((name) => name.startsWith('zspeakly-backup-')).sort();
+    if (!injected || result?.ok || JSON.stringify(after) !== JSON.stringify(before) || fs.readFileSync(existing.path, 'utf8') !== original) {
+      throw new Error(`частичный файл или перезапись: ${JSON.stringify({ injected, result, before, after })}`);
+    }
+  } finally {
+    fs.writeFileSync = realWrite;
+    for (const name of fs.readdirSync(userData).filter((entry) => entry.startsWith('zspeakly-backup-'))) fs.rmSync(path.join(userData, name), { force: true });
+  }
+});
+
+await check('ошибка удаления частичной копии не выдаётся за успешное сохранение', async () => {
+  const save = handlers.get('data:save-backup');
+  const realWrite = fs.writeFileSync;
+  const realUnlink = fs.unlinkSync;
+  let injected = false;
+  try {
+    fs.writeFileSync = function (file, data, options) {
+      if (!injected && typeof file === 'number') {
+        realWrite.call(this, file, '{"partial":', options);
+        injected = true;
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return realWrite.call(this, file, data, options);
+    };
+    fs.unlinkSync = () => { throw Object.assign(new Error('нет доступа'), { code: 'EACCES' }); };
+    const result = await save({}, JSON.stringify({ app: 'ZSpeakly', dictations: [] }));
+    if (!injected || result?.ok || !/частичный файл мог остаться/i.test(result?.reason || '')) {
+      throw new Error(`не сообщили о частичном файле: ${JSON.stringify({ injected, result })}`);
+    }
+  } finally {
+    fs.writeFileSync = realWrite;
+    fs.unlinkSync = realUnlink;
+    for (const name of fs.readdirSync(userData).filter((entry) => entry.startsWith('zspeakly-backup-'))) fs.rmSync(path.join(userData, name), { force: true });
+  }
+});
+
 await check('stt:status честно говорит, что движка нет', async () => {
   const st = await handlers.get('stt:status')({}, 'small');
   if (st.available) throw new Error('движок «нашёлся» до установки');
