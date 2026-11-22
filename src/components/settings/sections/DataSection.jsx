@@ -4,6 +4,7 @@ import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
+import { prepareBackup } from '../../../lib/backup.js';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 
@@ -99,7 +100,14 @@ export default function DataSection({ onOpenSection }) {
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         throw new Error('в файле нет данных ZSpeakly');
       }
-      setPendingBackup({ payload, name: file.name });
+      const prepared = prepareBackup(payload);
+      const labels = {
+        settings: 'настройки', dictations: 'история', dictionary: 'словарь', snippets: 'быстрые блоки',
+        voiceHotkeys: 'голосовые сочетания', presets: 'AI-инструкции', instructions: 'свои инструкции',
+        stats: 'счётчики', profile: 'профиль',
+      };
+      const sections = Object.keys(labels).filter((key) => Object.prototype.hasOwnProperty.call(prepared, key)).map((key) => labels[key]);
+      setPendingBackup({ payload, name: file.name, sections });
     } catch (err) {
       push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
     } finally {
@@ -305,10 +313,15 @@ export default function DataSection({ onOpenSection }) {
           if (!current) return;
           try {
             const applied = importBackup(current.payload);
+            let status;
+            try { status = window.zspeakly?.store?.statusSync?.(); } catch { status = { ok: false }; }
             push({
-              title: 'Копия восстановлена',
-              description: `${current.name}: ${applied.join(', ')}.`,
-              tone: 'success',
+              title: 'Данные применены в приложении',
+              description: status?.ok === false
+                ? `${current.name}: ${applied.join(', ')}. Профиль защищён от записи или не сохранён: изменения могут быть потеряны.`
+                : `${current.name}: ${applied.join(', ')}. Запись в профиль выполняется отдельно; следите за предупреждениями о сохранении.`,
+              tone: status?.ok === false ? 'warn' : 'info',
+              ttl: 10000,
             });
           } catch (err) {
             push({ title: 'Не удалось восстановить', description: String(err?.message || err), tone: 'warn' });
@@ -317,7 +330,7 @@ export default function DataSection({ onOpenSection }) {
         title="Восстановить данные из копии?"
         description={
           pendingBackup
-            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Текущие история, словарь и настройки будут заменены.`
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}. Старые записи могут удалиться по сроку хранения при следующем запуске.`
             : ''
         }
         confirmLabel="Восстановить"

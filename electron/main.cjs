@@ -2523,8 +2523,20 @@ function registerIpc() {
       const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
       const dir = app.getPath('desktop') || app.getPath('documents');
       fs.mkdirSync(dir, { recursive: true });
-      const file = path.join(dir, `zspeakly-backup-${stamp}.json`);
-      fs.writeFileSync(file, json, 'utf8');
+      // Копии одного дня независимы: эксклюзивное создание не перезапишет
+      // существующий файл даже при одновременном сохранении другим процессом.
+      let file = null;
+      for (let index = 0; index < 1000; index += 1) {
+        const candidate = path.join(dir, `zspeakly-backup-${stamp}${index ? `-${index}` : ''}.json`);
+        try {
+          fs.writeFileSync(candidate, json, { encoding: 'utf8', flag: 'wx' });
+          file = candidate;
+          break;
+        } catch (err) {
+          if (err?.code !== 'EEXIST') throw err;
+        }
+      }
+      if (!file) throw new Error('не удалось подобрать свободное имя копии');
       try {
         shell.showItemInFolder?.(file);
       } catch {

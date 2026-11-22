@@ -93,17 +93,25 @@ describe('очистка сохранённых данных', () => {
     expect(clean[0].createdAt).toBeGreaterThan(0);
   });
 
-  it('горячие клавиши: без id или без клавиш бесполезны', () => {
+  it('горячие клавиши: пустое сочетание — выбор пользователя, не повреждение', () => {
     const clean = sanitizeHotkeys([
       { id: 'h1', keys: ['Ctrl', 'Q'] },
       { id: 'h2', keys: [] },
       { keys: ['Ctrl'] },
       { id: 'h3', keys: ['Ctrl', 5, null] },
     ]);
-    expect(clean.map((h) => h.id)).toEqual(['h1', 'h3']);
-    expect(clean[1].keys).toEqual(['Ctrl']);
+    expect(clean.map((h) => h.id)).toEqual(['h1', 'h2', 'h3']);
+    expect(clean[1].keys).toEqual([]);
+    expect(clean[2].keys).toEqual(['Ctrl']);
     expect(clean[0].enabled).toBe(true);
     expect(sanitizeHotkeys([{ id: 'h', keys: ['A'], enabled: false }])[0].enabled).toBe(false);
+  });
+
+  it('сохранённые пресеты и инструкции сохраняют реальные поля после запуска', () => {
+    const preset = { id: 'p', title: 'Перевод', prompt: 'Переведи', keys: ['Ctrl', 'E'], enabled: false };
+    const instruction = { id: 'i', title: 'Письмо', prompt: 'Напиши письмо', keys: [], enabled: true };
+    expect(sanitizePresets([preset])).toEqual([expect.objectContaining(preset)]);
+    expect(sanitizeInstructions([instruction])).toEqual([expect.objectContaining(instruction)]);
   });
 
   it('пресеты и инструкции: пустое название — не запись', () => {

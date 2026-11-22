@@ -5905,12 +5905,17 @@ async function scenarioBackup(browser) {
       app: 'ZSpeakly',
       format: 1,
       exportedAt: '2026-11-01T10:00:00.000Z',
-      dictionary: [{ id: 'w-import', word: 'ИмпортСлово', hint: '' }],
+      dictionary: [{ id: 'w-import', word: 'ИмпортСлово', pronunciation: 'произношение', pinned: true, hits: 27, lastUsedAt: 1790000000000 }],
       dictations: [
         { id: 'd-import', text: 'Восстановленная запись из копии', createdAt: Date.now(), words: 5, seconds: 4 },
         { id: 'a-import', text: 'Ответ агента из копии', createdAt: Date.now(), words: 4, source: 'agent' },
+        { id: 'f-import', text: 'Юникод 😀\n'.repeat(1200), rawText: 'Исходный текст 😀\n'.repeat(90).trim(), createdAt: Date.now(), source: 'file', fileName: 'встреча.wav', sttModel: 'small-q5_1', sttParts: 3 },
+        { id: 'c-import', text: 'Результат команды', command: 'сократи', createdAt: Date.now(), source: 'command' },
       ],
       settings: { dictationRetentionDays: 3650 },
+      voiceHotkeys: [{ id: 'dictation', title: 'Диктовка', description: '', keys: [], enabled: false }],
+      presets: [{ id: 'backup-preset', title: 'Пресет из копии', prompt: 'Береги смысл', keys: ['Ctrl', 'P'], enabled: true }],
+      instructions: [{ id: 'backup-instruction', title: 'Своя инструкция из копии', prompt: 'Напиши письмо', keys: [], enabled: true }],
       profile: { name: 'Из копии' },
     }),
     'utf8',
@@ -5932,20 +5937,155 @@ async function scenarioBackup(browser) {
     record(
       'сценарии',
       'данные: копия восстанавливается после подтверждения',
-      /будет заменены|заменены/i.test(asked) &&
+      /будут заменены/i.test(asked) &&
         confirm &&
         state.dictionary.some((w) => w.word === 'ИмпортСлово') &&
         state.dictations.some((d) => /Восстановленная запись/.test(d.text)) &&
         state.dictations.some((d) => d.id === 'a-import' && d.source === 'agent') &&
-        /Копия восстановлена/i.test(state.toast),
+        /Данные применены в приложении/i.test(state.toast) && /Запись в профиль выполняется отдельно/i.test(state.toast),
       `asked=${asked.slice(0, 30)} confirm=${confirm} dict=${state.dictionary.length} hist=${state.dictations.length} toast=${state.toast.slice(0, 80)}`,
     );
+    const fileRecord = state.dictations.find((d) => d.id === 'f-import');
+    const commandRecord = state.dictations.find((d) => d.id === 'c-import');
+    const word = state.dictionary.find((w) => w.id === 'w-import');
+    record('сценарии', 'данные: восстановление сохраняет длинный текст, оригинал, источники и статистику словаря',
+      fileRecord?.text === 'Юникод 😀\n'.repeat(1200) && fileRecord?.rawText === 'Исходный текст 😀\n'.repeat(90).trim() &&
+      fileRecord?.source === 'file' && fileRecord?.fileName === 'встреча.wav' && fileRecord?.sttModel === 'small-q5_1' && fileRecord?.sttParts === 3 &&
+      commandRecord?.source === 'command' && commandRecord?.command === 'сократи' &&
+      word?.pinned === true && word?.hits === 27 && word?.lastUsedAt === 1790000000000,
+      JSON.stringify({ textLength: fileRecord?.text?.length, rawLength: fileRecord?.rawText?.length, source: fileRecord?.source, fileName: fileRecord?.fileName, command: commandRecord?.source, word }));
+    // Новое окно на том же хранилище имитирует следующий запуск без повторного seed.
+    const reopened = await browser.newPage();
+    try {
+      await reopened.evaluateOnNewDocument(installMockBridge);
+      await reopened.goto(`${BASE}/#/hotkeys?tab=recommended`, { waitUntil: 'domcontentloaded' });
+      await reopened.waitForSelector('.app-window', { timeout: 15000 });
+      await sleep(700);
+      const presetVisible = await reopened.evaluate(() => document.body.innerText.includes('Пресет из копии'));
+      await reopened.goto(`${BASE}/#/hotkeys?tab=custom`, { waitUntil: 'domcontentloaded' });
+      await sleep(500);
+      const afterRestart = await reopened.evaluate(() => ({
+        instructionVisible: document.body.innerText.includes('Своя инструкция из копии'),
+        history: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+        dictionary: JSON.parse(localStorage.getItem('mockstore:zs.dictionary') || '[]'),
+        hotkeys: JSON.parse(localStorage.getItem('mockstore:zs.hotkeys') || '[]'),
+      }));
+      const restoredFile = afterRestart.history.find((d) => d.id === 'f-import');
+      const restoredWord = afterRestart.dictionary.find((w) => w.id === 'w-import');
+      const restoredHotkey = afterRestart.hotkeys.find((h) => h.id === 'dictation');
+      record('сценарии', 'данные: после перезапуска остаются пресет, инструкция, пустое сочетание и метаданные',
+        presetVisible && afterRestart.instructionVisible && restoredFile?.source === 'file' && restoredFile?.text === fileRecord?.text &&
+        restoredWord?.pinned === true && restoredWord?.hits === 27 && Array.isArray(restoredHotkey?.keys) && restoredHotkey.keys.length === 0,
+        JSON.stringify({ presetVisible, instructionVisible: afterRestart.instructionVisible, source: restoredFile?.source, textLength: restoredFile?.text?.length, pinned: restoredWord?.pinned, keys: restoredHotkey?.keys }));
+    } finally { await reopened.close(); }
   } finally {
     rmSync(backupPath, { force: true });
   }
   const errors = takeErrors(page);
   record('сценарии', 'данные: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
+}
+
+// Импортируем именно JSON, который приложение только что экспортировало.
+async function scenarioBackupRoundTrip(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', {
+    settle: 500,
+    storeSeed: {
+      'zs.dictations': [{ id: 'd-roundtrip', text: 'Большая запись 😀 '.repeat(700), rawText: 'До изменений', createdAt: Date.now(), source: 'dictation', words: 100 }],
+      'zs.dictionary': [{ id: 'w-roundtrip', word: 'Термин', pronunciation: 'термин', pinned: true, hits: 3, lastUsedAt: 1000 }],
+      'zs.presets': [{ id: 'p-roundtrip', title: 'Рабочий пресет', prompt: 'Исправь', keys: [], enabled: true }],
+      'zs.instructions': [{ id: 'i-roundtrip', title: 'Рабочая инструкция', prompt: 'Сохрани', keys: [], enabled: true }],
+    },
+    patchNative: () => {
+      window.zspeakly.native.saveBackup = async (json) => { window.__exportedBackup = json; return { ok: true, path: 'copy.json' }; };
+    },
+  });
+  takeErrors(page);
+  const backupPath = join(tmpdir(), `zs-roundtrip-${Date.now()}.json`);
+  try {
+    await clickIn(page, '', 'Скачать');
+    await sleep(350);
+    const json = await page.evaluate(() => window.__exportedBackup);
+    if (!json) throw new Error('экспорт не передал JSON');
+    const snapshot = JSON.parse(json);
+    writeFileSync(backupPath, json, 'utf8');
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(backupPath);
+    await sleep(350);
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    if (preview) await clickIn(page, '', 'Восстановить');
+    await sleep(650);
+    const restored = await page.evaluate(() => ({
+      dictations: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+      dictionary: JSON.parse(localStorage.getItem('mockstore:zs.dictionary') || '[]'),
+      presets: JSON.parse(localStorage.getItem('mockstore:zs.presets') || '[]'),
+      instructions: JSON.parse(localStorage.getItem('mockstore:zs.instructions') || '[]'),
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: собственный экспорт восстанавливается целиком без буфера обмена',
+      Boolean(preview) && !Object.hasOwn(snapshot, 'clipboard') &&
+      restored.dictations[0]?.text === snapshot.dictations[0]?.text && restored.dictations[0]?.rawText === 'До изменений' &&
+      restored.dictionary[0]?.pinned === true && restored.dictionary[0]?.hits === 3 &&
+      restored.presets.some((p) => p.id === 'p-roundtrip' && p.prompt === 'Исправь') &&
+      restored.instructions.some((i) => i.id === 'i-roundtrip' && i.prompt === 'Сохрани') && errors.length === 0,
+      JSON.stringify({ preview: Boolean(preview), hasClipboard: Object.hasOwn(snapshot, 'clipboard'), length: restored.dictations[0]?.text?.length, toast: restored.toast.slice(-240), error: errors[0] }));
+  } finally { rmSync(backupPath, { force: true }); await page.close(); }
+}
+
+// Неподходящая копия не должна частично заменить настройки или историю.
+async function scenarioInvalidBackup(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
+  takeErrors(page);
+  const before = await page.evaluate(() => ({
+    history: localStorage.getItem('mockstore:zs.dictations'),
+    settings: localStorage.getItem('mockstore:zs.settings'),
+  }));
+  const backupPath = join(tmpdir(), `zs-invalid-backup-${Date.now()}.json`);
+  writeFileSync(backupPath, JSON.stringify({ app: 'ZSpeakly', dictations: [{ text: 'не заменять' }], dictionary: 'повреждённый раздел' }), 'utf8');
+  try {
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(backupPath);
+    await sleep(600);
+    const after = await page.evaluate(() => ({
+      history: localStorage.getItem('mockstore:zs.dictations'),
+      settings: localStorage.getItem('mockstore:zs.settings'),
+      dialog: Boolean(document.querySelector('.confirm__text')),
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: повреждённая копия отклоняется целиком до подтверждения',
+      after.history === before.history && after.settings === before.settings && !after.dialog && /Файл не подошёл/i.test(after.toast) && /Текущие данные не изменены/i.test(after.toast) && errors.length === 0,
+      JSON.stringify({ unchanged: after.history === before.history && after.settings === before.settings, dialog: after.dialog, toast: after.toast, error: errors[0] }));
+  } finally {
+    rmSync(backupPath, { force: true });
+    await page.close();
+  }
+}
+
+// Для защищённого профиля нельзя обещать, что импорт уже сохранён на диске.
+async function scenarioProtectedBackup(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', {
+    settle: 500,
+    patchNative: () => { window.zspeakly.store.statusSync = () => ({ ok: false, code: 'PROFILE_UNREADABLE' }); },
+  });
+  takeErrors(page);
+  const backupPath = join(tmpdir(), `zs-protected-backup-${Date.now()}.json`);
+  writeFileSync(backupPath, JSON.stringify({ app: 'ZSpeakly', dictations: [{ id: 'd1', text: 'только в памяти' }] }), 'utf8');
+  try {
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(backupPath);
+    await sleep(300);
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    await clickIn(page, '', 'Восстановить');
+    await sleep(500);
+    const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '));
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: частичная копия и защищённый профиль не обещают запись на диск',
+      /Будут заменены: история/i.test(preview) && !/словарь/i.test(preview) && /Профиль защищён от записи или не сохранён/i.test(toast) &&
+      !/Копия восстановлена/i.test(toast) && errors.length === 0,
+      JSON.stringify({ preview, toast: toast.slice(-450), error: errors[0] }));
+  } finally { rmSync(backupPath, { force: true }); await page.close(); }
 }
 
 // «Держать модель в памяти»: тумблер обязан реально просить main поднять
@@ -7904,6 +8044,9 @@ async function main() {
       ['модели', scenarioModels],
       ['микрофон', scenarioMic],
       ['данные: резервная копия', scenarioBackup],
+      ['данные: полный круг копии', scenarioBackupRoundTrip],
+      ['данные: повреждённая копия', scenarioInvalidBackup],
+      ['данные: копия защищённого профиля', scenarioProtectedBackup],
       ['хранилище заполнено', scenarioStorageFull],
       ['ошибка хранилища Electron', scenarioElectronStorageError],
       ['диагностика', scenarioDiagnostics],

@@ -19,6 +19,7 @@ import { migrateSettings } from '../lib/settingsMigration.js';
 import { tuneSettings } from '../lib/autotune.js';
 import { trimByBytes } from '../lib/clipboardBudget.js';
 import { trimDictations } from '../lib/dictationBudget.js';
+import { prepareBackup } from '../lib/backup.js';
 import {
   asList,
   sanitizeClipboard,
@@ -429,87 +430,49 @@ export function AppDataProvider({ children }) {
 
   const importBackup = useCallback(
     (payload) => {
-      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-        throw new Error('это не файл резервной копии ZSpeakly');
-      }
-      if (payload.app && payload.app !== 'ZSpeakly') {
-        throw new Error(`копия от другого приложения: ${String(payload.app).slice(0, 40)}`);
-      }
-      const lists = ['dictations', 'dictionary', 'snippets', 'voiceHotkeys', 'presets', 'instructions'];
-      const hasList = lists.some((k) => Array.isArray(payload[k]));
-      const hasSettings = payload.settings && typeof payload.settings === 'object';
-      if (!hasList && !hasSettings) throw new Error('в файле нет данных ZSpeakly');
-
-      // файл мог быть собран руками или другой версией: мусорные строки
-      // не должны ронять список на первом же рендере
-      const cleanDictations = (list) =>
-        list
-          .filter((d) => d && typeof d.text === 'string' && d.text.trim())
-          .map((d, i) => ({
-            id: String(d.id || `d-import-${Date.now()}-${i}`),
-            text: String(d.text).slice(0, 8000),
-            createdAt: Number(d.createdAt) || Date.now(),
-            durationMs: Number(d.durationMs) || 0,
-            words: Number(d.words) || String(d.text).trim().split(/\s+/).length,
-            language: typeof d.language === 'string' ? d.language : undefined,
-            source: d.source === 'dictation' ? 'dictation' : d.source === 'agent' ? 'agent' : 'import',
-            // «Отмени» после импорта: без этого флага в истории нечего было бы
-            // возвращать, хотя расшифровка помечена как удалённая
-            undone: d.undone === true ? true : undefined,
-          }));
-      const cleanDictionary = (list) =>
-        list
-          .filter((w) => w && typeof w.word === 'string' && w.word.trim())
-          .map((w, i) => ({
-            id: String(w.id || `w-import-${Date.now()}-${i}`),
-            word: String(w.word).trim().slice(0, 60),
-            pronunciation: String(w.pronunciation || '').trim().slice(0, 60),
-            createdAt: Number(w.createdAt) || Date.now(),
-          }));
-
+      // Вся проверка и подготовка предшествует первому setState: неисправный
+      // поздний раздел не должен уже успеть заменить историю или настройки.
+      const data = prepareBackup(payload);
       const applied = [];
-      if (hasSettings) {
-        setSettings({ ...DEFAULT_SETTINGS, ...payload.settings });
+      if (data.settings) {
+        setSettings(data.settings);
         applied.push('настройки');
       }
-      if (Array.isArray(payload.dictations)) {
-        const clean = cleanDictations(payload.dictations);
-        setDictations(clean);
-        applied.push(`диктовки (${clean.length})`);
+      if (data.dictations) {
+        setDictations(data.dictations);
+        applied.push(`диктовки (${data.dictations.length})`);
       }
-      if (Array.isArray(payload.dictionary)) {
-        const clean = cleanDictionary(payload.dictionary);
-        setDictionary(clean);
-        applied.push(`словарь (${clean.length})`);
+      if (data.dictionary) {
+        setDictionary(data.dictionary);
+        applied.push(`словарь (${data.dictionary.length})`);
       }
-      if (Array.isArray(payload.snippets)) {
-        const clean = sanitizeSnippets(payload.snippets);
-        setSnippets(clean);
-        applied.push(`быстрые блоки (${clean.length})`);
+      if (data.snippets) {
+        setSnippets(data.snippets);
+        applied.push(`быстрые блоки (${data.snippets.length})`);
       }
-      if (Array.isArray(payload.voiceHotkeys)) {
-        setVoiceHotkeys(payload.voiceHotkeys);
+      if (data.voiceHotkeys) {
+        setVoiceHotkeys(data.voiceHotkeys);
         applied.push('голосовые сочетания');
       }
-      if (Array.isArray(payload.presets)) {
-        setPresets(payload.presets);
-        applied.push(`AI-инструкции (${payload.presets.length})`);
+      if (data.presets) {
+        setPresets(data.presets);
+        applied.push(`AI-инструкции (${data.presets.length})`);
       }
-      if (Array.isArray(payload.instructions)) {
-        setInstructions(payload.instructions);
-        applied.push(`свои инструкции (${payload.instructions.length})`);
+      if (data.instructions) {
+        setInstructions(data.instructions);
+        applied.push(`свои инструкции (${data.instructions.length})`);
       }
-      if (payload.stats && typeof payload.stats === 'object') {
-        setStats({ ...DEFAULT_STATS, ...payload.stats });
+      if (data.stats) {
+        setStats(data.stats);
         applied.push('счётчики');
       }
-      if (payload.profile && typeof payload.profile === 'object') {
-        setProfile({ name: String(payload.profile.name || '').slice(0, 40) });
+      if (data.profile) {
+        setProfile(data.profile);
         applied.push('профиль');
       }
       return applied;
     },
-    [setSettings, setDictations, setDictionary, setVoiceHotkeys, setPresets, setInstructions, setStats, setProfile],
+    [setSettings, setDictations, setDictionary, setSnippets, setVoiceHotkeys, setPresets, setInstructions, setStats, setProfile],
   );
 
   const value = useMemo(

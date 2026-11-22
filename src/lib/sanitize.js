@@ -113,8 +113,14 @@ export function sanitizeHotkeys(stored, fallback = []) {
     (item) => {
       if (!item || typeof item !== 'object') return null;
       const keys = Array.isArray(item.keys) ? item.keys.filter((k) => typeof k === 'string') : [];
-      if (!item.id || !keys.length) return null;
-      return { ...item, keys, enabled: item.enabled !== false };
+      if (!item.id || !Array.isArray(item.keys)) return null;
+      return {
+        ...item,
+        title: typeof item.title === 'string' ? item.title : String(item.id),
+        description: typeof item.description === 'string' ? item.description : '',
+        keys,
+        enabled: item.enabled !== false,
+      };
     },
     fallback,
   );
@@ -139,9 +145,16 @@ export function sanitizePresets(stored, fallback = []) {
     stored,
     (item) => {
       if (!item || typeof item !== 'object') return null;
-      const name = typeof item.name === 'string' ? item.name.trim() : '';
-      if (!name) return null;
-      return { ...item, id: item.id || fallbackId('p'), name };
+      const title = typeof item.title === 'string' ? item.title.trim() : typeof item.name === 'string' ? item.name.trim() : '';
+      if (!title) return null;
+      return {
+        ...item,
+        id: item.id || fallbackId('p'),
+        title,
+        description: typeof item.description === 'string' ? item.description : '',
+        prompt: typeof item.prompt === 'string' ? item.prompt : '',
+        keys: Array.isArray(item.keys) ? item.keys.filter((key) => typeof key === 'string') : [],
+      };
     },
     fallback,
   );
@@ -154,7 +167,15 @@ export function sanitizeInstructions(stored, fallback = []) {
       if (!item || typeof item !== 'object') return null;
       const title = typeof item.title === 'string' ? item.title.trim() : '';
       if (!title) return null;
-      return { ...item, id: item.id || fallbackId('i'), title, text: typeof item.text === 'string' ? item.text : '' };
+      return {
+        ...item,
+        id: item.id || fallbackId('i'),
+        title,
+        text: typeof item.text === 'string' ? item.text : '',
+        prompt: typeof item.prompt === 'string' ? item.prompt : typeof item.text === 'string' ? item.text : '',
+        description: typeof item.description === 'string' ? item.description : '',
+        keys: Array.isArray(item.keys) ? item.keys.filter((key) => typeof key === 'string') : [],
+      };
     },
     fallback,
   );

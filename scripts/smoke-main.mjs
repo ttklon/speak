@@ -1122,6 +1122,22 @@ await check('резервная копия сохраняется файлом �
   return Boolean(good?.ok && /ZSpeakly/.test(written) && bad?.ok === false && empty?.ok === false);
 });
 
+await check('повторное сохранение копии не перезаписывает предыдущую', async () => {
+  const save = handlers.get('data:save-backup');
+  const firstJson = JSON.stringify({ app: 'ZSpeakly', dictations: [{ text: 'важная первая копия' }] });
+  const secondJson = JSON.stringify({ app: 'ZSpeakly', dictations: [{ text: 'новая копия' }] });
+  const first = await save({}, firstJson);
+  const second = await save({}, secondJson);
+  try {
+    if (!first?.ok || !second?.ok || first.path === second.path || fs.readFileSync(first.path, 'utf8') !== firstJson || fs.readFileSync(second.path, 'utf8') !== secondJson) {
+      throw new Error(`предыдущая копия перезаписана: ${JSON.stringify({ first, second })}`);
+    }
+  } finally {
+    if (first?.path) fs.rmSync(first.path, { force: true });
+    if (second?.path) fs.rmSync(second.path, { force: true });
+  }
+});
+
 await check('stt:status честно говорит, что движка нет', async () => {
   const st = await handlers.get('stt:status')({}, 'small');
   if (st.available) throw new Error('движок «нашёлся» до установки');
