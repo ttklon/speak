@@ -25,9 +25,25 @@ $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 75
 $timer.Add_Tick({
   $request = Join-Path $Directory 'request.json'
-  if (-not [IO.File]::Exists($request)) { return }
+  if ([IO.File]::Exists((Join-Path $Directory 'pause')) -or -not [IO.File]::Exists($request)) { return }
+  # Windows can briefly hold a newly published file open (sharing or lock
+  # violation). Retry only the read, before performing any command: retrying
+  # after a command executes could insert text or change the clipboard twice.
   try {
-    $data = [IO.File]::ReadAllText($request, $utf8) | ConvertFrom-Json
+    $raw = [IO.File]::ReadAllText($request, $utf8)
+  } catch {
+    $cause = $_.Exception.GetBaseException()
+    if ($cause -is [System.IO.IOException] -and (($cause.HResult -band 0xffff) -in @(32, 33))) {
+      if ([IO.File]::Exists((Join-Path $Directory 'lock-ready'))) {
+        [IO.File]::WriteAllText((Join-Path $Directory 'lock-seen'), 'retry')
+      }
+      return
+    }
+    [IO.File]::WriteAllText((Join-Path $Directory 'error.txt'), $_.Exception.ToString(), $utf8)
+    return
+  }
+  try {
+    $data = $raw | ConvertFrom-Json
     [IO.File]::Delete($request)
     $out = @{ id = $data.id; ok = $true }
     switch ($data.command) {

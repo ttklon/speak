@@ -71,10 +71,8 @@ function keyOf(raw = '') {
 
 /** Слова с их «сравнительным» ключом: регистр не важен, знаки по краям — тоже. */
 function words(text = '') {
-  return String(text)
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((raw) => ({ raw, key: keyOf(raw) }))
+  return [...String(text).matchAll(/\S+/gu)]
+    .map((match) => ({ raw: match[0], key: keyOf(match[0]), index: match.index }))
     .filter((w) => w.key);
 }
 
@@ -158,13 +156,17 @@ function findMarker(text = '') {
   const lower = text.toLowerCase();
   let best = null;
   for (const marker of MARKERS) {
-    const at = lower.indexOf(marker);
-    if (at < 0) continue;
-    // маркер должен быть отдельным словом, а не куском другого
-    const before = at === 0 ? ' ' : lower[at - 1];
-    const after = lower[at + marker.length] || ' ';
-    if (/[\p{L}\p{N}]/u.test(before) || /[\p{L}\p{N}]/u.test(after)) continue;
-    if (!best || at < best.index) best = { index: at, length: marker.length, marker };
+    let at = lower.indexOf(marker);
+    while (at >= 0) {
+      // Недопустимая подстрока не должна скрывать следующий отдельный маркер.
+      const before = at === 0 ? ' ' : lower[at - 1];
+      const after = lower[at + marker.length] || ' ';
+      if (!/[\p{L}\p{N}]/u.test(before) && !/[\p{L}\p{N}]/u.test(after)) {
+        if (!best || at < best.index) best = { index: at, length: marker.length, marker };
+        break;
+      }
+      at = lower.indexOf(marker, at + 1);
+    }
   }
   return best;
 }
@@ -174,13 +176,14 @@ function clauseStart(text = '', beforeIndex = 0) {
   const head = text.slice(0, beforeIndex);
   // Многоточие границей фразы не считаем: «в 4… то есть в 3» — это заминка
   // внутри той же мысли, а не новое предложение.
-  const at = Math.max(
+  const sentence = Math.max(
     head.lastIndexOf('. '),
     head.lastIndexOf('! '),
     head.lastIndexOf('? '),
     head.lastIndexOf('; '),
   );
-  return at >= 0 ? at + 2 : 0;
+  // A spoken or recognised line break is a boundary, not disposable space.
+  return Math.max(sentence >= 0 ? sentence + 2 : 0, head.lastIndexOf('\n') + 1);
 }
 
 /**
@@ -199,9 +202,9 @@ export function dropSelfCorrections(text = '') {
     // поправками вторая не попадает в «правую часть» первой и не теряется.
     // Запятые и тире сразу после маркера («ой, Васе») — часть маркера.
     const restRaw = current.slice(marker.index + marker.length);
-    const skip = Math.max(0, restRaw.search(/[^\s,;:—–-]/u));
+    const skip = Math.max(0, restRaw.search(/[^ \t,;:—–-]/u));
     const rest = restRaw.slice(skip);
-    const endMatch = /[.!?…;,]/.exec(rest);
+    const endMatch = /[.!?…;,\r\n]/.exec(rest);
     const right = endMatch ? rest.slice(0, endMatch.index) : rest;
     if (!right.trim()) break;
     const span = correctionSpan(left, right);
@@ -223,14 +226,14 @@ export function dropSelfCorrections(text = '') {
     }
     const leftWords = words(left);
     const dropCount = Math.min(span, leftWords.length);
-    // обрезаем левую часть по словам, сохраняя то, что было до них
-    const keep = leftWords.slice(0, leftWords.length - dropCount);
-    const keepText = keep.length ? `${keep.map((w) => w.raw).join(' ')}` : '';
-    const joinTail = keep.length ? ' ' : '';
+    // Меняем только сам фрагмент оговорки. Пересборка всей фразы из слов и
+    // глобальная нормализация пробелов уничтожали переносы, отступы и код.
+    const firstDropped = leftWords[leftWords.length - dropCount];
+    const prefix = left.slice(0, firstDropped.index);
+    const keepText = /^[ \t]*$/u.test(prefix) ? prefix : prefix.replace(/[ \t]+$/u, '');
+    const joinTail = keepText && !/[ \t]$/u.test(keepText) ? ' ' : '';
     const rightText = right.trim();
-    current = `${current.slice(0, start)}${keepText}${joinTail}${rightText}${current.slice(marker.index + marker.length + skip + right.length)}`
-      .replace(/\s{2,}/g, ' ')
-      .replace(/\s+([.,;:!?…])/g, '$1');
+    current = `${current.slice(0, start)}${keepText}${joinTail}${rightText}${current.slice(marker.index + marker.length + skip + right.length)}`;
     fixes += 1;
   }
   // Повтор не обязательно запинка: «алло, алло», «очень очень» и повторённое

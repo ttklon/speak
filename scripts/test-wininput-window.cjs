@@ -36,15 +36,28 @@ async function waitFile(file, timeout = 15000) {
   }
 }
 let seq = 0;
-async function command(command, text) {
+async function command(command, text, { lockRequest = false } = {}) {
   const id = ++seq;
   const request = path.join(dir, 'request.json');
   const temporary = path.join(dir, 'request.tmp');
   const response = path.join(dir, `response-${id}.json`);
-  fs.writeFileSync(temporary, JSON.stringify({ id, command, text }), 'utf8');
-  fs.renameSync(temporary, request);
-  await waitFile(response);
-  return JSON.parse(fs.readFileSync(response, 'utf8'));
+  let locker;
+  try {
+    if (lockRequest) fs.writeFileSync(path.join(dir, 'pause'), 'pause');
+    fs.writeFileSync(temporary, JSON.stringify({ id, command, text }), 'utf8');
+    fs.renameSync(temporary, request);
+    if (lockRequest) {
+      locker = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File',
+        path.resolve('scripts/e2e/wininput-lock.ps1'), '-Directory', dir],
+      { windowsHide: true, stdio: 'ignore' });
+      await waitFile(path.join(dir, 'lock-ready'));
+    }
+    await waitFile(response);
+    return JSON.parse(fs.readFileSync(response, 'utf8'));
+  } finally {
+    if (locker && locker.exitCode === null) locker.kill();
+    if (lockRequest) fs.rmSync(path.join(dir, 'pause'), { force: true });
+  }
 }
 async function active() {
   const state = await command('focus');
@@ -64,6 +77,15 @@ async function main() {
   const host = new InputHost({ timeoutMs: 15000 });
   try {
     await waitFile(path.join(dir, 'ready'));
+    // Hold a request with FileShare.None while the target polls it. The target
+    // must wait for release and execute it once, without creating error.txt.
+    const lockedState = await command('state', undefined, { lockRequest: true });
+    assert.equal(lockedState.ok, true, 'locked request was not processed after release');
+    assert.equal(fs.existsSync(path.join(dir, 'lock-seen')), true, 'target never observed the lock');
+    assert.equal(fs.existsSync(path.join(dir, 'error.txt')), false, 'transient lock reported as fatal');
+    fs.rmSync(path.join(dir, 'lock-ready'), { force: true });
+    fs.rmSync(path.join(dir, 'lock-seen'), { force: true });
+    console.log('WinForms target: temporary exclusive request lock is retried');
     if (!await active()) {
       console.log('SKIP: тестовое окно не смогло получить фокус; ввод в другие окна не выполнялся.');
       return;

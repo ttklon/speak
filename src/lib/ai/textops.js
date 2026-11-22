@@ -305,7 +305,8 @@ export function cleanLines(text) {
       const candidate = OPS.clean(source);
       const before = comparable(source);
       const after = comparable(candidate);
-      return after === before || after === `${before}.` ? candidate : source;
+      const canAppendPeriod = /[\p{L}\p{N})»\]]$/u.test(before) && !/[.!?…][)»\]]$/u.test(before);
+      return after === before || (canAppendPeriod && after === `${before}.`) ? candidate : source;
     });
   return lines.join('\n').trim();
 }
