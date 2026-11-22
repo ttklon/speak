@@ -6158,7 +6158,7 @@ async function scenarioBackupLargeExport(browser) {
     const errors = takeErrors(page);
     record('сценарии', 'данные: крупную копию сохраняют с явным предупреждением и без обещания импорта',
       result.saved && /превышает 32 МиБ/i.test(result.toast) && /не сможет восстановить/i.test(result.toast) && /toast--warn/.test(result.tone || '') &&
-      /незашифрованным JSON/i.test(description) && /Секреты могут встретиться/i.test(description) && errors.length === 0,
+      /JSON-файлом без шифрования/i.test(description) && /Секреты могут встретиться/i.test(description) && errors.length === 0,
       JSON.stringify({ ...result, error: errors[0] }));
   } finally { await page.close(); }
 }
