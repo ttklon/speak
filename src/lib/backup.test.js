@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKUP_MAX_BYTES, prepareBackup, readBackupJsonFile } from './backup.js';
+import { BACKUP_FORMAT, BACKUP_MAX_BYTES, describeBackupCompatibility, prepareBackup, readBackupJsonFile } from './backup.js';
 import { DICTATION_MAX_ITEMS } from './dictationBudget.js';
 
 describe('подготовка резервной копии', () => {
@@ -100,6 +100,46 @@ describe('подготовка резервной копии', () => {
     const items = Array(DICTATION_MAX_ITEMS + 1);
     Object.defineProperty(items, 0, { get() { throw new Error('элемент не должен читаться'); } });
     expect(() => prepareBackup({ dictations: items })).toThrow(/лимит/i);
+  });
+
+  it('читает синтетическую копию версии 1 без быстрых блоков, как в первом экспорте', () => {
+    const old = {
+      app: 'ZSpeakly', format: 1, exportedAt: '2026-01-02T03:04:05.000Z',
+      settings: { language: 'ru' }, dictations: [{ id: 'd1', text: 'Раньше' }],
+      dictionary: [{ id: 'w1', word: 'Слово' }], voiceHotkeys: [], presets: [], instructions: [],
+      stats: { wordsTotal: 3, secondsTotal: 4, sessions: 1 }, profile: { name: 'Имя' },
+    };
+    const restored = prepareBackup(old);
+    expect(restored.settings.language).toBe('ru');
+    expect(restored.dictations[0].text).toBe('Раньше');
+    expect(restored.dictionary[0].word).toBe('Слово');
+    expect(restored.stats).toEqual(old.stats);
+    expect(restored.profile).toEqual(old.profile);
+    expect(Object.hasOwn(restored, 'snippets')).toBe(false);
+    expect(describeBackupCompatibility(old)).toEqual({ legacy: false, ignoredFields: 0 });
+  });
+
+  it('поддерживает частичную копию только со счётчиками или профилем', () => {
+    expect(prepareBackup({ stats: { sessions: 2 } })).toEqual({ stats: { wordsTotal: 0, secondsTotal: 0, sessions: 2 } });
+    expect(prepareBackup({ profile: { name: 'Имя' } })).toEqual({ profile: { name: 'Имя' } });
+    expect(prepareBackup({ stats: {}, profile: { name: '' } })).toEqual({ stats: { wordsTotal: 0, secondsTotal: 0, sessions: 0 }, profile: { name: '' } });
+  });
+
+  it('явно различает известный формат, немаркированную копию и неподдерживаемую версию', () => {
+    expect(BACKUP_FORMAT).toBe(1);
+    expect(describeBackupCompatibility({ app: 'ZSpeakly', format: 1, dictations: [] })).toEqual({ legacy: false, ignoredFields: 0 });
+    expect(describeBackupCompatibility({ dictations: [], futureSection: ['личное'] })).toEqual({ legacy: true, ignoredFields: 1 });
+    expect(prepareBackup({ dictations: [] }).dictations).toEqual([]);
+    for (const format of [null, 0, 2, '1', {}, false]) {
+      expect(() => prepareBackup({ app: 'ZSpeakly', format, dictations: [] })).toThrow(/верси/i);
+    }
+    for (const app of ['', null, 0, false, {}, 'Другой продукт']) {
+      expect(() => prepareBackup({ app, format: 1, dictations: [] })).toThrow(/приложени/i);
+    }
+    for (const exportedAt of [3, [], { toString: 'личные данные', valueOf: 'секрет' }]) {
+      expect(() => prepareBackup({ app: 'ZSpeakly', format: 1, dictations: [], exportedAt })).toThrow(/дата/i);
+    }
+    expect(prepareBackup({ format: 1, dictations: [], exportedAt: null }).dictations).toEqual([]);
   });
 
   it('разрешает пустые списки и частичный старый формат, но не чужой или пустой файл', () => {

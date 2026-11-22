@@ -9,6 +9,7 @@ import { APP_PROFILE_LIMITS, sanitizeAppProfiles } from './appProfiles.js';
 // но в копии есть также настройки и словарь. Большую копию не уничтожаем:
 // её можно сохранить и разбирать вручную, автоматический импорт её отклоняет.
 export const BACKUP_MAX_BYTES = 32 * 1024 * 1024;
+export const BACKUP_FORMAT = 1;
 
 export async function readBackupJsonFile(file) {
   if (!file || typeof file.size !== 'number' || !Number.isSafeInteger(file.size) || file.size < 0) {
@@ -28,6 +29,19 @@ export async function readBackupJsonFile(file) {
 
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+const LIST_SECTIONS = ['dictations', 'dictionary', 'snippets', 'voiceHotkeys', 'presets', 'instructions'];
+const OBJECT_SECTIONS = ['settings', 'stats', 'profile'];
+const KNOWN_FIELDS = new Set(['app', 'format', 'exportedAt', ...LIST_SECTIONS, ...OBJECT_SECTIONS]);
+
+/** Предупреждение о совместимости без раскрытия неизвестных имён или значений. */
+export function describeBackupCompatibility(payload) {
+  if (!isObject(payload)) throw new Error('это не файл резервной копии ZSpeakly');
+  return {
+    legacy: !has(payload, 'app') || !has(payload, 'format'),
+    ignoredFields: Object.keys(payload).filter((key) => !KNOWN_FIELDS.has(key)).length,
+  };
+}
+
 const fail = (section) => { throw new Error(`Некорректный раздел копии: ${section}. Текущие данные не изменены.`); };
 const strings = ['rawText', 'language', 'command', 'fileName', 'sttModel', 'sttMode'];
 const numbers = ['durationMs', 'words', 'createdAt', 'editedAt', 'sttMs', 'spokenMs', 'sttParts', 'sttPreParts', 'sttGainDb', 'sttPausesMs', 'waitMs'];
@@ -114,12 +128,14 @@ function validateActions(list, section) {
 /** Валидирует всё заранее; отсутствующие разделы не заменяют текущие данные. */
 export function prepareBackup(payload) {
   if (!isObject(payload)) throw new Error('это не файл резервной копии ZSpeakly');
-  if (payload.app && payload.app !== 'ZSpeakly') throw new Error('копия от другого приложения');
-  if (payload.format != null && payload.format !== 1) throw new Error('неподдерживаемая версия резервной копии');
-  const lists = ['dictations', 'dictionary', 'snippets', 'voiceHotkeys', 'presets', 'instructions'];
-  for (const key of lists) if (has(payload, key) && !Array.isArray(payload[key])) fail(key);
-  for (const key of ['settings', 'stats', 'profile']) if (has(payload, key) && !isObject(payload[key])) fail(key);
-  if (!lists.some((key) => has(payload, key)) && !has(payload, 'settings')) throw new Error('в файле нет данных ZSpeakly');
+  // Немаркированные частичные копии поддерживаем ради совместимости. Если
+  // метка присутствует, пустое или некорректное значение не означает старую версию.
+  if (has(payload, 'app') && payload.app !== 'ZSpeakly') throw new Error('копия от другого приложения или неверная метка приложения');
+  if (has(payload, 'format') && payload.format !== BACKUP_FORMAT) throw new Error('неподдерживаемая версия резервной копии');
+  if (payload.exportedAt != null && typeof payload.exportedAt !== 'string') throw new Error('некорректная дата резервной копии');
+  for (const key of LIST_SECTIONS) if (has(payload, key) && !Array.isArray(payload[key])) fail(key);
+  for (const key of OBJECT_SECTIONS) if (has(payload, key) && !isObject(payload[key])) fail(key);
+  if (![...LIST_SECTIONS, ...OBJECT_SECTIONS].some((key) => has(payload, key))) throw new Error('в файле нет данных ZSpeakly');
   const result = {};
   if (has(payload, 'settings')) {
     for (const [key, value] of Object.entries(payload.settings)) {

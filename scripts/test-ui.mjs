@@ -6364,6 +6364,58 @@ async function scenarioBackupFileBoundaries(browser) {
   } finally { await page.close(); }
 }
 
+// Версия и нераспознанные разделы должны быть видны до подтверждения.
+async function scenarioBackupCompatibility(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
+  const backupPath = join(tmpdir(), `zs-compat-${Date.now()}.json`);
+  try {
+    takeErrors(page);
+    const input = await page.$('.settings-main input[type=file]');
+    const historyBefore = await page.evaluate(() => localStorage.getItem('mockstore:zs.dictations'));
+    writeFileSync(backupPath, JSON.stringify({ stats: { sessions: 12 }, profile: { name: 'Тест совместимости' }, СЕКРЕТНЫЙ_РАЗДЕЛ: ['ЛИЧНЫЕ_ДАННЫЕ'] }), 'utf8');
+    await input.uploadFile(backupPath);
+    await sleep(300);
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    if (preview) await clickIn(page, '', 'Восстановить');
+    await sleep(500);
+    const result = await page.evaluate(() => ({
+      stats: JSON.parse(localStorage.getItem('mockstore:zs.stats') || '{}'),
+      profile: JSON.parse(localStorage.getItem('mockstore:zs.profile') || '{}'),
+      history: localStorage.getItem('mockstore:zs.dictations'),
+    }));
+    record('сценарии', 'данные: частичная копия со счётчиками и профилем предупреждает о совместимости',
+      /счётчики, профиль/i.test(preview) && /без.*версии/i.test(preview) && /нераспознанн.*1/i.test(preview) &&
+      !preview.includes('СЕКРЕТНЫЙ_РАЗДЕЛ') && !preview.includes('ЛИЧНЫЕ_ДАННЫЕ') &&
+      result.stats.sessions === 12 && result.profile.name === 'Тест совместимости' && result.history === historyBefore,
+      JSON.stringify({ preview, stats: result.stats, profile: result.profile, historyUnchanged: result.history === historyBefore }));
+    writeFileSync(backupPath, JSON.stringify({ app: 'ZSpeakly', format: 2, dictations: [] }), 'utf8');
+    await input.uploadFile(backupPath);
+    await sleep(300);
+    const failure = await page.evaluate(() => ({
+      preview: document.querySelector('.confirm__text')?.innerText || '',
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+      history: localStorage.getItem('mockstore:zs.dictations'),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: версия из будущего отклоняется до изменений',
+      !failure.preview && /неподдерживаемая версия/i.test(failure.toast) && failure.history === historyBefore && errors.length === 0,
+      JSON.stringify({ ...failure, history: failure.history === historyBefore, error: errors[0] }));
+    writeFileSync(backupPath, JSON.stringify({ format: 1, dictations: [], exportedAt: { toString: 'СЕКРЕТ', valueOf: 'СЕКРЕТ' } }), 'utf8');
+    await input.uploadFile(backupPath);
+    await sleep(300);
+    const badDate = await page.evaluate(() => ({
+      preview: document.querySelector('.confirm__text')?.innerText || '',
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+      history: localStorage.getItem('mockstore:zs.dictations'),
+      mounted: Boolean(document.querySelector('.settings-main input[type=file]')),
+    }));
+    record('сценарии', 'данные: повреждённая дата не ломает интерфейс и не раскрывается',
+      badDate.mounted && !badDate.preview && /некорректная дата/i.test(badDate.toast) && !badDate.toast.includes('СЕКРЕТ') &&
+      badDate.history === historyBefore && takeErrors(page).length === 0,
+      JSON.stringify({ preview: badDate.preview, toast: badDate.toast.slice(-250), historyUnchanged: badDate.history === historyBefore, mounted: badDate.mounted }));
+  } finally { rmSync(backupPath, { force: true }); await page.close(); }
+}
+
 // Большую копию можно сохранить вручную, но нельзя обещать её автоматический импорт.
 async function scenarioBackupLargeExport(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
@@ -8480,6 +8532,7 @@ async function main() {
       ['микрофон', scenarioMic],
       ['локальная модель: приватность', scenarioLocalModelPrivacy],
       ['данные: резервная копия', scenarioBackup],
+      ['данные: совместимость копии', scenarioBackupCompatibility],
       ['данные: полный круг копии', scenarioBackupRoundTrip],
       ['данные: повреждённая копия', scenarioInvalidBackup],
       ['данные: срок хранения буфера', scenarioBackupClipboardRetention],

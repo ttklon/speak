@@ -19,7 +19,7 @@ import { migrateSettings } from '../lib/settingsMigration.js';
 import { tuneSettings } from '../lib/autotune.js';
 import { trimByBytes } from '../lib/clipboardBudget.js';
 import { trimDictations } from '../lib/dictationBudget.js';
-import { prepareBackup } from '../lib/backup.js';
+import { BACKUP_FORMAT, prepareBackup } from '../lib/backup.js';
 import {
   asList,
   sanitizeClipboard,
@@ -413,7 +413,7 @@ export function AppDataProvider({ children }) {
   const exportBackup = useCallback(
     () => ({
       app: 'ZSpeakly',
-      format: 1,
+      format: BACKUP_FORMAT,
       exportedAt: new Date().toISOString(),
       settings,
       dictations,

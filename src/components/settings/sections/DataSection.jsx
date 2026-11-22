@@ -4,7 +4,7 @@ import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes, isElectron } from '../../../lib/storage.js';
-import { BACKUP_MAX_BYTES, prepareBackup, readBackupJsonFile } from '../../../lib/backup.js';
+import { BACKUP_MAX_BYTES, describeBackupCompatibility, prepareBackup, readBackupJsonFile } from '../../../lib/backup.js';
 import { backupRetentionImpact } from '../../../lib/backupPreview.js';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
@@ -123,20 +123,15 @@ export default function DataSection({ onOpenSection }) {
       // Если пока читали выбрали другой файл, первый больше не должен менять
       // предпросмотр или показывать ошибку поверх последнего выбора.
       if (readId !== backupReadRef.current) return;
-      if (payload?.app && payload.app !== 'ZSpeakly') {
-        throw new Error(`это копия другого приложения (${String(payload.app).slice(0, 40)})`);
-      }
-      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-        throw new Error('в файле нет данных ZSpeakly');
-      }
       const prepared = prepareBackup(payload);
+      const compatibility = describeBackupCompatibility(payload);
       const labels = {
         settings: 'настройки', dictations: 'история', dictionary: 'словарь', snippets: 'быстрые блоки',
         voiceHotkeys: 'голосовые сочетания', presets: 'AI-инструкции', instructions: 'свои инструкции',
         stats: 'счётчики', profile: 'профиль',
       };
       const sections = Object.keys(labels).filter((key) => Object.prototype.hasOwnProperty.call(prepared, key)).map((key) => labels[key]);
-      setPendingBackup({ payload, prepared, name: file.name, sections });
+      setPendingBackup({ payload, prepared, compatibility, name: file.name, sections });
     } catch (err) {
       if (readId === backupReadRef.current) push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
     } finally {
@@ -374,7 +369,7 @@ export default function DataSection({ onOpenSection }) {
         title="Восстановить данные из копии?"
         description={
           pendingBackup
-            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}.${retentionWarning} Восстановление не атомарно: при сбое часть прежних данных может быть заменена, а часть — нет. Сначала сохраните отдельную копию текущих данных; при повреждённом профиле она может быть неполной.`
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}.${pendingBackup.compatibility.legacy ? ' Копия без полной метки приложения или версии: совместимость не гарантирована.' : ''}${pendingBackup.compatibility.ignoredFields ? ` Нераспознанные поля верхнего уровня будут пропущены: ${pendingBackup.compatibility.ignoredFields}.` : ''}${retentionWarning} Восстановление не атомарно: при сбое часть прежних данных может быть заменена, а часть — нет. Сначала сохраните отдельную копию текущих данных; при повреждённом профиле она может быть неполной.`
             : ''
         }
         confirmLabel="Восстановить"
