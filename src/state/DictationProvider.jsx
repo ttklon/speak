@@ -211,12 +211,6 @@ export function DictationProvider({ children }) {
   // Читаем его на нажатии — к моменту остановки записи выделение в чужом окне
   // уже может быть снято (клик по плашке, переключение окна).
   const commandRef = useRef('');
-  // кадр экрана для «диктовки с учётом экрана» (в памяти, не на диске)
-  const screenContextRef = useRef(null);
-  // термины, которые локальная модель разглядела на экране: уходят в whisper
-  // как подсказка. Живут до следующего кадра и нигде не сохраняются.
-  const screenTermsRef = useRef('');
-
   // Куда попадёт текст: спрашиваем на старте записи, в фоне. На остановке
   // берём готовый ответ — иначе ожидание вставки выросло бы на запрос к окну,
   // а обещание «20 секунд речи за 5 секунд» ломается на ровном месте.
@@ -317,7 +311,7 @@ export function DictationProvider({ children }) {
       // Только для сказанного: ответ агента — это написанный моделью текст,
       // и превращать в нём «запятую» в знак было бы ошибкой.
       const commanded = spoken
-        ? applyVoiceCommands(corrected, { language: settingsRef.current.language, preserveFormatting: codeTarget })
+        ? applyVoiceCommands(corrected, { language: resolveSessionLang(), preserveFormatting: codeTarget })
         : corrected;
       // В редакторе кода даже заглавная буква, точка и пробелы могут менять
       // программу. Без явных команд оставляем результат словаря как есть.
@@ -955,8 +949,20 @@ export function DictationProvider({ children }) {
   const start = useCallback(
     (opts = {}) => {
       if (recRef.current) return;
-      const session = { cancelled: false };
+      const processing = processingRecRef.current;
+      const activeProcessing = processing && !processing.cancelled && !processing.session?.cancelled;
+      const activeFinish = finishing.current && !finishing.current.isCancelled?.();
+      if (activeProcessing || activeFinish) {
+        pushToast({
+          title: 'Диктовка ещё обрабатывается',
+          description: 'Дождитесь результата или отмените распознавание, прежде чем начать новую запись.',
+          tone: 'warn',
+        });
+        return;
+      }
+      const session = { cancelled: false, completed: false, screenTerms: '' };
       sessionRef.current = session;
+      const isCurrentSession = () => sessionRef.current === session && !session.cancelled && !session.completed;
       sessionOpts.current = opts;
       // новая диктовка — снова показываем плавающее окно, даже если прошлое скрыли
       hudHiddenByUser.current = false;
@@ -987,11 +993,12 @@ export function DictationProvider({ children }) {
       targetRef.current = null;
       Promise.resolve(window.zspeakly?.native?.insertTarget?.())
         .then((info) => {
-          if (!info || typeof info !== 'object') return;
+          if (!isCurrentSession() || !info || typeof info !== 'object') return;
           targetRef.current = info;
-          // Окно известно: если для него есть правило, язык решаем сразу.
+          // Первый запрос к движку фиксирует язык всей записи. Поздний ответ
+          // окна больше не может изменить язык истории или следующих чанков.
           const rule = matchAppProfile(info, settingsRef.current.appProfiles || []);
-          if (!rule) return;
+          if (!rule || langRef.current) return;
           langRef.current = rule.language;
           diag.info('stt', 'Язык по активному окну', {
             window: info.app || info.title || '',
@@ -1020,8 +1027,7 @@ export function DictationProvider({ children }) {
         window.zspeakly.native
           .captureScreen()
           .then(async (shot) => {
-            if (!shot?.ok) return;
-            screenContextRef.current = shot.image;
+            if (!isCurrentSession() || !shot?.ok) return;
             const { aiEndpoint, aiModel, aiProcessing } = settingsRef.current || {};
             if (!aiEndpoint || aiProcessing === false) {
               diag.info('stt', 'Контекст экрана снят, но модель не настроена', {
@@ -1033,8 +1039,9 @@ export function DictationProvider({ children }) {
               return;
             }
             const ctx = await describeScreen(shot.image, { endpoint: aiEndpoint, model: aiModel });
+            if (!isCurrentSession()) return;
             if (ctx.ok) {
-              screenTermsRef.current = ctx.terms;
+              session.screenTerms = ctx.terms;
               diag.info('stt', 'Контекст экрана распознан', {
                 keep: true,
                 terms: ctx.terms.split(',').length,
@@ -1056,7 +1063,7 @@ export function DictationProvider({ children }) {
         window.zspeakly.native
           .sttStatus(settingsRef.current.whisperModel)
           .then((st) => {
-            if (st && st.available === false) {
+            if (isCurrentSession() && st && st.available === false) {
               setError({
                 code: 'engine-missing',
                 title: 'Движок распознавания не установлен',
@@ -1087,12 +1094,13 @@ export function DictationProvider({ children }) {
         useDictionary: settingsRef.current.dictionaryEnabled !== false,
         // контекст экрана читаем в момент остановки, а не старта: модель могла
         // ещё не ответить, когда человек уже отпустил клавишу
-        getContextPrompt: () => (opts.screenAware ? screenTermsRef.current : ''),
+        getContextPrompt: () => (opts.screenAware && isCurrentSession() ? session.screenTerms : ''),
         // 2,5 с — компромисс: whisper на коротком отрезке успевает за это время,
         // а текст в плашке не отстаёт от речи на полминуты
         streamIntervalMs: liveDraftRef.current.enabled ? 2500 : 0,
-        onStart: () => setState('listening'),
+        onStart: () => { if (isCurrentSession()) setState('listening'); },
         onPartial: ({ text, interim, truncated }) => {
+          if (!isCurrentSession()) return;
           const composed = [text, interim].filter(Boolean).join(' ');
           // живая расшифровка может прийти по хвосту записи — тогда начало
           // помечено многоточием, чтобы черновик не выдавал себя за всё
@@ -1101,11 +1109,13 @@ export function DictationProvider({ children }) {
           setDraft(shown);
         },
         onFinal: ({ text }) => {
+          if (!isCurrentSession()) return;
           finalRef.current = text;
           draftRef.current = text;
           setDraft(text);
         },
         onLevel: (v) => {
+          if (!isCurrentSession()) return;
           setLevel(v);
           // Раннее предупреждение: пять секунд тишины подряд при живой записи.
           // Сказать об этом один раз за участок тишины — помощь, а не шум.
@@ -1131,8 +1141,9 @@ export function DictationProvider({ children }) {
           Promise.resolve(stopRef.current?.()).catch(() => {});
         },
         // не ошибка, но человек должен знать: микрофон из настроек пропал
-        onNotice: (t) => pushToast(t),
+        onNotice: (t) => { if (isCurrentSession()) pushToast(t); },
         onError: (err) => {
+          if (!isCurrentSession()) return;
           // каждая ошибка движка должна быть видна в диагностике, иначе
           // «не работает» невозможно разобрать постфактум
           diag.warn('stt', err?.title || err?.code || 'Ошибка распознавания', {
@@ -1165,7 +1176,9 @@ export function DictationProvider({ children }) {
           }
         },
         onEnd: async ({ text, ms, spoken, mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs }) => {
-          if (session.cancelled) return;
+          session.screenTerms = '';
+          if (!isCurrentSession()) return;
+          session.completed = true;
           recRef.current = null;
           setState('processing');
           setLevel(0);
@@ -1194,6 +1207,7 @@ export function DictationProvider({ children }) {
       }
       // start() у нативного движка асинхронный (нужно разрешение на микрофон)
       const failStart = (err) => {
+        if (!isCurrentSession()) return;
         console.warn('[dictation] start failed', err);
         diag.error('stt', 'Не удалось начать запись', { reason: String(err?.message || err) });
         recRef.current = null;
@@ -1457,7 +1471,10 @@ export function DictationProvider({ children }) {
   }, [last, retrying, updateDictation]);
 
   const cancelProcessing = useCallback(() => {
-    if (sessionRef.current) sessionRef.current.cancelled = true;
+    if (sessionRef.current) {
+      sessionRef.current.cancelled = true;
+      sessionRef.current.screenTerms = '';
+    }
     if (finishing.current?.isCancelled?.()) finishing.current = false;
     const processing = processingRecRef.current;
     if (processing) processing.cancelled = true;
@@ -1506,7 +1523,10 @@ export function DictationProvider({ children }) {
 
   /** Отменить начатую запись без распознавания и без истории. */
   const cancel = useCallback(() => {
-    if (sessionRef.current) sessionRef.current.cancelled = true;
+    if (sessionRef.current) {
+      sessionRef.current.cancelled = true;
+      sessionRef.current.screenTerms = '';
+    }
     try {
       recRef.current?.abort?.();
     } catch {

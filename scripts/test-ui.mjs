@@ -1193,7 +1193,7 @@ async function scenarioAppLanguage(browser) {
       language: 'ru',
       appProfiles: [{ id: 'app-vs', match: 'Visual Studio Code', language: 'en' }],
     },
-    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'add a null check' },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'hello comma world period' },
   });
   takeErrors(page);
   await page.evaluate(() => {
@@ -1228,6 +1228,8 @@ async function scenarioAppLanguage(browser) {
     result.lang === 'en' && result.savedLang === 'en',
     `движок=${result.lang || '—'} история=${result.savedLang || '—'}`,
   );
+  record('сценарии', 'язык под окно: команды используют язык этой записи',
+    result.text === 'Hello, world.', result.text);
   record(
     'сценарии',
     'язык под окно: приложение говорит, почему диктует не на общем языке',
@@ -1237,6 +1239,222 @@ async function scenarioAppLanguage(browser) {
   const errors = takeErrors(page);
   record('сценарии', 'язык под окно: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
+}
+
+// Горячая клавиша во время обработки не должна перенести старый результат в новую сессию.
+async function scenarioPendingSessionStart(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      const native = window.zspeakly.native;
+      window.__pendingCalls = 0;
+      window.__pendingCaptures = 0;
+      native.captureScreen = async () => { window.__pendingCaptures += 1; return { ok: false }; };
+      native.transcribePcm = () => {
+        window.__pendingCalls += 1;
+        if (window.__pendingCalls === 1) return new Promise((resolve) => { window.__completeFirst = resolve; });
+        return Promise.resolve({ ok: true, text: 'вторая запись', ms: 20 });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => Boolean(window.__completeFirst), { timeout: 10000 });
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+    await sleep(300);
+    const blocked = await page.evaluate(() => ({
+      captures: window.__pendingCaptures,
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    await page.evaluate(() => window.__completeFirst({ ok: true, text: 'первая запись', ms: 20 }));
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    await sleep(1100);
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 2, { timeout: 10000 });
+    const result = await page.evaluate(() => ({
+      calls: window.__pendingCalls, captures: window.__pendingCaptures,
+      texts: (window.__e2e.read('zs.dictations') || []).map((row) => row.text),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'сессии: новую запись нельзя начать до результата, после результата можно',
+      blocked.captures === 0 && /Диктовка ещё обрабатывается/.test(blocked.toast) && result.calls === 2 && result.captures === 1 &&
+      result.texts.some((text) => /первая запись/i.test(text)) && result.texts.some((text) => /вторая запись/i.test(text)) && errors.length === 0,
+      JSON.stringify({ blocked, ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Отложенные данные окна и кадра одной записи не должны попадать в следующую.
+async function scenarioSessionContextIsolation(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: {
+      aiProcessing: true, aiDictationRewrite: false, aiEndpoint: 'http://localhost:11434', liveWhisper: false,
+      language: 'ru', appProfiles: [{ id: 'app-vs', match: 'Visual Studio Code', language: 'en' }],
+    },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'пример проверки' },
+    patchNative: () => {
+      const native = window.zspeakly.native;
+      let targetCount = 0;
+      let captureCount = 0;
+      native.insertTarget = () => {
+        window.__targetCount = ++targetCount;
+        if (targetCount === 1) return new Promise((resolve) => { window.__resolveOldTarget = resolve; });
+        return Promise.resolve({ own: false, app: 'Telegram Desktop', title: 'Telegram' });
+      };
+      native.captureScreen = async () => {
+        window.__captureCount = ++captureCount;
+        return captureCount === 1 ? { ok: true, image: 'data:image/png;base64,YWJj', width: 1, height: 1 } : { ok: false };
+      };
+      native.httpPost = async ({ body }) => {
+        if (body.images) return new Promise((resolve) => { window.__resolveOldVision = resolve; });
+        return { ok: false };
+      };
+      const original = native.transcribePcm;
+      native.transcribePcm = async (args) => {
+        window.__contextStt = { lang: args.lang, prompt: args.contextPrompt };
+        return original(args);
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+    try {
+      await page.waitForFunction(() => Boolean(window.__resolveOldTarget && window.__resolveOldVision), { timeout: 8000 });
+    } catch (err) {
+      const state = await page.evaluate(() => ({ target: Boolean(window.__resolveOldTarget), vision: Boolean(window.__resolveOldVision), captures: window.__captureCount, targets: window.__targetCount, body: document.body.innerText.slice(0, 180) }));
+      throw new Error(`${err.message}: ${JSON.stringify(state)}`);
+    }
+    await emit(page, 'hotkey', { type: 'cancel' });
+    await sleep(500);
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+    try {
+      await page.waitForFunction(() => window.__targetCount >= 3 && window.__captureCount === 2, { timeout: 8000 });
+    } catch (err) {
+      const state = await page.evaluate(() => ({ captures: window.__captureCount, targets: window.__targetCount, body: document.body.innerText.slice(0, 200) }));
+      throw new Error(`${err.message}: ${JSON.stringify(state)}`);
+    }
+    await page.evaluate(() => {
+      window.__resolveOldTarget({ own: false, app: 'Code', title: 'Visual Studio Code' });
+      window.__resolveOldVision({ ok: true, data: { response: 'ПрошлыйСекретныйКонтекст' } });
+    });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length > 0, { timeout: 12000 });
+    const result = await page.evaluate(() => ({
+      stt: window.__contextStt,
+      row: (window.__e2e.read('zs.dictations') || [])[0],
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'сессии: старое окно и старый экран не влияют на новую запись',
+      result.stt?.lang === 'ru' && !result.stt?.prompt && result.row?.language === 'ru' &&
+      result.row?.text === 'Пример проверки' && errors.length === 0,
+      JSON.stringify({ stt: result.stt, language: result.row?.language, text: result.row?.text, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Если получение снимка запоздало после отмены, не отправляем его модели.
+async function scenarioCancelledScreenCapture(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiDictationRewrite: false, aiEndpoint: 'http://localhost:11434', liveWhisper: false },
+    patchNative: () => {
+      window.zspeakly.native.captureScreen = () => new Promise((resolve) => { window.__resolveCapture = resolve; });
+      window.__visionCalls = 0;
+      window.zspeakly.native.httpPost = async () => { window.__visionCalls += 1; return { ok: true, data: { response: 'данные' } }; };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+    await page.waitForFunction(() => Boolean(window.__resolveCapture), { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'cancel' });
+    await page.evaluate(() => window.__resolveCapture({ ok: true, image: 'data:image/png;base64,YWJj', width: 1, height: 1 }));
+    await sleep(800);
+    const calls = await page.evaluate(() => window.__visionCalls);
+    const errors = takeErrors(page);
+    record('сценарии', 'сессии: запоздавший после отмены снимок не отправляется модели',
+      calls === 0 && errors.length === 0, `запросов=${calls}; ${errors[0] || ''}`);
+  } finally { await page.close(); }
+}
+
+// Завершённая запись тоже не должна передавать свой экран следующей.
+async function scenarioCompletedScreenIsolation(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiDictationRewrite: false, aiEndpoint: 'http://localhost:11434', liveWhisper: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'пример проверки' },
+    patchNative: () => {
+      const native = window.zspeakly.native;
+      let captures = 0;
+      native.captureScreen = async () => {
+        window.__captures = ++captures;
+        return captures === 1 ? { ok: true, image: 'data:image/png;base64,YWJj', width: 1, height: 1 } : { ok: false };
+      };
+      native.httpPost = async () => ({ ok: true, data: { response: 'ТерминПервогоЭкрана' } });
+      const original = native.transcribePcm;
+      window.__prompts = [];
+      native.transcribePcm = async (args) => {
+        window.__prompts.push(args.contextPrompt || '');
+        return original(args);
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    await sleep(900);
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold', screenAware: true });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 2, { timeout: 10000 });
+    const result = await page.evaluate(() => ({ prompts: window.__prompts, captures: window.__captures }));
+    const errors = takeErrors(page);
+    record('сценарии', 'сессии: готовый контекст экрана не переходит к следующей записи',
+      result.captures === 2 && result.prompts.length === 2 && result.prompts[0] === 'ТерминПервогоЭкрана' && result.prompts[1] === '' && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Язык фиксируется при первом запросе к движку, даже если окно ответило позже.
+async function scenarioLateTargetLanguage(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { language: 'ru', liveWhisper: false, aiDictationRewrite: false,
+      appProfiles: [{ id: 'app-vs', match: 'Visual Studio Code', language: 'en' }] },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      let targetCount = 0;
+      window.zspeakly.native.insertTarget = () => ++targetCount === 1
+        ? new Promise((resolve) => { window.__resolveTarget = resolve; })
+        : Promise.resolve({ own: false, app: 'Code', title: 'Visual Studio Code' });
+      window.zspeakly.native.transcribePcm = (args) => {
+        window.__engineLanguage = args.lang;
+        return new Promise((resolve) => { window.__resolveTranscription = resolve; });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => Boolean(window.__resolveTranscription), { timeout: 10000 });
+    await page.evaluate(() => window.__resolveTarget({ own: false, app: 'Code', title: 'Visual Studio Code' }));
+    await sleep(300);
+    await page.evaluate(() => window.__resolveTranscription({ ok: true, text: 'пример проверки', ms: 20 }));
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length > 0, { timeout: 10000 });
+    const result = await page.evaluate(() => ({ engine: window.__engineLanguage, row: (window.__e2e.read('zs.dictations') || [])[0] }));
+    const errors = takeErrors(page);
+    record('сценарии', 'сессии: позднее окно не меняет уже выбранный язык записи',
+      result.engine === 'ru' && result.row?.language === 'ru' && errors.length === 0,
+      JSON.stringify({ engine: result.engine, language: result.row?.language, error: errors[0] }));
+  } finally { await page.close(); }
 }
 
 // «Отмени»: сказал одно слово — последняя вставка ушла из окна.
@@ -7067,6 +7285,11 @@ async function main() {
       ['голосовые команды', scenarioVoiceCommands],
       ['оформление под окно', scenarioAppFormat],
       ['язык под окно', scenarioAppLanguage],
+      ['старт во время обработки', scenarioPendingSessionStart],
+      ['изоляция контекста сессии', scenarioSessionContextIsolation],
+      ['снимок после отмены', scenarioCancelledScreenCapture],
+      ['контекст завершённой сессии', scenarioCompletedScreenIsolation],
+      ['позднее окно и язык', scenarioLateTargetLanguage],
       ['команда «отмени»', scenarioUndoCommand],
       ['«отмени» в другом окне', scenarioUndoRefusal],
       ['быстрые блоки', scenarioSnippets],
