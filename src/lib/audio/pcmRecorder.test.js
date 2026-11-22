@@ -89,6 +89,38 @@ describe('запись в PCM для whisper', () => {
     },
   );
 
+  it('отмена при ожидании разрешения закрывает поздний поток до создания аудиоконтекста', async () => {
+    const audio = fakeAudio();
+    const created = vi.fn();
+    window.AudioContext = class extends audio.Ctx { constructor(options) { super(options); created(); } };
+    let allow;
+    const getUserMedia = vi.fn(() => new Promise((resolve) => { allow = resolve; }));
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+    let cancelled = false;
+    const opening = startPcmRecording({ isCancelled: () => cancelled });
+    cancelled = true;
+    allow(audio.stream());
+    await expect(opening).rejects.toMatchObject({ name: 'AbortError' });
+    expect(audio.tracks[0].stop).toHaveBeenCalledTimes(1);
+    expect(created).not.toHaveBeenCalled();
+  });
+
+  it('после отмены не открывает системный микрофон вместо пропавшего', async () => {
+    const audio = fakeAudio();
+    window.AudioContext = audio.Ctx;
+    let reject;
+    const getUserMedia = vi.fn()
+      .mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }))
+      .mockResolvedValue(audio.stream());
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+    let cancelled = false;
+    const opening = startPcmRecording({ deviceId: 'usb', isCancelled: () => cancelled });
+    cancelled = true;
+    reject(Object.assign(new Error('пропал'), { name: 'OverconstrainedError' }));
+    await expect(opening).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
   it('пишет 16 кГц моно и считает длительность по реальной частоте', async () => {
     const { rec, audio } = await record();
     expect(rec.sampleRate).toBe(48000);

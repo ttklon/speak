@@ -267,6 +267,39 @@ describe('диктовка целиком: что получает челове�
     } finally { vi.useRealTimers(); }
   });
 
+  it('стоп во время открытия микрофона сразу завершает запись и закрывает поздний поток', async () => {
+    let allow;
+    recorderState.startGate = new Promise((resolve) => { allow = resolve; });
+    const started = vi.fn(), error = vi.fn(), end = vi.fn();
+    const recognizer = createRecognizer({ onStart: started, onError: error, onEnd: end });
+    const opening = recognizer.start();
+    expect(await recognizer.stop()).toMatchObject({ text: '' });
+    await recognizer.stop();
+    allow();
+    await opening;
+    expect(fakeRecorder.abort).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ code: 'mic-not-ready' }));
+    expect(started).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+    expect(native.transcribePcm).not.toHaveBeenCalled();
+  });
+
+  it('ошибка разрешения после стопа не показывает устаревшую ошибку', async () => {
+    let reject;
+    recorderState.startGate = new Promise((_, fail) => { reject = fail; });
+    const error = vi.fn();
+    const recognizer = createRecognizer({ onError: error });
+    const opening = recognizer.start();
+    await recognizer.stop();
+    const denial = new Error('access denied');
+    denial.name = 'NotAllowedError';
+    reject(denial);
+    await opening;
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ code: 'mic-not-ready' }));
+  });
+
   it('отмена во время запроса микрофона закрывает полученный позже рекордер', async () => {
     let allow; recorderState.startGate = new Promise((resolve) => { allow = resolve; });
     const started = vi.fn(), error = vi.fn();

@@ -2297,6 +2297,96 @@ async function scenarioMicPreroll(browser) {
   record('сценарии', 'предролл: канал трея без ошибок консоли', warmErrors.length === 0, warmErrors[0] || '');
 }
 
+// Стоп до разрешения на микрофон должен завершить запись, а поздний поток закрыться.
+async function scenarioDelayedMicrophone(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { micPreroll: false, liveWhisper: false, aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'повторная запись' },
+    patchNative: () => {
+      const devices = navigator.mediaDevices;
+      const original = devices.getUserMedia.bind(devices);
+      let first = true;
+      window.__lateTrack = null;
+      devices.getUserMedia = async (constraints) => {
+        const stream = await original(constraints);
+        if (!first) return stream;
+        first = false;
+        window.__lateTrack = stream.getAudioTracks()[0];
+        await new Promise((resolve) => { window.__allowMic = resolve; });
+        return stream;
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await page.waitForFunction(() => Boolean(window.__allowMic), { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((node) => /Микрофон ещё не открылся/.test(node.innerText)), { timeout: 8000 });
+    await page.evaluate(() => window.__allowMic());
+    await page.waitForFunction(() => window.__lateTrack?.readyState === 'ended', { timeout: 8000 });
+    await sleep(1100);
+    const afterStop = await page.evaluate(() => ({
+      track: window.__lateTrack.readyState,
+      button: document.querySelector('.hero__mic')?.innerText || '',
+      history: window.__e2e.read('zs.dictations') || [],
+    }));
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1200);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    const history = await page.evaluate(() => window.__e2e.read('zs.dictations'));
+    const errors = takeErrors(page);
+    record('сценарии', 'микрофон: стоп до открытия закрывает поздний поток и позволяет повтор',
+      afterStop.track === 'ended' && !/Слушаю/.test(afterStop.button) && afterStop.history.length === 0 &&
+      /повторная запись/i.test(history[0]?.text || '') && errors.length === 0,
+      JSON.stringify({ afterStop, text: history[0]?.text, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Отказ без разрешения и отсутствующее устройство должны прекращать запись.
+async function scenarioMicrophoneFailure(browser) {
+  for (const name of ['NotFoundError', 'UnknownError']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { micPreroll: false, liveWhisper: false, aiDictationRewrite: false },
+      storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'после ошибки' },
+      patchNative: () => {
+        window.__micFailureName = 'NotFoundError';
+        const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        let fail = true;
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+          if (!fail) return original(constraints);
+          fail = false;
+          const err = new Error('test microphone failure');
+          err.name = window.__micFailureName;
+          throw err;
+        };
+      },
+    });
+    takeErrors(page);
+    try {
+      await page.evaluate((errorName) => { window.__micFailureName = errorName; }, name);
+      await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+      await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((node) => /микрофон/i.test(node.innerText)), { timeout: 8000 });
+      await sleep(300);
+      const result = await page.evaluate(() => ({
+        button: document.querySelector('.hero__mic')?.innerText || '',
+        toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+      }));
+      await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+      await sleep(1100);
+      await emit(page, 'hotkey', { type: 'up' });
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+      const text = await page.evaluate(() => window.__e2e.read('zs.dictations')[0]?.text || '');
+      const errors = takeErrors(page);
+      const expected = name === 'NotFoundError' ? /Микрофон не найден/ : /Не удалось открыть микрофон/;
+      record('сценарии', `микрофон: ${name} прекращает запись с сообщением и разрешает повтор`,
+        !/Слушаю/.test(result.button) && expected.test(result.toast) && /после ошибки/i.test(text) && errors.length === 0,
+        JSON.stringify({ ...result, text, error: errors[0] }));
+    } finally { await page.close(); }
+  }
+}
+
 // Микрофон из настроек пропал (выдернули USB): диктовка не должна молча
 // ломаться — пишем с системного и честно говорим об этом.
 async function scenarioMissingMic(browser) {
@@ -7306,6 +7396,8 @@ async function main() {
       ['поздняя полировка после правки', scenarioLatePolishEdit],
       ['отмена полировки', scenarioCancelPolish],
       ['повтор после отмены полировки', scenarioCancelPolishRestart],
+      ['стоп до открытия микрофона', scenarioDelayedMicrophone],
+      ['ошибки открытия микрофона', scenarioMicrophoneFailure],
       ['пропавший микрофон', scenarioMissingMic],
       ['вставка не удалась', scenarioInsertFailed],
       ['обещания плашки', scenarioHudPromise],

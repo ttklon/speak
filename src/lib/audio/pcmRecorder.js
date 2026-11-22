@@ -27,13 +27,15 @@ function toInt16(float32) {
  * @param {{samples: Float32Array, sampleRate: number}} [opts.preroll]
  *   звук, записанный «горячим микрофоном» до нажатия хоткея
  */
-export async function startPcmRecording({ deviceId = 'default', onLevel, preroll = null, cleanupAudio = false } = {}) {
+export async function startPcmRecording({ deviceId = 'default', onLevel, preroll = null, cleanupAudio = false, isCancelled = () => false } = {}) {
   const Ctx = pickAudioContext();
   if (!Ctx || !navigator.mediaDevices?.getUserMedia) {
     throw new Error('Микрофон недоступен в этом окружении');
   }
 
   const constraints = micConstraints({ deviceId, cleanup: cleanupAudio });
+  const cancelledError = () => Object.assign(new Error('Открытие микрофона отменено'), { name: 'AbortError' });
+  if (isCancelled()) throw cancelledError();
 
   // Микрофон из настроек мог исчезнуть (наушники отключили, USB выдернули).
   // Тогда getUserMedia падает с OverconstrainedError, и диктовка «не работает»
@@ -43,6 +45,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
   try {
     stream = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err) {
+    if (isCancelled()) throw cancelledError();
     const missingDevice =
       deviceId &&
       deviceId !== 'default' &&
@@ -50,6 +53,14 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     if (!missingDevice) throw err;
     stream = await navigator.mediaDevices.getUserMedia(micConstraints({ cleanup: cleanupAudio }));
     fellBack = true;
+  }
+  if (isCancelled()) {
+    try {
+      for (const track of stream.getTracks()) {
+        try { track.stop(); } catch { /* закрыть остальные дорожки */ }
+      }
+    } catch { /* поток уже закрыт */ }
+    throw cancelledError();
   }
   let ctx, native, source, processor, silent;
   let cleaned = false;

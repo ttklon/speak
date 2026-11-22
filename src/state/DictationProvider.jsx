@@ -1162,8 +1162,10 @@ export function DictationProvider({ children }) {
           }
           // Движка нет / он недоступен — запись продолжать бессмысленно:
           // иначе человек говорит в пустоту и ждёт результата.
-          const fatal = ['not-allowed', 'service-not-allowed', 'network', 'web-unavailable', 'engine-missing'];
+          const fatal = ['not-allowed', 'audio-capture', 'mic-failed', 'service-not-allowed', 'network', 'web-unavailable', 'engine-missing'];
           if (fatal.includes(err.code)) {
+            session.cancelled = true;
+            session.screenTerms = '';
             const rec = recRef.current;
             recRef.current = null;
             try {
@@ -1270,6 +1272,14 @@ export function DictationProvider({ children }) {
       if (processingRecRef.current === processing) processingRecRef.current = null;
     }
     if (processing.cancelled || processing.session?.cancelled || result?.code === 'cancelled') return;
+    if (result?.code === 'mic-not-ready') {
+      if (processing.session) {
+        processing.session.completed = true;
+        processing.session.screenTerms = '';
+      }
+      setState('idle');
+      return;
+    }
 
     const text = (result && result.text) || fallbackText || '';
     const item = await finish(text, { isCancelled: () => Boolean(processing.session?.cancelled) });

@@ -345,6 +345,7 @@ export function createRecognizer(opts = {}) {
             deviceId: opts.deviceId || 'default',
             // сырой звук или «шумоподавление Windows» — решает настройка
             cleanupAudio: opts.micCleanup === true,
+            isCancelled: () => aborted,
             onLevel: (v) => {
               onLevel?.(v);
               // Уровень микрофона — единственный сигнал, по которому видно
@@ -384,7 +385,10 @@ export function createRecognizer(opts = {}) {
           // Причина от браузера (NotAllowedError, NotFoundError) важнее
           // технического «Permission denied» — человеку нужен следующий шаг.
           const named = err?.name === 'NotAllowedError' ? 'not-allowed' : err?.name === 'NotFoundError' ? 'audio-capture' : '';
-          const described = named ? describeRecognitionError(named) : describeRecognitionError('audio-capture');
+          const described = named ? describeRecognitionError(named) : {
+            title: 'Не удалось открыть микрофон',
+            hint: 'Проверьте доступ к микрофону и устройство в «Настройки → Приложение → Устройство микрофона», затем попробуйте снова.',
+          };
           onError?.({
             ...described,
             code: named || 'mic-failed',
@@ -397,7 +401,23 @@ export function createRecognizer(opts = {}) {
         }
       },
       async stop() {
-        if (!recorder || stopped) return { text };
+        if (stopped) return { text };
+        if (!recorder) {
+          // Отпустили кнопку, пока система ещё открывает микрофон. Не ждём
+          // неопределённое время разрешения: поздно полученный поток закроет
+          // проверка aborted в start(), а новая запись сможет начаться сразу.
+          aborted = true;
+          stopped = true;
+          preClosed = true;
+          wakeAbort();
+          stopStream();
+          onError?.({
+            code: 'mic-not-ready',
+            title: 'Микрофон ещё не открылся',
+            hint: 'Дождитесь разрешения на микрофон и попробуйте записать ещё раз.',
+          });
+          return { text: '', code: 'mic-not-ready' };
+        }
         stopped = true;
         // недоработанный промежуточный запрос больше не нужен: финальный
         // проход по всей записи всё равно точнее. Раньше он не отменялся и
