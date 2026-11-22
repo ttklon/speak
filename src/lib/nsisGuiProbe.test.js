@@ -12,6 +12,15 @@ describe('проверка мастера без установки', () => {
     expect(probe).toContain('if ($ProbeCount -gt 50)');
   });
 
+  it('шаблон Next распознаёт подпись кнопки, но не Install', () => {
+    const pattern = probe.match(/\$_.Text -match '([^']*Next[^']*)'/)?.[1];
+    expect(pattern).toBeDefined();
+    const next = new RegExp(pattern, 'i');
+    expect(next.test('&Next >')).toBe(true);
+    expect(next.test('Next>')).toBe(true);
+    expect(next.test('&Install')).toBe(false);
+  });
+
   it('один раз нажимает только Next на первом экране и ждёт поле каталога, не нажимая Install', () => {
     expect(probe).toContain("$_.Text -match 'Choose Installation Options'");
     expect(probe).toContain("$_.Text -match '^&?Next\\s*>'");
