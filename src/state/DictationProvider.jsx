@@ -28,8 +28,8 @@ import { tierForModel } from '../lib/modelTiers.js';
 import { useAppData } from './AppDataProvider.jsx';
 import { OPS, cleanLines, llmRewrite, polishDictation } from '../lib/ai/textops.js';
 import { applyVoiceCommands } from '../lib/voiceCommands.js';
-// оформление под место вставки: в мессенджере точка в конце лишняя, в
-// редакторе кода — заглавная буква; решается без человека и без модели
+// оформление под место вставки: в чате можно убрать конечную точку,
+// в распознанном редакторе кода не меняем регистр и пунктуацию автоматически
 import { formatForApp, resolveAppStyle } from '../lib/appFormat.js';
 import { expandSnippet } from '../lib/snippets.js';
 import { createPolishGate } from '../lib/ai/polishGate.js';
@@ -295,29 +295,37 @@ export function DictationProvider({ children }) {
       // «Словарь» только сохранялся, а замены делались всегда
       const applyDict = settingsRef.current.dictionaryEnabled !== false;
       const corrected = applyDict ? applyDictionary(raw, dictRef.current) : raw;
-      // Тумблер «Постобработка текста» в настройках раньше только сохранялся:
-      // чистка шла всегда. Теперь выключенный тумблер оставляет текст как есть,
-      // а включённый убирает паразитов и расставляет пунктуацию.
+      // Очистка обычной диктовки не принимает результат с потерянными словами.
       // «Не трогать мой текст» — сильнее: выключает и чистку, и оговорки, и
       // оформление под окно, и переписывание моделью. Словарь, голосовые
       // команды и быстрые блоки остаются: это прямые указания человека.
       const policy = textPolicy(settingsRef.current);
       const preserve = policy.preserve;
       const polishing = policy.clean;
+      // Используем один снимок цели для всех стадий этой диктовки, включая
+      // поздний ответ модели. Если цель не определилась, остаётся neutral.
+      const targetStyle = insert && sessionOpts.current.insert !== false
+        ? resolveAppStyle(targetRef.current || {})
+        : { style: 'neutral', why: '', label: '' };
+      const where = policy.formatForApp
+        ? targetStyle
+        : { style: 'neutral', why: preserve ? 'текст не трогаем: оформление выключено' : '', label: '' };
+      const codeTarget = spoken && targetStyle.style === 'code';
       // Голосовые знаки и команды: «запятая», «с новой строки», «удалить
       // последнее слово». Раньше они попадали в текст словами — человеку
       // приходилось бросать диктовку и править руками.
       // Только для сказанного: ответ агента — это написанный моделью текст,
       // и превращать в нём «запятую» в знак было бы ошибкой.
       const commanded = spoken
-        ? applyVoiceCommands(corrected, { language: settingsRef.current.language })
+        ? applyVoiceCommands(corrected, { language: settingsRef.current.language, preserveFormatting: codeTarget })
         : corrected;
-      // Чистка — построчно: иначе схлопнулись бы переносы, сказанные голосом.
-      let cleaned = polishing ? cleanLines(commanded) : commanded.trim();
+      // В редакторе кода даже заглавная буква, точка и пробелы могут менять
+      // программу. Без явных команд оставляем результат словаря как есть.
+      let cleaned = codeTarget ? commanded : polishing ? cleanLines(commanded) : commanded.trim();
       // Оговорки: «встреча в четыре… то есть в три» — в тексте остаётся то,
       // что человек имел в виду. Правило осторожное: убираем только когда
       // замена очевидна (число, имя, день недели), уточнение не трогаем.
-      if (spoken && cleaned && policy.fixSelfCorrections) {
+      if (spoken && cleaned && policy.fixSelfCorrections && !codeTarget) {
         const fixed = dropSelfCorrections(cleaned);
         if (fixed.fixes > 0) {
           cleaned = fixed.text;
@@ -494,21 +502,12 @@ export function DictationProvider({ children }) {
         return null;
       }
 
-      // Куда и как вставляем — решаем один раз: этот же стиль нужен и позднему
-      // ответу модели (он приходит уже после вставки и обновляет историю),
-      // иначе в истории оказался бы текст с точкой, которой в окне нет.
-      // При «не трогать мой текст» окно не влияет на знаки: приложение не
-      // решает за человека, где ставить точку.
-      const where =
-        policy.formatForApp && insert && sessionOpts.current.insert !== false
-          ? resolveAppStyle(targetRef.current || {})
-          : { style: 'neutral', why: preserve ? 'текст не трогаем: оформление выключено' : '', label: '' };
       // Вторая стадия («Переписывать диктовку моделью»): офлайн-правила уже
       // дали текст, локальная модель доводит формулировки. Модель может
       // не ответить — тогда остаётся результат правил, диктовка не ломается.
       // Развёрнутый блок моделью не переписываем: это авторский текст, а не
       // расшифровка, — правки в подписи или реквизитах были бы порчей.
-      if (policy.rewriteWithModel && cleaned && !snippetHit) {
+      if (policy.rewriteWithModel && cleaned && !snippetHit && !codeTarget) {
         setState('processing');
         const before = cleaned.length;
         // Бюджет полировки. Раньше здесь стояло «ждём до 6 секунд» — и человек
@@ -599,8 +598,8 @@ export function DictationProvider({ children }) {
           }
         }
       }
-      // Оформление под окно, куда вставляем: мессенджер — без точки в конце,
-      // редактор кода — без заглавной и точки, письмо — с заглавной и точкой.
+      // Оформление под окно: мессенджер — без точки, письмо — с заглавной
+      // и точкой; для редактора кода исходное оформление не меняется.
       // Ничего не переписываем, только знаки и регистр первой буквы.
       if (cleaned && where.style !== 'neutral') {
         const shaped = formatForApp(cleaned, where.style);

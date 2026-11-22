@@ -1157,6 +1157,28 @@ async function scenarioAppFormat(browser) {
   const errors = takeErrors(code);
   record('сценарии', 'оформление: без ошибок консоли', errors.length === 0, errors[0] || '');
   await code.close();
+
+  // Код нельзя приводить к стилю обычного предложения: регистр и пробелы
+  // значимы, как и точка. Проверяем историю, вставку и отсутствие запроса LLM.
+  for (const preserveText of [false, true]) {
+    const sample = 'const UserService = JSON.parse(value);\n    return UserService';
+    const page = await openPage(browser, '#/home', {
+      settings: { preserveText, aiProcessing: true, aiDictationRewrite: true, aiEndpoint: 'http://localhost:11434', liveWhisper: false },
+      storeSeed: { 'zs.dictations': [], 'zs.mockSttText': sample },
+    });
+    takeErrors(page);
+    await page.evaluate(() => {
+      window.zspeakly.native.insertTarget = async () => ({ own: false, app: 'Code', title: 'main.js — Visual Studio Code' });
+      window.__e2e.resetCalls();
+    });
+    const output = await dictate(page);
+    const calls = await bridgeCalls(page);
+    const foundErrors = takeErrors(page);
+    record('сценарии', 'оформление: код без команды сохраняет регистр, отступы и не отправляется модели',
+      output.saved === sample && output.inserted === sample && !calls.includes('http:post') && foundErrors.length === 0,
+      `preserve=${preserveText} ${JSON.stringify(output)} ${foundErrors[0] || ''}`);
+    await page.close();
+  }
 }
 
 /**
@@ -1645,6 +1667,8 @@ async function scenarioDictationIntegrity(browser) {
     { raw: 'Это значит верно.', response: 'Это значит верно.', expected: 'Это значит верно.' },
     { raw: 'Цена 1,5 рубля.', response: 'Цена 1.5 рубля.', expected: 'Цена 1,5 рубля.' },
     { raw: 'Сайт example.com открыт.', response: 'Сайт example. com открыт.', expected: 'Сайт example.com открыт.' },
+    { raw: 'Сайт example.com запятая работает', response: 'Сайт example.com, работает.', expected: 'Сайт example.com, работает.' },
+    { raw: 'Ссылка https://example.com/a?x=1 запятая открыта', response: 'Ссылка https://example.com/a?x=1, открыта.', expected: 'Ссылка https://example.com/a?x=1, открыта.' },
     {
       raw: 'Заметка:\n\nВстреча в четыре, то есть в три часа.\n\nСледующая строка.',
       response: 'Заметка:\n\nВстреча в три часа.\n\nСледующая строка.',

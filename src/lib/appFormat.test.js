@@ -8,10 +8,12 @@ describe('оформление текста под место вставки', (
     expect(formatForApp('Ура!', 'chat')).toBe('Ура!');
   });
 
-  it('редактор кода: без заглавной и без точки', () => {
-    expect(formatForApp('Добавь проверку на пустой массив.', 'code')).toBe('добавь проверку на пустой массив');
-    // аббревиатура в начале не превращается в строчную
-    expect(formatForApp('API возвращает null.', 'code')).toBe('API возвращает null');
+  it('редактор кода: регистр, точка, отступы и пробелы не меняются', () => {
+    for (const text of [
+      'Добавь проверку на пустой массив.', 'Python — это язык.',
+      'JSON.parse(value).', 'UserService.Create().',
+      '    const foo = 1;\n    return foo;',
+    ]) expect(formatForApp(text, 'code')).toBe(text);
   });
 
   it('письмо: заглавная и точка, если их нет', () => {

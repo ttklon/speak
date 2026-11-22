@@ -2,10 +2,9 @@
  * Оформление текста под место вставки.
  *
  * Зачем: одна и та же фраза в разных окнах выглядит по-разному. В мессенджере
- * точка в конце — почти оскорбление, в редакторе кода заглавная буква в начале
- * ломает имя переменной, а в письме без заглавной и точки текст читается как
- * обрывок. Раньше приложение вставляло везде одно и то же — с заглавной и
- * точкой, потому что так выдаёт движок.
+ * в чате часто не нужна конечная точка, а в редакторе кода изменение регистра,
+ * пунктуации или отступов может сломать выражение. В письме часто нужна
+ * заглавная буква и конечная точка.
  *
  * Здесь только то, что можно решить без человека и без модели: знаки в конце,
  * заглавная в начале, лишние пробелы. Никакого переписывания слов: за стиль
@@ -45,7 +44,7 @@ const MATCHERS = [
   },
   {
     style: 'code',
-    // редакторы и терминалы: заглавная и точка тут лишние
+    // редакторы и терминалы: не угадываем регистр и пунктуацию
     names: [
       'visual studio code',
       'vscode',
@@ -114,24 +113,11 @@ export function resolveAppStyle(target = {}) {
 
 const STYLE_LABELS = {
   chat: 'без точки в конце',
-  code: 'как есть, без заглавной и точки',
+  code: 'без дополнительного оформления',
   mail: 'с заглавной и точкой',
   doc: 'с заглавной',
   neutral: 'как есть',
 };
-
-/** Слово-аббревиатура: «США», «МГУ», «API» — заглавную у них не снимаем. */
-function isAbbreviation(word) {
-  return /^[A-ZА-ЯЁ]{2,}$/u.test(word);
-}
-
-function firstLetterLower(text) {
-  const word = String(text).split(/\s/u)[0] || '';
-  if (!word || isAbbreviation(word)) return text;
-  const head = text[0];
-  if (head.toLowerCase() === head) return text;
-  return head.toLowerCase() + text.slice(1);
-}
 
 function firstLetterUpper(text) {
   const head = text[0];
@@ -152,7 +138,10 @@ function withoutTrailingPeriod(text) {
  * @returns {string}
  */
 export function formatForApp(text, style = 'neutral') {
-  let out = String(text ?? '')
+  const source = String(text ?? '');
+  // A capital letter, final period or indentation may be code, not prose.
+  if (style === 'code') return source.trim() ? source : '';
+  let out = source
     .replace(/[ \t]+/gu, ' ')
     .replace(/ ?\n ?/gu, '\n')
     .trim();
@@ -162,8 +151,6 @@ export function formatForApp(text, style = 'neutral') {
       // Многострочное сообщение точку в конце всё равно не заслуживает: люди
       // так не пишут. Вопросительный и восклицательный не трогаем.
       return withoutTrailingPeriod(out);
-    case 'code':
-      return withoutTrailingPeriod(firstLetterLower(out));
     case 'mail':
       return ensureSentence(out);
     case 'doc':

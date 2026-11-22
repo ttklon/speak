@@ -158,6 +158,29 @@ describe('язык и границы', () => {
     expect(ru('Цена 1,5 рубля.')).toBe('Цена 1,5 рубля.');
   });
 
+  it('сохраняет технические фрагменты рядом с голосовыми командами', () => {
+    for (const [source, expected] of [
+      ['Сайт example.com запятая работает', 'Сайт example.com, работает.'],
+      ['Используй JSON.parse(value) запятая затем продолжай', 'Используй JSON.parse(value), затем продолжай.'],
+      ['Ссылка https://example.com/a?x=1 запятая открыта', 'Ссылка https://example.com/a?x=1, открыта.'],
+      ['Путь /home/user/file.txt точка дальше', 'Путь /home/user/file.txt. Дальше.'],
+      ['Адрес hello@example.com запятая дальше', 'Адрес hello@example.com, дальше.'],
+      ['Текст zsprotectedfragment0z example.com запятая дальше', 'Текст zsprotectedfragment0z example.com, дальше.'],
+      ['Ссылка https://example.com/точка запятая дальше', 'Ссылка https://example.com/точка, дальше.'],
+    ]) expect(ru(source)).toBe(expected);
+  });
+
+  it('сохраняет исходные переносы, если встретилась команда', () => {
+    expect(ru('Первая строка запятая готово\n\nвторая строка')).toBe('Первая строка, готово.\n\nВторая строка.');
+    expect(ru('текст удалить последнее\nслово')).toBe('Текст удалить последнее.\nСлово.');
+  });
+
+  it('для кода без команд не добавляет пунктуацию и не меняет регистр или отступы', () => {
+    const code = '    const UserService = JSON.parse(value);\n    return UserService';
+    expect(applyVoiceCommands(code, { language: 'ru', preserveFormatting: true })).toBe(code);
+    expect(applyVoiceCommands('привет запятая мир', { language: 'ru', preserveFormatting: true })).toBe('Привет, мир.');
+  });
+
   it('пустой текст и пробелы', () => {
     expect(ru('')).toBe('');
     expect(ru('   ')).toBe('');

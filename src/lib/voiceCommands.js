@@ -134,13 +134,39 @@ export function commandsFor(language = 'ru') {
   return base.sort((a, b) => b.words.length - a.words.length);
 }
 
+// The command renderer normalises punctuation. Protect clearly recognisable
+// technical fragments as whole tokens so a command elsewhere in the phrase
+// does not turn example.com into "example. Com" or split a URL into pieces.
+// This is intentionally a narrow heuristic, not a general code parser.
+function protectTechnicalFragments(source) {
+  const protectedValues = [];
+  let prefix = 'zsprotectedfragment';
+  while (source.toLowerCase().includes(prefix)) prefix += 'x';
+  const text = source.replace(/\S+/gu, (fragment) => {
+    const match = /^(.*?)([.,;:!?]+)?$/u.exec(fragment);
+    const core = match[1];
+    const punctuation = match[2] || '';
+    const isUrl = /^https?:\/\/[^\s]+$/iu.test(core);
+    const isPath = /^(?:\/|[a-z]:\\)[^\s]+$/iu.test(core);
+    const isEmail = /^[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}$/u.test(core);
+    const isDotted = /^(?:[\p{L}\p{N}_-]+\.)+[\p{L}_][\p{L}\p{N}_-]*(?:\([^\s()]*\))?$/u.test(core);
+    if (!isUrl && !isPath && !isEmail && !isDotted) return fragment;
+    const index = protectedValues.push(core) - 1;
+    return `${prefix}${index}z${punctuation}`;
+  });
+  return {
+    text,
+    restore: (value) => value.replace(new RegExp(`${prefix}(\\d+)z`, 'giu'), (match, index) => protectedValues[Number(index)] ?? match),
+  };
+}
+
 function tokenize(text) {
   const tokens = [];
-  const re = new RegExp(TOKEN_RE.source, 'gu');
+  const re = new RegExp(`\\r\\n|[\\r\\n]|${TOKEN_RE.source}`, 'gu');
   let m = re.exec(text);
   while (m) {
     const raw = m[0];
-    tokens.push({ raw, low: raw.toLowerCase(), word: /^[\p{L}\p{N}]/u.test(raw) });
+    tokens.push({ raw, low: raw.toLowerCase(), word: /^[\p{L}\p{N}]/u.test(raw), linebreak: /^(?:\r\n|\r|\n)$/u.test(raw) });
     m = re.exec(text);
   }
   return tokens;
@@ -215,6 +241,11 @@ function deleteLastSentence(parts) {
 function render(parts) {
   let s = '';
   for (const p of parts) {
+    if (p.kind === 'sourceBreak') {
+      s = s.replace(/[ \t]+$/, '');
+      s += '\n';
+      continue;
+    }
     if (p.kind === 'break') {
       s = s.replace(/[ \t]+$/, '');
       // один перенос и абзац не должны схлопываться в один и тот же
@@ -267,14 +298,15 @@ function finishLine(line) {
  * Применить голосовые команды к распознанному тексту.
  *
  * @param {string} text — что вернул движок
- * @param {{language?: string}} [opts]
+ * @param {{language?: string, preserveFormatting?: boolean}} [opts]
  * @returns {string} текст со знаками, переносами и выполненными правками
  */
-export function applyVoiceCommands(text, { language = 'ru' } = {}) {
+export function applyVoiceCommands(text, { language = 'ru', preserveFormatting = false } = {}) {
   const source = String(text || '');
   if (!source.trim()) return '';
   const commands = commandsFor(language);
-  const tokens = tokenize(source);
+  const protectedText = protectTechnicalFragments(source);
+  const tokens = tokenize(protectedText.text);
   const parts = [];
   let capitalizeNext = false;
   let matchedCommand = false;
@@ -333,7 +365,9 @@ export function applyVoiceCommands(text, { language = 'ru' } = {}) {
       continue;
     }
 
-    if (token.word) {
+    if (token.linebreak) {
+      parts.push({ kind: 'sourceBreak' });
+    } else if (token.word) {
       const text_ = capitalizeNext ? token.raw[0].toUpperCase() + token.raw.slice(1) : token.raw;
       capitalizeNext = false;
       parts.push({ kind: 'word', text: text_ });
@@ -351,6 +385,9 @@ export function applyVoiceCommands(text, { language = 'ru' } = {}) {
   // домены, пути, код и исходные переносы. Обычный текст требует лишь
   // минимального оформления первой буквы и конечного знака.
   if (!matchedCommand) {
+    // For a code target do not invent capitalisation, periods or indentation.
+    // Explicitly recognised commands still go through the command renderer.
+    if (preserveFormatting) return source;
     return source.split('\n').map((line) => {
       let result = line.trim().replace(/[ \t]{2,}/g, ' ');
       if (!result) return '';
@@ -364,8 +401,8 @@ export function applyVoiceCommands(text, { language = 'ru' } = {}) {
     .replace(/ ?\n ?/g, '\n')
     .split('\n')
     .map(finishLine);
-  let out = lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').replace(/\n+$/, '');
-  return out;
+  const out = lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').replace(/\n+$/, '');
+  return protectedText.restore(out);
 }
 
 /** Подсказка для интерфейса: что можно говорить вместо клавиатуры. */
