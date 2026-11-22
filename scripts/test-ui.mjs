@@ -6083,6 +6083,92 @@ async function scenarioInvalidBackup(browser) {
   }
 }
 
+// Настройки из копии способны удалить текущий буфер, хотя его нет в копии.
+async function scenarioBackupClipboardRetention(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', {
+    settle: 500,
+    storeSeed: {
+      'zs.dictations': [{ id: 'before', text: 'текущая история', createdAt: Date.now() }],
+      'zs.clipboard': [
+        { id: 'cb-plain', text: 'частный текст', createdAt: Date.now() },
+        { id: 'cb-pinned', text: 'закреплено', pinned: true, createdAt: Date.now() },
+      ],
+    },
+  });
+  takeErrors(page);
+  const path = join(tmpdir(), `zs-retention-${Date.now()}.json`);
+  try {
+    const before = await page.evaluate(() => ({
+      clipboard: localStorage.getItem('mockstore:zs.clipboard'),
+      dictations: localStorage.getItem('mockstore:zs.dictations'),
+      settings: localStorage.getItem('mockstore:zs.settings'),
+    }));
+    writeFileSync(path, JSON.stringify({ settings: { dictationRetentionDays: 0, clipboardRetentionDays: 0 } }), 'utf8');
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(path);
+    await sleep(400);
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    if (preview) await clickIn(page, '', 'Отмена');
+    await sleep(250);
+    const cancelled = await page.evaluate(() => ({
+      clipboard: localStorage.getItem('mockstore:zs.clipboard'),
+      dictations: localStorage.getItem('mockstore:zs.dictations'),
+      settings: localStorage.getItem('mockstore:zs.settings'),
+    }));
+    record('сценарии', 'данные: предпросмотр предупреждает о текущем буфере и отмена ничего не меняет',
+      /буфер обмена/i.test(preview) && /не входит в копию/i.test(preview) && /сейчас под срок попадает: 1/i.test(preview) &&
+      !/частный текст|закреплено/.test(preview) && JSON.stringify(cancelled) === JSON.stringify(before),
+      JSON.stringify({ preview, unchanged: JSON.stringify(cancelled) === JSON.stringify(before) }));
+    await input.uploadFile(path);
+    await sleep(400);
+    await clickIn(page, '', 'Восстановить');
+    await sleep(600);
+    const after = await page.evaluate(() => ({
+      clipboard: JSON.parse(localStorage.getItem('mockstore:zs.clipboard') || '[]'),
+      dictations: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: срок хранения удаляет незакреплённое, но не закреплённое содержимое буфера',
+      after.clipboard.length === 1 && after.clipboard[0].id === 'cb-pinned' && after.dictations.length === 0 && errors.length === 0,
+      JSON.stringify({ clipboardIds: after.clipboard.map((item) => item.id), dictationCount: after.dictations.length, error: errors[0] }));
+  } finally { rmSync(path, { force: true }); await page.close(); }
+}
+
+// Частичная копия не меняет срок: старый текст появится сейчас, но пропадёт после запуска.
+async function scenarioBackupRetentionOnRestart(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', {
+    settle: 500, storeSeed: { 'zs.dictations': [] },
+  });
+  takeErrors(page);
+  const path = join(tmpdir(), `zs-expired-${Date.now()}.json`);
+  try {
+    writeFileSync(path, JSON.stringify({ dictations: [
+      { id: 'expired-import', text: 'старая запись', createdAt: Date.now() - 40 * 86400000 },
+    ] }), 'utf8');
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(path);
+    await sleep(400);
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    if (preview) await clickIn(page, '', 'Восстановить');
+    await sleep(600);
+    const beforeRestart = await page.evaluate(() => JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'));
+    const reopened = await browser.newPage();
+    let afterRestart;
+    try {
+      await reopened.evaluateOnNewDocument(installMockBridge);
+      await reopened.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+      await reopened.waitForSelector('.app-window', { timeout: 15000 });
+      await sleep(700);
+      afterRestart = await reopened.evaluate(() => JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'));
+    } finally { await reopened.close(); }
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: предупреждение о будущей очистке истории из частичной копии',
+      /истории из копии: 1/i.test(preview) && /при следующем запуске/i.test(preview) &&
+      beforeRestart.length === 1 && beforeRestart[0].id === 'expired-import' && afterRestart.length === 0 && errors.length === 0,
+      JSON.stringify({ preview, before: beforeRestart.length, after: afterRestart.length, error: errors[0] }));
+  } finally { rmSync(path, { force: true }); await page.close(); }
+}
+
 // Некорректные счётчики отклоняются до изменения данных; старый пресет переживает перезапуск.
 async function scenarioBackupValidationAndRetention(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', {
@@ -8215,6 +8301,8 @@ async function main() {
       ['данные: резервная копия', scenarioBackup],
       ['данные: полный круг копии', scenarioBackupRoundTrip],
       ['данные: повреждённая копия', scenarioInvalidBackup],
+      ['данные: срок хранения буфера', scenarioBackupClipboardRetention],
+      ['данные: срок хранения после перезапуска', scenarioBackupRetentionOnRestart],
       ['данные: валидация и срок хранения', scenarioBackupValidationAndRetention],
       ['данные: размер и гонка файлов', scenarioBackupFileBoundaries],
       ['данные: большая копия на экспорт', scenarioBackupLargeExport],

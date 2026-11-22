@@ -5,6 +5,7 @@ import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
 import { BACKUP_MAX_BYTES, prepareBackup, readBackupJsonFile } from '../../../lib/backup.js';
+import { backupRetentionImpact } from '../../../lib/backupPreview.js';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 
@@ -118,13 +119,27 @@ export default function DataSection({ onOpenSection }) {
         stats: 'счётчики', profile: 'профиль',
       };
       const sections = Object.keys(labels).filter((key) => Object.prototype.hasOwnProperty.call(prepared, key)).map((key) => labels[key]);
-      setPendingBackup({ payload, name: file.name, sections });
+      setPendingBackup({ payload, prepared, name: file.name, sections });
     } catch (err) {
       if (readId === backupReadRef.current) push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
     } finally {
       if (readId === backupReadRef.current && fileRef.current) fileRef.current.value = '';
     }
   };
+
+  // Считаем по текущим данным при каждом рендере, не показывая содержание буфера.
+  // Пока диалог открыт, записи и время могут измениться: числа ориентировочные.
+  const retentionImpact = pendingBackup
+    ? backupRetentionImpact({ prepared: pendingBackup.prepared, settings, dictations, clipboard })
+    : null;
+  const retentionWarning = retentionImpact
+    ? ` Старые записи могут удалиться по сроку хранения сразу после восстановления или при следующем запуске.` +
+      (retentionImpact.dictations ? ` Сейчас под срок хранения попадают записи ${retentionImpact.importedHistory ? 'истории из копии' : 'текущей истории'}: ${retentionImpact.dictations}.` : '') +
+      (pendingBackup.prepared.settings || retentionImpact.clipboard
+        ? ` Буфер обмена не входит в копию; срок хранения может удалить его текущие незакреплённые записи${retentionImpact.clipboard ? ` (сейчас под срок попадает: ${retentionImpact.clipboard})` : ''}.`
+        : '') +
+      ((retentionImpact.dictations || retentionImpact.clipboard) ? ' Количество может измениться.' : '')
+    : '';
 
   // Реальный размер именно диктовок. Раньше здесь было storageSize * 0.42 —
   // придуманное число, которое ничего не измеряло.
@@ -342,7 +357,7 @@ export default function DataSection({ onOpenSection }) {
         title="Восстановить данные из копии?"
         description={
           pendingBackup
-            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}. Старые записи могут удалиться по сроку хранения сразу после восстановления или при следующем запуске.`
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}.${retentionWarning}`
             : ''
         }
         confirmLabel="Восстановить"
