@@ -182,6 +182,17 @@ jobs:
           message=$(tail -c 4000 windows-all-tests.log | tr '\r\n' '  ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Windows all unit tests::$message"; exit "$code"; fi
           echo "::notice title=Windows all unit tests::$message"
+      - name: Clipboard monitoring smoke on Windows (mock Electron)
+        if: ${{ !cancelled() && steps.windows-install.outcome == 'success' }}
+        shell: bash
+        run: |
+          set +e
+          node scripts/smoke-main.mjs --test-clipboard-disabled > windows-clipboard-smoke.log 2>&1
+          code=$?
+          cat windows-clipboard-smoke.log
+          message=$(tail -c 1200 windows-clipboard-smoke.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Windows clipboard smoke::$message"; exit "$code"; fi
+          echo "::notice title=Windows clipboard smoke::$message"
       - name: Full UI crawl and all scenarios on Windows
         if: ${{ !cancelled() && steps.windows-install.outcome == 'success' }}
         shell: bash
@@ -207,6 +218,7 @@ jobs:
           name: windows-full-ui-logs
           path: |
             windows-all-tests.log
+            windows-clipboard-smoke.log
             windows-full-ui.log
           retention-days: 2
 
@@ -486,7 +498,12 @@ jobs:
                 ForEach-Object { Copy-Item $_.FullName build/bin -Force }
               if (Test-Path build/bin/whisper-cli.exe) { $ok = $true }
             } catch {
-              Write-Host "::warning title=whisper.cpp::попытка $i не удалась: $_"
+              # Annotation commands end at a newline; PowerShell errors can
+              # start with one, hiding the actual reason from the CI summary.
+              $hint = ([string]$_.Exception.Message -replace 'https?://\S+', '[url]' -replace '%', '%25' -replace '[\r\n]+', ' ').Trim()
+              if (-not $hint) { $hint = $_.Exception.GetType().Name }
+              if ($hint.Length -gt 500) { $hint = $hint.Substring(0, 500) }
+              Write-Host "::warning title=whisper.cpp::попытка $i не удалась: $hint"
               Start-Sleep -Seconds 15
             }
           }
@@ -497,8 +514,10 @@ jobs:
             # Именно он держит веса в памяти и прогревается в начале записи:
             # без него каждая диктовка начинается с загрузки модели.
             Write-Host '::notice title=whisper.cpp::whisper-server.exe в сборке — прогрев и быстрая диктовка работают'
+          } elseif ($ok) {
+            Write-Host '::warning title=whisper.cpp::whisper-server.exe не найден — прогрев недоступен, диктовка пойдёт холодным whisper-cli'
           } else {
-            Write-Host '::warning title=whisper.cpp::в архиве нет whisper-server.exe — прогрев недоступен, диктовка пойдёт холодным whisper-cli'
+            Write-Host '::warning title=whisper.cpp::сервер не найден; наличие его в архиве не установлено'
           }
           Get-ChildItem build/bin | Select-Object Name, Length
 

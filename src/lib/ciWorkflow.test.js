@@ -9,6 +9,8 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('runs-on: windows-latest');
     expect(job).toContain('npm test > windows-all-tests.log');
     expect(job).toContain('node scripts/test-ui.mjs > windows-full-ui.log');
+    expect(job).toContain('node scripts/smoke-main.mjs --test-clipboard-disabled > windows-clipboard-smoke.log');
+    expect(job).toContain('::error title=Windows clipboard smoke');
     // Unit failure must not prevent the independent UI suite from running.
     expect(job).toContain("if: ${{ !cancelled() && steps.windows-install.outcome == 'success' }}");
     expect(job).not.toContain('ZS_ONLY');
@@ -36,6 +38,8 @@ describe('проверка настоящего движка в CI', () => {
 
   it('Windows проверяет реальный ABI и симулированные отказы ввода', () => {
     const job = workflow.split('  package:')[1]?.split('\n  release:')[0];
+    expect(job).toContain("[string]$_.Exception.Message -replace 'https?://\\S+', '[url]' -replace '%', '%25' -replace '[\\r\\n]+', ' '");
+    expect(job).toContain('if (-not $hint) { $hint = $_.Exception.GetType().Name }');
     expect(job).toContain('scripts/test-wininput-layout.cjs');
     expect(job).toContain('scripts/test-wininput-failure.cjs');
     expect(job).toContain('scripts/test-wininput-window.cjs');
