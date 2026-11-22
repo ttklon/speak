@@ -3,11 +3,19 @@ import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
-import { formatBytes } from '../../../lib/storage.js';
+import { formatBytes, isElectron } from '../../../lib/storage.js';
 import { BACKUP_MAX_BYTES, prepareBackup, readBackupJsonFile } from '../../../lib/backup.js';
 import { backupRetentionImpact } from '../../../lib/backupPreview.js';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
+
+// Экспорт собирается из состояния renderer, а не из исходного файла профиля.
+// Неизвестный статус нельзя считать признаком полной и исправной копии.
+function isBackupPotentiallyIncomplete() {
+  if (!isElectron()) return false;
+  try { return window.zspeakly?.store?.statusSync?.()?.ok !== true; }
+  catch { return true; }
+}
 
 export default function DataSection({ onOpenSection }) {
   const {
@@ -32,6 +40,7 @@ export default function DataSection({ onOpenSection }) {
   useEffect(() => () => { backupReadRef.current += 1; }, []);
 
   const downloadBackup = async () => {
+    const wasUncertain = isBackupPotentiallyIncomplete();
     let data;
     try {
       data = exportBackup();
@@ -60,13 +69,17 @@ export default function DataSection({ onOpenSection }) {
     if (bridge?.saveBackup) {
       try {
         const res = await bridge.saveBackup(json);
+        const uncertain = wasUncertain || isBackupPotentiallyIncomplete();
+        const incompleteWarning = uncertain
+          ? ' Состояние профиля не подтверждено: копия из памяти может быть неполной. Сохраните исходные файлы профиля отдельно.'
+          : '';
         push(
           res?.ok
             ? {
                 title: 'Копия сохранена',
-                description: `${res.path || `zspeakly-backup-${stamp}.json`} — история (${dictations.length}) и настройки.${sizeWarning}`,
-                tone: oversized ? 'warn' : 'success',
-                ttl: oversized ? 12000 : undefined,
+                description: `${res.path || `zspeakly-backup-${stamp}.json`} — история (${dictations.length}) и настройки.${sizeWarning}${incompleteWarning}`,
+                tone: oversized || uncertain ? 'warn' : 'success',
+                ttl: oversized || uncertain ? 12000 : undefined,
               }
             : { title: 'Не удалось сохранить копию', description: res?.reason, tone: 'warn' },
         );
@@ -86,11 +99,15 @@ export default function DataSection({ onOpenSection }) {
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
+      const uncertain = wasUncertain || isBackupPotentiallyIncomplete();
+      const incompleteWarning = uncertain
+        ? ' Состояние профиля не подтверждено: копия из памяти может быть неполной. Сохраните исходные файлы профиля отдельно.'
+        : '';
       push({
         title: 'Копия скачана',
-        description: `zspeakly-backup-${stamp}.json — ${dictations.length} записей истории и настройки. Буфер обмена не выгружается.${sizeWarning}`,
-        tone: oversized ? 'warn' : 'success',
-        ttl: oversized ? 12000 : undefined,
+        description: `zspeakly-backup-${stamp}.json — ${dictations.length} записей истории и настройки. Буфер обмена не выгружается.${sizeWarning}${incompleteWarning}`,
+        tone: oversized || uncertain ? 'warn' : 'success',
+        ttl: oversized || uncertain ? 12000 : undefined,
       });
     } catch (err) {
       push({ title: 'Не удалось скачать копию', description: String(err?.message || err), tone: 'warn' });

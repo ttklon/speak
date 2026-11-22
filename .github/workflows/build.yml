@@ -296,6 +296,16 @@ jobs:
         run: xvfb-run -a node scripts/test-electron-quit.cjs
       - name: Electron single-instance profile lock
         run: xvfb-run -a node scripts/test-electron-single.cjs
+      - name: Electron backup round trip with Unicode path
+        shell: bash
+        run: |
+          set +e
+          xvfb-run -a node scripts/test-electron-backup.cjs > electron-backup.log 2>&1
+          code=$?
+          cat electron-backup.log
+          message=$(tail -c 4000 electron-backup.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron backup::$message"; exit "$code"; fi
+          echo "::notice title=Electron backup::$message"
       - name: Electron virtual microphone and real ONNX
         shell: bash
         env:
@@ -618,6 +628,18 @@ jobs:
           message=$(tail -c 4000 electron-single.log | tr '\r\n' '  ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Electron single-instance::$message"; exit "$code"; fi
           echo "::notice title=Electron single-instance::$message"
+
+      - name: Резервная копия Electron с Unicode-путём
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-electron-backup.cjs > electron-backup.log 2>&1
+          code=$?
+          cat electron-backup.log
+          message=$(tail -c 4000 electron-backup.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron backup::$message"; exit "$code"; fi
+          echo "::notice title=Electron backup::$message"
 
       - name: Проверить ONNX Runtime в собранном приложении
         shell: bash

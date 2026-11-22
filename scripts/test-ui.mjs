@@ -6391,6 +6391,44 @@ async function scenarioBackupLargeExport(browser) {
   } finally { await page.close(); }
 }
 
+// Экспорт берёт данные из памяти, которая при нечитаемом профиле пуста или неполна.
+async function scenarioBackupProtectedExport(browser) {
+  for (const mode of ['PROFILE_UNREADABLE', 'ENOSPC', 'missing', 'throw', 'late', 'recovered']) {
+    const page = await openPage(browser, '#/settings?section=data&from=home', {
+      settle: 500, patchArg: mode,
+      patchNative: (mode) => {
+        const store = window.zspeakly.store;
+        if (mode === 'missing') delete store.statusSync;
+        else if (mode === 'throw') store.statusSync = () => { throw new Error('секретный путь'); };
+        else if (mode !== 'late') store.statusSync = () => ({ ok: false, code: mode });
+        if (mode === 'late' || mode === 'recovered') {
+          const save = window.zspeakly.native.saveBackup;
+          window.zspeakly.native.saveBackup = async (json) => {
+            const result = await save(json);
+            store.statusSync = () => ({ ok: mode === 'recovered' });
+            return result;
+          };
+        }
+      },
+    });
+    try {
+      takeErrors(page);
+      await clickIn(page, '', 'Скачать');
+      await sleep(300);
+      const result = await page.evaluate(() => ({
+        toast: [...document.querySelectorAll('.toast')].map((node) => ({ text: node.innerText, cls: node.className })),
+        saved: (window.__bridgeCalls || []).some((item) => item.channel === 'data:save-backup'),
+      }));
+      const notice = result.toast.find((item) => /Копия сохранена/i.test(item.text));
+      const errors = takeErrors(page);
+      record('сценарии', `данные: экспорт при неизвестном состоянии профиля предупреждает о неполной копии (${mode})`,
+        result.saved && /может быть неполной/i.test(notice?.text || '') && /toast--warn/.test(notice?.cls || '') &&
+        !notice?.text.includes('секретный путь') && errors.length === 0,
+        JSON.stringify({ notice, saved: result.saved, error: errors[0] }));
+    } finally { await page.close(); }
+  }
+}
+
 // Известный сбой записи должен останавливать импорт до изменения состояния.
 async function scenarioProtectedBackup(browser) {
   const backupPath = join(tmpdir(), `zs-protected-backup-${Date.now()}.json`);
@@ -8449,6 +8487,7 @@ async function main() {
       ['данные: валидация и срок хранения', scenarioBackupValidationAndRetention],
       ['данные: размер и гонка файлов', scenarioBackupFileBoundaries],
       ['данные: большая копия на экспорт', scenarioBackupLargeExport],
+      ['данные: экспорт защищённого профиля', scenarioBackupProtectedExport],
       ['данные: копия защищённого профиля', scenarioProtectedBackup],
       ['данные: частичная запись копии', scenarioBackupPartialWrite],
       ['хранилище заполнено', scenarioStorageFull],
