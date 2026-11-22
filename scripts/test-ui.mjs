@@ -6391,28 +6391,97 @@ async function scenarioBackupLargeExport(browser) {
   } finally { await page.close(); }
 }
 
-// Для защищённого профиля нельзя обещать, что импорт уже сохранён на диске.
+// Известный сбой записи должен останавливать импорт до изменения состояния.
 async function scenarioProtectedBackup(browser) {
-  const page = await openPage(browser, '#/settings?section=data&from=home', {
-    settle: 500,
-    patchNative: () => { window.zspeakly.store.statusSync = () => ({ ok: false, code: 'PROFILE_UNREADABLE' }); },
-  });
-  takeErrors(page);
   const backupPath = join(tmpdir(), `zs-protected-backup-${Date.now()}.json`);
-  writeFileSync(backupPath, JSON.stringify({ app: 'ZSpeakly', dictations: [{ id: 'd1', text: 'только в памяти' }] }), 'utf8');
+  writeFileSync(backupPath, JSON.stringify({ app: 'ZSpeakly', dictations: [{ id: 'd1', text: 'из копии' }], dictionary: [{ id: 'w1', word: 'из копии' }] }), 'utf8');
   try {
+    for (const mode of ['PROFILE_UNREADABLE', 'ENOSPC', 'throw', 'missing', 'late']) {
+      const page = await openPage(browser, '#/settings?section=data&from=home', {
+        settle: 500, patchArg: mode,
+        patchNative: (mode) => {
+          const store = window.zspeakly.store;
+          window.__activateStorageFailure = () => {
+            if (mode === 'missing') delete store.statusSync;
+            else if (mode === 'throw') store.statusSync = () => { throw new Error('секретный путь'); };
+            else store.statusSync = () => ({ ok: false, code: mode === 'late' ? 'ENOSPC' : mode });
+          };
+          if (mode !== 'late') window.__activateStorageFailure();
+        },
+      });
+      try {
+        takeErrors(page);
+        const before = await page.evaluate(() => ({
+          history: localStorage.getItem('mockstore:zs.dictations'),
+          dictionary: localStorage.getItem('mockstore:zs.dictionary'),
+        }));
+        const input = await page.$('.settings-main input[type=file]');
+        await input.uploadFile(backupPath);
+        await sleep(300);
+        const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+        if (mode === 'late') await page.evaluate(() => window.__activateStorageFailure());
+        await clickIn(page, '', 'Восстановить');
+        await sleep(500);
+        const result = await page.evaluate(() => ({
+          history: localStorage.getItem('mockstore:zs.dictations'),
+          dictionary: localStorage.getItem('mockstore:zs.dictionary'),
+          toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+        }));
+        const errors = takeErrors(page);
+        record('сценарии', `данные: известный сбой записи останавливает импорт (${mode})`,
+          /Будут заменены: история, словарь/i.test(preview) && /не.*атомар/i.test(preview) && /сохраните.*копи/i.test(preview) &&
+          /Не удалось восстановить/i.test(result.toast) && /не изменены/i.test(result.toast) &&
+          result.history === before.history && result.dictionary === before.dictionary &&
+          !result.toast.includes('секретный путь') && errors.length === 0,
+          JSON.stringify({ preview, unchanged: result.history === before.history && result.dictionary === before.dictionary, toast: result.toast.slice(-350), error: errors[0] }));
+        if (mode === 'late') {
+          await page.evaluate(() => { window.zspeakly.store.statusSync = () => ({ ok: true }); });
+          await input.uploadFile(backupPath);
+          await sleep(300);
+          await clickIn(page, '', 'Восстановить');
+          await sleep(500);
+          const history = await page.evaluate(() => JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'));
+          record('сценарии', 'данные: повтор импорта возможен после восстановления статуса',
+            history.length === 1 && history[0].id === 'd1' && takeErrors(page).length === 0, JSON.stringify(history));
+        }
+      } finally { await page.close(); }
+    }
+  } finally { rmSync(backupPath, { force: true }); }
+}
+
+// Browser localStorage пишет каждый раздел отдельно: сбой нельзя выдавать за транзакцию.
+async function scenarioBackupPartialWrite(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', {
+    browserStorage: true, settle: 700,
+    patchNative: () => { window.zspeakly.isElectron = false; },
+  });
+  const backupPath = join(tmpdir(), `zs-partial-write-${Date.now()}.json`);
+  writeFileSync(backupPath, JSON.stringify({ app: 'ZSpeakly', dictations: [{ id: 'new-history', text: 'новая история' }], dictionary: [{ id: 'new-word', word: 'новый словарь' }] }), 'utf8');
+  try {
+    takeErrors(page);
+    const oldHistory = await page.evaluate(() => localStorage.getItem('zs:zs.dictations'));
     const input = await page.$('.settings-main input[type=file]');
     await input.uploadFile(backupPath);
     await sleep(300);
     const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === 'zs:zs.dictations') throw new Error('имитация переполнения');
+        return original.call(this, key, value);
+      };
+    });
     await clickIn(page, '', 'Восстановить');
     await sleep(500);
-    const toast = await page.evaluate(() => [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '));
-    const errors = takeErrors(page);
-    record('сценарии', 'данные: частичная копия и защищённый профиль не обещают запись на диск',
-      /Будут заменены: история/i.test(preview) && !/словарь/i.test(preview) && /Профиль защищён от записи или не сохранён/i.test(toast) &&
-      !/Копия восстановлена/i.test(toast) && errors.length === 0,
-      JSON.stringify({ preview, toast: toast.slice(-450), error: errors[0] }));
+    const result = await page.evaluate(() => ({
+      history: localStorage.getItem('zs:zs.dictations'),
+      dictionary: localStorage.getItem('zs:zs.dictionary'),
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    record('сценарии', 'данные: сбой browser localStorage действительно может сохранить только часть импорта',
+      /не атомарно/i.test(preview) && result.history === oldHistory && JSON.parse(result.dictionary || '[]').some((item) => item.id === 'new-word') &&
+      /Не удалось сохранить данные/i.test(result.toast),
+      JSON.stringify({ historyUnchanged: result.history === oldHistory, dictionary: result.dictionary, toast: result.toast.slice(-350) }));
   } finally { rmSync(backupPath, { force: true }); await page.close(); }
 }
 
@@ -8381,6 +8450,7 @@ async function main() {
       ['данные: размер и гонка файлов', scenarioBackupFileBoundaries],
       ['данные: большая копия на экспорт', scenarioBackupLargeExport],
       ['данные: копия защищённого профиля', scenarioProtectedBackup],
+      ['данные: частичная запись копии', scenarioBackupPartialWrite],
       ['хранилище заполнено', scenarioStorageFull],
       ['ошибка хранилища Electron', scenarioElectronStorageError],
       ['диагностика', scenarioDiagnostics],

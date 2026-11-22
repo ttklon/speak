@@ -27,6 +27,15 @@ export function readRaw(key) {
   }
 }
 
+/** Не начинать разрушительное восстановление, если main уже знает о сбое.
+ * ok не подтверждает запись будущих изменений и не делает импорт транзакцией. */
+export function assertBackupImportAllowed() {
+  if (!isElectron()) return; // У localStorage нет статуса будущих записей.
+  let ok = false;
+  try { ok = bridge()?.statusSync?.()?.ok === true; } catch { /* безопасный отказ */ }
+  if (!ok) throw new Error('Профиль защищён, не сохранён или его статус недоступен. Исправьте проблему записи перед восстановлением. Текущие данные не изменены.');
+}
+
 /** Синхронное чтение (мост использует sendSync — данные уже в памяти main). */
 export function read(key) {
   return readRaw(key);

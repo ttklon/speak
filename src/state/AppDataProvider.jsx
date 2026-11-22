@@ -5,7 +5,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { read, write, storageBytes } from '../lib/storage.js';
+import { assertBackupImportAllowed, read, write, storageBytes } from '../lib/storage.js';
 import {
   DEFAULT_AI_PRESETS,
   DEFAULT_CUSTOM_INSTRUCTIONS,
@@ -433,6 +433,9 @@ export function AppDataProvider({ children }) {
       // Вся проверка и подготовка предшествует первому setState: неисправный
       // поздний раздел не должен уже успеть заменить историю или настройки.
       const data = prepareBackup(payload);
+      // Проверяем непосредственно перед первым изменением, а не при выборе
+      // файла: за время предпросмотра состояние диска могло измениться.
+      assertBackupImportAllowed();
       const applied = [];
       if (data.settings) {
         setSettings(data.settings);

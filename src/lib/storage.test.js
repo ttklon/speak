@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { read, write, remove, storageBytes, formatBytes, isElectron } from './storage.js';
+import { assertBackupImportAllowed, read, write, remove, storageBytes, formatBytes, isElectron } from './storage.js';
 
 beforeEach(() => {
   localStorage.clear();
@@ -53,6 +53,17 @@ describe('хранилище в браузере', () => {
 });
 
 describe('хранилище в Electron', () => {
+  it('импорт отклоняется при ошибке, отсутствии или исключении статуса; путь не раскрывается', () => {
+    expect(() => assertBackupImportAllowed()).not.toThrow(); // браузер не умеет проверять будущую запись
+    for (const statusSync of [undefined, () => ({ ok: false, code: 'ENOSPC' }), () => ({}), () => { throw new Error('личный путь'); }]) {
+      window.zspeakly = { isElectron: true, store: { statusSync } };
+      expect(() => assertBackupImportAllowed()).toThrow(/Текущие данные не изменены/);
+      try { assertBackupImportAllowed(); } catch (err) { expect(err.message).not.toContain('личный путь'); }
+    }
+    window.zspeakly = { isElectron: true, store: { statusSync: () => ({ ok: true }) } };
+    expect(() => assertBackupImportAllowed()).not.toThrow();
+  });
+
   it('ходит через мост, а не в localStorage', () => {
     const store = {
       getSync: vi.fn(() => ({ theme: 'light' })),

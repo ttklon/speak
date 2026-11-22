@@ -357,7 +357,7 @@ export default function DataSection({ onOpenSection }) {
         title="Восстановить данные из копии?"
         description={
           pendingBackup
-            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}.${retentionWarning}`
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}.${retentionWarning} Восстановление не атомарно: при сбое часть прежних данных может быть заменена, а часть — нет. Сначала сохраните отдельную копию текущих данных; при повреждённом профиле она может быть неполной.`
             : ''
         }
         confirmLabel="Восстановить"
