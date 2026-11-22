@@ -28,7 +28,9 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('scripts/test-electron-virtual-mic.mjs gigaam');
     expect(job).toContain('scripts/test-electron-virtual-mic.mjs parakeet');
     expect(job).toContain('sha256sum -c');
-    expect(job.match(/exit "\$code"/g)).toHaveLength(6);
+    expect(job.match(/exit "\$code"/g)).toHaveLength(7);
+    expect(job).toContain('xvfb-run -a node scripts/test-electron-backup.cjs');
+    expect(job).toContain('::error title=Electron backup');
     expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
   });
 
@@ -38,6 +40,8 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).toContain('scripts/test-wininput-failure.cjs');
     expect(job).toContain('scripts/test-wininput-window.cjs');
     expect(job).toContain('scripts/check-packaged-onnx.cjs');
+    expect(job).toContain('node scripts/test-electron-backup.cjs');
+    expect(job).toContain('::error title=Electron backup');
     const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
     expect(pkg.build.files).not.toContain('!**/node_modules/onnxruntime-common/**');
     expect(pkg.build.nsis.include).toBe('scripts/nsis/installer.nsh');
