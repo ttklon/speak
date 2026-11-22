@@ -2995,10 +2995,72 @@ async function scenarioPasswordVault(browser) {
     'сценарии',
     'пароли: копирование кладёт в буфер сам пароль, а не шифр',
     copiedText === secret,
-    String(copiedText || '').slice(0, 20),
+    copiedText === secret ? 'тестовое значение совпало' : 'тестовое значение не совпало',
   );
   const errors = takeErrors(page);
   record('сценарии', 'пароли: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+// Синтетические данные и подменённый bridge: не проверяет реальный safeStorage.
+async function scenarioClipboardSecretPrivacy(browser) {
+  const plain = 'PlainTest9!';
+  const secret = 'CipherTest8!';
+  const page = await openPage(browser, '#/clipboard', {
+    settle: 500,
+    settings: { hidePasswords: true },
+    storeSeed: { 'zs.clipboard': [
+      { id: 'cipher-pw', kind: 'password', text: '', cipher: Buffer.from(secret).toString('base64'), source: 'vault', createdAt: Date.now() },
+      { id: 'plain-pw', kind: 'password', text: plain, source: 'legacy', createdAt: Date.now() - 1 },
+    ] },
+  });
+  takeErrors(page);
+  const initial = await page.evaluate(() => ({
+    body: document.body.innerText,
+    titles: [...document.querySelectorAll('.clip-card')].map((el) => el.title),
+  }));
+  record('приватность', 'буфер: маска и предупреждение о незашифрованных секретах',
+    !initial.body.includes(plain) && !initial.body.includes(secret) && /секрет может сохраниться как обычный текст/i.test(initial.body) &&
+      initial.titles.includes('Пароль (открытый текст)') && initial.titles.includes('Пароль (зашифрован)'));
+
+  await page.type('input[placeholder="Поиск по истории буфера"]', plain);
+  await sleep(250);
+  const matched = await page.evaluate(() => document.querySelectorAll('.clip-card').length);
+  record('приватность', 'буфер: поиск не раскрывает совпадение с текстом пароля', matched === 0);
+  await page.evaluate(() => {
+    const input = document.querySelector('input[placeholder="Поиск по истории буфера"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await sleep(250);
+  await page.evaluate(() => document.querySelector('.clip-card')?.click());
+  await sleep(200);
+  await page.evaluate(() => [...document.querySelectorAll('.clip-actions button')].find((b) => /^копировать$/i.test(b.innerText.trim()))?.click());
+  await sleep(400);
+  const copied = await page.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+    body: document.body.innerText,
+    calls: (window.__bridgeCalls || []).filter((c) => (c.channel || c.ch) === 'clipboard:write'),
+  }));
+  const copiedText = copied.calls.at(-1)?.payload?.[0]?.text ?? copied.calls.at(-1)?.args?.[0]?.text;
+  record('приватность', 'буфер: копирование расшифрованного пароля без раскрытия на экране',
+    copiedText === secret && /Скопировано/.test(copied.toast) && !copied.toast.includes(secret) && !copied.body.includes(secret));
+  await page.evaluate(() => {
+    [...document.querySelectorAll('.clip-card')].find((el) => el.title === 'Пароль (открытый текст)')?.click();
+  });
+  await sleep(200);
+  await page.evaluate(() => [...document.querySelectorAll('.clip-actions button')].find((b) => /^копировать$/i.test(b.innerText.trim()))?.click());
+  await sleep(400);
+  const copiedPlain = await page.evaluate(() => ({
+    body: document.body.innerText,
+    calls: (window.__bridgeCalls || []).filter((c) => (c.channel || c.ch) === 'clipboard:write'),
+  }));
+  const plainText = copiedPlain.calls.at(-1)?.payload?.[0]?.text ?? copiedPlain.calls.at(-1)?.args?.[0]?.text;
+  record('приватность', 'буфер: старый открытый пароль копируется без раскрытия в уведомлении',
+    plainText === plain && !copiedPlain.body.includes(plain));
+  const errors = takeErrors(page);
+  record('приватность', 'буфер: сценарий без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
@@ -8510,6 +8572,7 @@ async function main() {
       ['пауза и отмена распознавания', scenarioPauseAndCancel],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['пароли', scenarioPasswordVault],
+      ['приватность буфера', scenarioClipboardSecretPrivacy],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['прямые ссылки', scenarioDeepLinks],

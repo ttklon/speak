@@ -58,7 +58,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
     readSelection: () => ipcRenderer.invoke('text:read-selection'),
     replaceSelection: (text) => ipcRenderer.invoke('text:replace-selection', text),
     readClipboard: () => ipcRenderer.invoke('clipboard:read'),
-    // пароли в буфере: в профиле только шифр, открытый текст — по запросу
+    // Расшифровка записей, которые удалось зашифровать через safeStorage.
+    // Нераспознанные значения и отказ шифрования могут оставаться текстом.
     secretAvailable: () => ipcRenderer.invoke('secret:available'),
     revealSecret: (cipher) => ipcRenderer.invoke('secret:reveal', cipher),
     screenshot: () => ipcRenderer.invoke('clipboard:screenshot'),

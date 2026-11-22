@@ -1154,9 +1154,9 @@ function startClipboardWatch() {
     if (ownText) lastClipboardText = text;
     else if (text && text !== lastClipboardText) {
       lastClipboardText = text;
-      // Пароль из менеджера паролей не храним открытым текстом: если системное
-      // хранилище доступно (DPAPI на Windows), в профиль уходит только шифр,
-      // а в окно — маска. Иначе честно помечаем запись как «незашифрованную».
+      // Эвристика не обнаруживает все секреты. При доступном системном
+      // шифровании в окно уходит только шифр; при отказе запись передаётся
+      // как обычный текст и может сохраниться открыто в профиле.
       const secret = looksLikeSecret(text);
       const cipher = secret ? encryptText(text) : null;
       foregroundWindow().then((win) => {

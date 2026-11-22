@@ -136,7 +136,10 @@ export default function ClipboardPage() {
         if (tab === 'password' && item.kind !== 'password') return false;
       }
       if (!q) return true;
-      return `${item.text || ''} ${item.source || ''}`.toLowerCase().includes(q);
+      // Старые записи паролей могут содержать открытый текст. Поиск по нему
+      // раскрывал совпадение даже при включённой маске.
+      const searchableText = item.kind === 'password' ? '' : item.text || '';
+      return `${searchableText} ${item.source || ''}`.toLowerCase().includes(q);
     });
   }, [clipboard, tab, query]);
 
@@ -348,9 +351,9 @@ export default function ClipboardPage() {
   };
 
   /**
-   * Открытый текст записи: у пароля в профиле лежит только шифр, поэтому
-   * значение спрашиваем у main (DPAPI). Возвращает null, если расшифровать
-   * не удалось — тогда показывать нечего и врать про «зашифровано» нельзя.
+   * Открытый текст записи: при наличии шифра спрашиваем значение у main.
+   * Старые записи могут содержать открытый текст. null означает, что
+   * расшифровать значение не удалось.
    */
   const revealText = async (item) => {
     if (!item?.cipher) return item?.text || '';
@@ -392,7 +395,10 @@ export default function ClipboardPage() {
       await writeClipboard(value, item.image);
       setJustCopied(item.id);
       setTimeout(() => setJustCopied(null), 1400);
-      push({ title: 'Скопировано', description: truncate(value, 60), tone: 'success', ttl: 1800 });
+      // Не раскрывать распознанный пароль в уведомлении даже после копирования.
+      // Обычный текст тоже может содержать нераспознанный секрет.
+      const description = item.kind === 'password' || item.cipher ? 'Значение скопировано в системный буфер.' : truncate(value, 60);
+      push({ title: 'Скопировано', description, tone: 'success', ttl: 1800 });
     } catch {
       push({
         title: 'Не удалось скопировать',
@@ -431,9 +437,9 @@ export default function ClipboardPage() {
           <h1 className="page__title">Буфер обмена</h1>
           <p className="page__sub">
             Всё, что вы захватываете и копируете, — в одном месте.
-            {tab === 'password'
-              ? ' Пароли хранятся в профиле зашифрованными (системное хранилище Windows), в окно приходит только шифр.'
-              : ''}
+            {' '}Распознавание паролей приблизительное: секрет может сохраниться как обычный текст.
+            При недоступном шифровании похожие на пароль значения тоже могут сохраниться открыто.
+            Чтобы ограничить сбор, отключите мониторинг; прежние записи останутся.
           </p>
         </div>
         <div className="clip-head__toggle-wrap">
@@ -594,12 +600,12 @@ export default function ClipboardPage() {
                   }`}
                   onClick={() => setSelectedId(item.id)}
                   onDoubleClick={() => copyPaste(item)}
-                  title={item.kind === 'password' ? 'Пароль (зашифрован)' : item.text || item.source}
+                  title={item.kind === 'password' ? (item.cipher ? 'Пароль (зашифрован)' : 'Пароль (открытый текст)') : item.text || item.source}
                 >
                   {item.kind === 'image' && item.image ? (
                     <img className="clip-card__image" src={item.image} alt={item.source || 'Изображение'} />
                   ) : item.kind === 'password' ? (
-                    // в профиле только шифр: до «Показать» — маска, после — само значение
+                    // До «Показать» — маска, независимо от наличия шифра.
                     <div className={`clip-card__text ${decrypted[item.id] ? '' : 'clip-card__text--masked'}`}>
                       {decrypted[item.id] ||
                         '•'.repeat(Math.min(16, Math.max(6, String(item.text || '').length || 10)))}
