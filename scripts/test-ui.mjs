@@ -5863,6 +5863,26 @@ async function scenarioDiagnosticsBrowser(browser) {
   await page.close();
 }
 
+// Даже сохранённые старые описания не должны скрывать передачу кадра модели.
+async function scenarioLocalModelPrivacy(browser) {
+  const page = await openPage(browser, '#/hotkeys?tab=voice', {
+    settle: 500,
+    storeSeed: { 'zs.hotkeys': [{ id: 'screen-aware', title: 'Диктовка с учётом экрана', description: 'только в память', keys: ['Ctrl', 'Alt', 'S'], enabled: true }] },
+  });
+  takeErrors(page);
+  try {
+    const voiceText = await page.evaluate(() => document.body.innerText);
+    await page.goto(`${BASE}/#/hotkeys?tab=recommended`, { waitUntil: 'domcontentloaded' });
+    await sleep(500);
+    const recommendedText = await page.evaluate(() => document.body.innerText);
+    const errors = takeErrors(page);
+    record('сценарии', 'локальная модель: показано, что сервер может хранить и пересылать кадр и текст',
+      /Кадр может отправляться модели/i.test(voiceText) && /Сервер может хранить и пересылать снимок/i.test(voiceText) &&
+      /может хранить или пересылать текст/i.test(recommendedText) && errors.length === 0,
+      JSON.stringify({ screenWarning: /Сервер может хранить и пересылать снимок/i.test(voiceText), textWarning: /может хранить или пересылать текст/i.test(recommendedText), error: errors[0] }));
+  } finally { await page.close(); }
+}
+
 // Резервная копия: скачивание JSON и восстановление из файла (в браузере тоже работает).
 async function scenarioBackup(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
@@ -8298,6 +8318,7 @@ async function main() {
       ['новая инструкция', scenarioInstruction],
       ['модели', scenarioModels],
       ['микрофон', scenarioMic],
+      ['локальная модель: приватность', scenarioLocalModelPrivacy],
       ['данные: резервная копия', scenarioBackup],
       ['данные: полный круг копии', scenarioBackupRoundTrip],
       ['данные: повреждённая копия', scenarioInvalidBackup],

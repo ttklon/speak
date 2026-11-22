@@ -67,6 +67,9 @@ export const LANGUAGES = [
 ];
 
 /** Значения из видео: раздел «Голосовые сочетания клавиш». */
+export const SCREEN_CONTEXT_PRIVACY_DESCRIPTION =
+  'Кадр может отправляться модели на компьютере или в локальной сети. Сервер может хранить и пересылать снимок.';
+
 export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'dictation',
@@ -105,8 +108,7 @@ export const DEFAULT_VOICE_HOTKEYS = [
     // Снимок идёт в память (на диск не пишется) и подсказывает распознаванию
     // имена и термины с экрана; локальная модель с картинками может ещё и
     // ответить по нему.
-    description:
-      'Снимок экрана (только в память) подсказывает распознаванию имена и термины с экрана — они точнее попадают в текст.',
+    description: SCREEN_CONTEXT_PRIVACY_DESCRIPTION,
     keys: ['Ctrl', 'Alt', 'S'],
     mode: 'hold',
     enabled: true,

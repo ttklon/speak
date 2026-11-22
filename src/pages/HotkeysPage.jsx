@@ -12,6 +12,7 @@ import { useRoute } from '../lib/router.js';
 import { keysLabel, toAccelerator } from '../lib/utils.js';
 import { useTextAction } from '../lib/hotkeys/useTextAction.js';
 import { analyzeStyle, describeStyle } from '../lib/ai/style.js';
+import { SCREEN_CONTEXT_PRIVACY_DESCRIPTION } from '../lib/config.js';
 
 export default function HotkeysPage() {
   const {
@@ -196,7 +197,11 @@ export default function HotkeysPage() {
                     {hk.title}
                     {hk.isNew ? <span className="badge-new">НОВОЕ</span> : null}
                   </div>
-                  <div className="hk-row__desc">{hk.description}</div>
+                  <div className="hk-row__desc">
+                    {hk.id === 'screen-aware'
+                      ? SCREEN_CONTEXT_PRIVACY_DESCRIPTION
+                      : hk.description}
+                  </div>
                 </div>
                 <div className="hk-row__side">
                   {hk.keys?.length ? (
@@ -285,7 +290,7 @@ export default function HotkeysPage() {
       {tab === 'recommended' ? (
         <div className="stack-8">
           <p className="hk-note">
-            Выделите текст и нажмите сочетание — ZSpeakly перепишет его локально, без интернета.
+            Выделите текст и нажмите сочетание. Модель на компьютере или в локальной сети может хранить или пересылать текст.
           </p>
           {filteredPresets.map((p) => (
             <div key={p.id} className="preset-row">

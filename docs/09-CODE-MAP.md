@@ -236,7 +236,7 @@ Ctrl+Alt+E (или своя инструкция)
 | Текст | `text:insert`, `text:paste`, `text:read-selection`, `text:replace-selection` |
 | Буфер | `clipboard:read`, `clipboard:write`, `clipboard:screenshot`, `screen:capture` |
 | Хоткеи | `hotkey:set` (строка-акселератор или `{dictationKey, textActions, voiceHotkeys}`) |
-| Сеть (только локально) | `http:get`, `http:post` — allowlist: localhost, `*.local`, 10/8, 192.168/16, 172.16/12 |
+| Сеть модели | `http:get`, `http:post` — `electron/localHttp.cjs` проверяет адрес назначения и ответы DNS при соединении, не следует редиректам; локальный сервер сам может пересылать данные дальше |
 | Диагностика | `diag:log`, `diag:status` (логи + проверенные факты `system`: сочетания, движок, VAD, модель на диске, способ вставки, мониторинг буфера, железо), `diag:recent`, `diag:set-enabled`, `diag:set-endpoint`, `diag:save-report`, `diag:send-now`, `diag:ping`, `diag:clear` |
 | Файлы и система | `app:open-data-folder`, `app:open-external` (белый список GitHub), `app:auto-launch`, `app:open-logs`, `app:save-file`, `app:notify` |
 | Модели | `models:status`, `models:download`, `models:download-engine`, `models:import` |

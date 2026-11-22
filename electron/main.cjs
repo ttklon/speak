@@ -34,6 +34,7 @@ const { resolveWindowBounds, boundsToSave } = require('./windowBounds.cjs');
 const { processWhisperText } = require('./whisperTextPolicy.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
+const { requestLocal } = require('./localHttp.cjs');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
   clipboard, shell, dialog, screen, session, safeStorage,
@@ -2276,83 +2277,13 @@ function registerIpc() {
     logger.log(level, payload?.scope, payload?.message, payload?.data);
     return true;
   });
-  // Локальный сервер ИИ (Ollama) может стоять на любом порту и адресе:
-  // политика страницы (CSP) такие запросы режет, поэтому оба метода идут
-  // через главный процесс, а он пускает только локальную сеть.
-  const isLocalTarget = (url) => {
-    let target;
-    try {
-      target = new URL(String(url || ''));
-    } catch {
-      return { error: 'некорректный адрес' };
-    }
-    if (!['http:', 'https:'].includes(target.protocol)) return { error: 'разрешены только http и https' };
-    const host = target.hostname;
-    const local =
-      ['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'].includes(host) ||
-      host.endsWith('.local') ||
-      /^10\./.test(host) ||
-      /^192\.168\./.test(host) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
-    if (!local) return { error: 'разрешены только локальные адреса' };
-    return { target };
-  };
+  // Только локальные адреса: DNS проверяется в момент соединения, а редиректы
+  // не выполняются. Это не ограничивает то, что делает сам локальный сервер.
+  ipcMain.handle('http:get', async (_e, url) => requestLocal(url, { method: 'GET', timeout: 4000 }));
 
-  // Проверка локального сервера ИИ (Ollama) из «Сеть». Из окна обычный fetch
-  // упирается в CSP страницы, поэтому запрос идёт из главного процесса.
-  ipcMain.handle('http:get', async (_e, url) => {
-    const { target, error } = isLocalTarget(url);
-    if (error) return { ok: false, status: 0, reason: error };
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4000);
-      const res = await fetch(target.toString(), { signal: controller.signal });
-      clearTimeout(timer);
-      const text = await res.text();
-      let data = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch {
-        data = { raw: text.slice(0, 500) };
-      }
-      return { ok: res.ok, status: res.status, data };
-    } catch (err) {
-      return { ok: false, status: 0, reason: String(err?.message || err) };
-    }
-  });
-
-  // POST для локальной модели: /api/generate и подобные
   ipcMain.handle('http:post', async (_e, { url, body, timeout } = {}) => {
-    const { target, error } = isLocalTarget(url);
-    if (error) return { ok: false, status: 0, reason: error };
-    const controller = new AbortController();
     const limit = Math.min(Math.max(Number(timeout) || 8000, 1000), 120000);
-    const timer = setTimeout(() => controller.abort(), limit);
-    try {
-      const res = await fetch(target.toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: typeof body === 'string' ? body : JSON.stringify(body || {}),
-        signal: controller.signal,
-      });
-      const text = await res.text();
-      let data = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch {
-        data = { raw: text.slice(0, 2000) };
-      }
-      return { ok: res.ok, status: res.status, data };
-    } catch (err) {
-      const aborted = err?.name === 'AbortError';
-      return {
-        ok: false,
-        status: 0,
-        reason: aborted ? 'локальная модель не ответила вовремя' : String(err?.message || err),
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+    return requestLocal(url, { method: 'POST', body, timeout: limit });
   });
 
   /**

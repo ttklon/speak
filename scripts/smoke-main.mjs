@@ -2530,8 +2530,41 @@ await check('http:post доносит картинку до локальной �
     if (!res?.ok) throw new Error(res?.reason || 'запрос не прошёл');
     if (got.body?.images?.[0] !== 'data:image/png;base64,AAA') throw new Error('картинка не дошла');
     if (res.data?.response !== 'Проект «Атлас», дедлайн пятница') throw new Error('ответ не разобран');
+    const named = await handlers.get('http:post')({}, {
+      url: `http://localhost:${port}/api/generate`, body: { prompt: 'тест localhost' }, timeout: 4000,
+    });
+    if (!named?.ok || got.body?.prompt !== 'тест localhost') throw new Error(`localhost не работает: ${named?.reason || named?.status}`);
   } finally {
     server.close();
+  }
+});
+
+await check('http:get и http:post не отправляют данные по HTTP-перенаправлению', async () => {
+  const http = await import('node:http');
+  let redirected = 0;
+  const destination = http.createServer((req, res) => {
+    redirected += 1;
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"response":"перенаправление"}');
+  });
+  await new Promise((resolve) => destination.listen(0, '127.0.0.1', resolve));
+  const source = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(307, { location: `http://127.0.0.1:${destination.address().port}/unexpected` });
+    res.end();
+  });
+  await new Promise((resolve) => source.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${source.address().port}/api/generate`;
+    const post = await handlers.get('http:post')({}, { url, body: { images: ['private-test-image'] }, timeout: 3000 });
+    const get = await handlers.get('http:get')({}, url);
+    if (redirected || post?.ok || get?.ok) throw new Error(`перенаправление выполнено: ${JSON.stringify({ redirected, post: post?.ok, get: get?.ok })}`);
+  } finally {
+    source.closeAllConnections();
+    destination.closeAllConnections();
+    source.close();
+    destination.close();
   }
 });
 
@@ -2558,10 +2591,36 @@ await check('http:post ограничивает ожидание тела отв
   }
 });
 
+await check('http:get ограничивает ожидание тела ответа после заголовков', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('{"models":');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const started = Date.now();
+  const fallback = setTimeout(() => server.closeAllConnections(), 6500);
+  try {
+    const result = await handlers.get('http:get')({}, `http://127.0.0.1:${server.address().port}/api/tags`);
+    if (result?.ok || Date.now() - started > 6000 || !/вовремя|abort/i.test(result?.reason || '')) {
+      throw new Error(`ожидался таймаут тела GET: ${JSON.stringify(result)} за ${Date.now() - started} мс`);
+    }
+  } finally {
+    clearTimeout(fallback);
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 await check('http:post не пускает наружу', async () => {
   for (const url of ['https://example.com/api/generate', 'file:///C:/Windows/System32/calc.exe', 'nonsense']) {
     const res = await handlers.get('http:post')({}, { url, body: {} });
     if (res?.ok) throw new Error(`пропущен адрес: ${url}`);
+  }
+  for (const url of ['http://10.example.com/api/generate', 'http://172.16.example.com', 'http://192.168.example.com', 'http://0.0.0.0']) {
+    const res = await handlers.get('http:post')({}, { url, body: {} });
+    if (res?.ok || !/локальн/i.test(res?.reason || '')) throw new Error(`не отклонён до подключения: ${url}`);
   }
 });
 
