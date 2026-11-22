@@ -6083,6 +6083,86 @@ async function scenarioInvalidBackup(browser) {
   }
 }
 
+// Проверяем размер до чтения и не даём позднему чтению заменить последний выбор.
+async function scenarioBackupFileBoundaries(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
+  takeErrors(page);
+  try {
+    const before = await page.evaluate(() => localStorage.getItem('mockstore:zs.dictations'));
+    await page.evaluate(() => {
+      const size = Object.getOwnPropertyDescriptor(Blob.prototype, 'size');
+      const originalText = File.prototype.text;
+      window.__backupTextReads = [];
+      Object.defineProperty(File.prototype, 'size', { configurable: true, get() {
+        return this.name === 'big.json' ? 33 * 1024 * 1024 : size.get.call(this);
+      } });
+      File.prototype.text = function () {
+        window.__backupTextReads.push(this.name);
+        if (this.name === 'first.json') return new Promise((resolve) => { window.__resolveOldBackup = resolve; });
+        if (this.name === 'second.json') return Promise.resolve(JSON.stringify({ dictations: [{ id: 'last-choice', text: 'последний выбор' }] }));
+        return originalText.call(this);
+      };
+      window.__chooseBackup = (name) => {
+        const input = document.querySelector('.settings-main input[type=file]');
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(['{}'], name, { type: 'application/json' }));
+        input.files = transfer.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      window.__chooseBackup('big.json');
+    });
+    await sleep(400);
+    const large = await page.evaluate(() => ({
+      reads: window.__backupTextReads.slice(),
+      warning: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+      dialog: Boolean(document.querySelector('.confirm__text')),
+      unchanged: localStorage.getItem('mockstore:zs.dictations'),
+    }));
+    record('сценарии', 'данные: слишком большая копия отклоняется до чтения',
+      !large.reads.includes('big.json') && /больше 32 МиБ/i.test(large.warning) && !large.dialog && large.unchanged === before,
+      JSON.stringify({ reads: large.reads, warning: large.warning, dialog: large.dialog, unchanged: large.unchanged === before }));
+    await page.evaluate(() => { window.__chooseBackup('first.json'); window.__chooseBackup('second.json'); });
+    await page.waitForFunction(() => Boolean(window.__resolveOldBackup) && /second\.json/i.test(document.querySelector('.confirm__text')?.innerText || ''), { timeout: 8000 });
+    await page.evaluate(() => window.__resolveOldBackup(JSON.stringify({ dictations: [{ id: 'stale', text: 'старый выбор' }] })));
+    await sleep(300);
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    if (preview) await clickIn(page, '', 'Восстановить');
+    await sleep(600);
+    const history = await page.evaluate(() => JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'));
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: позднее чтение не подменяет последнюю выбранную копию',
+      /second\.json/i.test(preview) && history.length === 1 && history[0].id === 'last-choice' && errors.length === 0,
+      JSON.stringify({ preview, history, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Большую копию можно сохранить вручную, но нельзя обещать её автоматический импорт.
+async function scenarioBackupLargeExport(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
+  takeErrors(page);
+  try {
+    const description = await page.evaluate(() => document.body.innerText);
+    await page.evaluate(() => {
+      const NativeBlob = window.Blob;
+      window.Blob = class extends NativeBlob {
+        get size() { return 33 * 1024 * 1024; }
+      };
+    });
+    await clickIn(page, '', 'Скачать');
+    await sleep(500);
+    const result = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+      tone: [...document.querySelectorAll('.toast')].find((node) => /Копия сохранена/i.test(node.innerText))?.className,
+      saved: (window.__bridgeCalls || []).some((entry) => entry.channel === 'data:save-backup'),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: крупную копию сохраняют с явным предупреждением и без обещания импорта',
+      result.saved && /превышает 32 МиБ/i.test(result.toast) && /не сможет восстановить/i.test(result.toast) && /toast--warn/.test(result.tone || '') &&
+      /незашифрованным JSON/i.test(description) && /Секреты могут встретиться/i.test(description) && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
 // Для защищённого профиля нельзя обещать, что импорт уже сохранён на диске.
 async function scenarioProtectedBackup(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', {
@@ -8066,6 +8146,8 @@ async function main() {
       ['данные: резервная копия', scenarioBackup],
       ['данные: полный круг копии', scenarioBackupRoundTrip],
       ['данные: повреждённая копия', scenarioInvalidBackup],
+      ['данные: размер и гонка файлов', scenarioBackupFileBoundaries],
+      ['данные: большая копия на экспорт', scenarioBackupLargeExport],
       ['данные: копия защищённого профиля', scenarioProtectedBackup],
       ['хранилище заполнено', scenarioStorageFull],
       ['ошибка хранилища Electron', scenarioElectronStorageError],

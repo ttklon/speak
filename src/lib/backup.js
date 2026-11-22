@@ -3,7 +3,28 @@ import { DEFAULT_SETTINGS } from './config.js';
 import { trimDictations } from './dictationBudget.js';
 import { sanitizeDictionary, sanitizeHotkeys, sanitizeInstructions, sanitizePresets, sanitizeStats } from './sanitize.js';
 import { sanitizeSnippets, SNIPPET_LIMITS } from './snippets.js';
-import { sanitizeAppProfiles } from './appProfiles.js';
+import { APP_PROFILE_LIMITS, sanitizeAppProfiles } from './appProfiles.js';
+
+// Ограничиваем чтение до JSON.parse: история по умолчанию до 8 МиБ UTF-16,
+// но в копии есть также настройки и словарь. Большую копию не уничтожаем:
+// её можно сохранить и разбирать вручную, автоматический импорт её отклоняет.
+export const BACKUP_MAX_BYTES = 32 * 1024 * 1024;
+
+export async function readBackupJsonFile(file) {
+  if (!file || typeof file.size !== 'number' || !Number.isSafeInteger(file.size) || file.size < 0) {
+    throw new Error('не удалось определить размер файла');
+  }
+  if (file.size > BACKUP_MAX_BYTES) {
+    throw new Error('размер файла больше 32 МиБ: автоматическое восстановление недоступно');
+  }
+  const text = await file.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // В ошибке парсера может быть фрагмент частного содержимого файла.
+    throw new Error('это не JSON-файл: выберите копию, скачанную из ZSpeakly');
+  }
+}
 
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -97,6 +118,7 @@ export function prepareBackup(payload) {
   const result = {};
   if (has(payload, 'settings')) {
     for (const [key, value] of Object.entries(payload.settings)) {
+      if (key === '__proto__' || key === 'prototype' || key === 'constructor') fail('настройки: недопустимый ключ');
       if (!has(DEFAULT_SETTINGS, key)) continue;
       const expected = DEFAULT_SETTINGS[key];
       const valid = Array.isArray(expected) ? Array.isArray(value) : typeof expected === typeof value;
@@ -105,20 +127,30 @@ export function prepareBackup(payload) {
     if (has(payload.settings, 'dictationKeys') && payload.settings.dictationKeys.some((key) => typeof key !== 'string')) fail('настройки: dictationKeys');
     result.settings = { ...DEFAULT_SETTINGS, ...payload.settings };
     if (has(payload.settings, 'appProfiles')) {
+      const ids = new Set();
+      for (const item of payload.settings.appProfiles) {
+        if (!isObject(item) || typeof item.match !== 'string' || typeof item.language !== 'string' ||
+          item.match.trim().length > APP_PROFILE_LIMITS.match ||
+          (item.id != null && (typeof item.id !== 'string' || !item.id || ids.has(item.id)))) fail('настройки: правила приложений');
+        if (item.id) ids.add(item.id);
+      }
       const profiles = sanitizeAppProfiles(payload.settings.appProfiles);
-      if (profiles.length !== payload.settings.appProfiles.length) fail('настройки: правила приложений');
+      if (profiles.length !== payload.settings.appProfiles.length || new Set(profiles.map((item) => item.id)).size !== profiles.length) fail('настройки: правила приложений');
       result.settings.appProfiles = profiles;
     }
   }
   if (has(payload, 'dictations')) result.dictations = restoreHistory(payload.dictations);
   if (has(payload, 'dictionary')) result.dictionary = restoreDictionary(payload.dictionary);
   if (has(payload, 'snippets')) {
+    const ids = new Set();
     for (const item of payload.snippets) {
       if (!isObject(item) || typeof item.trigger !== 'string' || typeof item.body !== 'string' ||
-        item.trigger.replace(/\s+/gu, ' ').trim().length > SNIPPET_LIMITS.trigger || item.body.length > SNIPPET_LIMITS.body) fail('быстрые блоки');
+        item.trigger.replace(/\s+/gu, ' ').trim().length > SNIPPET_LIMITS.trigger || item.body.length > SNIPPET_LIMITS.body ||
+        (item.id != null && (typeof item.id !== 'string' || !item.id || ids.has(item.id)))) fail('быстрые блоки');
+      if (item.id) ids.add(item.id);
     }
     result.snippets = sanitizeSnippets(payload.snippets);
-    if (result.snippets.length !== payload.snippets.length) fail('быстрые блоки');
+    if (result.snippets.length !== payload.snippets.length || new Set(result.snippets.map((item) => item.id)).size !== result.snippets.length) fail('быстрые блоки');
   }
   if (has(payload, 'voiceHotkeys')) {
     validateActions(payload.voiceHotkeys, 'сочетания');

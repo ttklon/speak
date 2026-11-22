@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes } from '../../../lib/storage.js';
-import { prepareBackup } from '../../../lib/backup.js';
+import { BACKUP_MAX_BYTES, prepareBackup, readBackupJsonFile } from '../../../lib/backup.js';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 
@@ -27,6 +27,8 @@ export default function DataSection({ onOpenSection }) {
   const [confirmDictations, setConfirmDictations] = useState(false);
   const [pendingBackup, setPendingBackup] = useState(null);
   const fileRef = useRef(null);
+  const backupReadRef = useRef(0);
+  useEffect(() => () => { backupReadRef.current += 1; }, []);
 
   const downloadBackup = async () => {
     let data;
@@ -36,7 +38,17 @@ export default function DataSection({ onOpenSection }) {
       push({ title: 'Не удалось собрать копию', description: String(err?.message || err), tone: 'warn' });
       return;
     }
-    const json = JSON.stringify(data, null, 2);
+    let json;
+    let blob;
+    try {
+      json = JSON.stringify(data, null, 2);
+      blob = new Blob([json], { type: 'application/json' });
+    } catch (err) {
+      push({ title: 'Не удалось собрать копию', description: String(err?.message || err), tone: 'warn' });
+      return;
+    }
+    const oversized = blob.size > BACKUP_MAX_BYTES;
+    const sizeWarning = oversized ? ' Размер превышает 32 МиБ: приложение не сможет восстановить её целиком автоматически.' : '';
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     // локальная дата: toISOString отдаёт UTC и ночью показывает «завтра»
@@ -51,8 +63,9 @@ export default function DataSection({ onOpenSection }) {
           res?.ok
             ? {
                 title: 'Копия сохранена',
-                description: `${res.path || `zspeakly-backup-${stamp}.json`} — история (${dictations.length}) и настройки.`,
-                tone: 'success',
+                description: `${res.path || `zspeakly-backup-${stamp}.json`} — история (${dictations.length}) и настройки.${sizeWarning}`,
+                tone: oversized ? 'warn' : 'success',
+                ttl: oversized ? 12000 : undefined,
               }
             : { title: 'Не удалось сохранить копию', description: res?.reason, tone: 'warn' },
         );
@@ -64,7 +77,6 @@ export default function DataSection({ onOpenSection }) {
     }
     // Браузер: обычная загрузка файла
     try {
-      const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -75,8 +87,9 @@ export default function DataSection({ onOpenSection }) {
       setTimeout(() => URL.revokeObjectURL(url), 2000);
       push({
         title: 'Копия скачана',
-        description: `zspeakly-backup-${stamp}.json — ${dictations.length} записей истории и настройки. Буфер обмена не выгружается.`,
-        tone: 'success',
+        description: `zspeakly-backup-${stamp}.json — ${dictations.length} записей истории и настройки. Буфер обмена не выгружается.${sizeWarning}`,
+        tone: oversized ? 'warn' : 'success',
+        ttl: oversized ? 12000 : undefined,
       });
     } catch (err) {
       push({ title: 'Не удалось скачать копию', description: String(err?.message || err), tone: 'warn' });
@@ -85,15 +98,13 @@ export default function DataSection({ onOpenSection }) {
 
   const readBackupFile = async (file) => {
     if (!file) return;
+    const readId = ++backupReadRef.current;
+    setPendingBackup(null);
     try {
-      const text = await file.text();
-      let payload;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        // сообщение JSON.parse на английском и со фрагментом файла — бесполезно
-        throw new Error('это не JSON-файл: выберите копию, скачанную из ZSpeakly');
-      }
+      const payload = await readBackupJsonFile(file);
+      // Если пока читали выбрали другой файл, первый больше не должен менять
+      // предпросмотр или показывать ошибку поверх последнего выбора.
+      if (readId !== backupReadRef.current) return;
       if (payload?.app && payload.app !== 'ZSpeakly') {
         throw new Error(`это копия другого приложения (${String(payload.app).slice(0, 40)})`);
       }
@@ -109,9 +120,9 @@ export default function DataSection({ onOpenSection }) {
       const sections = Object.keys(labels).filter((key) => Object.prototype.hasOwnProperty.call(prepared, key)).map((key) => labels[key]);
       setPendingBackup({ payload, name: file.name, sections });
     } catch (err) {
-      push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
+      if (readId === backupReadRef.current) push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
     } finally {
-      if (fileRef.current) fileRef.current.value = '';
+      if (readId === backupReadRef.current && fileRef.current) fileRef.current.value = '';
     }
   };
 
@@ -270,7 +281,8 @@ export default function DataSection({ onOpenSection }) {
             Скачать копию
             <div className="setting-row__desc">
               Словарь, свои инструкции, AI-инструкции, сочетания, настройки, профиль и история
-              диктовок — одним JSON-файлом. Буфер обмена не выгружается: там бывают пароли и коды.
+              диктовок — одним незашифрованным JSON-файлом. Буфер обмена не выгружается.
+              Секреты могут встретиться в диктовках, инструкциях и адресах настроек — храните копию в безопасном месте.
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={downloadBackup}>
@@ -281,8 +293,8 @@ export default function DataSection({ onOpenSection }) {
           <div className="setting-row__label">
             Восстановить из файла
             <div className="setting-row__desc">
-              Заменит текущие данные тем, что лежит в файле. Перед восстановлением спросим
-              подтверждение и покажем, что внутри.
+              Заменит выбранные разделы данными из файла. Перед восстановлением спросим
+              подтверждение и покажем, что внутри. Автоматический импорт ограничен 32 МиБ.
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
