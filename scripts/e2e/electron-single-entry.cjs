@@ -31,7 +31,17 @@ if (role === 'primary') {
       console.log('SINGLE_SECOND_SHOWN');
     }, 150);
   });
-  process.stdin.on('data', (data) => { if (String(data).includes('quit')) app.quit(); });
+  // На Windows команда через stdin не завершила процесс в CI; причина неизвестна.
+  // Сигнал находится в уже изолированном временном каталоге теста.
+  const quitSignal = path.join(process.env.ZS_E2E_PROFILE, 'single-e2e-quit');
+  const quitTimer = setInterval(() => {
+    if (!fs.existsSync(quitSignal)) return;
+    clearInterval(quitTimer);
+    console.log('SINGLE_QUIT_REQUESTED');
+    app.quit();
+  }, 100);
+  quitTimer.unref();
+  app.on('will-quit', () => console.log('SINGLE_WILL_QUIT'));
   app.whenReady().then(async () => {
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {

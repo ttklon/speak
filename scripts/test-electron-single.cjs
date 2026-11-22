@@ -62,9 +62,11 @@ async function finish(state, timeout = 20000) {
     assert.doesNotMatch(second.output, /SECONDARY_PROFILE_LOADED/);
     await waitFor(first, 'SINGLE_SECOND_SHOWN');
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8'))['zs:single-e2e'], 'FIRST_PROCESS_DATA');
-    first.child.stdin.write('quit\n');
+    fs.writeFileSync(path.join(dir, 'single-e2e-quit'), 'quit');
     const firstExit = await finish(first);
     assert.equal(firstExit.code, 0, `Первый процесс: ${firstExit.code}/${firstExit.signal}\n${first.output}`);
+    assert.match(first.output, /SINGLE_QUIT_REQUESTED/);
+    assert.match(first.output, /SINGLE_WILL_QUIT/);
     console.log('Electron: два процесса с общим профилем — второй отказан, первое окно показано, данные сохранены');
   } finally {
     for (const state of [first, second]) {
