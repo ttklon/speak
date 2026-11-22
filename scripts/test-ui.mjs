@@ -6083,6 +6083,75 @@ async function scenarioInvalidBackup(browser) {
   }
 }
 
+// Некорректные счётчики отклоняются до изменения данных; старый пресет переживает перезапуск.
+async function scenarioBackupValidationAndRetention(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', {
+    settle: 500,
+    settings: { dictationRetentionDays: 3650 },
+    storeSeed: { 'zs.dictations': [{ id: 'before', text: 'до импорта', createdAt: Date.now() }] },
+  });
+  takeErrors(page);
+  const path = join(tmpdir(), `zs-validation-${Date.now()}.json`);
+  try {
+    const before = await page.evaluate(() => ({
+      history: localStorage.getItem('mockstore:zs.dictations'),
+      settings: localStorage.getItem('mockstore:zs.settings'),
+      stats: localStorage.getItem('mockstore:zs.stats'),
+    }));
+    writeFileSync(path, '{"dictations":[{"text":"не заменять"}],"stats":{"wordsTotal":1e400}}', 'utf8');
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(path);
+    await sleep(400);
+    const rejected = await page.evaluate(() => ({
+      history: localStorage.getItem('mockstore:zs.dictations'),
+      settings: localStorage.getItem('mockstore:zs.settings'),
+      stats: localStorage.getItem('mockstore:zs.stats'),
+      dialog: Boolean(document.querySelector('.confirm__text')),
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    record('сценарии', 'данные: некорректные счётчики не заменяют историю или настройки',
+      rejected.history === before.history && rejected.settings === before.settings && rejected.stats === before.stats &&
+      !rejected.dialog && /счётчики/i.test(rejected.toast), JSON.stringify({ rejected, unchanged: rejected.history === before.history }));
+    const name = 'Имя😀'.repeat(20);
+    writeFileSync(path, JSON.stringify({
+      settings: { dictationRetentionDays: 0 },
+      dictations: [{ id: 'import-old', text: 'история из файла', createdAt: Date.now() - 86400000 }],
+      presets: [{ id: 'legacy-preset', title: '', name: 'Старый пресет', prompt: 'Сохранить смысл' }],
+      profile: { name }, stats: { wordsTotal: 3, secondsTotal: 0.25, sessions: 1 },
+    }), 'utf8');
+    await input.uploadFile(path);
+    await sleep(400);
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    if (preview) await clickIn(page, '', 'Восстановить');
+    await sleep(600);
+    const result = await page.evaluate(() => ({
+      history: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+      presets: JSON.parse(localStorage.getItem('mockstore:zs.presets') || '[]'),
+      profile: JSON.parse(localStorage.getItem('mockstore:zs.profile') || '{}'),
+      stats: JSON.parse(localStorage.getItem('mockstore:zs.stats') || '{}'),
+    }));
+    const reopened = await browser.newPage();
+    let afterRestart;
+    try {
+      await reopened.evaluateOnNewDocument(installMockBridge);
+      await reopened.goto(`${BASE}/#/hotkeys?tab=recommended`, { waitUntil: 'domcontentloaded' });
+      await reopened.waitForSelector('.app-window', { timeout: 15000 });
+      await sleep(500);
+      afterRestart = await reopened.evaluate(() => ({
+        visible: document.body.innerText.includes('Старый пресет'),
+        presets: JSON.parse(localStorage.getItem('mockstore:zs.presets') || '[]'),
+        profile: JSON.parse(localStorage.getItem('mockstore:zs.profile') || '{}'),
+      }));
+    } finally { await reopened.close(); }
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: предупреждение о немедленном удалении и старый пресет после перезапуска',
+      /сразу после восстановления/i.test(preview) && result.history.length === 0 &&
+      result.presets[0]?.title === 'Старый пресет' && result.profile.name === name && result.stats.secondsTotal === 0.25 &&
+      afterRestart.visible && afterRestart.presets[0]?.prompt === 'Сохранить смысл' && afterRestart.profile.name === name && errors.length === 0,
+      JSON.stringify({ preview, historyCount: result.history.length, preset: result.presets[0], namePreserved: result.profile.name === name, afterRestart, error: errors[0] }));
+  } finally { rmSync(path, { force: true }); await page.close(); }
+}
+
 // Проверяем размер до чтения и не даём позднему чтению заменить последний выбор.
 async function scenarioBackupFileBoundaries(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
@@ -8146,6 +8215,7 @@ async function main() {
       ['данные: резервная копия', scenarioBackup],
       ['данные: полный круг копии', scenarioBackupRoundTrip],
       ['данные: повреждённая копия', scenarioInvalidBackup],
+      ['данные: валидация и срок хранения', scenarioBackupValidationAndRetention],
       ['данные: размер и гонка файлов', scenarioBackupFileBoundaries],
       ['данные: большая копия на экспорт', scenarioBackupLargeExport],
       ['данные: копия защищённого профиля', scenarioProtectedBackup],

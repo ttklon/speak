@@ -145,7 +145,8 @@ export function sanitizePresets(stored, fallback = []) {
     stored,
     (item) => {
       if (!item || typeof item !== 'object') return null;
-      const title = typeof item.title === 'string' ? item.title.trim() : typeof item.name === 'string' ? item.name.trim() : '';
+      const title = (typeof item.title === 'string' ? item.title.trim() : '') ||
+        (typeof item.name === 'string' ? item.name.trim() : '');
       if (!title) return null;
       return {
         ...item,

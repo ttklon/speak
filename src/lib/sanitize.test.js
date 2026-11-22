@@ -111,6 +111,8 @@ describe('очистка сохранённых данных', () => {
     const preset = { id: 'p', title: 'Перевод', prompt: 'Переведи', keys: ['Ctrl', 'E'], enabled: false };
     const instruction = { id: 'i', title: 'Письмо', prompt: 'Напиши письмо', keys: [], enabled: true };
     expect(sanitizePresets([preset])).toEqual([expect.objectContaining(preset)]);
+    expect(sanitizePresets([{ id: 'old', title: ' ', name: 'Старое имя', prompt: 'текст' }]))
+      .toEqual([expect.objectContaining({ id: 'old', title: 'Старое имя', prompt: 'текст' })]);
     expect(sanitizeInstructions([instruction])).toEqual([expect.objectContaining(instruction)]);
   });
 

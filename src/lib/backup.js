@@ -1,6 +1,6 @@
 /** Подготовка резервной копии до изменения состояния приложения. */
 import { DEFAULT_SETTINGS } from './config.js';
-import { trimDictations } from './dictationBudget.js';
+import { DICTATION_MAX_ITEMS, trimDictations } from './dictationBudget.js';
 import { sanitizeDictionary, sanitizeHotkeys, sanitizeInstructions, sanitizePresets, sanitizeStats } from './sanitize.js';
 import { sanitizeSnippets, SNIPPET_LIMITS } from './snippets.js';
 import { APP_PROFILE_LIMITS, sanitizeAppProfiles } from './appProfiles.js';
@@ -34,6 +34,10 @@ const numbers = ['durationMs', 'words', 'createdAt', 'editedAt', 'sttMs', 'spoke
 const flags = ['undone', 'sttWarm', 'sttThorough', 'sttSecondPass'];
 
 function restoreHistory(list) {
+  // Проверяем количество до обхода и выделения второй большой коллекции.
+  if (list.length > DICTATION_MAX_ITEMS) {
+    throw new Error('История из копии превышает лимит приложения. Текущие данные не изменены.');
+  }
   const ids = new Set();
   const result = list.map((item, index) => {
     if (!isObject(item) || typeof item.text !== 'string' || !item.text.trim()) fail('диктовки');
@@ -79,7 +83,8 @@ function restoreDictionary(list) {
     if (item.pronunciation != null && typeof item.pronunciation !== 'string') fail('произношение');
     if (item.pinned != null && typeof item.pinned !== 'boolean') fail('закрепление слова');
     for (const key of ['hits', 'lastUsedAt', 'createdAt']) {
-      if (item[key] != null && (typeof item[key] !== 'number' || !Number.isFinite(item[key]) || item[key] < 0)) fail(`словарь: ${key}`);
+      if (item[key] != null && (typeof item[key] !== 'number' || !Number.isFinite(item[key]) || item[key] < 0 ||
+        (key === 'hits' && !Number.isSafeInteger(item[key])))) fail(`словарь: ${key}`);
     }
     return {
       id, word: item.word.trim(), pronunciation: item.pronunciation || '', pinned: item.pinned === true,
@@ -122,7 +127,8 @@ export function prepareBackup(payload) {
       if (!has(DEFAULT_SETTINGS, key)) continue;
       const expected = DEFAULT_SETTINGS[key];
       const valid = Array.isArray(expected) ? Array.isArray(value) : typeof expected === typeof value;
-      if (!valid && !(key === 'liveWhisper' && typeof value === 'boolean')) fail(`настройки: ${key}`);
+      if ((!valid && !(key === 'liveWhisper' && typeof value === 'boolean')) ||
+        (typeof value === 'number' && !Number.isFinite(value))) fail(`настройки: ${key}`);
     }
     if (has(payload.settings, 'dictationKeys') && payload.settings.dictationKeys.some((key) => typeof key !== 'string')) fail('настройки: dictationKeys');
     result.settings = { ...DEFAULT_SETTINGS, ...payload.settings };
@@ -146,6 +152,7 @@ export function prepareBackup(payload) {
     for (const item of payload.snippets) {
       if (!isObject(item) || typeof item.trigger !== 'string' || typeof item.body !== 'string' ||
         item.trigger.replace(/\s+/gu, ' ').trim().length > SNIPPET_LIMITS.trigger || item.body.length > SNIPPET_LIMITS.body ||
+        (item.createdAt != null && (typeof item.createdAt !== 'number' || !Number.isFinite(item.createdAt) || item.createdAt < 0)) ||
         (item.id != null && (typeof item.id !== 'string' || !item.id || ids.has(item.id)))) fail('быстрые блоки');
       if (item.id) ids.add(item.id);
     }
@@ -164,10 +171,19 @@ export function prepareBackup(payload) {
     validateActions(payload.instructions, 'свои инструкции');
     result.instructions = sanitizeInstructions(payload.instructions);
   }
-  if (has(payload, 'stats')) result.stats = sanitizeStats(payload.stats);
+  if (has(payload, 'stats')) {
+    for (const key of ['wordsTotal', 'secondsTotal', 'sessions']) {
+      if (!has(payload.stats, key)) continue; // В старой копии поля могло не быть.
+      const value = payload.stats[key];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 ||
+        (key !== 'secondsTotal' && !Number.isSafeInteger(value))) fail(`счётчики: ${key}`);
+    }
+    result.stats = sanitizeStats(payload.stats);
+  }
   if (has(payload, 'profile')) {
     if (payload.profile.name != null && typeof payload.profile.name !== 'string') fail('профиль');
-    result.profile = { name: String(payload.profile.name || '').slice(0, 40) };
+    // Старый профиль может содержать более длинное имя: не обрезаем его при импорте.
+    result.profile = { name: payload.profile.name || '' };
   }
   return result;
 }

@@ -342,7 +342,7 @@ export default function DataSection({ onOpenSection }) {
         title="Восстановить данные из копии?"
         description={
           pendingBackup
-            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}. Старые записи могут удалиться по сроку хранения при следующем запуске.`
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}. Старые записи могут удалиться по сроку хранения сразу после восстановления или при следующем запуске.`
             : ''
         }
         confirmLabel="Восстановить"

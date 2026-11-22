@@ -22,6 +22,7 @@ describe('подготовка резервной копии', () => {
       { dictations: [{ text: 'да' }], dictionary: 'сломано' },
       { dictations: [{ text: 'да', sttModel: {} }] },
       { settings: { aiEndpoint: { broken: true } } },
+      { settings: JSON.parse('{"dictationRetentionDays":1e400}') },
       { voiceHotkeys: [{ id: 'диктовка', keys: 'Ctrl' }] },
       { instructions: [{ title: 'тест', prompt: {} }] },
     ]) expect(() => prepareBackup(payload)).toThrow();
@@ -65,6 +66,40 @@ describe('подготовка резервной копии', () => {
   it('не обрезает незаметно историю сверх текущего бюджета', () => {
     const records = Array.from({ length: DICTATION_MAX_ITEMS + 1 }, (_, i) => ({ id: `d-${i}`, text: 'слово' }));
     expect(() => prepareBackup({ dictations: records })).toThrow(/лимит/i);
+  });
+
+  it('проверяет счётчики, не превращая повреждённые значения в нули или бесконечность', () => {
+    for (const stats of [
+      { wordsTotal: 'не число' }, { secondsTotal: -1 }, { sessions: 1.5 },
+      JSON.parse('{"wordsTotal":1e400}'), { wordsTotal: null }, { sessions: {} },
+    ]) expect(() => prepareBackup({ dictations: [], stats })).toThrow(/счётчики/i);
+    expect(prepareBackup({ dictations: [], stats: { wordsTotal: 3, secondsTotal: 0.25, sessions: 0 } }).stats)
+      .toEqual({ wordsTotal: 3, secondsTotal: 0.25, sessions: 0 });
+    expect(prepareBackup({ dictations: [], stats: {} }).stats).toEqual({ wordsTotal: 0, secondsTotal: 0, sessions: 0 });
+  });
+
+  it('не теряет пресет при пустом title и заполненном старом name', () => {
+    const preset = { id: 'legacy', title: '', name: 'Старое имя', prompt: 'текст' };
+    expect(prepareBackup({ presets: [preset] }).presets).toHaveLength(1);
+    expect(prepareBackup({ presets: [preset] }).presets[0]).toMatchObject({ id: 'legacy', title: 'Старое имя', prompt: 'текст' });
+  });
+
+  it('сохраняет длинное имя старого профиля, а не обрезает его', () => {
+    const name = 'Имя😀'.repeat(20);
+    expect(prepareBackup({ dictations: [], profile: { name } }).profile.name).toBe(name);
+  });
+
+  it('проверяет дату блока и целое количество использований слова', () => {
+    for (const date of ['сломано', -5, JSON.parse('1e400')]) {
+      expect(() => prepareBackup({ snippets: [{ trigger: 'фраза', body: 'текст', createdAt: date }] })).toThrow();
+    }
+    expect(() => prepareBackup({ dictionary: [{ word: 'слово', hits: 1.5 }] })).toThrow();
+  });
+
+  it('отклоняет историю сверх лимита количества до обхода элементов', () => {
+    const items = Array(DICTATION_MAX_ITEMS + 1);
+    Object.defineProperty(items, 0, { get() { throw new Error('элемент не должен читаться'); } });
+    expect(() => prepareBackup({ dictations: items })).toThrow(/лимит/i);
   });
 
   it('разрешает пустые списки и частичный старый формат, но не чужой или пустой файл', () => {
