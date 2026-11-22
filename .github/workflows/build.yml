@@ -609,7 +609,15 @@ jobs:
 
       - name: Блокировка профиля при двух экземплярах Electron
         if: github.event_name == 'pull_request'
-        run: node scripts/test-electron-single.cjs
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-electron-single.cjs > electron-single.log 2>&1
+          code=$?
+          cat electron-single.log
+          message=$(tail -c 4000 electron-single.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron single-instance::$message"; exit "$code"; fi
+          echo "::notice title=Electron single-instance::$message"
 
       - name: Проверить ONNX Runtime в собранном приложении
         shell: bash
