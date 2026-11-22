@@ -57,27 +57,40 @@ public static class NsisGui {
 '@
 if ($ProbeCount -gt 0) {
   if ($ProbeCount -gt 50) { throw 'ProbeCount exceeds 50' }
-  # Stop before interacting with the wizard or installing files. Each fresh
-  # process must reach its own dialog without the first-install startup crash.
+  # Verify the first page AND its transition to the directory page. A process
+  # can show its first window and still crash on Next. Never press Install.
   for ($i = 1; $i -le $ProbeCount; $i++) {
     $probe = Start-Process -FilePath $Setup -PassThru
     try {
       $until = (Get-Date).AddSeconds(30)
-      $seen = $false
+      $advanced = $false
+      $directoryReady = $false
       while ((Get-Date) -lt $until) {
         $probe.Refresh()
-        if ($probe.HasExited) { throw "Fresh installer $i exited before its window: $($probe.ExitCode)" }
-        if ([NsisGui]::FindWindow($probe.Id) -ne [IntPtr]::Zero) { $seen = $true; break }
+        if ($probe.HasExited) { throw "Fresh installer $i exited before directory page (Next=$advanced): $($probe.ExitCode)" }
+        $window = [NsisGui]::FindWindow($probe.Id)
+        if ($window -ne [IntPtr]::Zero) {
+          $items = @([NsisGui]::Children($window) | Where-Object { $_.Visible })
+          $location = $items | Where-Object { $_.Class -eq 'Static' -and $_.Text -match 'Choose Install Location' } | Select-Object -First 1
+          $edit = $items | Where-Object { $_.Class -eq 'Edit' -and $_.Id -eq 1019 } | Select-Object -First 1
+          if ($null -ne $location -and $null -ne $edit) { $directoryReady = $true; break }
+          $options = $items | Where-Object { $_.Class -eq 'Static' -and $_.Text -match 'Choose Installation Options' } | Select-Object -First 1
+          $next = $items | Where-Object { $_.Class -eq 'Button' -and $_.Id -eq 1 -and $_.Enabled -and $_.Text -match '^&?Next\s*>' } | Select-Object -First 1
+          if (-not $advanced -and $null -ne $options -and $null -ne $next) {
+            [NsisGui]::Click($next.Handle)
+            $advanced = $true
+          }
+        }
         Start-Sleep -Milliseconds 150
       }
-      if (-not $seen) { throw "Fresh installer $i did not show a window" }
-      Write-Output "Fresh installer $i reached its wizard"
+      if (-not $directoryReady) { throw "Fresh installer $i did not reach a ready directory page (Next=$advanced)" }
+      Write-Output "Fresh installer $i reached its directory page without installing"
     } finally {
       $probe.Refresh()
       if (-not $probe.HasExited) { Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue; $probe.WaitForExit() }
     }
   }
-  Write-Output "PASS: $ProbeCount first-install wizard starts without a crash; no installation performed."
+  Write-Output "PASS: $ProbeCount fresh installers reached the directory page; no installation performed."
   exit 0
 }
 $p = Start-Process -FilePath $Setup -PassThru

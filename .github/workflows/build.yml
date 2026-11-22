@@ -664,9 +664,15 @@ jobs:
           if (Test-Path "$env:LOCALAPPDATA\Programs\ZSpeakly") { throw 'Установка по умолчанию уже существует' }
           node -e "const f=require('fs'),p=require('path'),patch=require('./scripts/nsis/patch-builder.cjs').patch; const file=p.join(p.dirname(require.resolve('app-builder-lib/package.json')),'templates/nsis/multiUser.nsh'); const data=f.readFileSync(file,'utf8'); if(patch(data)!==data)throw Error('NSIS template not patched during packaging');"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./scripts/e2e/nsis-gui.ps1 -Setup (Resolve-Path $setup).Path -InstallPath (Join-Path $env:RUNNER_TEMP 'unused') -ProbeCount 20
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Write-Host '::notice title=NSIS first start::20 отдельных процессов дошли до мастера без установки; шаблон с ограниченным чтением применён.'
+          try {
+            & ./scripts/e2e/nsis-gui.ps1 -Setup (Resolve-Path $setup).Path -InstallPath (Join-Path $env:RUNNER_TEMP 'unused') -ProbeCount 20
+            if ($LASTEXITCODE -ne 0) { throw "Проверка мастера: код $LASTEXITCODE" }
+          } catch {
+            $message = ($_.Exception.Message -replace '%', '%25' -replace '[\r\n]+', ' ')
+            Write-Host "::error title=NSIS first start::$message"
+            exit 1
+          }
+          Write-Host '::notice title=NSIS first start::20 отдельных процессов дошли до готового выбора каталога после Next без установки; шаблон с ограниченным чтением применён.'
 
       - name: Electron диктует через виртуальный микрофон в окно Windows
         shell: bash
