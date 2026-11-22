@@ -16,6 +16,15 @@ import { resolveSection } from './lib/settingsSections.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
 
+const PROTECTED_PROFILE_CODES = ['BACKUP_FAILED', 'PROFILE_UNREADABLE', 'RECOVERY_PENDING', 'RECOVERY_UNCHECKED'];
+
+function initialStorageProtection() {
+  try {
+    const status = window.zspeakly?.store?.statusSync?.();
+    return status?.ok === false && PROTECTED_PROFILE_CODES.includes(status.code) ? status.code : null;
+  } catch { return null; }
+}
+
 const PAGES = {
   home: HomePage,
   dictionary: DictionaryPage,
@@ -28,7 +37,8 @@ export default function App() {
   const { settings, updateSettings, presets, instructions, voiceHotkeys } = useAppData();
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [storageProtection, setStorageProtection] = useState(null);
+  const [storageProtection, setStorageProtection] = useState(initialStorageProtection);
+  const [recoveryFolderState, setRecoveryFolderState] = useState('idle');
   const [settingsSection, setSettingsSection] = useState('dictation');
   // Палитра команд: одна строка на всё приложение (Ctrl+K).
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -128,8 +138,7 @@ export default function App() {
       const now = Date.now();
       const last = lastStorageWarning.current;
       // Защита профиля важнее обычной ошибки и не должна ею скрываться.
-      const protectedCodes = ['BACKUP_FAILED', 'PROFILE_UNREADABLE', 'RECOVERY_PENDING', 'RECOVERY_UNCHECKED'];
-      const protectedProfile = protectedCodes.includes(code);
+      const protectedProfile = PROTECTED_PROFILE_CODES.includes(code);
       if (protectedProfile) setStorageProtection(code);
       if (now - last.at < 30_000 && !(protectedProfile && code !== last.code)) return;
       lastStorageWarning.current = { at: now, code };
@@ -279,6 +288,16 @@ export default function App() {
     setSettingsOpen(false);
   }, []);
 
+  const openRecoveryFolder = async () => {
+    setRecoveryFolderState('opening');
+    try {
+      const result = await window.zspeakly?.native?.openDataFolder?.();
+      setRecoveryFolderState(result?.ok ? 'opened' : 'failed');
+    } catch {
+      setRecoveryFolderState('failed');
+    }
+  };
+
   const content = useMemo(() => {
     if (page(route) === 'home') return <HomePage onOpenSettings={openSettings} />;
     const Page = PAGES[page(route)] || HomePage;
@@ -298,6 +317,23 @@ export default function App() {
                 ? 'Не удалось проверить временный файл. Проверьте доступ к папке профиля и сохраните файлы отдельно.'
                 : 'Исходный профиль не перезаписывается. Сохраните важные данные отдельно и проверьте файлы профиля.'}{' '}
             Новые изменения не сохранятся при закрытии.
+            <details className="profile-warning__recovery">
+              <summary>Как сохранить файлы и восстановить профиль</summary>
+              <ol>
+                <li>Сохраните важный новый текст вне приложения: изменения этой сессии могут исчезнуть.</li>
+                <li>Откройте папку данных, затем полностью закройте приложение, в том числе в трее. При предупреждении о несохранённых изменениях сначала сохраните их отдельно.</li>
+                <li>При закрытом приложении скопируйте в безопасное место profile.json, profile.json.tmp и profile.json.broken-* — если они существуют. Эти файлы могут содержать личные данные.</li>
+                <li>Проверьте копии вручную. Копия broken может содержать ту же ошибку, а временный файл — неполные или старые данные. Корректный JSON не гарантирует целостность профиля.</li>
+                <li>Если есть надёжная копия именно файла profile.json, замените им профиль только после сохранения оригиналов. При наличии profile.json.tmp переместите его в безопасное место вне папки профиля. Не заменяйте профиль непроверенными данными.</li>
+                <li>Если исправного profile.json нет, но есть экспортированная через настройки копия, после сохранения оригиналов можно переместить нечитаемый profile.json вне папки профиля и перезапустить приложение. Создастся пустой профиль: импортируйте копию через настройки и проверьте результат. Экспорт — другой формат, не переименовывайте его в profile.json.</li>
+                <li>Запустите приложение снова и проверьте данные. Защита не снимается в текущей сессии. Если доступа к папке или надёжной копии нет, обратитесь за помощью, не удаляя файлы.</li>
+              </ol>
+              <button type="button" onClick={openRecoveryFolder} disabled={recoveryFolderState === 'opening'}>Открыть папку данных</button>
+              <span className="profile-warning__folder-status" role="status">
+                {recoveryFolderState === 'failed' ? 'Не удалось открыть папку данных. Проверьте доступ к ней или обратитесь за помощью.' : ''}
+                {recoveryFolderState === 'opened' ? 'Папка открыта. Перед изменением файлов полностью закройте приложение.' : ''}
+              </span>
+            </details>
           </div>
         ) : null}
         <div className="app-body">
@@ -313,7 +349,7 @@ export default function App() {
 
       <DictationHUD />
 
-      <OnboardingModal />
+      {!storageProtection && <OnboardingModal />}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 

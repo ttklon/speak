@@ -5719,6 +5719,59 @@ async function scenarioElectronStorageError(browser) {
     await pending.close();
   }
 
+  // Нечитаемый профиль загружается как пустой: онбординг не должен закрыть
+  // предупреждение и предложить записывать настройки вместо восстановления.
+  for (const mode of ['ok', 'failed', 'rejected']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { onboarded: false }, viewport: { width: 720, height: 480 }, settle: 500, patchArg: mode,
+      patchNative: (value) => {
+        window.zspeakly.store.statusSync = () => ({ ok: false, code: 'PROFILE_UNREADABLE' });
+        window.zspeakly.native.openDataFolder = async () => {
+          window.__recoveryFolderCalls = (window.__recoveryFolderCalls || 0) + 1;
+          if (value === 'rejected') throw new Error('СЕКРЕТНЫЙ ПУТЬ');
+          return value === 'failed' ? { ok: false, reason: 'СЕКРЕТНЫЙ ПУТЬ' } : { ok: true };
+        };
+      },
+    });
+    try {
+      const before = await page.evaluate(() => {
+        const summary = document.querySelector('.profile-warning summary');
+        const rect = summary?.getBoundingClientRect();
+        const top = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return { onboarding: Boolean(document.querySelector('.onboarding')), usable: Boolean(summary && (top === summary || summary.contains(top))) };
+      });
+      if (before.usable) {
+        await page.click('.profile-warning summary');
+        await page.click('.profile-warning button');
+        await sleep(200);
+      }
+      const after = await page.evaluate(() => ({
+        text: document.querySelector('.profile-warning')?.innerText || '',
+        calls: window.__recoveryFolderCalls || 0,
+      }));
+      const errors = takeErrors(page);
+      record('сценарии', `Electron: восстановление пустого профиля доступно до онбординга (${mode})`,
+        !before.onboarding && before.usable && after.calls === 1 && /полностью закройте/i.test(after.text) &&
+        /profile\.json\.broken/i.test(after.text) && /экспортированная через настройки копия/i.test(after.text) && /другой формат/i.test(after.text) &&
+        (mode === 'ok' || /не удалось открыть/i.test(after.text)) && !after.text.includes('СЕКРЕТНЫЙ ПУТЬ') && errors.length === 0,
+        JSON.stringify({ before, after, error: errors[0] }));
+    } finally { await page.close(); }
+  }
+
+  const lateProtection = await openPage(browser, '#/home', { settings: { onboarded: false }, settle: 500 });
+  try {
+    const onboardingBefore = Boolean(await lateProtection.$('.onboarding'));
+    await emit(lateProtection, 'store:error', { ok: false, code: 'RECOVERY_PENDING' });
+    await sleep(200);
+    const state = await lateProtection.evaluate(() => ({
+      onboarding: Boolean(document.querySelector('.onboarding')),
+      warning: document.querySelector('.profile-warning')?.innerText || '',
+    }));
+    record('сценарии', 'Electron: позднее предупреждение закрывает онбординг и показывает защиту',
+      onboardingBefore && !state.onboarding && /profile\.json\.tmp/i.test(state.warning) && takeErrors(lateProtection).length === 0,
+      JSON.stringify({ onboardingBefore, ...state }));
+  } finally { await lateProtection.close(); }
+
   for (const key of ['zs:settings', 'zs:dictionary']) {
     const rejected = await openPage(browser, '#/home', {
       settle: 500,

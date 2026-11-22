@@ -217,6 +217,34 @@ describe('профиль Electron: сбой записи', () => {
     expect(fs.readdirSync(dir).some((name) => name.startsWith('profile.json.broken-'))).toBe(true);
   });
 
+  it('ручное восстановление после закрытия сохраняет копии и читает выбранный профиль при новом запуске', () => {
+    const file = path.join(dir, 'profile.json');
+    const original = '{повреждённый оригинал';
+    const pending = '{"history":["непроверенное"]}';
+    const trusted = '{"history":["проверенная копия"]}';
+    fs.writeFileSync(file, original);
+    fs.writeFileSync(`${file}.tmp`, pending);
+    const store = new JsonStore();
+    store.set('history', ['только в памяти']);
+    expect(store.flush()).toBe(false);
+    const saved = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-recovery-copies-'));
+    try {
+      fs.copyFileSync(file, path.join(saved, 'original.json'));
+      fs.copyFileSync(`${file}.tmp`, path.join(saved, 'pending.json'));
+      fs.renameSync(`${file}.tmp`, path.join(saved, 'moved-pending.json'));
+      fs.writeFileSync(file, trusted);
+      expect(store.flush()).toBe(false); // защита не исчезает в прежней сессии
+      expect(fs.readFileSync(file, 'utf8')).toBe(trusted);
+      const restarted = new JsonStore();
+      expect(restarted.status()).toEqual({ ok: true });
+      expect(restarted.get('history')).toEqual(['проверенная копия']);
+      restarted.set('history', ['после восстановления']);
+      expect(restarted.flush()).toBe(true);
+      expect(fs.readFileSync(path.join(saved, 'original.json'), 'utf8')).toBe(original);
+      expect(fs.readFileSync(path.join(saved, 'pending.json'), 'utf8')).toBe(pending);
+    } finally { fs.rmSync(saved, { recursive: true, force: true }); }
+  });
+
   it('если не удалось проверить временный файл, не рискует переписать его', () => {
     const storeFile = path.join(dir, 'profile.json');
     const raw = '{"history":["важное"]}';
