@@ -1241,6 +1241,89 @@ async function scenarioAppLanguage(browser) {
   await page.close();
 }
 
+// Повторный сигнал стопа во время STT не должен прятать обработку и отмену.
+async function scenarioDoubleStopWhileProcessing(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = () => new Promise((resolve) => { window.__lateStt = resolve; });
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => Boolean(window.__lateStt), { timeout: 10000 });
+    await page.waitForSelector('.live-draft--processing', { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'up' });
+    await sleep(300);
+    const after = await page.evaluate(() => ({
+      processing: !!document.querySelector('.live-draft--processing'),
+      cancel: [...document.querySelectorAll('.live-draft--processing button')].some((button) => /ОТМЕНИТЬ/i.test(button.innerText)),
+    }));
+    if (after.cancel) {
+      await page.click('.live-draft--processing button');
+      await page.evaluate(() => window.__lateStt({ ok: true, text: 'не должно появиться' }));
+      await sleep(400);
+    }
+    const history = await page.evaluate(() => window.__e2e.read('zs.dictations') || []);
+    const errors = takeErrors(page);
+    record('сценарии', 'сессии: повторный стоп не скрывает обработку и отмену',
+      after.processing && after.cancel && history.length === 0 && errors.length === 0,
+      JSON.stringify({ ...after, history, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Сторож обработки должен освободить сессию, а не только скрыть индикатор.
+async function scenarioProcessingTimeout(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      const originalTimeout = window.setTimeout.bind(window);
+      window.setTimeout = (fn, delay, ...args) => originalTimeout(fn, delay === 90000 ? 1500 : delay, ...args);
+      let calls = 0;
+      window.zspeakly.native.transcribePcm = () => {
+        window.__timeoutCalls = ++calls;
+        return calls === 1 ? new Promise((resolve) => { window.__timeoutOld = resolve; })
+          : Promise.resolve({ ok: true, text: 'новая запись', ms: 20 });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => Boolean(window.__timeoutOld), { timeout: 10000 });
+    const beforeCancel = await page.evaluate(() => (window.__bridgeCalls || []).filter((call) => call.channel === 'stt:cancel').length);
+    await page.waitForFunction(() => !document.querySelector('.live-draft--processing'), { timeout: 6000 });
+    const afterTimeout = await page.evaluate(() => ({
+      cancels: (window.__bridgeCalls || []).filter((call) => call.channel === 'stt:cancel').length,
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'up' });
+    await sleep(1000);
+    await page.evaluate(() => window.__timeoutOld({ ok: true, text: 'устаревшая запись', ms: 20 }));
+    await sleep(500);
+    const result = await page.evaluate(() => ({
+      calls: window.__timeoutCalls,
+      texts: (window.__e2e.read('zs.dictations') || []).map((row) => row.text),
+      inserts: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:insert').map((call) => call.args?.[0]),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'сессии: таймаут освобождает обработку и отбрасывает поздний результат',
+      afterTimeout.cancels > beforeCancel && /Распознавание не ответило/.test(afterTimeout.toast) &&
+      result.calls === 2 && result.texts.length === 1 && /новая запись/i.test(result.texts[0]) &&
+      result.inserts.length === 1 && /новая запись/i.test(result.inserts[0]) && errors.length === 0,
+      JSON.stringify({ beforeCancel, afterTimeout, ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
 // Горячая клавиша во время обработки не должна перенести старый результат в новую сессию.
 async function scenarioPendingSessionStart(browser) {
   const page = await openPage(browser, '#/home', {
@@ -7375,6 +7458,8 @@ async function main() {
       ['голосовые команды', scenarioVoiceCommands],
       ['оформление под окно', scenarioAppFormat],
       ['язык под окно', scenarioAppLanguage],
+      ['повторный стоп при обработке', scenarioDoubleStopWhileProcessing],
+      ['таймаут обработки', scenarioProcessingTimeout],
       ['старт во время обработки', scenarioPendingSessionStart],
       ['изоляция контекста сессии', scenarioSessionContextIsolation],
       ['снимок после отмены', scenarioCancelledScreenCapture],

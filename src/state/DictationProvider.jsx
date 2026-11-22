@@ -1231,19 +1231,15 @@ export function DictationProvider({ children }) {
     quietRef.current = null;
     setMicQuiet(false);
     const rec = recRef.current;
+    // Повторный сигнал отпускания не должен скрывать уже идущую обработку.
+    if (!rec) return;
     // Отсюда и до готового текста — то время, которое человек реально ждёт.
     // Отчёт о скорости раньше судил только счёт движка и потому мог говорить
     // «укладывается», пока ожидание было дольше пяти секунд.
-    if (rec) stopAtRef.current = Date.now();
+    stopAtRef.current = Date.now();
     setState('processing');
     setLevel(0);
-    if (rec && settingsRef.current.soundFeedback !== false) playCue('stop');
-    // записи нет — нечего останавливать: иначе плашка «Распознаю…» висела
-    // до 90-секундного сторожа
-    if (!rec) {
-      setState('idle');
-      return;
-    }
+    if (settingsRef.current.soundFeedback !== false) playCue('stop');
     const fallbackText = rec.text || draftRef.current;
     const processing = { rec, cancelled: false, session: sessionRef.current };
     processingRecRef.current = processing;
@@ -1506,18 +1502,36 @@ export function DictationProvider({ children }) {
   // и честно показываем ошибку вместо вечной плашки.
   useEffect(() => {
     if (state !== 'processing') return undefined;
+    const processing = processingRecRef.current;
     const t = setTimeout(() => {
-      setError((prev) =>
-        prev || {
-          code: 'stt-timeout',
-          title: 'Распознавание не ответило',
-          hint: 'Проверьте модель в «Настройки → Диктовка → Модель распознавания» и сохраните отчёт из «Настройки → Диагностика → Отправка отчётов».',
-        },
-      );
+      // Сторож относится к конкретному запросу. Одна смена надписи на idle
+      // оставляла запрос занятым и позволяла вставить его поздний результат.
+      if (processing && sessionRef.current !== processing.session) return;
+      if (processing) {
+        processing.cancelled = true;
+        if (processing.session) {
+          processing.session.cancelled = true;
+          processing.session.screenTerms = '';
+        }
+        if (finishing.current?.isCancelled?.()) finishing.current = false;
+        if (processingRecRef.current === processing) {
+          processingRecRef.current = null;
+          try {
+            Promise.resolve(processing.rec?.abort?.()).catch(() => {});
+          } catch { /* даже при ошибке отмены результат уже не принимается */ }
+        }
+      }
+      const timeoutError = {
+        code: 'stt-timeout',
+        title: 'Распознавание не ответило',
+        hint: 'Проверьте модель в «Настройки → Диктовка → Модель распознавания» и сохраните отчёт из «Настройки → Диагностика → Отправка отчётов».',
+      };
+      setError((prev) => prev || timeoutError);
+      pushToast({ title: timeoutError.title, description: timeoutError.hint, tone: 'warn', ttl: 9000 });
       setState('idle');
     }, 90000);
     return () => clearTimeout(t);
-  }, [state]);
+  }, [state, pushToast]);
 
   // Таймер длительности. Время на паузе не должно «идти»: иначе человек
   // видит, что запись продолжается, хотя звук уже не пишется.
