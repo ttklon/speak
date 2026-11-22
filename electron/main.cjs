@@ -77,6 +77,9 @@ const HUD_HEIGHT_ERROR = 112;
 // идёт ли сейчас диктовка (для пункта «Остановить диктовку» в трее)
 let hudActive = false;
 let clipboardTimer = null;
+// Токен сессии отменяет результаты ещё выполняющегося поиска активного окна.
+let clipboardWatchGeneration = 0;
+let clipboardWatchClosed = false;
 let updater = null;
 let lastClipboardText = '';
 let windowHiddenForInsert = false;
@@ -1142,7 +1145,8 @@ function decryptText(cipher) {
 
 // ── Буфер обмена ───────────────────────────────────────────────────────────
 function startClipboardWatch() {
-  stopClipboardWatch();
+  if (clipboardTimer || clipboardWatchClosed) return;
+  const generation = ++clipboardWatchGeneration;
   clipboardTimer = setInterval(() => {
     const settings = store?.get('zs:settings') || {};
     if (settings.clipboardMonitor === false) return;
@@ -1160,6 +1164,10 @@ function startClipboardWatch() {
       const secret = looksLikeSecret(text);
       const cipher = secret ? encryptText(text) : null;
       foregroundWindow().then((win) => {
+        // Ожидание окна может завершиться уже после выключения или повторного
+        // включения мониторинга. Старые результаты нельзя отправлять в UI.
+        if (!clipboardTimer || generation !== clipboardWatchGeneration ||
+            (store?.get('zs:settings') || {}).clipboardMonitor === false) return;
         const source = win.app
           ? `${win.app}${win.title ? ` — ${win.title}` : ''}`
           : 'Системный буфер';
@@ -1196,8 +1204,15 @@ function startClipboardWatch() {
 }
 
 function stopClipboardWatch() {
+  clipboardWatchGeneration += 1;
   if (clipboardTimer) clearInterval(clipboardTimer);
   clipboardTimer = null;
+}
+
+function syncClipboardWatch() {
+  if (!startupComplete || clipboardWatchClosed) return;
+  if ((store?.get('zs:settings') || {}).clipboardMonitor === false) stopClipboardWatch();
+  else startClipboardWatch();
 }
 
 // ── IPC ────────────────────────────────────────────────────────────────────
@@ -1235,9 +1250,15 @@ function registerIpc() {
     } catch {
       /* не мешаем самой записи */
     }
-    return store.set(key, value);
+    const result = store.set(key, value);
+    if (key === 'zs:settings') syncClipboardWatch();
+    return result;
   });
-  ipcMain.handle('store:remove', (_e, key) => store.remove(key));
+  ipcMain.handle('store:remove', (_e, key) => {
+    const result = store.remove(key);
+    if (key === 'zs:settings') syncClipboardWatch();
+    return result;
+  });
 
   ipcMain.handle('win:minimize', () => mainWindow?.minimize());
   ipcMain.handle('win:toggle-maximize', () => {
@@ -2260,6 +2281,7 @@ function registerIpc() {
     }
     // сохраняем, иначе после перезапуска сочетания вернутся к прежним
     store.set('zs:settings', { ...current, ...payload });
+    syncClipboardWatch();
     registerShortcuts({ ...current, ...payload });
     return true;
   });
@@ -3428,6 +3450,7 @@ app.on('will-quit', (event) => {
   try { whisper.stopServer(); } catch { /* процесс уже закрыт */ }
   try { inputHost.stop(); } catch { /* процесс уже закрыт */ }
   globalShortcut.unregisterAll();
+  clipboardWatchClosed = true;
   stopClipboardWatch();
 });
 

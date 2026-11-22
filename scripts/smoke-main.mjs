@@ -17,9 +17,11 @@ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-smoke-'));
 const deniedLockProbe = process.argv.includes('--test-lock-denied');
 const earlySecondProbe = process.argv.includes('--test-early-second');
 const closedSecondProbe = process.argv.includes('--test-closed-second');
+const disabledClipboardProbe = process.argv.includes('--test-clipboard-disabled');
 const probeProfile = path.join(userData, 'profile.json');
 const probeContents = JSON.stringify({ 'zs:installId': 'existing-id', history: ['исходная запись'] });
 if (deniedLockProbe) fs.writeFileSync(probeProfile, probeContents, 'utf8');
+if (disabledClipboardProbe) fs.writeFileSync(probeProfile, JSON.stringify({ 'zs:settings': { clipboardMonitor: false, checkUpdates: false } }), 'utf8');
 let quitCalled = 0;
 
 const handlers = new Map();
@@ -32,6 +34,7 @@ const sentEvents = [];
 const sentInputEvents = [];
 const clipboardText = { value: 'выделенный текст' };
 const clipboardImage = { value: null };
+const clipboardReads = { text: 0, image: 0 };
 
 const windowInstances = [];
 
@@ -207,11 +210,11 @@ const electronStub = {
   },
   clipboard: {
     writeImage: (img) => { clipboardImage.value = img; },
-    readText: () => clipboardText.value,
+    readText: () => { clipboardReads.text += 1; return clipboardText.value; },
     writeText: (v) => {
       clipboardText.value = String(v);
     },
-    readImage: () => ({ isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }) }),
+    readImage: () => { clipboardReads.image += 1; return { isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }) }; },
     availableFormats: () => ['text/plain'],
   },
   shell: { openExternal: () => {}, openPath: () => {} },
@@ -250,7 +253,11 @@ const cpStub = {
     spawnCalls.push({ file, args });
     // execError: притворяемся, что SendKeys недоступен (окно с правами админа)
     if (typeof cb === 'function') {
-      setTimeout(() => (spawnPlan.execError ? cb(new Error('SendKeys недоступен')) : cb(null, '', '')), 0);
+      if (spawnPlan.deferForeground && String(file).includes('powershell') && args?.some((arg) => String(arg).includes('GetForegroundWindow'))) {
+        spawnPlan.foregroundCallbacks.push(cb);
+      } else {
+        setTimeout(() => (spawnPlan.execError ? cb(new Error('SendKeys недоступен')) : cb(null, '', '')), 0);
+      }
     }
     // SendInput-помощник общается через stdin/stdout: отдаём то, что велел тест
     const listeners = {};
@@ -354,6 +361,55 @@ async function check(name, fn) {
 
 await new Promise((r) => setTimeout(r, 200));
 
+if (disabledClipboardProbe) {
+  let error = '';
+  try {
+    const status = () => handlers.get('diag:status')({}).system.clipboardWatch;
+    if (status()) throw new Error('монитор запущен с выключенной настройкой');
+    const before = { ...clipboardReads };
+    await new Promise((r) => setTimeout(r, 1100));
+    if (clipboardReads.text !== before.text || clipboardReads.image !== before.image) throw new Error('буфер читается при выключенном мониторинге');
+    clipboardText.value = 'новый тестовый текст после включения';
+    handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true, checkUpdates: false });
+    if (!status()) throw new Error('включение не запустило мониторинг');
+    await new Promise((r) => setTimeout(r, 1100));
+    if (!sentEvents.some((e) => e.ch === 'clipboard:item' && e.payload.text === clipboardText.value)) throw new Error('включённый монитор не прислал текст');
+    handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: false, checkUpdates: false });
+    if (status()) throw new Error('выключение не остановило мониторинг');
+    const stopped = { ...clipboardReads };
+    await new Promise((r) => setTimeout(r, 1100));
+    if (clipboardReads.text !== stopped.text || clipboardReads.image !== stopped.image) throw new Error('остановленный монитор читает буфер');
+
+    // На Windows получение активного окна асинхронно. Отложенный ответ старой
+    // сессии не должен попасть в новую после быстрого выключения и включения.
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    spawnPlan.deferForeground = true;
+    spawnPlan.foregroundCallbacks = [];
+    clipboardText.value = 'отложенный текст старой сессии';
+    sentEvents.length = 0;
+    handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true, checkUpdates: false });
+    await new Promise((r) => setTimeout(r, 1100));
+    if (!spawnPlan.foregroundCallbacks.length) throw new Error('не начат отложенный поиск окна');
+    handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: false, checkUpdates: false });
+    handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true, checkUpdates: false });
+    for (const callback of spawnPlan.foregroundCallbacks) callback(null, '', '');
+    await new Promise((r) => setTimeout(r, 100));
+    if (sentEvents.some((e) => e.ch === 'clipboard:item' && e.payload.text === 'отложенный текст старой сессии')) throw new Error('старая сессия прислала событие после выключения');
+    handlers.get('hotkey:set')({}, { clipboardMonitor: false });
+    if (status()) throw new Error('hotkey:set не остановил мониторинг');
+    handlers.get('store:remove')({}, 'zs:settings');
+    if (!status()) throw new Error('после удаления настроек не применён default');
+    for (const fn of appListeners.get('will-quit') || []) fn({ preventDefault() {} });
+    if (status()) throw new Error('монитор не остановлен при выходе');
+    handlers.get('store:set')({}, 'zs:settings', { clipboardMonitor: true });
+    if (status()) throw new Error('монитор повторно запущен после выхода');
+  } catch (err) { error = err.message; }
+  fs.rmSync(userData, { recursive: true, force: true });
+  if (error) console.error(error);
+  else console.log('CLIPBOARD_DISABLED_OK');
+  process.exit(error ? 1 : 0);
+}
+
 if (deniedLockProbe || earlySecondProbe || closedSecondProbe) {
   let error = '';
   if (deniedLockProbe) {
@@ -398,6 +454,12 @@ await check('отказ блокировки не запускает второ�
     const marker = args[0] === '--test-lock-denied' ? 'LOCK_DENIED_OK' : args[0] === '--test-closed-second' ? 'CLOSED_SECOND_OK' : 'EARLY_SECOND_OK';
     if (child.status !== 0 || !child.stdout.includes(marker)) throw new Error(`${args[0]}: ${child.stderr || child.stdout || child.error?.message}`);
   }
+});
+
+await check('мониторинг: запуск с выключенной настройкой и включение без перезапуска', () => {
+  const { spawnSync } = originalLoad('node:child_process', undefined, false);
+  const child = spawnSync(process.execPath, [path.resolve('scripts/smoke-main.mjs'), '--test-clipboard-disabled'], { encoding: 'utf8', timeout: 25000 });
+  if (child.status !== 0 || !child.stdout.includes('CLIPBOARD_DISABLED_OK')) throw new Error(child.stderr || child.stdout || child.error?.message);
 });
 
 await check('main загружается без реального Electron', () => {
