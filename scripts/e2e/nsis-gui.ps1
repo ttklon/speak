@@ -99,6 +99,9 @@ $lastSignature = ''
 $lastClick = [DateTime]::MinValue
 $directorySeen = $false
 $waitingForDirectory = [DateTime]::MinValue
+$windowObserved = $false
+$nextSent = $false
+$repeatReported = $false
 $clicks = 0
 try {
   while ((Get-Date) -lt $deadline) {
@@ -112,6 +115,10 @@ try {
     }
     $window = [NsisGui]::FindWindow($p.Id)
     if ($window -ne [IntPtr]::Zero) {
+      if (-not $windowObserved) {
+        $windowObserved = $true
+        Write-Output 'Wizard window observed'
+      }
       $items = @([NsisGui]::Children($window) | Where-Object { $_.Visible })
       $edit = $items | Where-Object { $_.Class -eq 'Edit' -and $_.Id -eq 1019 } | Select-Object -First 1
       if ($null -ne $edit -and -not $directorySeen) {
@@ -146,9 +153,18 @@ try {
       } else {
         $waitingForDirectory = [DateTime]::MinValue
       }
-      if (-not $mustWait -and $null -ne $next -and (($signature -ne $lastSignature) -or ((Get-Date) - $lastClick).TotalSeconds -gt 8)) {
+      # A changing control signature can still describe the same options page.
+      # Send Next once only; a stuck transition must fail, not be clicked again.
+      $isNext = $null -ne $next -and $next.Text -match '^&?Next\s*>'
+      $repeatNext = $isNext -and $nextSent
+      if ($repeatNext -and -not $repeatReported) {
+        Write-Output 'Waiting after Next; no repeated click will be sent'
+        $repeatReported = $true
+      }
+      if (-not $mustWait -and -not $repeatNext -and $null -ne $next -and (($signature -ne $lastSignature) -or ((Get-Date) - $lastClick).TotalSeconds -gt 8)) {
         Write-Output "Wizard button: $($next.Text); controls: $($signature.Substring(0,[Math]::Min(500,$signature.Length)))"
         [NsisGui]::Click($next.Handle)
+        if ($isNext) { $nextSent = $true }
         $lastSignature = $signature
         $lastClick = Get-Date
         $clicks++
