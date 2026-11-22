@@ -39,7 +39,7 @@ describe('без движка распознавания', () => {
     // движок берёт конструктор при загрузке модуля — подставляем до импорта
     window.webkitSpeechRecognition = function FakeRecognition() {
       this.start = () => {};
-      this.stop = () => {};
+      this.stop = () => { this.onend?.(); };
       this.abort = () => {};
     };
     vi.resetModules();
@@ -48,7 +48,7 @@ describe('без движка распознавания', () => {
     const rec = mod.createRecognizer({ lang: 'ru-RU', onError });
     expect(rec.kind).toBe('web-fallback');
     rec.start();
-    const res = rec.stop();
+    const res = await rec.stop();
     expect(res.text).toBe('');
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'no-speech' }));
   });

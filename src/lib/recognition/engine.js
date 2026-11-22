@@ -105,10 +105,12 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
 
   let finalText = '';
   let stopped = false;
+  let closed = false;
 
-  rec.onstart = () => onStart?.();
-  rec.onerror = (e) => onError?.({ code: e.error, ...describeRecognitionError(e.error) });
+  rec.onstart = () => { if (!closed) onStart?.(); };
+  rec.onerror = (e) => { if (!closed) onError?.({ code: e.error, ...describeRecognitionError(e.error) }); };
   rec.onend = () => {
+    if (closed) return;
     if (!stopped) {
       try {
         rec.start();
@@ -117,9 +119,11 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
         /* ignore */
       }
     }
+    closed = true;
     onEnd?.({ text: finalText });
   };
   rec.onresult = (event) => {
+    if (closed) return;
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const res = event.results[i];
@@ -137,6 +141,7 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
     kind: 'web',
     start() {
       stopped = false;
+      closed = false;
       finalText = '';
       rec.start();
     },
@@ -144,12 +149,14 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
       stopped = true;
       try {
         rec.stop();
+        return true;
       } catch {
-        /* ignore */
+        return false;
       }
     },
     abort() {
       stopped = true;
+      closed = true;
       try {
         rec.abort();
       } catch {
@@ -612,33 +619,52 @@ export function createRecognizer(opts = {}) {
     };
   }
 
-  // 2) Web Speech: настоящий браузерный движок. Если он не поднялся,
-  // показываем ошибку, а не выдуманный текст.
+  // 2) Web Speech: системный движок браузера (может отправлять звук в сеть).
   if (hasWebSpeech) {
     let active = null;
     let emitted = false;
     let ended = false;
+    let aborted = false;
     let userStopped = false;
-
-    const emitEnd = (payload) => {
-      if (ended) return;
-      ended = true;
-      onEnd?.(payload);
-    };
-
-    let switched = false;
     let watchdog = null;
+    let stopTimer = null;
+    let stopPromise = null;
+    let resolveStop = null;
+    let endPayload = null;
 
-    const giveUp = (reason) => {
-      if (switched) return;
-      switched = true;
+    const clearTimers = () => {
       clearTimeout(watchdog);
+      clearTimeout(stopTimer);
       watchdog = null;
-      try {
-        active?.abort?.();
-      } catch {
-        /* ignore */
+      stopTimer = null;
+    };
+    const settle = (payload, { reportEmpty = true } = {}) => {
+      if (ended || aborted) return;
+      ended = true;
+      clearTimers();
+      endPayload = { text: String(payload?.text || '') };
+      if (reportEmpty && !endPayload.text.trim()) {
+        onError?.({ code: 'no-speech', ...describeRecognitionError('no-speech') });
       }
+      onEnd?.(endPayload);
+      resolveStop?.(endPayload);
+      resolveStop = null;
+    };
+    const stopWithoutEnd = (code) => {
+      if (aborted || ended) return;
+      const text = active?.text || '';
+      active?.abort?.();
+      if (text.trim()) {
+        onNotice?.({ title: 'Браузер не завершил распознавание', description: 'Сохранены только подтверждённые слова; конец фразы мог потеряться.', tone: 'warn', ttl: 9000 });
+      } else {
+        onError?.({ code, title: 'Браузер не завершил распознавание', hint: 'Попробуйте записать фразу ещё раз.' });
+      }
+      settle({ text }, { reportEmpty: false });
+    };
+    const giveUp = (reason) => {
+      if (ended || aborted) return;
+      clearTimers();
+      active?.abort?.();
       onError?.({
         code: 'web-unavailable',
         title: 'Распознавание недоступно',
@@ -647,7 +673,7 @@ export function createRecognizer(opts = {}) {
           : 'Браузер не дал распознавание: системный движок выключен или нет сети. Полностью офлайн диктовка работает в приложении для Windows.',
       });
       if (reason) console.warn('[stt] Web Speech недоступен:', reason);
-      emitEnd({ text: '' });
+      settle({ text: '' }, { reportEmpty: false });
     };
 
     active = createWebRecognizer({
@@ -655,26 +681,31 @@ export function createRecognizer(opts = {}) {
       continuous,
       interimResults,
       onStart: () => {
-        // Движок действительно запустился — сторож больше не нужен.
+        if (aborted || ended || userStopped) return;
         clearTimeout(watchdog);
         watchdog = null;
         onStart?.();
       },
       onPartial: (p) => {
+        if (aborted || ended) return;
         emitted = true;
         onPartial?.(p);
       },
       onFinal: (p) => {
+        if (aborted || ended) return;
         emitted = true;
         onFinal?.(p);
       },
-      // Если Web Speech завершился без результата и пользователь не останавливал
-      // запись — ждём сторож: он честно скажет, что распознать не удалось.
       onEnd: (payload) => {
-        if (!emitted && !userStopped) return;
-        emitEnd(payload);
+        if (aborted || ended) return;
+        if (!emitted && !userStopped) {
+          giveUp('браузер остановил распознавание и не перезапустился');
+          return;
+        }
+        settle(payload);
       },
       onError: (err) => {
+        if (aborted || ended) return;
         const unavailable = ['network', 'service-not-allowed', 'language-not-supported'].includes(err.code);
         if (unavailable && !emitted) {
           giveUp(err.code);
@@ -687,29 +718,33 @@ export function createRecognizer(opts = {}) {
     return {
       kind: 'web-fallback',
       start() {
-        active?.start?.();
-        // Если браузер объявил Web Speech, но движок не поднялся за 2 с
-        // (нет сети / сервис отключён), честно говорим об этом.
-        clearTimeout(watchdog);
+        // Назначаем до старта: onstart в некоторых реализациях может прийти сразу.
         watchdog = setTimeout(() => {
-          if (!emitted) giveUp('движок не поднялся за 2 с');
+          if (!emitted && !ended && !aborted && !userStopped) giveUp('движок не поднялся за 2 с');
         }, 2000);
+        try { active?.start?.(); } catch (err) { clearTimers(); throw err; }
       },
       stop() {
+        if (stopPromise) return stopPromise;
+        if (aborted) return Promise.resolve({ text: '', code: 'cancelled' });
+        if (ended) return Promise.resolve(endPayload || { text: '' });
         userStopped = true;
         clearTimeout(watchdog);
-        const res = active?.stop?.();
-        const payload = res && typeof res.text === 'string' ? res : { text: active?.text || '' };
-        // Web Speech может закончиться без текста и без ошибки (нет сети,
-        // микрофон молчит). Раньше в этом случае не происходило вообще ничего:
-        // человек говорил, нажимал «стоп» и не понимал, что случилось.
-        if (!String(payload.text || '').trim()) {
-          onError?.({ code: 'no-speech', ...describeRecognitionError('no-speech') });
-        }
-        return payload;
+        watchdog = null;
+        stopPromise = new Promise((resolve) => { resolveStop = resolve; });
+        // stop лишь просит браузер закончить. Финальное событие может прийти
+        // после него; промежуточный текст нельзя сохранять как окончательный.
+        stopTimer = setTimeout(() => stopWithoutEnd('web-stop-timeout'), 5000);
+        if (active?.stop?.() === false) stopWithoutEnd('web-stop-failed');
+        return stopPromise;
       },
       abort() {
+        if (aborted || ended) return;
+        aborted = true;
+        clearTimers();
         active?.abort?.();
+        resolveStop?.({ text: '', code: 'cancelled' });
+        resolveStop = null;
       },
       get text() {
         return active?.text || '';

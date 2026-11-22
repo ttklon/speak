@@ -196,18 +196,20 @@ async function openPage(browser, route = '#/home', opts = {}) {
     'zs.dictionary': SEED_DICTIONARY,
     ...(opts.storeSeed || {}),
   };
-  await page.evaluateOnNewDocument(([seed, fresh, extra]) => {
+  await page.evaluateOnNewDocument(([seed, fresh, extra, browserStorage]) => {
     if (fresh !== false) {
       for (const key of Object.keys(localStorage)) {
-        if (key.startsWith('mockstore:')) localStorage.removeItem(key);
+        if (key.startsWith('mockstore:') || (browserStorage && key.startsWith('zs:'))) localStorage.removeItem(key);
       }
     }
     localStorage.setItem('mockstore:zs.settings', JSON.stringify(seed));
+    if (browserStorage) localStorage.setItem('zs:zs.settings', JSON.stringify(seed));
     // готовые данные для сценариев (буфер, словарь, история)
     for (const [key, value] of Object.entries(extra || {})) {
       localStorage.setItem(`mockstore:${key}`, JSON.stringify(value));
+      if (browserStorage) localStorage.setItem(`zs:${key}`, JSON.stringify(value));
     }
-  }, [settings, opts.fresh === false ? false : true, fixtures]);
+  }, [settings, opts.fresh === false ? false : true, fixtures, opts.browserStorage === true]);
   await page.goto(`${BASE}/${route}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.app-window', { timeout: 15_000 });
   await sleep(opts.settle ?? 250);
@@ -1239,6 +1241,137 @@ async function scenarioAppLanguage(browser) {
   const errors = takeErrors(page);
   record('сценарии', 'язык под окно: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
+}
+
+// Управляемые события Web Speech: после stop браузер ещё может прислать финал.
+async function scenarioWebSpeechFinalization(browser) {
+  const makePage = () => openPage(browser, '#/home', {
+    browserStorage: true,
+    settings: { aiDictationRewrite: false, language: 'ru', appProfiles: [{ id: 'en-app', match: 'Code', language: 'en' }] },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      delete window.zspeakly.native.transcribePcm;
+      window.zspeakly.isElectron = false;
+      window.__webHistory = () => JSON.parse(localStorage.getItem('zs:zs.dictations') || '[]');
+      window.zspeakly.native.insertTarget = async () => ({ own: false, app: 'Code', title: 'Visual Studio Code' });
+      window.__speechInstances = [];
+      window.SpeechRecognition = class {
+        constructor() { window.__speechInstances.push(this); this.stops = 0; this.aborts = 0; }
+        start() { setTimeout(() => this.onstart?.(), 0); }
+        stop() { this.stops += 1; }
+        abort() { this.aborts += 1; }
+      };
+      window.__speechResult = (index, text, final) => {
+        const speech = window.__speechInstances[index];
+        speech.onresult?.({ resultIndex: 0, results: [Object.assign([{ transcript: text }], { isFinal: final })] });
+      };
+    },
+  });
+
+  const page = await makePage();
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    try {
+      await page.waitForFunction(() => window.__speechInstances.length === 1, { timeout: 8000 });
+    } catch (err) {
+      throw new Error(`web speech start: ${err.message}; ${JSON.stringify(await page.evaluate(() => ({ count: window.__speechInstances?.length, hasNative: !!window.zspeakly?.native?.transcribePcm, button: document.querySelector('.hero__mic')?.innerText, calls: window.__bridgeCalls?.slice(-8) })))}; errors=${JSON.stringify(takeErrors(page))}`);
+    }
+    await page.evaluate(() => window.__speechResult(0, 'черновик', false));
+    await emit(page, 'hotkey', { type: 'up' });
+    await emit(page, 'hotkey', { type: 'up' });
+    await sleep(200);
+    const waiting = await page.evaluate(() => ({
+      processing: Boolean(document.querySelector('.live-draft--processing')),
+      history: window.__webHistory(),
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+      lang: window.__speechInstances[0].lang,
+      stops: window.__speechInstances[0].stops,
+    }));
+    await page.evaluate(() => {
+      window.__speechResult(0, 'окончательный текст', true);
+      window.__speechInstances[0].onend();
+    });
+    try {
+      await page.waitForFunction(() => (window.__webHistory()).length === 1, { timeout: 8000 });
+    } catch (err) {
+      throw new Error(`web speech finish: ${err.message}; ${JSON.stringify(await page.evaluate(() => ({ body: document.body.innerText.slice(0, 900), history: window.__e2e.read('zs.dictations'), calls: window.__bridgeCalls?.slice(-12) })))}; errors=${JSON.stringify(takeErrors(page))}`);
+    }
+    await page.evaluate(() => { window.__speechResult(0, 'запоздалые слова', true); window.__speechInstances[0].onend(); });
+    await sleep(900);
+    const final = await page.evaluate(() => ({
+      history: window.__webHistory(),
+      inserts: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:insert').map((call) => call.args?.[0]),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'Web Speech: ждём финал после stop и сохраняем язык и текст один раз',
+      waiting.processing && waiting.history.length === 0 && !/Речь не распознана/.test(waiting.toast) && waiting.lang === 'ru-RU' && waiting.stops === 1 &&
+      final.history.length === 1 && final.history[0].language === 'ru' && final.history[0].text === 'окончательный текст' &&
+      final.inserts.length === 1 && final.inserts[0] === 'окончательный текст' && errors.length === 0,
+      JSON.stringify({ waiting, final, error: errors[0] }));
+  } finally { await page.close(); }
+
+  const empty = await makePage();
+  takeErrors(empty);
+  try {
+    await emit(empty, 'hotkey', { type: 'down', mode: 'hold' });
+    await empty.waitForFunction(() => window.__speechInstances.length === 1, { timeout: 8000 });
+    await empty.evaluate(() => window.__speechResult(0, 'только черновик', false));
+    await emit(empty, 'hotkey', { type: 'up' });
+    await empty.evaluate(() => window.__speechInstances[0].onend());
+    await sleep(350);
+    const result = await empty.evaluate(() => ({
+      history: window.__webHistory(),
+      inserts: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:insert').length,
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    const errors = takeErrors(empty);
+    record('сценарии', 'Web Speech: неподтверждённый черновик не становится диктовкой',
+      result.history.length === 0 && result.inserts === 0 && /Речь не распознана/.test(result.toast) && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await empty.close(); }
+
+  const cancelled = await makePage();
+  takeErrors(cancelled);
+  try {
+    await emit(cancelled, 'hotkey', { type: 'down', mode: 'hold' });
+    await cancelled.waitForFunction(() => window.__speechInstances.length === 1, { timeout: 8000 });
+    await emit(cancelled, 'hotkey', { type: 'up' });
+    await cancelled.waitForSelector('.live-draft--processing', { timeout: 8000 });
+    await cancelled.click('.live-draft--processing button');
+    await cancelled.evaluate(() => { window.__speechResult(0, 'отменённые слова', true); window.__speechInstances[0].onend(); });
+    await sleep(400);
+    const result = await cancelled.evaluate(() => ({
+      aborts: window.__speechInstances[0].aborts,
+      history: window.__webHistory(),
+      inserts: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:insert').length,
+    }));
+    const errors = takeErrors(cancelled);
+    record('сценарии', 'Web Speech: отмена во время ожидания игнорирует запоздалые события',
+      result.aborts === 1 && result.history.length === 0 && result.inserts === 0 && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await cancelled.close(); }
+
+  const failed = await makePage();
+  takeErrors(failed);
+  try {
+    await emit(failed, 'hotkey', { type: 'down', mode: 'hold' });
+    await failed.waitForFunction(() => window.__speechInstances.length === 1, { timeout: 8000 });
+    await failed.evaluate(() => window.__speechResult(0, 'черновик', false));
+    await emit(failed, 'hotkey', { type: 'up' });
+    await failed.waitForSelector('.live-draft--processing', { timeout: 8000 });
+    await failed.evaluate(() => window.__speechInstances[0].onerror({ error: 'network' }));
+    await sleep(300);
+    const result = await failed.evaluate(() => ({
+      aborts: window.__speechInstances[0].aborts,
+      history: window.__webHistory(),
+      button: document.querySelector('.hero__mic')?.innerText || '',
+    }));
+    const errors = takeErrors(failed);
+    record('сценарии', 'Web Speech: фатальная ошибка после stop прерывает ожидающий движок',
+      result.aborts === 1 && result.history.length === 0 && !/Слушаю/.test(result.button) && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await failed.close(); }
 }
 
 // Повторный сигнал стопа во время STT не должен прятать обработку и отмену.
@@ -7458,6 +7591,7 @@ async function main() {
       ['голосовые команды', scenarioVoiceCommands],
       ['оформление под окно', scenarioAppFormat],
       ['язык под окно', scenarioAppLanguage],
+      ['web speech завершение', scenarioWebSpeechFinalization],
       ['повторный стоп при обработке', scenarioDoubleStopWhileProcessing],
       ['таймаут обработки', scenarioProcessingTimeout],
       ['старт во время обработки', scenarioPendingSessionStart],

@@ -260,7 +260,7 @@ export function DictationProvider({ children }) {
   const finish = useCallback(
     async (
       text,
-      { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0, sttMeta = null, isCancelled = () => false } = {},
+      { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0, sttMeta = null, isCancelled = () => false, allowDraftFallback = true } = {},
     ) => {
       // защита от двойного завершения (web-движок + фолбэк); держим до конца
       // второй стадии, иначе модель успевала запуститься дважды
@@ -284,7 +284,7 @@ export function DictationProvider({ children }) {
           if (finishing.current === finishLock) finishing.current = false;
         }, isCancelled() ? 0 : 700);
       };
-      const raw = text || finalRef.current || draftRef.current;
+      const raw = allowDraftFallback ? (text || finalRef.current || draftRef.current) : (text || '');
       // настройка «Применять словарь при диктовке»: раньше тумблер в разделе
       // «Словарь» только сохранялся, а замены делались всегда
       const applyDict = settingsRef.current.dictionaryEnabled !== false;
@@ -1079,10 +1079,9 @@ export function DictationProvider({ children }) {
       // предролл забираем один раз: иначе звук прошлой диктовки попадёт в новую
       const preroll = micWarm.current?.take?.() || null;
       const recognizer = createRecognizer({
-        // Запасной вариант для браузерного распознавания: оно берёт язык один
-        // раз при создании. Нативные движки спрашивают getLang лениво — тогда
-        // окно уже известно, и правило человека успевает сработать.
-        lang: langTag(settingsRef.current.language),
+        // Браузерный движок получает язык при создании; фиксируем тот же язык
+        // для истории и команд. Нативный выбирает язык лениво через getLang.
+        lang: langTag(hasNativeStt() ? settingsRef.current.language : resolveSessionLang()),
         getLang: resolveSessionLang,
         deviceId: settingsRef.current.audioDeviceId,
         // обработку «для звонков» включаем только по просьбе человека:
@@ -1166,7 +1165,8 @@ export function DictationProvider({ children }) {
           if (fatal.includes(err.code)) {
             session.cancelled = true;
             session.screenTerms = '';
-            const rec = recRef.current;
+            const pending = processingRecRef.current;
+            const rec = recRef.current || (pending?.session === session ? pending.rec : null);
             recRef.current = null;
             try {
               rec?.abort?.();
@@ -1191,6 +1191,7 @@ export function DictationProvider({ children }) {
             sttMs: ms,
             spokenSeconds: spoken || 0,
             sttMeta: { mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs },
+            allowDraftFallback: recognizer.kind !== 'web-fallback',
             isCancelled: () => session.cancelled,
           });
           if (!session.cancelled && opts.onResult) opts.onResult(item);
@@ -1210,6 +1211,8 @@ export function DictationProvider({ children }) {
       // start() у нативного движка асинхронный (нужно разрешение на микрофон)
       const failStart = (err) => {
         if (!isCurrentSession()) return;
+        session.cancelled = true;
+        session.screenTerms = '';
         console.warn('[dictation] start failed', err);
         diag.error('stt', 'Не удалось начать запись', { reason: String(err?.message || err) });
         recRef.current = null;
@@ -1277,8 +1280,11 @@ export function DictationProvider({ children }) {
       return;
     }
 
-    const text = (result && result.text) || fallbackText || '';
-    const item = await finish(text, { isCancelled: () => Boolean(processing.session?.cancelled) });
+    const text = rec.kind === 'web-fallback' ? (result?.text || '') : ((result && result.text) || fallbackText || '');
+    const item = await finish(text, {
+      allowDraftFallback: rec.kind !== 'web-fallback',
+      isCancelled: () => Boolean(processing.session?.cancelled),
+    });
     if (processing.session?.cancelled) return;
     if (!item && text.trim()) return;
     if (!text.trim()) setState('idle');
