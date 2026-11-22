@@ -169,6 +169,20 @@ export function DictationProvider({ children }) {
   // После остановки микрофона распознаватель ещё ждёт итоговый ответ.
   const processingRecRef = useRef(null);
   const sessionRef = useRef(null);
+  // Запрос агента живёт отдельно от записи и отменяется независимо от STT.
+  const agentRef = useRef(null);
+  const commandRequestRef = useRef(null);
+  const [agentPending, setAgentPending] = useState(false);
+  useEffect(() => () => {
+    const agent = agentRef.current;
+    if (agent) {
+      agent.cancelled = true;
+      agent.controller.abort();
+      clearTimeout(agent.timer);
+      agentRef.current = null;
+    }
+    commandRequestRef.current = null;
+  }, []);
   // сторож тишины текущей записи (только для режима «переключатель»)
   const silenceRef = useRef(null);
   // Язык этой записи: решается один раз по активному окну. Общий язык из
@@ -949,6 +963,10 @@ export function DictationProvider({ children }) {
   const start = useCallback(
     (opts = {}) => {
       if (recRef.current) return;
+      if (agentRef.current && !agentRef.current.cancelled) {
+        pushToast({ title: 'Агент ещё отвечает', description: 'Дождитесь ответа или отмените запрос, прежде чем начать диктовку.', tone: 'warn' });
+        return;
+      }
       const processing = processingRecRef.current;
       const activeProcessing = processing && !processing.cancelled && !processing.session?.cancelled;
       const activeFinish = finishing.current && !finishing.current.isCancelled?.();
@@ -960,6 +978,7 @@ export function DictationProvider({ children }) {
         });
         return;
       }
+      commandRequestRef.current = null;
       const session = { cancelled: false, completed: false, screenTerms: '' };
       sessionRef.current = session;
       const isCurrentSession = () => sessionRef.current === session && !session.cancelled && !session.completed;
@@ -1226,7 +1245,7 @@ export function DictationProvider({ children }) {
         failStart(err);
       }
     },
-    [finish],
+    [finish, pushToast],
   );
 
   const stop = useCallback(async () => {
@@ -1302,6 +1321,17 @@ export function DictationProvider({ children }) {
    * Полностью офлайн; если модель недоступна — честный тост, а не тишина.
    */
   const askAgent = useCallback(async () => {
+    const processing = processingRecRef.current;
+    const activeProcessing = processing && !processing.cancelled && !processing.session?.cancelled;
+    const activeFinish = finishing.current && !finishing.current.isCancelled?.();
+    if (agentRef.current || recRef.current || activeProcessing || activeFinish) {
+      pushToast({
+        title: 'Сначала завершите текущую задачу',
+        description: 'Дождитесь результата или отмените текущую запись или запрос агента.',
+        tone: 'warn',
+      });
+      return;
+    }
     const question = String(finalRef.current || draftRef.current || '').trim();
     const base = question || 'Кратко перескажи этот текст и назови главное действие.';
     const settingsNow = settingsRef.current || {};
@@ -1315,10 +1345,30 @@ export function DictationProvider({ children }) {
       });
       return;
     }
+    commandRequestRef.current = null;
+    const agent = { cancelled: false, timer: null, controller: new AbortController() };
+    agentRef.current = agent;
+    const isCurrent = () => agentRef.current === agent && !agent.cancelled;
+    setAgentPending(true);
+    setError(null);
     setState('processing');
     diag.info('agent', 'Запрос к локальной модели', { chars: base.length });
+    // Ограничиваем и получение выделения, и ожидание модели. Отмена сбрасывает
+    // интерфейс сразу, даже если IPC не вернулся; уже отправленный запрос может
+    // продолжать выполняться в main и его ответ просто игнорируется.
+    agent.timer = setTimeout(() => {
+      if (!isCurrent()) return;
+      agent.cancelled = true;
+      agent.controller.abort();
+      agentRef.current = null;
+      setAgentPending(false);
+      setState('idle');
+      pushToast({ title: 'Агент не ответил вовремя', description: 'Попробуйте ещё раз и проверьте локальную модель.', tone: 'warn', ttl: 9000 });
+      diag.warn('agent', 'Истекло время ожидания агента');
+    }, 25000);
     try {
       const source = await (window.zspeakly?.native?.readSelection?.() || Promise.resolve(''));
+      if (!isCurrent()) return;
       const prompt = source && String(source).trim()
         ? `Контекст:\n${String(source).slice(0, 4000)}\n\nВопрос: ${base}`
         : base;
@@ -1328,27 +1378,48 @@ export function DictationProvider({ children }) {
         system: 'Ответь коротко и по делу, без вступлений.',
         text: prompt,
         timeout: 20000,
+        signal: agent.controller.signal,
       });
+      if (!isCurrent()) return;
       if (!answer) {
         diag.warn('agent', 'Локальная модель не ответила');
         pushToast({
           title: 'Модель не ответила',
-          description:
-            'Текст очищен офлайн-правилами. Локальная модель инструкций молчит: «Настройки → Диктовка → Модель для инструкций».',
+          description: 'Агент не получил ответ. Проверьте «Настройки → Диктовка → Модель для инструкций».',
           tone: 'warn',
           ttl: 9000,
         });
         setState('idle');
         return;
       }
-      const item = await finish(answer, { insert: false, spoken: false });
-      if (item) pushToast({ title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' });
+      // Ответ модели — отдельный источник, не диктовка и не команда. Не
+      // применяем к нему словарь, голосовые правила, старый commandRef или
+      // повторную полировку; автоматически в чужое окно он не вставляется.
+      const item = {
+        id: `a-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        text: answer,
+        durationMs: 0,
+        words: words(answer),
+        createdAt: Date.now(),
+        language: settingsNow.language,
+        source: 'agent',
+      };
+      addDictation(item);
+      setState('idle');
+      pushToast({ title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' });
     } catch (err) {
+      if (!isCurrent()) return;
       diag.error('agent', 'Ошибка агента', { reason: String(err?.message || err) });
       pushToast({ title: 'Агент не сработал', description: String(err?.message || err), tone: 'warn' });
       setState('idle');
+    } finally {
+      clearTimeout(agent.timer);
+      if (agentRef.current === agent) {
+        agentRef.current = null;
+        setAgentPending(false);
+      }
     }
-  }, [finish, pushToast]);
+  }, [addDictation, pushToast]);
 
   const toggle = useCallback(() => {
     if (recRef.current) stop();
@@ -1368,12 +1439,32 @@ export function DictationProvider({ children }) {
       stop();
       return;
     }
+    const busy = () => {
+      const processing = processingRecRef.current;
+      return Boolean(agentRef.current || (processing && !processing.cancelled && !processing.session?.cancelled) ||
+        (finishing.current && !finishing.current.isCancelled?.()));
+    };
+    if (busy() || commandRequestRef.current) {
+      pushToast({ title: 'Сначала завершите текущую задачу', tone: 'warn' });
+      return;
+    }
+    const request = {};
+    commandRequestRef.current = request;
+    const timer = setTimeout(() => {
+      if (commandRequestRef.current !== request) return;
+      commandRequestRef.current = null;
+      pushToast({ title: 'Не удалось получить выделение вовремя', description: 'Попробуйте снова.', tone: 'warn' });
+    }, 5000);
     let selection = '';
     try {
       selection = String((await readSelectionText()) || '').trim();
     } catch {
       selection = '';
     }
+    clearTimeout(timer);
+    if (commandRequestRef.current !== request) return;
+    commandRequestRef.current = null;
+    if (recRef.current || busy()) return;
     if (!selection) {
       pushToast({
         title: COMMAND_ERRORS['no-selection'].title,
@@ -1483,6 +1574,20 @@ export function DictationProvider({ children }) {
   }, [last, retrying, updateDictation]);
 
   const cancelProcessing = useCallback(() => {
+    const agent = agentRef.current;
+    if (agent) {
+      agent.cancelled = true;
+      agent.controller.abort();
+      clearTimeout(agent.timer);
+      agentRef.current = null;
+      setAgentPending(false);
+      setState('idle');
+      diag.info('agent', 'Запрос агента отменён пользователем');
+      return;
+    }
+    commandRequestRef.current = null;
+    sessionOpts.current = {};
+    commandRef.current = '';
     if (sessionRef.current) {
       sessionRef.current.cancelled = true;
       sessionRef.current.screenTerms = '';
@@ -1553,6 +1658,10 @@ export function DictationProvider({ children }) {
 
   /** Отменить начатую запись без распознавания и без истории. */
   const cancel = useCallback(() => {
+    commandRequestRef.current = null;
+    if (!recRef.current) return;
+    sessionOpts.current = {};
+    commandRef.current = '';
     if (sessionRef.current) {
       sessionRef.current.cancelled = true;
       sessionRef.current.screenTerms = '';
@@ -1794,8 +1903,9 @@ export function DictationProvider({ children }) {
       // командный режим: плашка обязана сказать, что слушает команду, а не
       // диктовку, — иначе человек ждёт вставки вместо правки выделения
       command: Boolean(sessionOpts.current.command),
+      agent: agentPending,
     });
-  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, micQuiet, paused, processingMs, sttProgress]);
+  }, [state, level, elapsed, draft, error, hudAllowed, engine, liveText, micQuiet, paused, processingMs, sttProgress, agentPending]);
 
   // Сообщаем main, что реально происходит: от этого зависят пункт
   // «Остановить диктовку» в трее и поведение глобального сочетания.
@@ -1865,6 +1975,7 @@ export function DictationProvider({ children }) {
       micQuiet,
       processingMs,
       sttProgress,
+      agentPending,
       nativeHud: hudAllowed && hudNativeOn,
       engine,
       // видно в настройках: держим ли микрофон открытым прямо сейчас
@@ -1891,7 +2002,7 @@ export function DictationProvider({ children }) {
       askAgent,
     }),
     [
-      state, draft, level, error, last, mode, elapsed, hudOpen, paused, micQuiet, processingMs, sttProgress,
+      state, draft, level, error, last, mode, elapsed, hudOpen, paused, micQuiet, processingMs, sttProgress, agentPending,
       hudAllowed, hudNativeOn, engine, micWarmState, start, stop, toggle, pause, resume, cancelProcessing, finish, askAgent,
       fileJob, transcribeFile, cancelFile, retryLast, retrying,
     ],

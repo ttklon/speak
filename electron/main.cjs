@@ -2325,17 +2325,16 @@ function registerIpc() {
   ipcMain.handle('http:post', async (_e, { url, body, timeout } = {}) => {
     const { target, error } = isLocalTarget(url);
     if (error) return { ok: false, status: 0, reason: error };
+    const controller = new AbortController();
+    const limit = Math.min(Math.max(Number(timeout) || 8000, 1000), 120000);
+    const timer = setTimeout(() => controller.abort(), limit);
     try {
-      const controller = new AbortController();
-      const limit = Math.min(Math.max(Number(timeout) || 8000, 1000), 120000);
-      const timer = setTimeout(() => controller.abort(), limit);
       const res = await fetch(target.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: typeof body === 'string' ? body : JSON.stringify(body || {}),
         signal: controller.signal,
       });
-      clearTimeout(timer);
       const text = await res.text();
       let data = null;
       try {
@@ -2351,6 +2350,8 @@ function registerIpc() {
         status: 0,
         reason: aborted ? 'локальная модель не ответила вовремя' : String(err?.message || err),
       };
+    } finally {
+      clearTimeout(timer);
     }
   });
 

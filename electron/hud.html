@@ -261,16 +261,18 @@
           state === 'idle' || state === 'error' || state === 'done'
             ? ''
             : state === 'processing'
-              ? parts
-                ? `фрагмент ${parts.done} из ${parts.total}`
-                : `распознаю ${procSeconds.toFixed(0)} с`
+              ? p.agent
+                ? ''
+                : parts
+                  ? `фрагмент ${parts.done} из ${parts.total}`
+                  : `распознаю ${procSeconds.toFixed(0)} с`
               : `${p.paused ? 'пауза · ' : ''}${seconds.toFixed(1)} с`;
         if (state === 'listening' && p.paused) titleEl.textContent = 'Пауза';
         // Командный режим: сказанное применится к выделению, а не вставится
         // текстом. Без этой строки плашка обещала бы диктовку.
         const isCommand = Boolean(p.command);
         if (state === 'listening' && isCommand && !p.paused) titleEl.textContent = 'Слушаю команду…';
-        if (state === 'processing') titleEl.textContent = p.error ? p.error : 'Распознаю…';
+        if (state === 'processing') titleEl.textContent = p.error ? p.error : p.agent ? 'Агент отвечает…' : 'Распознаю…';
         // Микрофон молчит: говорим во время записи, а не после остановки.
         // Человек иначе проговорит минуту в выключенный микрофон и узнает
         // об этом из ошибки.
@@ -289,6 +291,8 @@
         textEl.textContent =
           state === 'error'
             ? p.hint || 'Проверьте микрофон и движок в настройках'
+            : state === 'processing' && p.agent
+              ? 'Ответ появится в истории'
             : quiet && !draft
               ? 'Проверьте устройство в «Настройки → Приложение»'
               : draft ||
@@ -297,6 +301,8 @@
         stopBtn.hidden = state !== 'listening';
         pauseBtn.hidden = state !== 'listening';
         cancelBtn.hidden = state !== 'processing';
+        cancelBtn.title = p.agent ? 'Отменить запрос агента' : 'Отменить распознавание';
+        cancelBtn.setAttribute('aria-label', cancelBtn.title);
         pauseIcon.hidden = Boolean(p.paused);
         playIcon.hidden = !p.paused;
         pauseBtn.title = p.paused ? 'Продолжить запись' : 'Пауза';

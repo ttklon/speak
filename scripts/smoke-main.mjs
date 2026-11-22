@@ -2465,6 +2465,29 @@ await check('http:post доносит картинку до локальной �
   }
 });
 
+await check('http:post ограничивает ожидание тела ответа после заголовков', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('{"response":"');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const started = Date.now();
+  const fallback = setTimeout(() => server.closeAllConnections(), 3500);
+  try {
+    const result = await handlers.get('http:post')({}, { url: `http://127.0.0.1:${port}/api/generate`, body: {}, timeout: 1000 });
+    if (result?.ok || !/вовремя/.test(result?.reason || '') || Date.now() - started > 3000) {
+      throw new Error(`ожидался таймаут тела: ${JSON.stringify(result)} за ${Date.now() - started} мс`);
+    }
+  } finally {
+    clearTimeout(fallback);
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 await check('http:post не пускает наружу', async () => {
   for (const url of ['https://example.com/api/generate', 'file:///C:/Windows/System32/calc.exe', 'nonsense']) {
     const res = await handlers.get('http:post')({}, { url, body: {} });

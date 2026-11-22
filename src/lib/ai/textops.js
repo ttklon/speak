@@ -418,8 +418,8 @@ export async function polishDictation(text, settings = {}, { timeout = 6000 } = 
   return saneRewrite(text, out);
 }
 
-export async function llmRewrite({ endpoint, model, system, text, timeout = 6000 }) {
-  if (!endpoint || !text) return null;
+export async function llmRewrite({ endpoint, model, system, text, timeout = 6000, signal }) {
+  if (!endpoint || !text || signal?.aborted) return null;
   // недавно уже не ответила — не тратим время человека
   if (llmIsDown()) return null;
   const url = `${endpoint.replace(/\/$/, '')}/api/generate`;
@@ -436,6 +436,7 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
   if (bridge?.httpPost) {
     try {
       const res = await bridge.httpPost({ url, body, timeout });
+      if (signal?.aborted) return null;
       if (!res?.ok) {
         markLlm(false);
         return null;
@@ -444,12 +445,14 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
       markLlm(Boolean(out));
       return out || null;
     } catch {
-      markLlm(false);
+      if (!signal?.aborted) markLlm(false);
       return null;
     }
   }
 
   const controller = new AbortController();
+  const abortExternal = () => controller.abort();
+  signal?.addEventListener('abort', abortExternal, { once: true });
   const t = setTimeout(() => controller.abort(), timeout);
   try {
     const res = await fetch(url, {
@@ -458,19 +461,22 @@ export async function llmRewrite({ endpoint, model, system, text, timeout = 6000
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    if (signal?.aborted) return null;
     if (!res.ok) {
       markLlm(false);
       return null;
     }
     const data = await res.json();
+    if (signal?.aborted) return null;
     const out = (data?.response || '').trim();
     markLlm(Boolean(out));
     return out || null;
   } catch {
-    markLlm(false);
+    if (!signal?.aborted) markLlm(false);
     return null;
   } finally {
     clearTimeout(t);
+    signal?.removeEventListener('abort', abortExternal);
   }
 }
 

@@ -452,7 +452,7 @@ export function AppDataProvider({ children }) {
             durationMs: Number(d.durationMs) || 0,
             words: Number(d.words) || String(d.text).trim().split(/\s+/).length,
             language: typeof d.language === 'string' ? d.language : undefined,
-            source: d.source === 'dictation' ? 'dictation' : 'import',
+            source: d.source === 'dictation' ? 'dictation' : d.source === 'agent' ? 'agent' : 'import',
             // «Отмени» после импорта: без этого флага в истории нечего было бы
             // возвращать, хотя расшифровка помечена как удалённая
             undone: d.undone === true ? true : undefined,

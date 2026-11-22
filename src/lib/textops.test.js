@@ -72,6 +72,61 @@ describe('постобработка диктовки', () => {
 });
 
 describe('локальная модель не тормозит офлайн-режим', () => {
+  it('поздний отказ отменённого IPC не включает общую паузу модели', async () => {
+    resetLlmBackoff();
+    let resolve;
+    window.zspeakly = { native: { httpPost: vi.fn(() => new Promise((done) => { resolve = done; })) } };
+    const controller = new AbortController();
+    try {
+      const result = llmRewrite({ endpoint: 'http://localhost:11434', text: 'тест', signal: controller.signal });
+      controller.abort();
+      resolve({ ok: false });
+      expect(await result).toBeNull();
+      expect(llmIsDown()).toBe(false);
+    } finally {
+      delete window.zspeakly;
+      resetLlmBackoff();
+    }
+  });
+
+  it('поздний успех отменённого IPC не снимает паузу после другого отказа', async () => {
+    resetLlmBackoff();
+    let resolve;
+    const post = vi.fn().mockImplementationOnce(() => new Promise((done) => { resolve = done; })).mockResolvedValueOnce({ ok: false });
+    window.zspeakly = { native: { httpPost: post } };
+    const controller = new AbortController();
+    try {
+      const old = llmRewrite({ endpoint: 'http://localhost:11434', text: 'старый', signal: controller.signal });
+      controller.abort();
+      await llmRewrite({ endpoint: 'http://localhost:11434', text: 'новый' });
+      expect(llmIsDown()).toBe(true);
+      resolve({ ok: true, data: { response: 'поздний ответ' } });
+      expect(await old).toBeNull();
+      expect(llmIsDown()).toBe(true);
+    } finally {
+      delete window.zspeakly;
+      resetLlmBackoff();
+    }
+  });
+
+  it('отмена браузерного fetch прерывает ожидание и не включает паузу модели', async () => {
+    resetLlmBackoff();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_, { signal }) =>
+      new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })),
+    );
+    const controller = new AbortController();
+    try {
+      const pending = llmRewrite({ endpoint: 'http://localhost:11434', text: 'тест', signal: controller.signal });
+      controller.abort();
+      expect(await pending).toBeNull();
+      expect(fetchSpy.mock.calls[0][1].signal.aborted).toBe(true);
+      expect(llmIsDown()).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+      resetLlmBackoff();
+    }
+  });
+
   it('после сбоя следующие запросы не ждут таймаут', async () => {
     resetLlmBackoff();
     expect(llmIsDown()).toBe(false);

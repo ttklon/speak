@@ -47,7 +47,7 @@ export default function HomePage() {
   const { dictations, voiceHotkeys, settings, deleteDictation, addDictation, updateDictation } = useAppData();
   const {
     state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress,
-    cancelProcessing, fileJob, transcribeFile, cancelFile, retryLast, retrying,
+    cancelProcessing, fileJob, transcribeFile, cancelFile, retryLast, retrying, agentPending,
   } = useDictation();
   // выбор файла: скрытый input — единственный способ открыть системный
   // диалог без нативного окна и новых разрешений
@@ -334,17 +334,19 @@ export default function HomePage() {
           <div className="live-draft live-draft--processing">
             <div className="live-draft__head">
               <span className="dot-live" />
-              Транскрипция… {(processingMs / 1000).toFixed(1)} с
-              {sttProgress ? ` · фрагмент ${sttProgress.done} из ${sttProgress.total}` : ''}
+              {agentPending ? 'Агент ждёт ответ модели…' : `Транскрипция… ${(processingMs / 1000).toFixed(1)} с`}
+              {!agentPending && sttProgress ? ` · фрагмент ${sttProgress.done} из ${sttProgress.total}` : ''}
             </div>
             <p className="live-draft__text">
-              {draft || <span className="muted">Движок распознаёт запись — текст появится сразу после.</span>}
+              {agentPending
+                ? <span className="muted">Ответ появится в истории и не вставится в чужое окно.</span>
+                : draft || <span className="muted">Движок распознаёт запись — текст появится сразу после.</span>}
             </p>
             <div className="live-draft__actions">
               <button type="button" className="link-btn" onClick={cancelProcessing}>
                 ОТМЕНИТЬ
               </button>
-              {processingMs > 15000 ? (
+              {!agentPending && processingMs > 15000 ? (
                 <span className="live-draft__hint">
                   Долго? В «Настройки → Диктовка → Модель распознавания» есть режим «Быстро» — он
                   считает примерно вдвое быстрее.
@@ -451,16 +453,16 @@ export default function HomePage() {
               <span className="recent__time">{timeHM(item.createdAt)}</span>
               {/* Откуда текст: из файла, из команды голосом или из диктовки.
                   Без пометки человек не понимает, почему запись появилась сама. */}
-              {item.source === 'file' || item.source === 'command' ? (
+              {item.source === 'file' || item.source === 'command' || item.source === 'agent' ? (
                 <span
                   className="recent__tag"
                   title={
                     item.source === 'file'
                       ? item.fileName || 'Расшифровка файла'
-                      : `Команда: ${item.command || ''}`
+                      : item.source === 'agent' ? 'Ответ агента' : `Команда: ${item.command || ''}`
                   }
                 >
-                  {item.source === 'file' ? 'файл' : 'команда'}
+                  {item.source === 'file' ? 'файл' : item.source === 'agent' ? 'агент' : 'команда'}
                 </span>
               ) : null}
               <span className="recent__text">{truncate(item.text, 108)}</span>

@@ -2406,6 +2406,13 @@ async function scenarioHudPromise(browser) {
     /текст появится здесь/i.test(web) && draft === 'привет как дела',
     `${web} · черновик: ${draft}`,
   );
+  const agent = await page.evaluate(() => {
+    window.__hudPush({ state: 'processing', agent: true, draft: 'старый черновик', processingMs: 1000 });
+    return { title: document.getElementById('title').textContent, text: document.getElementById('text').textContent, cancel: !document.getElementById('cancel').hidden };
+  });
+  record('сценарии', 'плашка: ожидание агента названо отдельно от распознавания',
+    /Агент отвечает/i.test(agent.title) && /Ответ появится в истории/i.test(agent.text) && agent.cancel,
+    JSON.stringify(agent));
   await page.close();
 }
 
@@ -5899,7 +5906,10 @@ async function scenarioBackup(browser) {
       format: 1,
       exportedAt: '2026-11-01T10:00:00.000Z',
       dictionary: [{ id: 'w-import', word: 'ИмпортСлово', hint: '' }],
-      dictations: [{ id: 'd-import', text: 'Восстановленная запись из копии', createdAt: Date.now(), words: 5, seconds: 4 }],
+      dictations: [
+        { id: 'd-import', text: 'Восстановленная запись из копии', createdAt: Date.now(), words: 5, seconds: 4 },
+        { id: 'a-import', text: 'Ответ агента из копии', createdAt: Date.now(), words: 4, source: 'agent' },
+      ],
       settings: { dictationRetentionDays: 3650 },
       profile: { name: 'Из копии' },
     }),
@@ -5926,6 +5936,7 @@ async function scenarioBackup(browser) {
         confirm &&
         state.dictionary.some((w) => w.word === 'ИмпортСлово') &&
         state.dictations.some((d) => /Восстановленная запись/.test(d.text)) &&
+        state.dictations.some((d) => d.id === 'a-import' && d.source === 'agent') &&
         /Копия восстановлена/i.test(state.toast),
       `asked=${asked.slice(0, 30)} confirm=${confirm} dict=${state.dictionary.length} hist=${state.dictations.length} toast=${state.toast.slice(0, 80)}`,
     );
@@ -7063,6 +7074,248 @@ async function scenarioAiOff(browser) {
 
 /* ── режимы диктовки, кнопки окна, звук и эффект печати ───────────────── */
 
+// Отмена до получения выделения не должна отправлять данные в модель.
+async function scenarioAgentSelectionCancel(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.zspeakly.native.readSelection = () => new Promise((resolve) => { window.__agentSelection = resolve; });
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'agent' });
+    await page.waitForFunction(() => Boolean(window.__agentSelection), { timeout: 8000 });
+    await page.waitForSelector('.live-draft--processing button', { timeout: 8000 });
+    await page.click('.live-draft--processing button');
+    await page.evaluate(() => window.__agentSelection('секретное выделение'));
+    await sleep(600);
+    const result = await page.evaluate(() => ({
+      calls: (window.__bridgeCalls || []).filter((call) => ['http:post', 'stt:cancel'].includes(call.channel)).map((call) => call.channel),
+      history: window.__e2e.read('zs.dictations') || [],
+      processing: Boolean(document.querySelector('.live-draft--processing')),
+    }));
+    const errors = takeErrors(page);
+    record('режимы', 'агент: отмена до выделения не отправляет текст и не отменяет чужой STT',
+      result.calls.length === 0 && result.history.length === 0 && !result.processing && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Поздний ответ отменённого агента не должен перезаписывать новую запись.
+async function scenarioAgentCancelAndRetry(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'новая диктовка' },
+    patchNative: () => {
+      window.__agentPosts = 0;
+      window.zspeakly.native.httpPost = () => {
+        window.__agentPosts += 1;
+        return new Promise((resolve) => { window.__agentAnswer = resolve; });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'agent' });
+    await page.waitForFunction(() => Boolean(window.__agentAnswer), { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'agent' });
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(300);
+    const blocked = await page.evaluate(() => ({
+      posts: window.__agentPosts,
+      listening: /Слушаю/.test(document.querySelector('.hero__mic')?.innerText || ''),
+      processing: Boolean(document.querySelector('.live-draft--processing button')),
+      description: document.querySelector('.live-draft--processing')?.innerText || '',
+      hud: (window.__bridgeCalls || []).filter((call) => call.channel === 'hud:update').at(-1)?.args?.[0]?.agent,
+    }));
+    if (blocked.processing) await page.click('.live-draft--processing button');
+    else await emit(page, 'hotkey', { type: 'cancel' });
+    await sleep(100);
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1100);
+    await page.evaluate(() => window.__agentAnswer({ ok: true, data: { response: 'старый ответ агента' } }));
+    await sleep(300);
+    const during = await page.evaluate(() => ({
+      listening: /Слушаю/.test(document.querySelector('.hero__mic')?.innerText || ''),
+      history: window.__e2e.read('zs.dictations') || [],
+    }));
+    await emit(page, 'hotkey', { type: 'up' });
+    await sleep(1000);
+    const result = await page.evaluate(() => ({
+      texts: (window.__e2e.read('zs.dictations') || []).map((row) => row.text),
+      inserts: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:insert').map((call) => call.args?.[0]),
+    }));
+    const errors = takeErrors(page);
+    record('режимы', 'агент: занятый запрос блокирует повтор; отменённый ответ не мешает новой диктовке',
+      blocked.posts === 1 && !blocked.listening && blocked.processing && /Агент ждёт ответ/i.test(blocked.description) && blocked.hud === true && during.listening && during.history.length === 0 &&
+      result.texts.length === 1 && /новая диктовка/i.test(result.texts[0]) && result.inserts.length === 1 && errors.length === 0,
+      JSON.stringify({ blocked, during, ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Таймаут относится к старому запросу; поздний отказ не блокирует повтор.
+async function scenarioAgentTimeout(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      const original = window.setTimeout.bind(window);
+      window.setTimeout = (fn, delay, ...args) => original(fn, delay === 25000 ? 1200 : delay, ...args);
+      let posts = 0;
+      window.zspeakly.native.httpPost = () => {
+        window.__agentTimeoutPosts = ++posts;
+        return posts === 1 ? new Promise((resolve) => { window.__agentOldReply = resolve; })
+          : Promise.resolve({ ok: true, data: { response: 'новый ответ агента' } });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'agent' });
+    await page.waitForFunction(() => Boolean(window.__agentOldReply), { timeout: 8000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((node) => /Агент не ответил вовремя/.test(node.innerText)), { timeout: 5000 });
+    await page.evaluate(() => window.__agentOldReply({ ok: false, reason: 'слишком поздно' }));
+    await sleep(200);
+    await emit(page, 'hotkey', { type: 'agent' });
+    await sleep(900);
+    const result = await page.evaluate(() => ({
+      posts: window.__agentTimeoutPosts,
+      history: window.__e2e.read('zs.dictations') || [],
+      processing: Boolean(document.querySelector('.live-draft--processing')),
+    }));
+    const errors = takeErrors(page);
+    record('режимы', 'агент: таймаут разрешает повтор, поздний отказ не включает блокировку модели',
+      result.posts === 2 && result.history.length === 1 && result.history[0].source === 'agent' &&
+      /новый ответ агента/i.test(result.history[0].text) && !result.processing && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Таймаут покрывает и зависшее получение выделения, до вызова модели.
+async function scenarioAgentSelectionTimeout(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      const original = window.setTimeout.bind(window);
+      window.setTimeout = (fn, delay, ...args) => original(fn, delay === 25000 ? 800 : delay, ...args);
+      window.zspeakly.native.readSelection = () => new Promise((resolve) => { window.__agentLateSelection = resolve; });
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'agent' });
+    await page.waitForFunction(() => Boolean(window.__agentLateSelection), { timeout: 8000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((node) => /Агент не ответил вовремя/.test(node.innerText)), { timeout: 5000 });
+    await page.evaluate(() => window.__agentLateSelection('не отправлять после таймаута'));
+    await sleep(400);
+    const result = await page.evaluate(() => ({
+      posts: (window.__bridgeCalls || []).filter((c) => c.channel === 'http:post').length,
+      history: window.__e2e.read('zs.dictations') || [],
+      processing: Boolean(document.querySelector('.live-draft--processing')),
+    }));
+    const errors = takeErrors(page);
+    record('режимы', 'агент: таймаут выделения не отправляет запоздавший контекст',
+      result.posts === 0 && result.history.length === 0 && !result.processing && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Запоздавшее выделение голосовой команды не должно запускать запись после агента.
+async function scenarioAgentAfterPendingCommand(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      let reads = 0;
+      window.zspeakly.native.readSelection = () => ++reads === 1
+        ? new Promise((resolve) => { window.__pendingCommandSelection = resolve; })
+        : Promise.resolve('контекст агента');
+      window.zspeakly.native.httpPost = async () => ({ ok: true, data: { response: 'ответ агента' } });
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'toggle', command: true });
+    await page.waitForFunction(() => Boolean(window.__pendingCommandSelection), { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'agent' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 8000 });
+    await page.evaluate(() => window.__pendingCommandSelection('старое выделение'));
+    await sleep(500);
+    const result = await page.evaluate(() => ({
+      history: window.__e2e.read('zs.dictations'),
+      listening: /Слушаю/.test(document.querySelector('.hero__mic')?.innerText || ''),
+      replaced: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:replace-selection').length,
+    }));
+    const errors = takeErrors(page);
+    record('режимы', 'агент: запоздавшее выделение команды не запускает запись',
+      !result.listening && result.replaced === 0 && result.history.length === 1 && result.history[0].source === 'agent' && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Во время записи другой хоткей агента не должен гасить микрофон.
+async function scenarioAgentDuringRecording(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'диктовка не потеряна' },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await sleep(1000);
+    await emit(page, 'hotkey', { type: 'agent' });
+    await sleep(200);
+    const during = await page.evaluate(() => ({
+      listening: /Слушаю/.test(document.querySelector('.hero__mic')?.innerText || ''),
+      posts: (window.__bridgeCalls || []).filter((call) => call.channel === 'http:post').length,
+      toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+    }));
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    const history = await page.evaluate(() => window.__e2e.read('zs.dictations'));
+    const errors = takeErrors(page);
+    record('режимы', 'агент: отдельный хоткей не прерывает текущую запись',
+      during.listening && during.posts === 0 && /Сначала завершите текущую задачу/.test(during.toast) &&
+      /диктовка не потеряна/i.test(history[0]?.text || '') && errors.length === 0,
+      JSON.stringify({ during, text: history[0]?.text, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
+// Ответ агента не должен проходить через устаревший командный режим и заменять выделение.
+async function scenarioAgentAfterCancelledCommand(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [], 'zs.stats': { wordsTotal: 0, secondsTotal: 0 } },
+    patchNative: () => {
+      window.zspeakly.native.httpPost = async () => ({ ok: true, data: { response: 'Ответ:\n  первая строка\n  вторая строка' } });
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'toggle', command: true });
+    await page.waitForFunction(() => /Слушаю/.test(document.querySelector('.hero__mic')?.innerText || ''), { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'cancel' });
+    await emit(page, 'hotkey', { type: 'agent' });
+    await sleep(1200);
+    const result = await page.evaluate(() => ({
+      history: window.__e2e.read('zs.dictations') || [],
+      stats: window.__e2e.read('zs.stats'),
+      replaced: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:replace-selection').length,
+      inserts: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:insert').length,
+      labels: [...document.querySelectorAll('.recent__tag')].map((node) => node.innerText),
+    }));
+    const errors = takeErrors(page);
+    record('режимы', 'агент: после отменённой команды ответ не изменяет выделение и отдельно помечен в истории',
+      result.history.length === 1 && result.history[0].source === 'agent' &&
+      result.history[0].text === 'Ответ:\n  первая строка\n  вторая строка' && result.replaced === 0 && result.inserts === 0 &&
+      result.stats?.wordsTotal === 0 && result.labels.some((label) => /^агент$/i.test(label)) && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
 async function scenarioDictationModes(browser) {
   // «свободные руки»: одно нажатие — слушаем, ещё одно — стоп
   const page = await openPage(browser, '#/home', {
@@ -7712,6 +7965,13 @@ async function main() {
       ['чистая установка', scenarioFreshInstall],
       ['снимок экрана', scenarioScreenshotOnce],
       ['диктовка с учётом экрана', scenarioScreenAware],
+      ['агент отмена выделения', scenarioAgentSelectionCancel],
+      ['агент отмена и повтор', scenarioAgentCancelAndRetry],
+      ['агент таймаут', scenarioAgentTimeout],
+      ['агент таймаут выделения', scenarioAgentSelectionTimeout],
+      ['агент во время записи', scenarioAgentDuringRecording],
+      ['агент после ожидающей команды', scenarioAgentAfterPendingCommand],
+      ['агент после отмены команды', scenarioAgentAfterCancelledCommand],
       ['режимы диктовки', scenarioDictationModes],
       ['связь с main', scenarioMainSync],
       ['сброс сочетаний', scenarioResetHotkeys],

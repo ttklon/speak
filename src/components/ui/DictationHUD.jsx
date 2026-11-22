@@ -6,7 +6,7 @@ import { useDictation } from '../../state/DictationProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 
 export default function DictationHUD() {
-  const { state, draft, level, elapsed, stop, setHudOpen, error, nativeHud, sttProgress, micQuiet } = useDictation();
+  const { state, draft, level, elapsed, stop, cancelProcessing, setHudOpen, error, nativeHud, sttProgress, micQuiet, agentPending } = useDictation();
   const { settings } = useAppData();
   // настройка «Плавающий индикатор записи»: выключили — плашки нет,
   // но ошибки показываем всегда, иначе человек не поймёт, почему тишина
@@ -40,7 +40,7 @@ export default function DictationHUD() {
     : idle
       ? 'Запись остановлена'
       : state === 'processing'
-        ? 'Распознаю…'
+        ? agentPending ? 'Агент отвечает…' : 'Распознаю…'
         : quiet
           ? 'Микрофон молчит'
           : 'Слушаю…';
@@ -65,7 +65,9 @@ export default function DictationHUD() {
           )}
         </div>
         <div className="hud__text">
-          {draft ? (
+          {agentPending ? (
+            <span className="hud__hint">Ответ появится в истории</span>
+          ) : draft ? (
             <span className="hud__draft">{draft}</span>
           ) : (
             <span className="hud__hint">
@@ -84,6 +86,10 @@ export default function DictationHUD() {
         {state === 'listening' ? (
           <button type="button" className="hud__btn" onClick={stop} aria-label="Остановить запись">
             <Square size={11} fill="currentColor" />
+          </button>
+        ) : state === 'processing' ? (
+          <button type="button" className="hud__btn" onClick={cancelProcessing} aria-label={agentPending ? 'Отменить запрос агента' : 'Отменить распознавание'}>
+            <X size={12} />
           </button>
         ) : (
           <span className="hud__btn hud__btn--ghost" aria-hidden="true">
