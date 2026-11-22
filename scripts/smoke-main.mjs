@@ -14,6 +14,13 @@ import fs from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'zs-smoke-'));
+const deniedLockProbe = process.argv.includes('--test-lock-denied');
+const earlySecondProbe = process.argv.includes('--test-early-second');
+const closedSecondProbe = process.argv.includes('--test-closed-second');
+const probeProfile = path.join(userData, 'profile.json');
+const probeContents = JSON.stringify({ 'zs:installId': 'existing-id', history: ['исходная запись'] });
+if (deniedLockProbe) fs.writeFileSync(probeProfile, probeContents, 'utf8');
+let quitCalled = 0;
 
 const handlers = new Map();
 const onHandlers = new Map();
@@ -60,7 +67,14 @@ const makeWindow = (options = {}) => {
     emit: (event, payload) => {
       for (const fn of win._listeners[event] || []) fn(payload);
     },
-    once: () => {},
+    once: (event, fn) => {
+      if (!win._listeners[event]) win._listeners[event] = [];
+      const wrapped = (...args) => {
+        win._listeners[event] = win._listeners[event].filter((item) => item !== wrapped);
+        fn(...args);
+      };
+      win._listeners[event].push(wrapped);
+    },
     loadURL: async () => {},
     loadFile: async (file) => {
       win._file = String(file);
@@ -82,7 +96,7 @@ const makeWindow = (options = {}) => {
     hide: () => {
       win._visible = false;
     },
-    isMinimized: () => false,
+    isMinimized: () => Boolean(win._minimized),
     isVisible: () => win._visible,
     isDestroyed: () => false,
     destroy: () => {
@@ -102,7 +116,7 @@ const makeWindow = (options = {}) => {
       win._bounds = b;
     },
     setIgnoreMouseEvents: () => {},
-    restore: () => {},
+    restore: () => { win._minimized = false; win._restoreCalls = (win._restoreCalls || 0) + 1; },
     isMaximized: () => false,
     isFocused: () => true,
     maximize: () => {},
@@ -117,13 +131,13 @@ const fakeWindow = () => windowInstances[windowInstances.length - 1] || makeWind
 const electronStub = {
   app: {
     isPackaged: false,
-    requestSingleInstanceLock: () => true,
+    requestSingleInstanceLock: () => !deniedLockProbe,
     on: (event, fn) => {
       if (!appListeners.has(event)) appListeners.set(event, []);
       appListeners.get(event).push(fn);
     },
     whenReady: () => Promise.resolve(),
-    quit: () => {},
+    quit: () => { quitCalled += 1; },
     getVersion: () => '1.5.0',
     getName: () => 'ZSpeakly',
     getPath: () => userData,
@@ -314,6 +328,8 @@ Module._load = function patched(request, parent, isMain) {
 
 // main.cjs живёт в CommonJS — грузим через require
 const main = require(path.resolve('electron/main.cjs'));
+// Событие приходит до whenReady и создания окна, а не после загрузки UI.
+if (earlySecondProbe) for (const fn of appListeners.get('second-instance') || []) fn();
 // Подмена прогрева сразу после загрузки main: до первого «hud:show» и до
 // таймера прогрева при старте. Нужна, чтобы увидеть, что прогрев вообще
 // запускается, не поднимая настоящий whisper-server.
@@ -337,6 +353,52 @@ async function check(name, fn) {
 }
 
 await new Promise((r) => setTimeout(r, 200));
+
+if (deniedLockProbe || earlySecondProbe || closedSecondProbe) {
+  let error = '';
+  if (deniedLockProbe) {
+    if (!quitCalled) error = 'не запросил выход';
+    else if (handlers.size || onHandlers.size || windowInstances.length) error = 'второй экземпляр запустил IPC или окно после отказа блокировки';
+    else if (fs.readFileSync(probeProfile, 'utf8') !== probeContents || fs.existsSync(`${probeProfile}.tmp`)) error = 'второй экземпляр изменил профиль';
+  } else {
+    let win = findMainWindow();
+    if (!win) error = 'основное окно не создано';
+    else if (closedSecondProbe) {
+      const previous = windowInstances.length;
+      win.emit('closed');
+      for (const fn of appListeners.get('second-instance') || []) fn();
+      if (windowInstances.length !== previous + 1) error = 'повторный запуск не создал закрытое окно';
+      else {
+        win = windowInstances.at(-1);
+        win.emit('ready-to-show');
+        if (!win.isVisible() || !win._focusCalls) error = 'восстановленное окно не показано';
+      }
+    } else {
+      win.emit('ready-to-show');
+      if (!win.isVisible() || !win._focusCalls) error = 'ранний повторный запуск потерян до готовности окна';
+      else {
+        const focusBefore = win._focusCalls;
+        win._minimized = true;
+        win.hide();
+        for (const fn of appListeners.get('second-instance') || []) fn();
+        if (!win.isVisible() || win._minimized || !win._restoreCalls || win._focusCalls <= focusBefore) error = 'свёрнутое окно не восстановлено';
+      }
+    }
+  }
+  fs.rmSync(userData, { recursive: true, force: true });
+  if (error) console.error(error);
+  else console.log(deniedLockProbe ? 'LOCK_DENIED_OK' : closedSecondProbe ? 'CLOSED_SECOND_OK' : 'EARLY_SECOND_OK');
+  process.exit(error ? 1 : 0);
+}
+
+await check('отказ блокировки не запускает второй профиль, ранний повтор открывает окно', () => {
+  const { spawnSync } = originalLoad('node:child_process', undefined, false);
+  for (const args of [['--test-lock-denied'], ['--test-early-second', '--hidden'], ['--test-closed-second', '--hidden']]) {
+    const child = spawnSync(process.execPath, [path.resolve('scripts/smoke-main.mjs'), ...args], { encoding: 'utf8', timeout: 15000 });
+    const marker = args[0] === '--test-lock-denied' ? 'LOCK_DENIED_OK' : args[0] === '--test-closed-second' ? 'CLOSED_SECOND_OK' : 'EARLY_SECOND_OK';
+    if (child.status !== 0 || !child.stdout.includes(marker)) throw new Error(`${args[0]}: ${child.stderr || child.stdout || child.error?.message}`);
+  }
+});
 
 await check('main загружается без реального Electron', () => {
   if (!main) throw new Error('модуль не вернулся');

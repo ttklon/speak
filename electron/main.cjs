@@ -118,16 +118,23 @@ const OWN_TEXT_TTL = 2000;
 let lastClipboardImageHash = '';
 
 // ── Одиночный экземпляр ────────────────────────────────────────────────────
+let pendingSecondInstance = false;
+let startupComplete = false;
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      // Событие может прийти до создания окна или после его закрытия. Не
+      // создаём окно до готовности профиля; запоминаем запрос до ready-to-show.
+      pendingSecondInstance = true;
+      if (startupComplete) createWindow();
+      return;
     }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
 }
 
@@ -219,7 +226,11 @@ function createWindow() {
         /* платформа без maximize — не повод не показывать окно */
       }
     }
-    if (!START_HIDDEN) mainWindow.show();
+    if (!START_HIDDEN || pendingSecondInstance) mainWindow.show();
+    if (pendingSecondInstance) {
+      pendingSecondInstance = false;
+      mainWindow.focus();
+    }
     startupMs = Date.now() - BOOT_AT;
     logger.info('app', 'Окно на экране', { keep: true, ms: startupMs });
     // Первая установка: движок уже в комплекте, модель докачиваем сами.
@@ -3228,7 +3239,9 @@ app.on('before-quit', (event) => {
   if (confirmUnsavedQuit(event)) app.isQuitting = true;
 });
 
-app.whenReady().then(() => {
+// При отказе блокировки вообще не запускаем инициализацию: quit() может
+// завершиться не синхронно и сам по себе не отменяет уже созданные промисы.
+if (gotLock) app.whenReady().then(() => {
   store = new JsonStore('profile.json', {
     onError: (status) => {
       // Окно может ещё не существовать; при старте renderer читает status.
@@ -3391,6 +3404,7 @@ app.whenReady().then(() => {
   });
   if (settings.clipboardMonitor !== false) startClipboardWatch();
 
+  startupComplete = true;
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     else mainWindow?.show();

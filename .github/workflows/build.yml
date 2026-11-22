@@ -294,6 +294,8 @@ jobs:
         run: npm run build
       - name: Electron quit with simulated storage failure
         run: xvfb-run -a node scripts/test-electron-quit.cjs
+      - name: Electron single-instance profile lock
+        run: xvfb-run -a node scripts/test-electron-single.cjs
       - name: Electron virtual microphone and real ONNX
         shell: bash
         env:
@@ -604,6 +606,10 @@ jobs:
       - name: Выход Electron при имитации сбоя записи
         if: github.event_name == 'pull_request'
         run: node scripts/test-electron-quit.cjs
+
+      - name: Блокировка профиля при двух экземплярах Electron
+        if: github.event_name == 'pull_request'
+        run: node scripts/test-electron-single.cjs
 
       - name: Проверить ONNX Runtime в собранном приложении
         shell: bash
