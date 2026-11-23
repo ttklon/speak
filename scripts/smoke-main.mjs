@@ -935,6 +935,7 @@ await check('insertText шлёт Ctrl+V в активное окно', async () 
     if (!pasted) throw new Error(`не нашёл Ctrl+V: ${calls.join(' | ') || 'пусто'}`);
     if (clipboardText.value !== 'привет из диктовки') throw new Error('текст не в буфере');
   } finally {
+    await new Promise((r) => setTimeout(r, 550));
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   }
 });
@@ -975,6 +976,143 @@ await check('«Отмени»: неподтверждённый курсор н�
     handlers.get('store:set')({}, 'zs:settings', settings);
     Object.defineProperty(process, 'platform', { value: platform, configurable: true });
     await new Promise((resolve) => setTimeout(resolve, 550));
+  }
+});
+
+await check('две диктовки: вторая не меняет буфер во время незавершённой вставки', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  let release, firstStarted;
+  const started = new Promise((r) => { firstStarted = r; });
+  let calls = 0;
+  spawnPlan.clipboardHelper = () => {
+    calls++;
+    if (calls === 1) { firstStarted(); return new Promise((r) => { release = r; }); }
+    return Promise.resolve({ ok: true });
+  };
+  let first;
+  try {
+    clipboardText.value = 'исходный буфер';
+    first = handlers.get('text:insert')({}, 'первая фраза');
+    await started;
+    const second = await handlers.get('text:insert')({}, 'вторая фраза');
+    if (!second?.busy || second.ok !== false) throw new Error(`вторая вставка не отклонена: ${JSON.stringify(second)}`);
+    if (calls !== 1 || clipboardText.value !== 'первая фраза') throw new Error('вторая вставка изменила буфер или послала клавиши');
+  } finally {
+    release?.({ ok: true });
+    if (first) await first;
+    await new Promise((r) => setTimeout(r, 650));
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('две диктовки: период восстановления не перезаписывает исходный буфер', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => ({ ok: true });
+  try {
+    clipboardText.value = 'исходный буфер';
+    const first = await handlers.get('text:insert')({}, 'первая фраза');
+    if (!first?.ok) throw new Error('первая вставка не подтвердилась');
+    const second = await handlers.get('text:insert')({}, 'вторая фраза');
+    if (!second?.busy || second.ok !== false) throw new Error(`вторая вставка не отклонена: ${JSON.stringify(second)}`);
+    await new Promise((r) => setTimeout(r, 650));
+    if (clipboardText.value !== 'исходный буфер') throw new Error(`буфер не восстановлен: ${clipboardText.value}`);
+    const retry = await handlers.get('text:insert')({}, 'вторая фраза');
+    if (!retry?.ok) throw new Error(`вставка после освобождения не работает: ${JSON.stringify(retry)}`);
+  } finally {
+    await new Promise((r) => setTimeout(r, 650));
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('две диктовки SendInput: вторая не начинается до ответа первой', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, type = host.type;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  host.available = () => true;
+  let release, notify;
+  const started = new Promise((r) => { notify = r; });
+  let calls = 0, first;
+  host.type = async () => {
+    calls++;
+    if (calls === 1) { notify(); return new Promise((r) => { release = r; }); }
+    return { ok: true };
+  };
+  try {
+    clipboardText.value = 'исходный буфер';
+    first = handlers.get('text:insert')({}, 'первая');
+    await started;
+    const second = await handlers.get('text:insert')({}, 'вторая');
+    if (!second?.busy || second.ok !== false || calls !== 1) throw new Error(`параллельный SendInput: ${JSON.stringify(second)}, вызовов ${calls}`);
+    if (clipboardText.value !== 'исходный буфер') throw new Error('SendInput изменил буфер');
+    release({ ok: true });
+    if (!(await first).ok) throw new Error('первый SendInput не завершился');
+    if (!(await handlers.get('text:insert')({}, 'вторая')).ok) throw new Error('блокировка не снята');
+  } finally {
+    release?.({ ok: true });
+    if (first) await first;
+    host.available = available; host.type = type;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('ошибка восстановления буфера не оставляет вставку заблокированной', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const read = electronStub.clipboard.readText;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => ({ ok: true });
+  try {
+    if (!(await handlers.get('text:insert')({}, 'первая')).ok) throw new Error('вставка не началась');
+    electronStub.clipboard.readText = () => { throw new Error('read failed'); };
+    await new Promise((r) => setTimeout(r, 650));
+    electronStub.clipboard.readText = read;
+    const next = await handlers.get('text:insert')({}, 'следующая');
+    if (!next?.ok) throw new Error(`блокировка не снята: ${JSON.stringify(next)}`);
+  } finally {
+    electronStub.clipboard.readText = read;
+    await new Promise((r) => setTimeout(r, 650));
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('блокировка вставки освобождается после ошибки записи буфера', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const write = electronStub.clipboard.writeText;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => ({ ok: true });
+  try {
+    electronStub.clipboard.writeText = () => { throw new Error('clipboard write failed'); };
+    let rejected = false;
+    try { await handlers.get('text:insert')({}, 'первая фраза'); } catch { rejected = true; }
+    if (!rejected) throw new Error('исключение записи не воспроизведено');
+    electronStub.clipboard.writeText = write;
+    const retry = await handlers.get('text:insert')({}, 'следующая фраза');
+    if (!retry?.ok) throw new Error(`блокировка не освобождена: ${JSON.stringify(retry)}`);
+  } finally {
+    electronStub.clipboard.writeText = write;
+    await new Promise((r) => setTimeout(r, 650));
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
   }
 });
 
@@ -1275,6 +1413,7 @@ await check('вставка без буфера: полный отказ ухо�
     if (!ok || ok.ok !== true) throw new Error(`SendInput не ввёл ничего, а буферный путь не сработал: ${JSON.stringify(ok)}`);
     if (clipboardText.value !== text) throw new Error(`в буфере: ${clipboardText.value}`);
   } finally {
+    await new Promise((r) => setTimeout(r, 550));
     spawnPlan.sendInput = null;
     handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
@@ -3511,6 +3650,7 @@ await check('вставка не забирает фокус у чужого о�
     if (mainWin._focusCalls > 0) throw new Error('окно забрало фокус после вставки');
     if (mainWin._showCalls > 0) throw new Error('окно показалось поверх чужого приложения');
     if (mainWin._visible) throw new Error('скрытое окно всплыло после вставки');
+    await new Promise((r) => setTimeout(r, 200)); // восстановление буфера первой вставки
 
     // окно было в фокусе: его прячем, а после вставки возвращаем без фокуса
     mainWin.isFocused = () => true;

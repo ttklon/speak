@@ -2370,6 +2370,33 @@ async function scenarioInsertFailed(browser) {
   record('сценарии', 'вставка без буфера: без ошибок консоли', partialErrors.length === 0, partialErrors[0] || '');
   await partialPage.close();
 
+  const busyPage = await openPage(browser, '#/home', {
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'вторая тестовая фраза' });
+      window.__insertCount = 0;
+      window.zspeakly.native.insertText = async () => {
+        window.__insertCount += 1;
+        return { ok: false, busy: true, reason: 'другая вставка ещё выполняется' };
+      };
+    },
+  });
+  takeErrors(busyPage);
+  await busyPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await busyPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const busy = await busyPage.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+    inserts: window.__insertCount,
+    history: (window.__e2e.read('zs.dictations') || [])[0]?.text || '',
+  }));
+  record('безопасность', 'занятая вставка: текст в истории, не обещается Ctrl+V и нет автоповтора',
+    /Вставка ещё занята/.test(busy.toast) && /не скопирована в буфер/.test(busy.toast) && /истории/.test(busy.toast)
+      && !/нажмите Ctrl\+V/i.test(busy.toast) && busy.inserts === 1 && /вторая тестовая фраза/i.test(busy.history), busy.toast);
+  record('безопасность', 'занятая вставка: без ошибок консоли', takeErrors(busyPage).length === 0);
+  await busyPage.close();
+
   const uncertainPage = await openPage(browser, '#/home', {
     patchNative: () => {
       window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'неопределённый ввод' });

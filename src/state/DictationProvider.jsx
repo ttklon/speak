@@ -711,6 +711,15 @@ export function DictationProvider({ children }) {
           // говорим об этом, иначе диктовка выглядит «сломанной».
           Promise.resolve(native.insertText(cleaned))
             .then((res) => {
+              if (res && typeof res === 'object' && res.busy === true) {
+                pushToast({
+                  title: 'Вставка ещё занята',
+                  description: 'Эта фраза не отправлялась в окно и не скопирована в буфер. Она сохранена в истории — вставьте её оттуда, когда предыдущая вставка завершится.',
+                  tone: 'warn', ttl: 15000,
+                });
+                diag.warn('stt', 'Вставка отклонена: предыдущая ещё выполняется');
+                return;
+              }
               if (res && typeof res === 'object' && res.uncertain === true) {
                 pushToast({
                   title: 'Не удалось подтвердить ввод',

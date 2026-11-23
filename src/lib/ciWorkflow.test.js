@@ -95,6 +95,18 @@ describe('проверка настоящего движка в CI', () => {
     expect(runner).toContain("assert.equal((await command('state')).text, text");
   });
 
+  it('параллельные диктовки проверяются изолированно с настоящим Ctrl+V', () => {
+    const runner = readFileSync('scripts/test-wininput-window.cjs', 'utf8');
+    const entry = readFileSync('scripts/e2e/electron-insert-concurrency-entry.cjs', 'utf8');
+    expect(entry).toContain("process.platform !== 'win32'");
+    expect(entry).toContain("process.env.CI !== 'true'");
+    expect(entry).toContain("process.env.RUNNER_ENVIRONMENT !== 'github-hosted'");
+    expect(entry).toContain("process.env.ZS_CONCURRENT_E2E !== '1'");
+    expect(entry).toContain('await input.paste()');
+    expect(runner).toContain('DICTATION_OVERLAP_E2E_OK');
+    expect(runner).toContain('second.busy, true');
+  });
+
   it('ошибка выполненного теста не подавляется настройкой шага', () => {
     const step = workflow.split('      - name: Тест настоящего движка распознавания (whisper.cpp)')[1]?.split('\n  package:')[0];
     expect(step).toBeTruthy();

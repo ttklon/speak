@@ -108,6 +108,8 @@ const getWinInput = () => {
 let lastInsertInfo = { at: 0, ok: null, method: '', ms: 0, reason: '' };
 let lastInsertedText = '';
 let lastInsertedAt = 0;
+// Одна диктовка управляет буфером до окончания ввода и восстановления.
+let dictationInsertBusy = false;
 // Сколько времени движок тратит на секунду речи — по этим замерам решается,
 // можно ли считать сразу «честным» проходом на этой машине.
 const decodeHistory = [];
@@ -2021,6 +2023,17 @@ function registerIpc() {
   ipcMain.handle('text:insert', async (_e, text) => {
     const value = String(text || '');
     if (!value) return { ok: false, reason: 'пустой текст' };
+    if (dictationInsertBusy) return { ok: false, busy: true, reason: 'другая вставка ещё выполняется' };
+    dictationInsertBusy = true;
+    let restoreScheduled = false;
+    try {
+      return await insertDictation(value, () => { restoreScheduled = true; });
+    } finally {
+      if (!restoreScheduled) dictationInsertBusy = false;
+    }
+  });
+
+  async function insertDictation(value, onRestoreScheduled) {
     lastInsertedText = value;
     lastInsertedAt = Date.now();
     const started = Date.now();
@@ -2175,11 +2188,14 @@ function registerIpc() {
         lastClipboardText = previousText || '';
       } catch {
         /* ignore */
+      } finally {
+        dictationInsertBusy = false;
       }
     }, 500);
+    onRestoreScheduled();
     lastInsertInfo = { at: Date.now(), ok: true, method, ms: Date.now() - started, reason: '' };
     return { ok: true, method, ms: Date.now() - started };
-  });
+  }
   // Backspace вслепую может удалить чужой текст даже в том же окне.
   // Пока позиция курсора и содержимое поля не подтверждаются, не посылаем клавиши.
   ipcMain.handle('text:undo-last', () => planUndo({ text: lastInsertedText }));

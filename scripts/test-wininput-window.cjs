@@ -379,6 +379,56 @@ async function main() {
           assert.equal((await command('readClipboard')).text, replacement, 'результат замены отсутствует в буфере');
           console.log('SHARED_PASTE_LOST_ACK_E2E_OK: история и замена: реальный Ctrl+V однократно, ответ искусственно потерян');
 
+          // Fresh process: the actual paste happens once, then its response is
+          // held so a second IPC request definitely overlaps the first one.
+          await browser.close();
+          browser = await puppeteer.launch({
+            executablePath: executable, headless: false, ignoreDefaultArgs: true,
+            env: { ...process.env, ZS_E2E_PROFILE: profile, ZSPEAKLY_DEV_URL: 'none',
+              ZS_CONCURRENT_E2E: '1', ZS_CONCURRENT_DIR: dir },
+            args: [path.resolve('scripts/e2e/electron-insert-concurrency-entry.cjs')], timeout: 60000,
+          });
+          const concurrentTarget = await browser.waitForTarget((t) => t.type() === 'page' && t.url().includes('index.html'), { timeout: 30000 });
+          const concurrentPage = await concurrentTarget.page();
+          await concurrentPage.waitForSelector('.app-window', { timeout: 30000 });
+          await concurrentPage.waitForFunction(async () => Boolean((await window.zspeakly?.native?.inputStatus())?.ready), { timeout: 30000, polling: 300 });
+          await concurrentPage.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'clipboard' });
+          });
+          const initial = 'Исходный синтетический буфер';
+          const firstText = 'Первая синтетическая фраза';
+          const secondText = 'Вторая синтетическая фраза';
+          await command('clear');
+          await command('clipboard', initial);
+          assert.equal(await active(), true, 'перед проверкой параллельной вставки потерян фокус');
+          let firstPending;
+          try {
+            firstPending = concurrentPage.evaluate((value) => window.zspeakly.native.insertText(value), firstText);
+            await waitFile(path.join(dir, 'concurrent-paste-ready'));
+            await assertText(firstText, 'первая параллельная вставка');
+            const second = await concurrentPage.evaluate((value) => window.zspeakly.native.insertText(value), secondText);
+            assert.equal(second.ok, false, JSON.stringify(second));
+            assert.equal(second.busy, true, JSON.stringify(second));
+            assert.equal((await command('state')).text, firstText, 'вторая вставка попала в окно');
+            assert.equal((await command('readClipboard')).text, firstText, 'вторая вставка изменила буфер');
+            fs.writeFileSync(path.join(dir, 'concurrent-paste-release'), 'release');
+            const first = await firstPending;
+            assert.equal(first.ok, true, JSON.stringify(first));
+            await sleep(1200);
+            assert.equal((await command('readClipboard')).text, initial, 'исходный буфер не восстановлен');
+            assert.equal(await active(), true, 'перед повтором потерян фокус');
+            const retry = await concurrentPage.evaluate((value) => window.zspeakly.native.insertText(value), secondText);
+            assert.equal(retry.ok, true, JSON.stringify(retry));
+            await assertText(firstText + secondText, 'повтор после освобождения');
+            await sleep(1200);
+            assert.equal((await command('readClipboard')).text, initial, 'буфер изменился после ручного повтора');
+            console.log('DICTATION_OVERLAP_E2E_OK: реальный Ctrl+V, задержанный ответ, отказ второй вставке и ручной повтор');
+          } finally {
+            fs.writeFileSync(path.join(dir, 'concurrent-paste-release'), 'release');
+            if (firstPending) await firstPending.catch(() => {});
+          }
+
         }
       } finally {
         if (browser) await browser.close();
