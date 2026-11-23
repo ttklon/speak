@@ -194,6 +194,24 @@ async function main() {
           assert.equal(after.text, previous, `Electron ${mode}: прежний буфер не сохранён`);
           console.log(`Electron IPC ${mode}: текст получен окном, прежний буфер сохранён (метод ${result.method})`);
         }
+        // Only disposable CI may start with a deliberately empty system clipboard.
+        if (process.env.CI === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+          const text = 'Синтетическая вставка в пустой буфер';
+          await command('clear');
+          await command('clipboardClearIsolatedCi');
+          assert.equal((await command('clipboardFormatsIsolatedCi')).count, 0, 'буфер не пуст перед тестом');
+          await page.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'clipboard' });
+          });
+          assert.equal(await active(), true, 'перед вставкой в пустой буфер потерян фокус');
+          const result = await page.evaluate((value) => window.zspeakly.native.insertText(value), text);
+          assert.equal(result.ok, true, `Electron clipboard empty: ${JSON.stringify(result)}`);
+          await assertText(text, 'Electron clipboard empty');
+          await sleep(1200);
+          assert.equal((await command('clipboardFormatsIsolatedCi')).count, 0, 'после вставки буфер не пуст');
+          console.log('CLIPBOARD_EMPTY_RESTORE_E2E_OK: текст в WinForms, исходно пустой буфер снова пуст');
+        }
         if (dictation) {
           const status = await page.evaluate(() => window.zspeakly.native.modelsStatus());
           assert.equal(status.russian.available, true, `GigaAM недоступна: ${status.russian.reason}`);

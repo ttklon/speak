@@ -64,6 +64,18 @@ describe('проверка настоящего движка в CI', () => {
     expect(job).not.toMatch(/^\s*continue-on-error:\s*true\s*$/m);
   });
 
+  it('проверка пустого буфера разрешена только на одноразовом Windows CI', () => {
+    const runner = readFileSync('scripts/test-wininput-window.cjs', 'utf8');
+    const target = readFileSync('scripts/e2e/wininput-target.ps1', 'utf8');
+    expect(runner).toContain("process.platform !== 'win32'");
+    expect(runner).toContain("process.env.CI === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted'");
+    expect(runner).toContain("await command('clipboardClearIsolatedCi')");
+    expect(runner).toContain("await command('clipboardFormatsIsolatedCi')");
+    expect(runner).toContain('CLIPBOARD_EMPTY_RESTORE_E2E_OK');
+    expect(target.match(/\$env:CI -ne 'true' -or \$env:RUNNER_ENVIRONMENT -ne 'github-hosted'/g)).toHaveLength(2);
+    expect(target).toContain('[System.Windows.Forms.Clipboard]::Clear()');
+  });
+
   it('ошибка выполненного теста не подавляется настройкой шага', () => {
     const step = workflow.split('      - name: Тест настоящего движка распознавания (whisper.cpp)')[1]?.split('\n  package:')[0];
     expect(step).toBeTruthy();

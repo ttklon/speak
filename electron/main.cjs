@@ -2074,7 +2074,17 @@ function registerIpc() {
     const previousText = clipboard.readText();
     const previousImage = clipboard.readImage();
     const hadImage = previousImage && !previousImage.isEmpty();
+    // Не считаем буфер пустым по одному readText: в нём могут быть другие форматы.
+    // Если ОС не сообщает форматы после записи, не восстанавливаем буфер.
+    const clipboardFormats = () => {
+      try {
+        const formats = clipboard.availableFormats();
+        return Array.isArray(formats) ? JSON.stringify([...formats].sort()) : null;
+      } catch { return null; }
+    };
+    const previousFormats = clipboardFormats();
     clipboard.writeText(value);
+    const insertedFormats = clipboardFormats();
     // Сначала свой помощник: Ctrl+V через SendInput, без PowerShell и без
     // Add-Type. Именно на этом шаге раньше и ломалось — политика PowerShell
     // запрещала сценарий, вставка молча не происходила, а уведомление «Готово»
@@ -2127,12 +2137,21 @@ function registerIpc() {
       try {
         // Если за эти полсекунды человек успел что-то скопировать сам — его
         // содержимое важнее нашего восстановления, буфер не перетираем.
-        if (clipboard.readText() !== value) {
-          lastClipboardText = clipboard.readText();
+        const currentText = clipboard.readText();
+        const currentFormats = clipboardFormats();
+        if (currentText !== value || insertedFormats === null || currentFormats !== insertedFormats) {
+          lastClipboardText = currentText;
           return;
         }
         if (hadImage) clipboard.writeImage(previousImage);
         else if (previousText) clipboard.writeText(previousText);
+        else if (previousFormats === '[]') clipboard.clear();
+        else {
+          // Исходный неизвестный формат восстановить нечем: оставшийся текст
+          // всё ещё наш и не должен появиться как внешнее копирование.
+          lastClipboardText = value;
+          return;
+        }
         // буфер вернулся к прежнему значению — мониторинг не должен считать
         // это новой записью
         lastClipboardText = previousText || '';

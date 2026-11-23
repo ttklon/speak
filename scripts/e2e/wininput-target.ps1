@@ -58,6 +58,15 @@ $timer.Add_Tick({
       }
       'clear' { $box.Clear() }
       'clipboard' { [System.Windows.Forms.Clipboard]::SetText([string]$data.text) }
+      'clipboardClearIsolatedCi' {
+        if ($env:CI -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'isolated CI only' }
+        [System.Windows.Forms.Clipboard]::Clear()
+      }
+      'clipboardFormatsIsolatedCi' {
+        if ($env:CI -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'isolated CI only' }
+        $clipObject = [System.Windows.Forms.Clipboard]::GetDataObject()
+        $out.count = if ($null -eq $clipObject) { 0 } else { @($clipObject.GetFormats()).Count }
+      }
       'readClipboard' { $out.text = [System.Windows.Forms.Clipboard]::GetText() }
       'close' { $timer.Stop(); $form.Close() }
       default { throw 'unknown command' }

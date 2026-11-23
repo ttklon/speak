@@ -947,6 +947,127 @@ await check('восстановление буфера не перетирает
   }
 });
 
+await check('после вставки исходно пустой буфер снова пуст', async () => {
+  const platform = process.platform;
+  const originalFormats = electronStub.clipboard.availableFormats;
+  const originalClear = electronStub.clipboard.clear;
+  let isEmpty = true;
+  let clears = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  electronStub.clipboard.availableFormats = () => isEmpty ? [] : ['text/plain'];
+  electronStub.clipboard.clear = () => { clears++; clipboardText.value = ''; isEmpty = true; };
+  const originalWrite = electronStub.clipboard.writeText;
+  electronStub.clipboard.writeText = (value) => { isEmpty = false; originalWrite(value); };
+  try {
+    clipboardText.value = '';
+    const result = await handlers.get('text:insert')({}, 'временная диктовка');
+    if (!result?.ok) throw new Error('вставка не удалась');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (clears !== 1 || clipboardText.value !== '') throw new Error('диктовка осталась в исходно пустом буфере');
+  } finally {
+    electronStub.clipboard.availableFormats = originalFormats;
+    electronStub.clipboard.clear = originalClear;
+    electronStub.clipboard.writeText = originalWrite;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('неудачная вставка в пустой буфер оставляет текст для Ctrl+V', async () => {
+  const platform = process.platform;
+  const originalFormats = electronStub.clipboard.availableFormats;
+  const originalClear = electronStub.clipboard.clear;
+  const originalWrite = electronStub.clipboard.writeText;
+  let empty = true;
+  let clears = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  electronStub.clipboard.availableFormats = () => empty ? [] : ['text/plain'];
+  electronStub.clipboard.writeText = (value) => { empty = false; originalWrite(value); };
+  electronStub.clipboard.clear = () => { clears++; clipboardText.value = ''; };
+  try {
+    clipboardText.value = '';
+    spawnPlan.execError = true;
+    const result = await handlers.get('text:insert')({}, 'нужно вставить вручную');
+    if (result?.ok !== false) throw new Error('вставка выдана за успешную');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (clears || clipboardText.value !== 'нужно вставить вручную') throw new Error('утерян текст для ручной вставки');
+  } finally {
+    spawnPlan.execError = false;
+    electronStub.clipboard.availableFormats = originalFormats;
+    electronStub.clipboard.clear = originalClear;
+    electronStub.clipboard.writeText = originalWrite;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('восстановление не стирает другой формат с тем же текстом', async () => {
+  const platform = process.platform;
+  const originalFormats = electronStub.clipboard.availableFormats;
+  const originalWrite = electronStub.clipboard.writeText;
+  let formats = ['text/plain'];
+  let writes = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  electronStub.clipboard.availableFormats = () => formats;
+  electronStub.clipboard.writeText = (value) => { writes++; originalWrite(value); };
+  try {
+    clipboardText.value = 'старый текст';
+    const result = await handlers.get('text:insert')({}, 'тот же текст');
+    if (!result?.ok) throw new Error('вставка не удалась');
+    formats = ['text/plain', 'text/html']; // новое внешнее копирование того же текста
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (writes !== 1 || clipboardText.value !== 'тот же текст') throw new Error('новый формат перезаписан прежним буфером');
+  } finally {
+    electronStub.clipboard.availableFormats = originalFormats;
+    electronStub.clipboard.writeText = originalWrite;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('ошибка определения форматов не очищает и не восстанавливает буфер', async () => {
+  const platform = process.platform;
+  const originalFormats = electronStub.clipboard.availableFormats;
+  const originalWrite = electronStub.clipboard.writeText;
+  const originalClear = electronStub.clipboard.clear;
+  let writes = 0;
+  let clears = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  electronStub.clipboard.availableFormats = () => { throw new Error('unavailable'); };
+  electronStub.clipboard.writeText = (value) => { writes++; originalWrite(value); };
+  electronStub.clipboard.clear = () => { clears++; };
+  try {
+    clipboardText.value = '';
+    const result = await handlers.get('text:insert')({}, 'диктовка');
+    if (!result?.ok) throw new Error('вставка не удалась');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (writes !== 1 || clears !== 0 || clipboardText.value !== 'диктовка') throw new Error('неизвестное состояние буфера изменено');
+  } finally {
+    electronStub.clipboard.availableFormats = originalFormats;
+    electronStub.clipboard.writeText = originalWrite;
+    electronStub.clipboard.clear = originalClear;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('неизвестный исходный формат не считается пустым буфером', async () => {
+  const platform = process.platform;
+  const originalFormats = electronStub.clipboard.availableFormats;
+  const originalClear = electronStub.clipboard.clear;
+  let clears = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  electronStub.clipboard.availableFormats = () => ['application/x-foreign'];
+  electronStub.clipboard.clear = () => { clears++; clipboardText.value = ''; };
+  try {
+    clipboardText.value = '';
+    const result = await handlers.get('text:insert')({}, 'диктовка');
+    if (!result?.ok) throw new Error('вставка не удалась');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (clears !== 0) throw new Error('неизвестный формат принят за пустой буфер');
+  } finally {
+    electronStub.clipboard.availableFormats = originalFormats;
+    electronStub.clipboard.clear = originalClear;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
 await check('после успешной вставки возвращается прежний буфер', async () => {
   const realPlatform = process.platform;
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
