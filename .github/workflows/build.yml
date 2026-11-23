@@ -660,6 +660,20 @@ jobs:
           if [ "$code" -ne 0 ]; then echo "::error title=Electron backup::$message"; exit "$code"; fi
           echo "::notice title=Electron backup::$message"
 
+      # Изолированный экран CI закрыт синтетическим окном; WebM хранится только
+      # во временной папке и удаляется тестом, не загружается артефактом.
+      - name: Реальная запись экрана Electron
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-electron-screen-recording.cjs > electron-screen-recording.log 2>&1
+          code=$?
+          cat electron-screen-recording.log
+          message=$(tail -c 4000 electron-screen-recording.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron screen recording::$message"; exit "$code"; fi
+          echo "::notice title=Electron screen recording::$message"
+
       - name: Проверить ONNX Runtime в собранном приложении
         shell: bash
         run: |
