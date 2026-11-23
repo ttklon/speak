@@ -37,6 +37,7 @@ const { cleanupTemp } = require('./tempCleanup.cjs');
 const { requestLocal } = require('./localHttp.cjs');
 const { RECORDING_MAX_BYTES } = require('./recordingLimits.cjs');
 const { validateImageDataUrl, validImageDimensions } = require('./clipboardImage.cjs');
+const { prepareClipboardPreview } = require('./clipboardPreview.cjs');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
   clipboard, shell, dialog, screen, session, safeStorage,
@@ -82,6 +83,8 @@ let clipboardTimer = null;
 // Токен сессии отменяет результаты ещё выполняющегося поиска активного окна.
 let clipboardWatchGeneration = 0;
 let clipboardWatchClosed = false;
+let clipboardWatchTextError = false;
+let clipboardWatchImageIssue = '';
 let updater = null;
 let lastClipboardText = '';
 let windowHiddenForInsert = false;
@@ -1153,7 +1156,15 @@ function startClipboardWatch() {
     const settings = store?.get('zs:settings') || {};
     if (settings.clipboardMonitor === false) return;
 
-    const text = clipboard.readText();
+    let text;
+    try {
+      text = clipboard.readText();
+      clipboardWatchTextError = false;
+    } catch {
+      if (!clipboardWatchTextError) console.warn('[clipboard] monitor text read failed');
+      clipboardWatchTextError = true;
+      return; // Попробуем снова на следующем тике, не раскрывая ошибку ОС.
+    }
     // свой вставленный диктант не пишем в историю буфера
     const ownText =
       Boolean(text) && text === lastInsertedText && Date.now() - lastInsertedAt < OWN_TEXT_TTL;
@@ -1187,20 +1198,28 @@ function startClipboardWatch() {
       });
     }
 
-    const image = clipboard.readImage();
-    if (image && !image.isEmpty()) {
-      const size = image.getSize();
-      const hash = `${size.width}x${size.height}:${image.toBitmap().length}`;
-      if (hash !== lastClipboardImageHash) {
-        lastClipboardImageHash = hash;
-        mainWindow?.webContents.send('clipboard:item', {
-          kind: 'image',
-          text: '',
-          image: image.resize({ width: 320 }).toDataURL(),
-          source: 'Снимок экрана',
-          createdAt: Date.now(),
-        });
+    try {
+      const preview = prepareClipboardPreview(clipboard.readImage(), lastClipboardImageHash);
+      if (preview.status === 'size') {
+        if (clipboardWatchImageIssue !== 'size') console.warn('[clipboard] monitor image exceeds limits');
+        clipboardWatchImageIssue = 'size';
+      } else {
+        if (preview.status === 'ready') {
+          mainWindow?.webContents.send('clipboard:item', {
+            kind: 'image',
+            text: '',
+            image: preview.dataUrl,
+            source: 'Снимок экрана',
+            createdAt: Date.now(),
+          });
+          // Не подавляем следующую попытку, если подготовка или отправка упала.
+          lastClipboardImageHash = preview.hash;
+        }
+        clipboardWatchImageIssue = '';
       }
+    } catch {
+      if (clipboardWatchImageIssue !== 'error') console.warn('[clipboard] monitor image read failed');
+      clipboardWatchImageIssue = 'error';
     }
   }, 900);
 }
@@ -1209,6 +1228,8 @@ function stopClipboardWatch() {
   clipboardWatchGeneration += 1;
   if (clipboardTimer) clearInterval(clipboardTimer);
   clipboardTimer = null;
+  clipboardWatchTextError = false;
+  clipboardWatchImageIssue = '';
 }
 
 function syncClipboardWatch() {
@@ -2355,6 +2376,8 @@ function registerIpc() {
         insertMethod: s.insertMethod === 'sendinput' ? 'sendinput' : 'clipboard',
         insertSupported: process.platform === 'win32',
         clipboardWatch: Boolean(clipboardTimer),
+        clipboardWatchTextError,
+        clipboardWatchImageIssue,
         micPreroll: s.micPreroll === true,
         autoLaunch,
         // Готовность быстрого пути: прогрета ли модель в памяти и поднят ли

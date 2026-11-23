@@ -1180,6 +1180,86 @@ await check('мониторинг буфера присылает новое к�
   if (!item.payload.source) throw new Error('источник не заполнен');
 });
 
+await check('мониторинг: крупное изображение не копируется в bitmap и не создаёт превью', async () => {
+  const original = electronStub.clipboard.readImage;
+  let bitmapCalls = 0;
+  let resizeCalls = 0;
+  try {
+    electronStub.clipboard.readImage = () => ({
+      isEmpty: () => false, getSize: () => ({ width: 50000, height: 50000 }),
+      toBitmap: () => { bitmapCalls++; return { length: 100 }; },
+      getBitmap: () => { bitmapCalls++; return { length: 100 }; },
+      resize: () => { resizeCalls++; return { toDataURL: () => 'data:image/png;base64,big' }; },
+    });
+    sentEvents.length = 0;
+    await new Promise((r) => setTimeout(r, 1100));
+    if (bitmapCalls || resizeCalls || sentEvents.some((e) => e.ch === 'clipboard:item' && e.payload.kind === 'image')) throw new Error('слишком большая картинка обработана');
+    if (handlers.get('diag:status')({}).system.clipboardWatchImageIssue !== 'size') throw new Error('диагностика не сообщила об ограничении');
+  } finally { electronStub.clipboard.readImage = original; }
+});
+
+await check('мониторинг: высокое изображение масштабируется внутри 320×320 без копии bitmap', async () => {
+  const original = electronStub.clipboard.readImage;
+  let copied = 0;
+  let borrowed = 0;
+  let previewSize;
+  try {
+    electronStub.clipboard.readImage = () => ({
+      isEmpty: () => false, getSize: () => ({ width: 40, height: 4000 }),
+      toBitmap: () => { copied++; return { length: 640000 }; },
+      getBitmap: () => { borrowed++; return { length: 640000 }; },
+      resize: (size) => { previewSize = size; return { toDataURL: () => 'data:image/png;base64,preview' }; },
+    });
+    sentEvents.length = 0;
+    await new Promise((r) => setTimeout(r, 1100));
+    const found = sentEvents.some((e) => e.ch === 'clipboard:item' && e.payload.kind === 'image');
+    if (!found || copied || !borrowed || !previewSize?.height || previewSize.width > 320 || previewSize.height > 320 || Math.abs(previewSize.width / previewSize.height - 0.01) > 0.005) {
+      throw new Error(`превью не ограничено или bitmap скопирован: ${JSON.stringify({ copied, borrowed, previewSize, found })}`);
+    }
+    if (handlers.get('diag:status')({}).system.clipboardWatchImageIssue) throw new Error('старая ошибка изображения не сброшена');
+  } finally { electronStub.clipboard.readImage = original; }
+});
+
+await check('мониторинг: сбой чтения текста не вызывает системный диалог и следующий опрос работает', async () => {
+  const originalRead = electronStub.clipboard.readText;
+  const originalDialog = electronStub.dialog.showErrorBox;
+  let dialogs = 0;
+  try {
+    electronStub.dialog.showErrorBox = () => { dialogs++; };
+    electronStub.clipboard.readText = () => { throw new Error('SENSITIVE_ERROR_DO_NOT_LOG'); };
+    await new Promise((r) => setTimeout(r, 1100));
+    if (!handlers.get('diag:status')({}).system.clipboardWatchTextError) throw new Error('диагностика не показала ошибку чтения');
+    const report = await handlers.get('diag:save-report')({});
+    const contents = fs.readFileSync(report.path, 'utf8');
+    if (!contents.includes('ошибка чтения текста') || contents.includes('SENSITIVE_ERROR_DO_NOT_LOG')) throw new Error('отчёт не показал состояние или раскрыл сообщение ОС');
+    electronStub.clipboard.readText = originalRead;
+    clipboardText.value = 'после отказа чтения';
+    sentEvents.length = 0;
+    await new Promise((r) => setTimeout(r, 1100));
+    if (dialogs || handlers.get('diag:status')({}).system.clipboardWatchTextError || !sentEvents.some((e) => e.ch === 'clipboard:item' && e.payload.text === 'после отказа чтения')) throw new Error(`диалогов ${dialogs}, повтор не доставлен или ошибка не сброшена`);
+  } finally { electronStub.clipboard.readText = originalRead; electronStub.dialog.showErrorBox = originalDialog; }
+});
+
+await check('мониторинг: после ошибки создания превью тот же кадр можно обработать снова', async () => {
+  const originalRead = electronStub.clipboard.readImage;
+  const originalDialog = electronStub.dialog.showErrorBox;
+  let dialogs = 0;
+  let attempts = 0;
+  try {
+    electronStub.dialog.showErrorBox = () => { dialogs++; };
+    electronStub.clipboard.readImage = () => ({
+      isEmpty: () => false, getSize: () => ({ width: 30, height: 500 }),
+      toBitmap: () => ({ length: 60000 }), getBitmap: () => ({ length: 60000 }),
+      resize: () => { attempts++; if (attempts === 1) throw new Error('синтетическая ошибка превью'); return { toDataURL: () => 'data:image/png;base64,preview' }; },
+    });
+    sentEvents.length = 0;
+    for (let i = 0; i < 60 && attempts === 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+    if (attempts !== 1 || handlers.get('diag:status')({}).system.clipboardWatchImageIssue !== 'error') throw new Error('диагностика не показала сбой превью');
+    await new Promise((r) => setTimeout(r, 1100));
+    if (dialogs || attempts < 2 || handlers.get('diag:status')({}).system.clipboardWatchImageIssue || !sentEvents.some((e) => e.ch === 'clipboard:item' && e.payload.kind === 'image')) throw new Error(`диалогов ${dialogs}, попыток ${attempts} или ошибка не сброшена`);
+  } finally { electronStub.clipboard.readImage = originalRead; electronStub.dialog.showErrorBox = originalDialog; }
+});
+
 await check('своя вставка не попадает в историю буфера', async () => {
   await handlers.get('text:insert')({}, 'вставленный диктант');
   sentEvents.length = 0;

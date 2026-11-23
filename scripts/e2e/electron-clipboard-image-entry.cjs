@@ -1,6 +1,6 @@
 /** Настоящий preload/IPC и системный буфер одноразового Windows CI. */
 const assert = require('node:assert/strict');
-const { app, BrowserWindow, clipboard } = require('electron');
+const { app, BrowserWindow, clipboard, nativeImage } = require('electron');
 
 if (process.platform !== 'win32' || process.env.CI !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted' || process.env.ZS_CLIPBOARD_IMAGE_E2E !== '1') {
   throw new Error('Проверка буфера разрешена только в изолированном Windows CI');
@@ -68,6 +68,25 @@ app.whenReady().then(async () => {
     assert.ok(entries?.some((item) => item.text === pinnedText && !item.pinned), 'системное событие не появилось в истории');
     const pinned = entries.find((item) => item.id === 'pinned-ci');
     assert.ok(pinned?.pinned && pinned.text === pinnedText && pinned.source === 'исходный источник', 'повтор удалил или изменил закреплённую запись');
+
+    // Подписываемся на настоящий IPC мониторинга, не меняя фильтр UI для
+    // изображений. Синтетический узкий портрет не содержит данных пользователя.
+    await win.webContents.executeJavaScript("window.__testPreview = ''; window.zspeakly.native.onClipboard((item) => { if (item?.kind === 'image') window.__testPreview = item.image; })");
+    const portrait = nativeImage.createFromBitmap(Buffer.alloc(40 * 4000 * 4, 255), { width: 40, height: 4000 });
+    assert.equal(portrait.isEmpty(), false);
+    clipboard.writeImage(portrait);
+    let preview = '';
+    const previewDeadline = Date.now() + 20000;
+    while (Date.now() < previewDeadline && !preview) {
+      preview = await win.webContents.executeJavaScript('window.__testPreview');
+      if (!preview) await wait(200);
+    }
+    assert.ok(preview.startsWith('data:image/png;base64,'), 'мониторинг не прислал изображение');
+    const previewImage = nativeImage.createFromDataURL(preview);
+    assert.equal(previewImage.isEmpty(), false);
+    const previewSize = previewImage.getSize();
+    assert.ok(previewSize.width > 0 && previewSize.width <= 320 && previewSize.height === 320, 'превью не вписано в 320×320');
+    console.log('CLIPBOARD_PREVIEW_E2E_OK');
     await win.webContents.executeJavaScript("window.zspeakly.store.set('zs:settings', { ...window.zspeakly.store.getSync('zs:settings'), clipboardMonitor: false })");
     await wait(700); // ожидаем отложенную запись тестового профиля
     console.log('CLIPBOARD_PIN_E2E_OK');

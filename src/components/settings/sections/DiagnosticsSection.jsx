@@ -638,7 +638,9 @@ export default function DiagnosticsSection() {
         <div className="kv-row">
           <span className="kv-row__key">Мониторинг буфера</span>
           <span className="kv-row__value">
-            {system ? (system.clipboardWatch ? 'включён' : 'выключен') : '—'}
+            {system ? (system.clipboardWatch
+              ? `включён${system.clipboardWatchTextError ? ' · ошибка чтения текста' : ''}${system.clipboardWatchImageIssue === 'error' ? ' · ошибка чтения изображения' : system.clipboardWatchImageIssue === 'size' ? ' · изображение превышает лимит' : ''}`
+              : 'выключен') : '—'}
           </span>
         </div>
         <div className="kv-row">

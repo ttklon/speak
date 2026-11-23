@@ -6418,6 +6418,22 @@ async function scenarioDiagnostics(browser) {
   await page.close();
 }
 
+async function scenarioClipboardMonitorDiagnostics(browser) {
+  const cases = [
+    { system: { clipboardWatch: true, clipboardWatchTextError: true, clipboardWatchImageIssue: 'error' }, words: ['включён', 'ошибка чтения текста', 'ошибка чтения изображения'] },
+    { system: { clipboardWatch: true, clipboardWatchImageIssue: 'size' }, words: ['включён', 'изображение превышает лимит'] },
+    { system: { clipboardWatch: false, clipboardWatchTextError: true, clipboardWatchImageIssue: 'error' }, words: ['выключен'], absent: 'ошибка чтения' },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const page = await openPage(browser, '#/settings?section=diagnostics&from=home', { settle: 600, storeSeed: { 'zs.mockSystem': item.system } });
+    const row = await page.evaluate(() => [...document.querySelectorAll('.kv-row')].find((el) => /Мониторинг буфера/.test(el.innerText))?.innerText || '');
+    record('диагностика', `буфер: состояние опроса ${index + 1} видно без данных содержимого`, item.words.every((word) => row.includes(word)) && (!item.absent || !row.includes(item.absent)));
+    const errors = takeErrors(page);
+    record('диагностика', `буфер: состояние опроса ${index + 1} без ошибок консоли`, errors.length === 0, errors[0] || '');
+    await page.close();
+  }
+}
+
 // В браузере моста нет: отчёт должен скачиваться файлом, а не молчать.
 async function scenarioDiagnosticsBrowser(browser) {
   const page = await openPage(browser, '#/settings?section=diagnostics&from=home', { settle: 500 });
@@ -9118,6 +9134,7 @@ async function main() {
       ['хранилище заполнено', scenarioStorageFull],
       ['ошибка хранилища Electron', scenarioElectronStorageError],
       ['диагностика', scenarioDiagnostics],
+      ['диагностика мониторинга буфера', scenarioClipboardMonitorDiagnostics],
       ['диагностика без моста', scenarioDiagnosticsBrowser],
       ['модель в памяти', scenarioWarmModel],
       ['отмена скачивания модели', scenarioModelCancel],

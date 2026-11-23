@@ -33,7 +33,7 @@ const entry = path.resolve('scripts/e2e/electron-clipboard-image-entry.cjs');
         child.once('close', (code, signal) => resolve({ code, signal }));
       });
     } finally { clearTimeout(timer); }
-    if (timedOut || result.code !== 0 || !output.includes('CLIPBOARD_IMAGE_E2E_OK') || !output.includes('CLIPBOARD_PIN_E2E_OK')) {
+    if (timedOut || result.code !== 0 || !output.includes('CLIPBOARD_IMAGE_E2E_OK') || !output.includes('CLIPBOARD_PIN_E2E_OK') || !output.includes('CLIPBOARD_PREVIEW_E2E_OK')) {
       throw new Error(`Electron clipboard: ${timedOut ? 'timeout' : `${result.code}/${result.signal}`}\n${output}`);
     }
     const profile = JSON.parse(fs.readFileSync(path.join(root, 'profile.json'), 'utf8'));
@@ -41,7 +41,7 @@ const entry = path.resolve('scripts/e2e/electron-clipboard-image-entry.cjs');
     if (!original?.pinned || original.text !== pinned.text || original.source !== pinned.source || original.createdAt !== pinned.createdAt) {
       throw new Error('Закреплённая запись не сохранена в тестовом профиле');
     }
-    console.log('CLIPBOARD_IMAGE_E2E_OK CLIPBOARD_PIN_E2E_OK: реальный IPC, системный буфер и сохранение закреплённого на изолированном Windows CI');
+    console.log('CLIPBOARD_IMAGE_E2E_OK CLIPBOARD_PIN_E2E_OK CLIPBOARD_PREVIEW_E2E_OK: реальный IPC, системный буфер, закрепление и превью на изолированном Windows CI');
   } finally {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }

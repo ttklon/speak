@@ -391,7 +391,12 @@ const logger = {
           sys.insertSupported ? '' : ' (системой не поддержано)'
         }`,
       );
-      lines.push(`мониторинг буфера: ${sys.clipboardWatch ? 'включён' : 'выключен'}`);
+      const clipboardProblems = sys.clipboardWatch ? [
+        sys.clipboardWatchTextError && 'ошибка чтения текста',
+        sys.clipboardWatchImageIssue === 'error' && 'ошибка чтения изображения',
+        sys.clipboardWatchImageIssue === 'size' && 'изображение превышает лимит',
+      ].filter(Boolean) : [];
+      lines.push(`мониторинг буфера: ${sys.clipboardWatch ? 'включён' : 'выключен'}${clipboardProblems.length ? ` · ${clipboardProblems.join(' · ')}` : ''}`);
       lines.push(`горячий микрофон: ${sys.micPreroll ? 'включён' : 'выключен'}`);
       lines.push(`автозапуск: ${sys.autoLaunch ? 'включён' : 'выключен'}`);
       lines.push(
