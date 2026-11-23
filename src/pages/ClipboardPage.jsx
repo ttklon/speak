@@ -196,7 +196,7 @@ export default function ClipboardPage() {
         try {
           addClipboardItem({
             kind: 'file',
-            text: `Запись экрана · ${formatSeconds(result.durationMs)} · ${result.sizeMb} МБ`,
+            text: `Запись экрана · ${formatSeconds(result.durationMs)} · ${result.sizeMb} МБ${result.hasAudioTrack ? '' : ' · без звука'}`,
             image: result.poster || '',
             source: 'Запись экрана — ZSpeakly',
             createdAt: Date.now(),
@@ -228,8 +228,8 @@ export default function ClipboardPage() {
   };
 
   /** Запись экрана: один обработчик результата для кнопки и системной остановки. */
-  const toggleRecording = async () => {
-    if (captureStarting.current || captureStopping.current || savingVideoRef.current) return;
+  const toggleRecording = async ({ audio = true } = {}) => {
+    if (!mounted.current || captureStarting.current || captureStopping.current || savingVideoRef.current) return;
     if (pendingVideoRef.current) {
       push({ title: 'Сначала сохраните или удалите предыдущую запись', tone: 'warn' });
       return;
@@ -263,7 +263,7 @@ export default function ClipboardPage() {
     }
     captureStarting.current = true;
     try {
-      const rec = await startScreenRecording({ onTick: (ms) => { if (mounted.current) setRecordMs(ms); } });
+      const rec = await startScreenRecording({ audio, onTick: (ms) => { if (mounted.current) setRecordMs(ms); } });
       // Системный выбор может завершиться уже после ухода со страницы.
       if (!mounted.current) {
         rec.cancel();
@@ -272,7 +272,11 @@ export default function ClipboardPage() {
       recordingRef.current = rec;
       setRecordMs(0);
       setRecording(rec);
-      push({ title: 'Запись пошла', description: 'Нажмите «Запись экрана» ещё раз, чтобы остановить. При уходе со страницы запись отменится.', tone: 'success' });
+      push({
+        title: 'Запись пошла',
+        description: `${rec.hasAudioTrack ? 'Аудиодорожка получена.' : 'Запись идёт без системного звука.'} Нажмите «Запись экрана» ещё раз, чтобы остановить. При уходе со страницы запись отменится.`,
+        tone: rec.hasAudioTrack ? 'success' : 'warn',
+      });
       rec.finished.then(async (result) => {
         // Отмена на уходе и ошибка stop не должны запускать сохранение.
         if (!mounted.current || recordingRef.current !== rec) return;
@@ -302,11 +306,30 @@ export default function ClipboardPage() {
         }
       });
     } catch (err) {
-      if (mounted.current) push({
-        title: 'Не удалось начать запись',
-        description: err?.name === 'NotAllowedError' ? 'Выбор экрана отменён' : String(err?.message || err),
-        tone: 'warn',
-      });
+      if (mounted.current) {
+        const retryWithoutAudio = audio && err?.name === 'NotReadableError';
+        push({
+          title: 'Не удалось начать запись',
+          description: retryWithoutAudio
+            ? 'Не удалось открыть источник экрана или звука. Можно отдельно попробовать запись без системного звука.'
+            : err?.name === 'NotAllowedError' ? 'Выбор экрана отменён' : String(err?.message || err),
+          tone: 'warn',
+          ...(retryWithoutAudio ? {
+            ttl: 0,
+            action: {
+              label: 'Записать без звука',
+              onClick: () => {
+                if (!mounted.current) return;
+                if (recordingRef.current || captureStarting.current || captureStopping.current || savingVideoRef.current || pendingVideoRef.current) {
+                  push({ title: 'Новая запись сейчас недоступна', tone: 'warn' });
+                  return;
+                }
+                void toggleRecording({ audio: false });
+              },
+            },
+          } : {}),
+        });
+      }
     } finally {
       captureStarting.current = false;
     }
@@ -601,7 +624,7 @@ export default function ClipboardPage() {
         })}
       </div>
       <p className="page__sub">Запись экрана останавливается примерно при 48 МиБ или примерно через 10 минут. При превышении 64 МиБ видео не сохранится.</p>
-      {recording ? <p className="page__sub" role="status">При переходе на другую страницу запись отменится и не сохранится. Сначала остановите её здесь.</p> : null}
+      {recording ? <p className="page__sub" role="status">{recording.hasAudioTrack ? 'Аудиодорожка получена; наличие звука в записи не гарантировано. ' : 'Запись идёт без системного звука. '}При переходе на другую страницу запись отменится и не сохранится. Сначала остановите её здесь.</p> : null}
       {pendingVideo ? (
         <div className="stack-8" role="status">
           <p className="page__sub">{savingVideo ? 'Сохраняем запись…' : 'Запись осталась только в памяти. При уходе со страницы или закрытии приложения она будет потеряна.'}</p>

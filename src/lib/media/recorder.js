@@ -36,6 +36,12 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
       try { track.stop(); } catch { /* остальные дорожки всё равно нужно остановить */ }
     });
   };
+  const audioTracks = stream.getTracks().filter((track) => track.kind === 'audio');
+  if (!audio && audioTracks.length) {
+    stopTracks();
+    throw new Error('Источник вернул звук при запросе без звука');
+  }
+  const hasAudioTrack = audioTracks.some((track) => track.readyState !== 'ended' && track.enabled !== false);
   let mimeType;
   let recorder;
   try {
@@ -108,6 +114,7 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
           durationMs: Date.now() - startedAt,
           sizeMb: Math.round((output.size / (1024 * 1024)) * 10) / 10,
           interrupted,
+          hasAudioTrack,
           limitReason: cancelled ? '' : limitReason,
         });
       } catch {
@@ -132,6 +139,7 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
 
   return {
     mimeType,
+    hasAudioTrack,
     stop: () => {
       if (recorder.state !== 'inactive') recorder.stop();
       return finished;

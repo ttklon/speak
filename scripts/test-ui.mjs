@@ -3181,6 +3181,84 @@ async function scenarioScreenRecordingCleanup(browser) {
   await page.close();
 }
 
+async function scenarioScreenRecordingNoAudio(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__screenAttempts = [];
+    window.__screenMode = 'denied';
+    window.__screenStops = 0;
+    Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: async (opts) => {
+      window.__screenAttempts.push(opts.audio);
+      if (window.__screenMode === 'denied') throw new DOMException('Denied', 'NotAllowedError');
+      if (opts.audio && window.__screenMode === 'audio-error') throw new DOMException('Could not start audio source', 'NotReadableError');
+      const tracks = [{ kind: 'video', stop() {} }];
+      if (opts.audio && window.__screenMode === 'with-audio') tracks.push({ kind: 'audio', stop() {} });
+      return { getTracks: () => tracks };
+    } });
+    window.MediaRecorder = class {
+      static isTypeSupported() { return true; }
+      constructor() { this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() { window.__screenStops++; this.state = 'inactive'; this.ondataavailable?.({ data: new Blob(['video']) }); this.onstop?.(); }
+    };
+  });
+  const button = '.clip-hotkey[title^="Запись экрана"]';
+  await page.click(button);
+  await sleep(300);
+  let state = await page.evaluate(() => ({ attempts: window.__screenAttempts.length, body: document.body.innerText }));
+  record('приватность', 'запись экрана: отказ разрешения не запускает повтор и не предлагает обход', state.attempts === 1 && /Выбор экрана отменён/.test(state.body) && !/Записать без звука/.test(state.body));
+  await page.evaluate(() => { window.__screenMode = 'audio-error'; });
+  await page.click(button);
+  await sleep(300);
+  state = await page.evaluate(() => ({ attempts: window.__screenAttempts.length, body: document.body.innerText }));
+  record('приватность', 'запись экрана: ошибка устройства не запускает повтор без согласия', state.attempts === 2 && /Записать без звука/.test(state.body));
+  await page.evaluate(() => [...document.querySelectorAll('.toast__action')].find((b) => /Записать без звука/.test(b.innerText))?.click());
+  await sleep(300);
+  state = await page.evaluate(() => ({ attempts: window.__screenAttempts, body: document.body.innerText, stops: window.__screenStops }));
+  record('приватность', 'запись экрана: после явного выбора запрашивается видео без аудио и есть предупреждение', state.attempts.length === 3 && state.attempts[2] === false && /Остановить/.test(state.body) && /Запись идёт без системного звука/.test(state.body) && state.stops === 0);
+  await page.evaluate(() => { location.hash = '#/'; });
+  await sleep(300);
+  await page.evaluate(() => { location.hash = '#/clipboard'; window.__screenMode = 'audio-error'; });
+  await sleep(500);
+  await page.click(button);
+  await sleep(250);
+  await page.evaluate(() => { window.__screenMode = 'with-audio'; });
+  await page.click(button);
+  await sleep(250);
+  state = await page.evaluate(() => ({ attempts: window.__screenAttempts.length, stops: window.__screenStops, body: document.body.innerText }));
+  record('приватность', 'запись экрана: наличие аудиодорожки не обещает, что звук реально записан', /Аудиодорожка получена; наличие звука в записи не гарантировано/.test(state.body));
+  const beforeOldAction = state;
+  await page.evaluate(() => [...document.querySelectorAll('.toast__action')].find((b) => /Записать без звука/.test(b.innerText))?.click());
+  await sleep(250);
+  state = await page.evaluate(() => ({ attempts: window.__screenAttempts.length, stops: window.__screenStops, body: document.body.innerText }));
+  record('приватность', 'запись экрана: устаревшая кнопка повтора не останавливает текущую запись', state.attempts === beforeOldAction.attempts && state.stops === beforeOldAction.stops && /Новая запись сейчас недоступна/.test(state.body));
+  await page.evaluate(() => { location.hash = '#/'; });
+  await sleep(300);
+  await page.evaluate(() => { location.hash = '#/clipboard'; window.__screenMode = 'audio-error'; });
+  await sleep(500);
+  await page.click(button);
+  await sleep(250);
+  const attemptsBeforeExit = await page.evaluate(() => window.__screenAttempts.length);
+  await page.evaluate(() => { location.hash = '#/'; });
+  await sleep(300);
+  await page.evaluate(() => [...document.querySelectorAll('.toast__action')].find((b) => /Записать без звука/.test(b.innerText))?.click());
+  await sleep(250);
+  state = await page.evaluate(() => ({ attempts: window.__screenAttempts.length }));
+  record('приватность', 'запись экрана: повтор после ухода со страницы не запускает захват', state.attempts === attemptsBeforeExit);
+  await page.evaluate(() => { location.hash = '#/clipboard'; window.__screenMode = 'no-audio'; });
+  await sleep(500);
+  await page.click(button);
+  await sleep(300);
+  state = await page.evaluate(() => ({ body: document.body.innerText, attempts: window.__screenAttempts }));
+  record('приватность', 'запись экрана: отсутствие аудиодорожки при успешном запросе не скрывается', Boolean(state.attempts.at(-1)) && /Запись идёт без системного звука/.test(state.body));
+  await page.evaluate(() => { location.hash = '#/'; });
+  await sleep(300);
+  const errors = takeErrors(page);
+  record('приватность', 'запись экрана: сценарий без аудио не вызывает ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioScreenRecordingLimits(browser) {
   const page = await openPage(browser, '#/clipboard', { settle: 500 });
   takeErrors(page);
@@ -8896,6 +8974,7 @@ async function main() {
       ['захват экрана при уходе', scenarioScreenRecordingCleanup],
       ['сохранение записи экрана', scenarioScreenRecordingSave],
       ['ограничения записи экрана', scenarioScreenRecordingLimits],
+      ['запись экрана без аудио', scenarioScreenRecordingNoAudio],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['прямые ссылки', scenarioDeepLinks],

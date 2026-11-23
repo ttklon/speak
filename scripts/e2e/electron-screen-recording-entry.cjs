@@ -44,13 +44,18 @@ app.whenReady().then(async () => {
     if (!devices?.getDisplayMedia) return;
     const original = devices.getDisplayMedia.bind(devices);
     Object.defineProperty(devices, 'getDisplayMedia', { configurable: true, value: (...args) => {
+      const attempt = { audioRequested: Boolean(args[0]?.audio), audioTracks: null };
+      (window.__screenCaptureAttempts ||= []).push(attempt);
       try {
-        return original(...args).catch((error) => {
-          window.__screenCaptureError = { name: error?.name || '', message: String(error?.message || '').slice(0, 300) };
+        return original(...args).then((stream) => {
+          attempt.audioTracks = stream.getAudioTracks().length;
+          return stream;
+        }).catch((error) => {
+          attempt.error = window.__screenCaptureError = { name: error?.name || '', message: String(error?.message || '').slice(0, 300) };
           throw error;
         });
       } catch (error) {
-        window.__screenCaptureError = { name: error?.name || '', message: String(error?.message || '').slice(0, 300) };
+        attempt.error = window.__screenCaptureError = { name: error?.name || '', message: String(error?.message || '').slice(0, 300) };
         throw error;
       }
     } });
@@ -71,17 +76,33 @@ app.whenReady().then(async () => {
 
   const click = `(() => { const b = document.querySelector('.clip-hotkey[title^="Запись экрана"]'); if (!b) return false; b.click(); return true; })()`;
   if (!(await evaluate(click))) throw new Error('Не найдена кнопка записи');
-  await until(async () => {
-    const status = await evaluate(`(() => {
-      const error = [...document.querySelectorAll('.toast')].find(e => /Не удалось начать запись|Запись экрана недоступна/.test(e.innerText));
-      return { running: Boolean([...document.querySelectorAll('.clip-hotkey__title')].find(e => /Остановить/.test(e.innerText))),
-        failed: Boolean(error), description: error?.querySelector('.toast__desc')?.innerText?.slice(0, 300) || '',
-        focus: document.hasFocus(), visibility: document.visibilityState, activation: navigator.userActivation?.isActive ?? null,
-        captureError: window.__screenCaptureError || null };
-    })()`);
-    if (status.failed) throw new Error(`Настоящий getDisplayMedia не запустился: ${JSON.stringify({ ...status, windowFocused: win.isFocused(), windowVisible: win.isVisible() })}`);
-    return status.running;
-  }, 'старт записи');
+  const readStatus = () => evaluate(`(() => {
+    const error = [...document.querySelectorAll('.toast')].find(e => /Не удалось начать запись|Запись экрана недоступна/.test(e.innerText));
+    return { running: Boolean([...document.querySelectorAll('.clip-hotkey__title')].find(e => /Остановить/.test(e.innerText))),
+      failed: Boolean(error), description: error?.querySelector('.toast__desc')?.innerText?.slice(0, 300) || '',
+      focus: document.hasFocus(), visibility: document.visibilityState, activation: navigator.userActivation?.isActive ?? null,
+      captureError: window.__screenCaptureError || null, attempts: window.__screenCaptureAttempts || [],
+      noAudioWarning: document.body.innerText.includes('Запись идёт без системного звука') };
+  })()`);
+  let status;
+  await until(async () => { status = await readStatus(); return status.running || status.failed; }, 'первый запрос записи');
+  let usedNoAudio = false;
+  if (!status.running) {
+    if (status.captureError?.name !== 'NotReadableError') throw new Error(`Настоящий getDisplayMedia не запустился: ${JSON.stringify({ ...status, windowFocused: win.isFocused(), windowVisible: win.isVisible() })}`);
+    const clicked = await evaluate(`(() => { const b = [...document.querySelectorAll('.toast__action')].find(e => /Записать без звука/.test(e.innerText)); if (!b) return false; b.click(); return true; })()`);
+    if (!clicked) throw new Error('Ошибка источника не предложила явную запись без звука');
+    usedNoAudio = true;
+    await until(async () => {
+      status = await readStatus();
+      if (status.attempts[1]?.error) throw new Error(`Запись без звука не запустилась: ${JSON.stringify(status)}`);
+      return status.running;
+    }, 'старт записи без звука');
+  }
+  const lastAttempt = status.attempts.at(-1);
+  if (!lastAttempt || lastAttempt.audioTracks === null || (usedNoAudio && (lastAttempt.audioRequested || lastAttempt.audioTracks !== 0)) || (lastAttempt.audioTracks === 0 && !status.noAudioWarning)) {
+    throw new Error(`Неверное состояние звука: ${JSON.stringify(status)}`);
+  }
+  const audioMode = lastAttempt.audioTracks ? 'audio-track' : 'no-audio';
   await wait(4000);
   if (!(await evaluate(click))) throw new Error('Не найдена кнопка остановки');
   await until(async () => {
@@ -126,7 +147,7 @@ app.whenReady().then(async () => {
   if (video.width < 32 || video.height < 32 || video.currentTime <= 0 || video.green < 400) {
     throw new Error(`Видео не воспроизвело синтетический экран: ${JSON.stringify(video)}`);
   }
-  console.log(`SCREEN_E2E_OK bytes=${data.length} frame=${video.width}x${video.height} green=${video.green} time=${video.currentTime.toFixed(2)}`);
+  console.log(`SCREEN_E2E_OK mode=${audioMode} retry=${usedNoAudio} bytes=${data.length} frame=${video.width}x${video.height} green=${video.green} time=${video.currentTime.toFixed(2)}`);
   target.destroy();
   app.quit();
 }).catch(fail);

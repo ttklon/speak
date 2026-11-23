@@ -94,6 +94,32 @@ describe('запись экрана', () => {
     rec.cancel();
   });
 
+  it('возвращает признак отсутствия звука, если источник не предоставил аудиодорожку', async () => {
+    installMedia();
+    installDisplay();
+    const rec = await startScreenRecording({ audio: true });
+    expect(rec.hasAudioTrack).toBe(false);
+    rec.cancel();
+  });
+
+  it('сообщает о наличии запрошенной аудиодорожки', async () => {
+    installMedia();
+    const tracks = [{ kind: 'video', stop: vi.fn() }, { kind: 'audio', stop: vi.fn() }];
+    vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: async () => ({ getTracks: () => tracks }) } });
+    const rec = await startScreenRecording({ audio: true });
+    expect(rec.hasAudioTrack).toBe(true);
+    rec.cancel();
+  });
+
+  it('при запросе без аудио не начинает запись, если источник неожиданно вернул звук', async () => {
+    const { instances } = installMedia();
+    const tracks = [{ kind: 'video', stop: vi.fn() }, { kind: 'audio', stop: vi.fn() }];
+    vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: async () => ({ getTracks: () => tracks }) } });
+    await expect(startScreenRecording({ audio: false })).rejects.toThrow(/звук/i);
+    expect(instances.length).toBe(0);
+    expect(tracks.every((track) => track.stop.mock.calls.length > 0)).toBe(true);
+  });
+
   it('отмена останавливает дорожки и не отдаёт данные', async () => {
     vi.useFakeTimers();
     installMedia();

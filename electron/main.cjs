@@ -2947,19 +2947,23 @@ function registerIpc() {
   });
 
   // Выбор источника для getDisplayMedia (запись экрана / системный звук)
-  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
-    const { desktopCapturer } = require('electron');
-    const sources = await desktopCapturer.getSources({ types: ['screen'] });
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    let sources;
+    try {
+      const { desktopCapturer } = require('electron');
+      sources = await desktopCapturer.getSources({ types: ['screen'] });
+    } catch {
+      callback({});
+      return;
+    }
     if (!sources.length) {
       callback({});
       return;
     }
-    const wantsSystemAudio = process.platform === 'win32';
-    callback(
-      wantsSystemAudio
-        ? { video: sources[0], audio: 'loopback' }
-        : { video: sources[0] },
-    );
+    // При явном запросе без звука не включаем loopback и не заставляем
+    // Chromium открывать отсутствующий аудиоисточник.
+    const wantsSystemAudio = process.platform === 'win32' && request.audioRequested === true;
+    callback(wantsSystemAudio ? { video: sources[0], audio: 'loopback' } : { video: sources[0] });
   });
 }
 

@@ -35,6 +35,7 @@ const sentInputEvents = [];
 const clipboardText = { value: 'выделенный текст' };
 const clipboardImage = { value: null };
 const clipboardReads = { text: 0, image: 0 };
+let displayMediaHandler;
 
 const windowInstances = [];
 
@@ -239,7 +240,7 @@ const electronStub = {
       workArea: { x: 1920, y: 0, width: 2560, height: 1400 },
     }),
   },
-  session: { defaultSession: { setDisplayMediaRequestHandler: () => {} } },
+  session: { defaultSession: { setDisplayMediaRequestHandler: (handler) => { displayMediaHandler = handler; } } },
   desktopCapturer: { getSources: async () => [] },
 };
 
@@ -975,6 +976,36 @@ await check('app:open-external пускает только наши ссылки
     const res = await handlers.get('app:open-external')({}, bad);
     if (res) throw new Error(`пропущена чужая ссылка: ${bad}`);
     opened.push(bad);
+  }
+});
+
+await check('захват экрана: loopback только при явном запросе звука, отказ источника завершает запрос', async () => {
+  const stub = electronStub.desktopCapturer;
+  const original = stub.getSources;
+  const realPlatform = process.platform;
+  const source = { id: 'screen:test' };
+  const ask = async (audioRequested) => {
+    let response;
+    let called = 0;
+    await displayMediaHandler({ videoRequested: true, audioRequested }, (value) => { response = value; called++; });
+    if (called !== 1) throw new Error(`callback вызван ${called} раз`);
+    return response;
+  };
+  try {
+    if (typeof displayMediaHandler !== 'function') throw new Error('обработчик не зарегистрирован');
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    stub.getSources = async () => [source];
+    const withAudio = await ask(true);
+    const withoutAudio = await ask(false);
+    if (withAudio.video !== source || withAudio.audio !== 'loopback') throw new Error('запрос звука не передан');
+    if (withoutAudio.video !== source || Object.hasOwn(withoutAudio, 'audio')) throw new Error('loopback передан без запроса');
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    if (Object.hasOwn(await ask(true), 'audio')) throw new Error('loopback добавлен на Linux');
+    stub.getSources = async () => { throw new Error('источник недоступен'); };
+    if (Object.keys(await ask(false)).length !== 0) throw new Error('ошибка источника выдана за успех');
+  } finally {
+    stub.getSources = original;
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
   }
 });
 
