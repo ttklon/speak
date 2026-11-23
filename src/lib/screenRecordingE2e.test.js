@@ -24,6 +24,8 @@ describe('реальная проверка записи экрана', () => {
     expect(entry).toContain('.clip-hotkey[title^="Запись экрана"]');
     expect(entry).toContain('video.play()');
     expect(entry).toContain('ctx.drawImage(video');
+    expect(entry).toContain('const original = devices.getDisplayMedia.bind(devices)');
+    expect(entry).toContain('return original(...args).catch');
     expect(entry).toContain("'1a45dfa3'");
     expect(entry).not.toContain('window.MediaRecorder =');
     expect(entry).not.toContain('getDisplayMedia =');

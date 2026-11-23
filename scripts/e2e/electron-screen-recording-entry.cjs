@@ -37,6 +37,24 @@ app.whenReady().then(async () => {
   const evaluate = (code) => win.webContents.executeJavaScript(code, true);
   await evaluate("location.hash = '#/clipboard'");
   await until(() => evaluate('Boolean(document.querySelector(\'.clip-hotkey[title^="Запись экрана"]\'))'), 'страница буфера');
+  // Только диагностика: немедленно вызываем настоящий getDisplayMedia и
+  // сохраняем имя/сообщение ошибки; поток и результат не подменяются.
+  await evaluate(`(() => {
+    const devices = navigator.mediaDevices;
+    if (!devices?.getDisplayMedia) return;
+    const original = devices.getDisplayMedia.bind(devices);
+    Object.defineProperty(devices, 'getDisplayMedia', { configurable: true, value: (...args) => {
+      try {
+        return original(...args).catch((error) => {
+          window.__screenCaptureError = { name: error?.name || '', message: String(error?.message || '').slice(0, 300) };
+          throw error;
+        });
+      } catch (error) {
+        window.__screenCaptureError = { name: error?.name || '', message: String(error?.message || '').slice(0, 300) };
+        throw error;
+      }
+    } });
+  })()`);
   win.show();
   win.focus();
 
@@ -54,9 +72,14 @@ app.whenReady().then(async () => {
   const click = `(() => { const b = document.querySelector('.clip-hotkey[title^="Запись экрана"]'); if (!b) return false; b.click(); return true; })()`;
   if (!(await evaluate(click))) throw new Error('Не найдена кнопка записи');
   await until(async () => {
-    const status = await evaluate(`({ running: Boolean([...document.querySelectorAll('.clip-hotkey__title')].find(e => /Остановить/.test(e.innerText))),
-      failed: /Не удалось начать запись|Запись экрана недоступна/.test(document.body.innerText) })`);
-    if (status.failed) throw new Error('Настоящий getDisplayMedia не запустился');
+    const status = await evaluate(`(() => {
+      const error = [...document.querySelectorAll('.toast')].find(e => /Не удалось начать запись|Запись экрана недоступна/.test(e.innerText));
+      return { running: Boolean([...document.querySelectorAll('.clip-hotkey__title')].find(e => /Остановить/.test(e.innerText))),
+        failed: Boolean(error), description: error?.querySelector('.toast__desc')?.innerText?.slice(0, 300) || '',
+        focus: document.hasFocus(), visibility: document.visibilityState, activation: navigator.userActivation?.isActive ?? null,
+        captureError: window.__screenCaptureError || null };
+    })()`);
+    if (status.failed) throw new Error(`Настоящий getDisplayMedia не запустился: ${JSON.stringify({ ...status, windowFocused: win.isFocused(), windowVisible: win.isVisible() })}`);
     return status.running;
   }, 'старт записи');
   await wait(4000);
