@@ -1274,6 +1274,20 @@ await check('запись экрана: пустые и повреждённые
   }
 });
 
+await check('запись экрана: IPC отклоняет данные больше 64 МиБ до создания файла', async () => {
+  const save = handlers.get('app:save-file');
+  const target = path.join(userData, 'zs-test-oversize.webm');
+  const encoded = 'A'.repeat(4 * Math.ceil((64 * 1024 * 1024) / 3) + 4);
+  try {
+    const result = await save({}, { name: 'zs-test-oversize.webm', base64: encoded });
+    if (result?.ok || fs.existsSync(target)) throw new Error('слишком большой файл создан');
+    // Та же длина base64 может означать на 1–2 лишних байта без padding.
+    const boundary = 'A'.repeat(4 * Math.ceil((64 * 1024 * 1024) / 3));
+    const noPadding = await save({}, { name: 'zs-test-oversize.webm', base64: boundary });
+    if (noPadding?.ok || fs.existsSync(target)) throw new Error('на границе размера создан слишком большой файл');
+  } finally { fs.rmSync(target, { force: true }); }
+});
+
 await check('запись экрана: ошибка записи не оставляет частичный файл', async () => {
   const save = handlers.get('app:save-file');
   const realWrite = fs.writeFileSync;

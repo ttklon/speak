@@ -13,6 +13,15 @@ describe('сохранение записи экрана', () => {
     for (let i = 0; i < bytes.length; i++) if (decoded.charCodeAt(i) !== bytes[i]) throw new Error(`byte ${i}`);
   });
 
+  it('не читает слишком большой Blob в память и не вызывает мост', async () => {
+    const saveFile = vi.fn();
+    const readAsDataURL = vi.fn();
+    vi.stubGlobal('FileReader', class { readAsDataURL = readAsDataURL; });
+    await expect(saveScreenRecording({ size: 64 * 1024 * 1024 + 1 }, 'test.webm', { saveFile })).rejects.toThrow(/размер/i);
+    expect(readAsDataURL).not.toHaveBeenCalled();
+    expect(saveFile).not.toHaveBeenCalled();
+  });
+
   it('отказ или исключение моста не выдаётся за успех', async () => {
     const blob = new Blob(['video']);
     await expect(saveScreenRecording(blob, 'test.webm', { saveFile: async () => ({ ok: false }) })).rejects.toThrow();

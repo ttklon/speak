@@ -202,14 +202,16 @@ export default function ClipboardPage() {
             createdAt: Date.now(),
           });
         } catch { historyFailed = true; }
-        const notes = [result.interrupted && 'Видео может быть неполным.', historyFailed && 'Не удалось добавить запись в историю.', saved.path || 'Файл в папке Видео.'].filter(Boolean).join(' ');
+        const limitNote = result.limitReason === 'size' ? 'Запись остановлена по размеру.' : result.limitReason === 'duration' ? 'Запись остановлена по времени.' : '';
+        const notes = [limitNote, result.interrupted && 'Видео может быть неполным.', historyFailed && 'Не удалось добавить запись в историю.', saved.path || 'Файл в папке Видео.'].filter(Boolean).join(' ');
         push({
-          title: result.interrupted ? 'Запись могла прерваться' : 'Запись сохранена',
+          title: result.interrupted ? 'Запись могла прерваться' : limitNote ? 'Запись остановлена по ограничению' : 'Запись сохранена',
           description: notes,
-          tone: result.interrupted || historyFailed ? 'warn' : 'success',
+          tone: result.interrupted || historyFailed || limitNote ? 'warn' : 'success',
         });
       } else {
-        push({ title: 'Загрузка запрошена', description: result.interrupted ? 'Запись могла прерваться. Проверьте файл в браузере.' : 'Проверьте, что браузер сохранил файл.', tone: result.interrupted ? 'warn' : 'success' });
+        const limited = result.limitReason === 'size' || result.limitReason === 'duration';
+        push({ title: 'Загрузка запрошена', description: result.interrupted || limited ? 'Запись прервана или остановлена по ограничению. Проверьте файл в браузере.' : 'Проверьте, что браузер сохранил файл.', tone: result.interrupted || limited ? 'warn' : 'success' });
       }
     } catch {
       if (mounted.current) push({
@@ -279,7 +281,11 @@ export default function ClipboardPage() {
         setRecording(null);
         if (!result?.blob?.size) {
           captureStopping.current = false;
-          push({ title: 'Запись пустая', tone: 'warn' });
+          if (result?.limitReason === 'overflow') {
+            push({ title: 'Запись не сохранена', description: 'Фрагмент превысил предел 64 МиБ; неполное видео не сохранялось.', tone: 'warn', ttl: 9000 });
+          } else {
+            push({ title: 'Запись пустая', tone: 'warn' });
+          }
           return;
         }
         const pending = { ...result, name: `ZSpeakly-${Date.now()}.webm` };
@@ -594,6 +600,7 @@ export default function ClipboardPage() {
           );
         })}
       </div>
+      <p className="page__sub">Запись экрана останавливается примерно при 48 МиБ или примерно через 10 минут. При превышении 64 МиБ видео не сохранится.</p>
       {recording ? <p className="page__sub" role="status">При переходе на другую страницу запись отменится и не сохранится. Сначала остановите её здесь.</p> : null}
       {pendingVideo ? (
         <div className="stack-8" role="status">

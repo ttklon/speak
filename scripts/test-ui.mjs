@@ -3181,6 +3181,53 @@ async function scenarioScreenRecordingCleanup(browser) {
   await page.close();
 }
 
+async function scenarioScreenRecordingLimits(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__limitSaves = 0;
+    window.zspeakly.native.saveFile = async () => { window.__limitSaves++; return { ok: true, path: 'C:\\Videos\\limited.webm' }; };
+    Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: async () => ({ getTracks: () => [{ kind: 'video', stop() {} }] }) });
+    window.MediaRecorder = class {
+      static isTypeSupported() { return true; }
+      constructor() { window.__limitRecorder = this; this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        this.ondataavailable?.({ data: new Blob(['final']) });
+        this.onstop?.();
+      }
+    };
+  });
+  const initial = await page.evaluate(() => document.body.innerText);
+  record('сохранность', 'запись экрана: лимиты и риск потери указаны до запуска', /48 МиБ/.test(initial) && /10 минут/.test(initial) && /64 МиБ видео не сохранится/.test(initial));
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(250);
+  // Размер фрагмента подменён: проверяем логику UI, а не настоящий файл 48 МиБ.
+  await page.evaluate(() => window.__limitRecorder.ondataavailable({ data: { size: 48 * 1024 * 1024 } }));
+  await sleep(2800);
+  let state = await page.evaluate(() => ({ saved: window.__limitSaves, body: document.body.innerText, title: [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '' }));
+  record('сохранность', 'запись экрана: при лимите размера завершение и сохранение с предупреждением', state.saved === 1 && /Запись остановлена по ограничению/.test(state.title) && /остановлена по размеру/.test(state.body));
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(250);
+  await page.evaluate(() => window.__limitRecorder.ondataavailable({ data: { size: 64 * 1024 * 1024 + 1 } }));
+  await sleep(400);
+  state = await page.evaluate(() => ({ saved: window.__limitSaves, body: document.body.innerText, title: [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '' }));
+  record('сохранность', 'запись экрана: слишком большой фрагмент не выдаётся за сохранённое видео', state.saved === 1 && /Запись не сохранена/.test(state.title) && /предел 64 МиБ/.test(state.body));
+  await page.evaluate(() => {
+    window.__realTimeout = window.setTimeout;
+    window.setTimeout = (fn, ms, ...args) => window.__realTimeout(fn, ms === 600000 ? 40 : ms, ...args);
+  });
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(2800);
+  state = await page.evaluate(() => ({ saved: window.__limitSaves, body: document.body.innerText, title: [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '' }));
+  record('сохранность', 'запись экрана: остановка по времени сообщает причину и сохраняет результат', state.saved === 2 && /Запись остановлена по ограничению/.test(state.title) && /остановлена по времени/.test(state.body));
+  await page.evaluate(() => { window.setTimeout = window.__realTimeout; });
+  const errors = takeErrors(page);
+  record('сохранность', 'запись экрана: сценарий ограничений без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioScreenRecordingSave(browser) {
   const page = await openPage(browser, '#/clipboard', { settle: 500 });
   takeErrors(page);
@@ -8848,6 +8895,7 @@ async function main() {
       ['копирование изображения буфера', scenarioClipboardImageCopy],
       ['захват экрана при уходе', scenarioScreenRecordingCleanup],
       ['сохранение записи экрана', scenarioScreenRecordingSave],
+      ['ограничения записи экрана', scenarioScreenRecordingLimits],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['прямые ссылки', scenarioDeepLinks],

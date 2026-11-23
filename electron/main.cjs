@@ -35,6 +35,7 @@ const { processWhisperText } = require('./whisperTextPolicy.cjs');
 const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
 const { requestLocal } = require('./localHttp.cjs');
+const { RECORDING_MAX_BYTES } = require('./recordingLimits.cjs');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
   clipboard, shell, dialog, screen, session, safeStorage,
@@ -2465,11 +2466,12 @@ function registerIpc() {
     // payload: { name, base64 } — файл записи экрана в «Видео»
     try {
       const encoded = payload?.base64;
-      if (typeof encoded !== 'string' || !encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
-        return { ok: false, reason: 'неверные данные записи' };
+      if (typeof encoded !== 'string' || !encoded || encoded.length % 4 !== 0 || encoded.length > 4 * Math.ceil(RECORDING_MAX_BYTES / 3)) {
+        return { ok: false, reason: 'неверный размер записи' };
       }
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return { ok: false, reason: 'неверные данные записи' };
       const data = Buffer.from(encoded, 'base64');
-      if (!data.length) return { ok: false, reason: 'пустая запись' };
+      if (!data.length || data.length > RECORDING_MAX_BYTES) return { ok: false, reason: 'неверный размер записи' };
       const dir = app.getPath('videos');
       fs.mkdirSync(dir, { recursive: true });
       const name = String(payload?.name || 'zspeakly.webm').replace(/[\\/:*?"<>|]/g, '_');

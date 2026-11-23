@@ -1,3 +1,5 @@
+import { RECORDING_MAX_BYTES } from './recordingLimits.js';
+
 /** Сохранение полученного Blob без разворачивания всего массива байтов в аргументы функции. */
 export function recordingBase64(blob) {
   return new Promise((resolve, reject) => {
@@ -19,6 +21,9 @@ export function recordingBase64(blob) {
 
 /** В браузере можно лишь запросить загрузку; её фактическое завершение неизвестно. */
 export async function saveScreenRecording(blob, name, bridge) {
+  if (!blob || !Number.isFinite(blob.size) || blob.size <= 0 || blob.size > RECORDING_MAX_BYTES) {
+    throw new Error('Недопустимый размер записи');
+  }
   if (bridge?.saveFile) {
     const base64 = await recordingBase64(blob);
     const result = await bridge.saveFile({ name, base64 });

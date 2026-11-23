@@ -9,6 +9,8 @@
  * чтобы элемент буфера сразу показывал превью.
  */
 
+import { RECORDING_STOP_BYTES, RECORDING_MAX_BYTES, RECORDING_MAX_DURATION_MS } from './recordingLimits.js';
+
 export function isRecordingSupported() {
   if (typeof navigator === 'undefined') return false;
   return Boolean(navigator.mediaDevices?.getDisplayMedia) && typeof MediaRecorder !== 'undefined';
@@ -47,32 +49,51 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
   const chunks = [];
   let cancelled = false;
   let interrupted = false;
+  let bufferedBytes = 0;
+  let limitReason = '';
   const videoTracks = stream.getTracks().filter((track) => track.kind === 'video');
   const removeEndedListeners = () => videoTracks.forEach((track) => track.removeEventListener?.('ended', onVideoEnded));
   let failFinished;
-  const onVideoEnded = () => {
+  let deadline;
+  const startedAt = Date.now();
+  const tick = onTick ? setInterval(() => onTick(Date.now() - startedAt), 1000) : null;
+  const clearTimers = () => { if (tick) clearInterval(tick); if (deadline) clearTimeout(deadline); };
+  const requestStop = (reason = '') => {
     if (cancelled || recorder.state === 'inactive') return;
+    if (reason && !limitReason) limitReason = reason;
     try {
       recorder.stop();
     } catch {
-      if (tick) clearInterval(tick);
+      clearTimers();
       removeEndedListeners();
       stopTracks();
+      chunks.length = 0;
       failFinished(new Error('Не удалось завершить запись'));
     }
   };
-  const startedAt = Date.now();
-  const tick = onTick ? setInterval(() => onTick(Date.now() - startedAt), 1000) : null;
+  const onVideoEnded = () => requestStop();
 
   recorder.ondataavailable = (e) => {
-    if (!cancelled && e.data && e.data.size) chunks.push(e.data);
+    if (cancelled || limitReason === 'overflow' || !e.data?.size) return;
+    // Не сохраняем усечённый WebM как успешную запись: последний фрагмент
+    // может превышать оставшийся запас даже после команды stop().
+    if (bufferedBytes + e.data.size > RECORDING_MAX_BYTES) {
+      limitReason = 'overflow';
+      chunks.length = 0;
+      bufferedBytes = 0;
+      requestStop('overflow');
+      return;
+    }
+    chunks.push(e.data);
+    bufferedBytes += e.data.size;
+    if (bufferedBytes >= RECORDING_STOP_BYTES) requestStop('size');
   };
 
   recorder.onerror = () => { interrupted = true; };
   const finished = new Promise((resolve, reject) => {
     failFinished = reject;
     recorder.onstop = async () => {
-      if (tick) clearInterval(tick);
+      clearTimers();
       removeEndedListeners();
       stopTracks();
       try {
@@ -87,6 +108,7 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
           durationMs: Date.now() - startedAt,
           sizeMb: Math.round((output.size / (1024 * 1024)) * 10) / 10,
           interrupted,
+          limitReason: cancelled ? '' : limitReason,
         });
       } catch {
         chunks.length = 0;
@@ -98,8 +120,9 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
   try {
     videoTracks.forEach((track) => track.addEventListener?.('ended', onVideoEnded));
     recorder.start(1000);
+    if (recorder.state !== 'inactive') deadline = setTimeout(() => requestStop('duration'), RECORDING_MAX_DURATION_MS);
   } catch (err) {
-    if (tick) clearInterval(tick);
+    clearTimers();
     removeEndedListeners();
     stopTracks();
     throw err;
@@ -121,7 +144,7 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
       } finally {
         removeEndedListeners();
         stopTracks();
-        if (tick) clearInterval(tick);
+        clearTimers();
       }
     },
     finished,

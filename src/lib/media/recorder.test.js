@@ -197,6 +197,89 @@ describe('запись экрана', () => {
     expect((await done).interrupted).toBe(true);
   });
 
+  it('при 48 МиБ просит остановку и возвращает результат с пометкой лимита', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    const { tracks } = installDisplay();
+    const rec = await startScreenRecording();
+    const part = new Uint8Array(1024 * 1024);
+    instances[0].ondataavailable({ data: new Blob(Array(48).fill(part), { type: 'video/webm' }) });
+    expect(instances[0].state).toBe('inactive');
+    await vi.runAllTimersAsync();
+    const result = await rec.finished;
+    expect(result.limitReason).toBe('size');
+    expect(result.blob.size).toBe(49 * 1024 * 1024);
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('при отказе автоматической остановки освобождает поток и сообщает ошибку', async () => {
+    const { tracks } = installDisplay();
+    let instance;
+    class BrokenRecorder {
+      static isTypeSupported() { return true; }
+      constructor() { instance = this; this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() { throw new Error('stop failed'); }
+    }
+    vi.stubGlobal('MediaRecorder', BrokenRecorder);
+    const rec = await startScreenRecording();
+    const failure = expect(rec.finished).rejects.toThrow('Не удалось завершить запись');
+    instance.ondataavailable({ data: { size: 48 * 1024 * 1024 } });
+    await failure;
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('отбрасывает результат, если один фрагмент превышает жёсткий предел 64 МиБ', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    installDisplay();
+    const rec = await startScreenRecording();
+    instances[0].ondataavailable({ data: { size: 64 * 1024 * 1024 + 1 } });
+    expect(instances[0].state).toBe('inactive');
+    await vi.runAllTimersAsync();
+    const result = await rec.finished;
+    expect(result.limitReason).toBe('overflow');
+    expect(result.blob.size).toBe(0);
+  });
+
+  it('проверяет лимит также для последнего фрагмента при ручной остановке', async () => {
+    const { instances } = installMedia();
+    installDisplay();
+    const rec = await startScreenRecording();
+    instances[0].stop = () => {
+      instances[0].state = 'inactive';
+      instances[0].ondataavailable({ data: { size: 64 * 1024 * 1024 + 1 } });
+      instances[0].onstop();
+    };
+    const result = await rec.stop();
+    expect(result.limitReason).toBe('overflow');
+    expect(result.blob.size).toBe(0);
+  });
+
+  it('ручная остановка отменяет таймер лимита и не останавливает повторно', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    installDisplay();
+    const rec = await startScreenRecording();
+    const stop = vi.spyOn(instances[0], 'stop');
+    const result = rec.stop();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect((await result).limitReason).toBe('');
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('автоматически останавливает запись через десять минут', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    const { tracks } = installDisplay();
+    const rec = await startScreenRecording();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(instances[0].state).toBe('inactive');
+    await vi.runAllTimersAsync();
+    expect((await rec.finished).limitReason).toBe('duration');
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
   it('после отмены игнорирует поздний dataavailable перед onstop', async () => {
     const { tracks } = installDisplay();
     let instance;
