@@ -71,7 +71,7 @@ app.whenReady().then(async () => {
 
     // Подписываемся на настоящий IPC мониторинга, не меняя фильтр UI для
     // изображений. Синтетический узкий портрет не содержит данных пользователя.
-    await win.webContents.executeJavaScript("window.__testPreview = ''; window.zspeakly.native.onClipboard((item) => { if (item?.kind === 'image') window.__testPreview = item.image; })");
+    await win.webContents.executeJavaScript("(() => { window.__testPreview = ''; window.zspeakly.native.onClipboard((item) => { if (item?.kind === 'image') window.__testPreview = item.image; }); return true; })()");
     const portrait = nativeImage.createFromBitmap(Buffer.alloc(40 * 4000 * 4, 255), { width: 40, height: 4000 });
     assert.equal(portrait.isEmpty(), false);
     clipboard.writeImage(portrait);
