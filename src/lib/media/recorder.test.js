@@ -102,6 +102,88 @@ describe('запись экрана', () => {
     rec.cancel();
     expect(tracks[0].stop).toHaveBeenCalled();
     await vi.runAllTimersAsync();
+    const result = await rec.finished;
+    expect(result.blob.size).toBe(0);
+    expect(result.poster).toBe('');
+  });
+
+  it('освобождает захват, если конструктор MediaRecorder выбросил ошибку', async () => {
+    const { tracks } = installDisplay();
+    class BrokenRecorder {
+      static isTypeSupported() { return true; }
+      constructor() { throw new Error('constructor failed'); }
+    }
+    vi.stubGlobal('MediaRecorder', BrokenRecorder);
+    await expect(startScreenRecording()).rejects.toThrow('constructor failed');
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('освобождает захват и таймер, если старт MediaRecorder выбросил ошибку', async () => {
+    vi.useFakeTimers();
+    const { tracks } = installDisplay();
+    class BrokenRecorder {
+      static isTypeSupported() { return true; }
+      start() { throw new Error('start failed'); }
+    }
+    vi.stubGlobal('MediaRecorder', BrokenRecorder);
+    const ticks = vi.fn();
+    await expect(startScreenRecording({ onTick: ticks })).rejects.toThrow('start failed');
+    expect(tracks[0].stop).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(ticks).not.toHaveBeenCalled();
+  });
+
+  it('после отмены игнорирует поздний dataavailable перед onstop', async () => {
+    const { tracks } = installDisplay();
+    let instance;
+    class AsyncRecorder {
+      static isTypeSupported() { return true; }
+      constructor() { instance = this; this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; }
+    }
+    vi.stubGlobal('MediaRecorder', AsyncRecorder);
+    const rec = await startScreenRecording();
+    instance.ondataavailable({ data: new Blob(['до отмены']) });
+    rec.cancel();
+    instance.ondataavailable({ data: new Blob(['после отмены']) });
+    await instance.onstop();
+    const result = await rec.finished;
+    expect(result.blob.size).toBe(0);
+    expect(result.poster).toBe('');
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('отмена во время создания постера не возвращает полученное видео', async () => {
+    installMedia();
+    installDisplay();
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:pending', revokeObjectURL });
+    let video;
+    vi.stubGlobal('document', { createElement: () => (video = { src: '', muted: false, set currentTime(_) { throw new Error('seek failed'); } }) });
+    const rec = await startScreenRecording();
+    const result = rec.stop();
+    rec.cancel();
+    video.onloadeddata();
+    expect((await result).blob.size).toBe(0);
+    expect((await result).poster).toBe('');
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:pending');
+  });
+
+  it('освобождает временный URL видео, даже если создание постера завершилось ошибкой', async () => {
+    installMedia();
+    installDisplay();
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:test-recording', revokeObjectURL });
+    const video = {
+      set src(value) { this.url = value; queueMicrotask(() => this.onloadeddata()); },
+      set currentTime(_) { throw new Error('seek failed'); },
+    };
+    vi.stubGlobal('document', { createElement: () => video });
+    const rec = await startScreenRecording();
+    const result = await rec.stop();
+    expect(result.poster).toBe('');
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-recording');
   });
 
   it('если браузер не умеет ни один кодек — пишем без mimeType', async () => {

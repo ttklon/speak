@@ -29,33 +29,55 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
     audio: audio ? { echoCancellation: false, noiseSuppression: false } : false,
   });
 
-  const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
-  const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported?.(m)) || '';
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const stopTracks = () => {
+    stream.getTracks().forEach((track) => {
+      try { track.stop(); } catch { /* остальные дорожки всё равно нужно остановить */ }
+    });
+  };
+  let mimeType;
+  let recorder;
+  try {
+    const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported?.(m)) || '';
+    recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  } catch (err) {
+    stopTracks();
+    throw err;
+  }
   const chunks = [];
+  let cancelled = false;
   const startedAt = Date.now();
   const tick = onTick ? setInterval(() => onTick(Date.now() - startedAt), 1000) : null;
 
   recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size) chunks.push(e.data);
+    if (!cancelled && e.data && e.data.size) chunks.push(e.data);
   };
 
   const finished = new Promise((resolve) => {
     recorder.onstop = async () => {
       if (tick) clearInterval(tick);
-      stream.getTracks().forEach((t) => t.stop());
+      stopTracks();
       const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
-      const poster = await grabPoster(stream, blob);
+      chunks.length = 0;
+      const poster = cancelled || !blob.size ? '' : await grabPoster(blob);
+      // Отмена могла прийти, пока создавался постер.
+      const output = cancelled ? new Blob([], { type: mimeType || 'video/webm' }) : blob;
       resolve({
-        blob,
-        poster,
+        blob: output,
+        poster: cancelled ? '' : poster,
         durationMs: Date.now() - startedAt,
-        sizeMb: Math.round((blob.size / (1024 * 1024)) * 10) / 10,
+        sizeMb: Math.round((output.size / (1024 * 1024)) * 10) / 10,
       });
     };
   });
 
-  recorder.start(1000);
+  try {
+    recorder.start(1000);
+  } catch (err) {
+    if (tick) clearInterval(tick);
+    stopTracks();
+    throw err;
+  }
 
   return {
     mimeType,
@@ -64,20 +86,26 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
       return finished;
     },
     cancel: () => {
+      cancelled = true;
       chunks.length = 0;
-      if (recorder.state !== 'inactive') recorder.stop();
-      stream.getTracks().forEach((t) => t.stop());
-      if (tick) clearInterval(tick);
+      try {
+        if (recorder.state !== 'inactive') recorder.stop();
+      } finally {
+        stopTracks();
+        if (tick) clearInterval(tick);
+      }
     },
     finished,
   };
 }
 
 /** Первый кадр как PNG-постер: показываем в карточке буфера. */
-async function grabPoster(stream, blob) {
+async function grabPoster(blob) {
+  let url;
   try {
     const video = document.createElement('video');
-    video.src = URL.createObjectURL(blob);
+    url = URL.createObjectURL(blob);
+    video.src = url;
     video.muted = true;
     await new Promise((resolve, reject) => {
       video.onloadeddata = resolve;
@@ -93,11 +121,11 @@ async function grabPoster(stream, blob) {
     canvas.width = 480;
     canvas.height = Math.round((480 / (video.videoWidth || 16)) * (video.videoHeight || 9)) || 270;
     canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const poster = canvas.toDataURL('image/png');
-    URL.revokeObjectURL(video.src);
-    return poster;
+    return canvas.toDataURL('image/png');
   } catch {
     return '';
+  } finally {
+    if (url) URL.revokeObjectURL(url);
   }
 }
 

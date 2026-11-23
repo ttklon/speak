@@ -3116,6 +3116,71 @@ async function scenarioClipboardPasteFailure(browser) {
   await page.close();
 }
 
+async function scenarioScreenRecordingCleanup(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__capture = { starts: 0, stopped: 0, recorderStops: 0, pending: false };
+    const track = () => ({ kind: 'video', stop: () => { window.__capture.stopped++; } });
+    Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: () => {
+      window.__capture.starts++;
+      if (window.__capture.pending) return new Promise((resolve) => { window.__resolveCapture = () => resolve({ getTracks: () => [track()] }); });
+      return Promise.resolve({ getTracks: () => [track()] });
+    } });
+    window.MediaRecorder = class {
+      static isTypeSupported() { return true; }
+      constructor() { this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() {
+        window.__capture.recorderStops++;
+        if (window.__capture.failStop) throw new Error('stop failed');
+        this.state = 'inactive';
+        this.ondataavailable?.({ data: new Blob(['test video']) });
+        this.onstop?.();
+      }
+    };
+  });
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(300);
+  const warned = await page.evaluate(() => /При переходе на другую страницу запись отменится/.test(document.body.innerText));
+  record('приватность', 'запись экрана: предупреждение об отмене видно во время записи', warned);
+  await emit(page, 'clipboard:action', 'record');
+  await sleep(2700);
+  let state = await page.evaluate(() => ({ ...window.__capture, body: document.body.innerText, calls: window.__bridgeCalls.filter((c) => (c.channel || c.ch) === 'app:save-file').length }));
+  record('приватность', 'запись экрана: сочетание останавливает текущую запись, не запуская новую', state.starts === 1 && state.recorderStops === 1 && state.calls === 1 && /Запись сохранена/.test(state.body));
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(300);
+  await page.evaluate(() => { location.hash = '#/'; });
+  await sleep(400);
+  state = await page.evaluate(() => ({ ...window.__capture }));
+  record('приватность', 'запись экрана: переход со страницы останавливает захват', state.starts === 2 && state.stopped > 1 && state.recorderStops === 2);
+  await page.evaluate(() => { location.hash = '#/clipboard'; window.__capture.pending = true; });
+  await sleep(500);
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(200);
+  state = await page.evaluate(() => ({ ...window.__capture }));
+  record('приватность', 'запись экрана: ожидание разрешения не запускает повторный запрос', state.starts === 3);
+  await page.evaluate(() => { location.hash = '#/'; });
+  await sleep(300);
+  await page.evaluate(() => window.__resolveCapture());
+  await sleep(400);
+  state = await page.evaluate(() => ({ ...window.__capture }));
+  record('приватность', 'запись экрана: разрешение после ухода немедленно останавливает захват', state.stopped >= 3 && state.recorderStops === 3);
+  await page.evaluate(() => { location.hash = '#/clipboard'; window.__capture.pending = false; window.__capture.failStop = true; });
+  await sleep(500);
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(200);
+  const beforeStop = await page.evaluate(() => window.__capture.stopped);
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(400);
+  state = await page.evaluate(() => ({ ...window.__capture, body: document.body.innerText }));
+  record('приватность', 'запись экрана: ошибка остановки освобождает дорожки и предупреждает', state.stopped > beforeStop && /Попытались остановить захват; видео не сохранено/.test(state.body));
+  const errors = takeErrors(page);
+  record('приватность', 'запись экрана: уход со страницы без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioClipboardImageCopy(browser) {
   const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
   const page = await openPage(browser, '#/clipboard', {
@@ -8680,6 +8745,7 @@ async function main() {
       ['приватность буфера', scenarioClipboardSecretPrivacy],
       ['безопасность вставки буфера', scenarioClipboardPasteFailure],
       ['копирование изображения буфера', scenarioClipboardImageCopy],
+      ['захват экрана при уходе', scenarioScreenRecordingCleanup],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['прямые ссылки', scenarioDeepLinks],

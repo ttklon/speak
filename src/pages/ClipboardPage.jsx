@@ -70,7 +70,21 @@ export default function ClipboardPage() {
   const [decrypted, setDecrypted] = useState({});
   const [recording, setRecording] = useState(null);
   const [recordMs, setRecordMs] = useState(0);
+  const recordingRef = useRef(null);
+  const captureStarting = useRef(false);
+  const captureStopping = useRef(false);
+  const mounted = useRef(false);
   const lastExternal = useRef(0);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const active = recordingRef.current;
+      recordingRef.current = null;
+      try { active?.cancel(); } catch { /* дорожки останавливаются в cancel */ }
+    };
+  }, []);
 
   // Глобальные сочетания буфера (Shift+Ctrl+A и т.д.) регистрирует main-процесс,
   // но раньше он слал только навигацию. Теперь действие приезжает сюда, и
@@ -164,8 +178,25 @@ export default function ClipboardPage() {
 
   /** Запись экрана: старт/стоп, постер в историю и файл в «Видео». */
   const toggleRecording = async () => {
-    if (recording) {
-      const result = await recording.stop();
+    if (captureStarting.current || captureStopping.current) return;
+    const active = recordingRef.current;
+    if (active) {
+      captureStopping.current = true;
+      let result;
+      try {
+        result = await active.stop();
+      } catch {
+        try { active.cancel(); } catch { /* дорожки останавливаются в cancel */ }
+        if (recordingRef.current === active) recordingRef.current = null;
+        if (mounted.current) {
+          setRecording(null);
+          push({ title: 'Не удалось остановить запись', description: 'Попытались остановить захват; видео не сохранено.', tone: 'warn' });
+        }
+        return;
+      } finally {
+        captureStopping.current = false;
+      }
+      if (!mounted.current) return;
       setRecording(null);
       if (!result?.blob?.size) {
         push({ title: 'Запись пустая', tone: 'warn' });
@@ -211,19 +242,30 @@ export default function ClipboardPage() {
     if (!window.zspeakly?.native?.screenshot) {
       push({ title: 'Выберите окно или экран', description: 'В диалоге браузера отметьте, что записывать.', tone: 'success' });
     }
+    captureStarting.current = true;
     try {
-      const rec = await startScreenRecording({ onTick: (ms) => setRecordMs(ms) });
+      const rec = await startScreenRecording({ onTick: (ms) => { if (mounted.current) setRecordMs(ms); } });
+      // Системный выбор может завершиться уже после ухода со страницы.
+      if (!mounted.current) {
+        rec.cancel();
+        return;
+      }
+      recordingRef.current = rec;
       setRecordMs(0);
       setRecording(rec);
-      push({ title: 'Запись пошла', description: 'Нажмите «Запись экрана» ещё раз, чтобы остановить.', tone: 'success' });
-      // остановка из системного диалога тоже должна завершить запись
-      rec.finished.then(() => setRecording((cur) => (cur === rec ? null : cur)));
+      push({ title: 'Запись пошла', description: 'Нажмите «Запись экрана» ещё раз, чтобы остановить. При уходе со страницы запись отменится.', tone: 'success' });
+      rec.finished.then(() => {
+        if (recordingRef.current === rec) recordingRef.current = null;
+        if (mounted.current) setRecording((cur) => (cur === rec ? null : cur));
+      });
     } catch (err) {
-      push({
+      if (mounted.current) push({
         title: 'Не удалось начать запись',
         description: err?.name === 'NotAllowedError' ? 'Выбор экрана отменён' : String(err?.message || err),
         tone: 'warn',
       });
+    } finally {
+      captureStarting.current = false;
     }
   };
 
@@ -515,6 +557,7 @@ export default function ClipboardPage() {
           );
         })}
       </div>
+      {recording ? <p className="page__sub" role="status">При переходе на другую страницу запись отменится и не сохранится. Сначала остановите её здесь.</p> : null}
 
       <div className="clip-toolbar">
         <SearchInput
