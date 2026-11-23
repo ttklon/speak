@@ -73,6 +73,7 @@ describe('проверка настоящего движка в CI', () => {
     expect(runner).toContain("await command('clipboardFormatsIsolatedCi')");
     expect(runner).toContain('CLIPBOARD_EMPTY_RESTORE_E2E_OK');
     expect(runner).toContain('SELECTION_STALE_CLIPBOARD_E2E_OK');
+    expect(runner).toContain('UNDO_CARET_MOVED_E2E_OK');
     expect(target.match(/\$env:CI -ne 'true' -or \$env:RUNNER_ENVIRONMENT -ne 'github-hosted'/g)).toHaveLength(2);
     expect(target).toContain('[System.Windows.Forms.Clipboard]::Clear()');
   });

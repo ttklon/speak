@@ -42,6 +42,12 @@ describe('isUndoCommand', () => {
 });
 
 describe('undoFailureText', () => {
+  it('объясняет безопасный отказ и ручное исправление', () => {
+    const text = undoFailureText('неподтверждённая позиция курсора');
+    expect(text).toMatch(/не стираю текст/i);
+    expect(text).toMatch(/вручную/i);
+  });
+
   it('объясняет просрочку словами человека, а не кодом', () => {
     const text = undoFailureText('прошло больше двух минут');
     expect(text).toMatch(/две минуты|больше двух минут/);

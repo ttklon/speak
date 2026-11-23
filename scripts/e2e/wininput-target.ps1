@@ -55,10 +55,13 @@ $timer.Add_Tick({
       'state' {
         $out.foreground = ([ZsTestForeground]::GetForegroundWindow() -eq $form.Handle -and $box.Focused)
         $out.text = $box.Text
+        $out.selectionStart = $box.SelectionStart
+        $out.selectionLength = $box.SelectionLength
       }
       'clear' { $box.Clear() }
       'selectText' { $box.Text = [string]$data.text; $box.SelectAll() }
       'deselectText' { $box.Select($box.Text.Length, 0) }
+      'caretAt' { $box.Select([int]$data.text, 0) }
       'clipboard' { [System.Windows.Forms.Clipboard]::SetText([string]$data.text) }
       'clipboardClearIsolatedCi' {
         if ($env:CI -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'isolated CI only' }

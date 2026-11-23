@@ -349,6 +349,7 @@ winInputModule.createWinInput = (...args) => {
     status: () => spawnPlan.clipboardHelper ? { ready: true, reason: '' } : status(),
     ensure: () => spawnPlan.clipboardHelper ? Promise.resolve({ ready: true }) : ensure(),
     paste: () => spawnPlan.clipboardHelper ? spawnPlan.clipboardHelper() : paste(),
+    erase: (n) => spawnPlan.eraseHelper ? spawnPlan.eraseHelper(n) : input.erase(n),
   };
 };
 // main.cjs живёт в CommonJS — грузим через require
@@ -951,6 +952,30 @@ await check('«Отмени» отказывает с причиной, а не 
   if (!res || typeof res !== 'object') throw new Error(`не объект: ${JSON.stringify(res)}`);
   if (res.ok !== false) throw new Error(`убрал то, чего не вставлял: ${JSON.stringify(res)}`);
   if (!res.reason) throw new Error('отказ без причины — человеку нечего делать');
+});
+
+await check('«Отмени»: неподтверждённый курсор не запускает Backspace', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const win = fakeWindow();
+  const isFocused = win.isFocused;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  win.isFocused = () => false;
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => ({ ok: true });
+  let calls = 0;
+  spawnPlan.eraseHelper = async (n) => { calls++; return { ok: true, erased: n, total: n }; };
+  try {
+    const inserted = await handlers.get('text:insert')({}, 'тестовая вставка');
+    if (!inserted?.ok) throw new Error('не удалось подготовить вставку');
+    const undo = await handlers.get('text:undo-last')({});
+    if (undo?.ok || calls !== 0) throw new Error(`слепое стирание разрешено: ${JSON.stringify(undo)}; вызовов ${calls}`);
+  } finally {
+    spawnPlan.clipboardHelper = null; spawnPlan.eraseHelper = null; win.isFocused = isFocused;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    await new Promise((resolve) => setTimeout(resolve, 550));
+  }
 });
 
 await check('таймаут Ctrl+V у exe не запускает второй способ', async () => {

@@ -195,6 +195,36 @@ async function main() {
           console.log(`Electron IPC ${mode}: текст получен окном, прежний буфер сохранён (метод ${result.method})`);
         }
         if (process.env.CI === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+          // Same window and field, but the caret moved after a real insertion.
+          // Blind Backspace would delete pre-existing text, so no keys may be sent.
+          const original = 'Чужие слова: ';
+          const insertedText = 'тестовая вставка';
+          assert.equal(await active(), true, 'перед подготовкой undo потерян фокус');
+          await command('selectText', original);
+          await command('deselectText');
+          await page.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'clipboard' });
+          });
+          assert.equal((await command('state')).foreground, true, 'перед вставкой для undo потерян фокус');
+          const insertion = await page.evaluate((text) => window.zspeakly.native.insertText(text), insertedText);
+          assert.equal(insertion.ok, true, JSON.stringify(insertion));
+          const expected = original + insertedText;
+          await assertText(expected, 'подготовка теста undo');
+          await command('caretAt', '3');
+          const caretState = await command('state');
+          assert.equal(caretState.foreground, true, 'перед проверкой undo потерян фокус');
+          assert.equal(caretState.selectionStart, 3, 'курсор не перемещён');
+          assert.equal(caretState.selectionLength, 0, 'неожиданное выделение');
+          const undo = await page.evaluate(() => window.zspeakly.native.undoLastInsert());
+          assert.equal(undo.ok, false, JSON.stringify(undo));
+          assert.equal(undo.reason, 'неподтверждённая позиция курсора', JSON.stringify(undo));
+          await sleep(1200);
+          assert.equal((await command('state')).text, expected, 'слепой undo удалил чужой текст');
+          const repeatedUndo = await page.evaluate(() => window.zspeakly.native.undoLastInsert());
+          assert.equal(repeatedUndo.ok, false, JSON.stringify(repeatedUndo));
+          assert.equal((await command('state')).text, expected, 'повтор undo удалил текст');
+          console.log('UNDO_CARET_MOVED_E2E_OK: после реальной вставки и смены позиции курсора текст не изменился');
           await page.waitForFunction(async () => Boolean((await window.zspeakly.native.inputStatus())?.helper?.ready), { timeout: 30000, polling: 300 });
           const oldClipboard = 'Старый синтетический буфер';
           const selected = 'Выделенный синтетический текст';

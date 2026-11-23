@@ -1692,10 +1692,8 @@ async function scenarioLateTargetLanguage(browser) {
   } finally { await page.close(); }
 }
 
-// «Отмени»: сказал одно слово — последняя вставка ушла из окна.
-// Сценарий подставляет ответ main и проверяет три вещи: что стирание вообще
-// попросили, что человек увидел объяснение и что история не притворяется,
-// будто текст остался в чужом окне.
+// «Отмени»: при неподтверждённом курсоре main отказывает в стирании.
+// Мок проверяет предупреждение и то, что история не помечена как убранная.
 async function scenarioUndoCommand(browser) {
   // Настоящая последовательность: сначала диктовка, потом слово «отмени».
   // Так проверяется и то, что marked именно та запись, которую вставляли.
@@ -1734,24 +1732,24 @@ async function scenarioUndoCommand(browser) {
   });
   record(
     'сценарии',
-    '«отмени»: стирает последнюю вставку, а не вставляет слово «отмени»',
+    '«отмени»: запрос не вставляет слово «отмени»',
     result.undo === 1 && result.insert === 0 && !result.undoWord,
     `отмена=${result.undo} вставок=${result.insert}`,
   );
   record(
     'сценарии',
-    '«отмени»: человек видит, что убрали и что текст остался в истории',
-    /Убрал последнюю вставку/.test(result.toast) && /истории/.test(result.toast),
+    '«отмени»: человек видит отказ и ручное исправление',
+    /Убирать не стал/.test(result.toast) && /курсора/.test(result.toast) && /вручную/.test(result.toast) && /истории/.test(result.toast),
     result.toast.slice(0, 110) || 'тоста нет',
   );
   record(
     'сценарии',
-    '«отмени»: команда не попадает в историю, а убранная запись помечена',
-    result.count === before && result.undone,
+    '«отмени»: запись в истории не помечена убранной',
+    result.count === before && !result.undone,
     `записей ${before} → ${result.count}, пометка=${result.undone}`,
   );
   const tag = await page.evaluate(() => document.querySelector('.recent__tag')?.textContent || '');
-  record('сценарии', '«отмени»: в истории видно «убрано»', /убрано/.test(tag), tag || 'метки нет');
+  record('сценарии', '«отмени»: ложной метки «убрано» нет', !/убрано/.test(tag), tag || 'метки нет');
   const errors = takeErrors(page);
   record('сценарии', '«отмени»: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
