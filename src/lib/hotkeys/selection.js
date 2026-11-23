@@ -39,13 +39,20 @@ export async function readSelectionText() {
 /**
  * Вернуть текст на место выделения.
  * 'inserted' — вставили в чужое окно, 'copied' — только в буфер (браузер),
- * 'failed' — не получилось ни то, ни другое.
+ * 'failed' — известный отказ, 'uncertain' — результат вставки неизвестен.
  */
 export async function writeSelectionText(text) {
   const bridge = nativeBridge();
   if (bridge?.replaceSelection) {
-    const ok = await bridge.replaceSelection(text);
-    return ok ? 'inserted' : 'failed';
+    try {
+      const outcome = await bridge.replaceSelection(text);
+      if (outcome === true) return 'inserted';
+      if (outcome === false) return 'failed';
+      return 'uncertain';
+    } catch {
+      // Ответ IPC может потеряться уже после отправки клавиш.
+      return 'uncertain';
+    }
   }
   try {
     const { writeClipboard } = await import('../clipboard.js');

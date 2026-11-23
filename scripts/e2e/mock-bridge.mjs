@@ -267,7 +267,7 @@ export function installMockBridge() {
       }
       return 'выделенный текст со страницы';
     },
-    replaceSelection: ok('text:replace-selection'),
+    replaceSelection: async (text) => { record('text:replace-selection', [text]); return true; },
 
     readClipboard: async () => {
       record('clipboard:read');

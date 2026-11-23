@@ -960,6 +960,25 @@ async function scenarioVoiceCommand(browser) {
     result.toasts.slice(0, 100) || 'тоста нет',
   );
 
+  const uncertain = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, aiProcessing: true },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'сократи вдвое' }, settle: 700,
+    patchNative: () => { window.zspeakly.native.replaceSelection = async () => ({ uncertain: true }); },
+  });
+  takeErrors(uncertain);
+  await emit(uncertain, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(1200);
+  await emit(uncertain, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(2600);
+  const unknown = await uncertain.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    history: window.__e2e.read('zs.dictations'),
+  }));
+  record('безопасность', 'голосовая команда: неизвестная замена не объявляется успехом',
+    /Не удалось подтвердить замену/.test(unknown.toast) && /Проверьте его перед повтором/.test(unknown.toast) && !/Готово: сократить/.test(unknown.toast) && unknown.history?.length > 0, unknown.toast);
+  record('безопасность', 'голосовая команда: неизвестная замена без ошибок консоли', takeErrors(uncertain).length === 0);
+  await uncertain.close();
+
   // 3) Без выделения — приложение говорит об этом до записи, а не после
   const empty = await openPage(browser, '#/home', {
     storeSeed: { 'zs.mockSelection': '' },
@@ -3226,7 +3245,12 @@ async function scenarioClipboardPasteFailure(browser) {
   await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
   await sleep(400);
   warning = await page.evaluate(() => [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '');
-  record('безопасность', 'буфер: исключение автовставки не теряется', /Автовставка не удалась/.test(warning));
+  record('безопасность', 'буфер: исключение IPC не считается известным отказом', /Не удалось подтвердить автовставку/.test(warning));
+  await page.evaluate(() => { window.zspeakly.native.pasteToActive = async () => ({ uncertain: true }); });
+  await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+  await sleep(400);
+  const uncertainToast = await page.evaluate(() => [...document.querySelectorAll('.toast')].at(-1)?.innerText || '');
+  record('безопасность', 'буфер: неизвестная автовставка требует проверки перед повтором', /Не удалось подтвердить автовставку/.test(uncertainToast) && /Проверьте его перед повтором/.test(uncertainToast), uncertainToast);
   const errors = takeErrors(page);
   record('безопасность', 'буфер: ошибки копирования не ломают интерфейс', errors.length === 0, errors[0] || '');
   await page.close();
@@ -7873,6 +7897,12 @@ async function scenarioTextActionEvent(browser) {
   const calls = await bridgeCalls(page);
   const copied = calls.includes('text:replace-selection') || calls.includes('clipboard:write') || calls.includes('text:insert');
   record('события', 'глобальное сочетание запускает AI-инструкцию и возвращает текст', copied, calls.filter((c) => /text:|clipboard:write/.test(c)).join(','));
+  await page.evaluate(() => { window.zspeakly.native.replaceSelection = async () => { throw new Error('IPC lost'); }; });
+  await emit(page, 'text-action', presetId);
+  await sleep(1500);
+  const uncertain = await page.evaluate(() => [...document.querySelectorAll('.toast')].at(-1)?.innerText || '');
+  record('безопасность', 'AI-инструкция: потеря IPC не объявляется успехом',
+    /Не удалось подтвердить замену/.test(uncertain) && /Проверьте его перед повтором/.test(uncertain), uncertain);
   const errors = takeErrors(page);
   record('события', 'AI-инструкция по хоткею без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();

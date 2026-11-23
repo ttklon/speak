@@ -72,9 +72,9 @@ export function useTextAction() {
         }
         const where = await writeSelection(result);
         push({
-          title: where === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${instruction.title}`,
-          description: [truncate(result, 90), note].filter(Boolean).join(' — '),
-          tone: where === 'failed' || note ? 'warn' : 'success',
+          title: where === 'uncertain' ? 'Не удалось подтвердить замену' : where === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${instruction.title}`,
+          description: where === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
+          tone: where === 'uncertain' || where === 'failed' || note ? 'warn' : 'success',
         });
       } catch (err) {
         push({ title: 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });

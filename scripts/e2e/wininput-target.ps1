@@ -57,6 +57,7 @@ $timer.Add_Tick({
         $out.text = $box.Text
       }
       'clear' { $box.Clear() }
+      'selectText' { $box.Text = [string]$data.text; $box.SelectAll() }
       'clipboard' { [System.Windows.Forms.Clipboard]::SetText([string]$data.text) }
       'clipboardClearIsolatedCi' {
         if ($env:CI -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'isolated CI only' }

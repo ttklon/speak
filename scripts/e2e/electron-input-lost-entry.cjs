@@ -11,6 +11,12 @@ host.type = async (text) => {
   if (!result.ok) throw new Error('Реальный тестовый SendInput не подтвердил ввод');
   return { ok: false, typed: 0, total: String(text).length, reason: 'simulated-lost-response', uncertain: true };
 };
+const hostPaste = host.paste.bind(host);
+host.paste = async () => {
+  const result = await hostPaste();
+  if (!result.ok) throw new Error('Резидентный Ctrl+V не подтвердил нажатие');
+  return { ok: false, uncertain: true, reason: 'simulated-lost-response' };
+};
 const winInput = require('../../electron/winInput.cjs');
 const createWinInput = winInput.createWinInput;
 winInput.createWinInput = (...args) => {

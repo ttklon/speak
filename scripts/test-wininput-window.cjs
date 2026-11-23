@@ -301,6 +301,29 @@ async function main() {
           const pasteUndo = await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert());
           assert.equal(pasteUndo.reason, 'нечего убирать', JSON.stringify(pasteUndo));
           console.log('PASTE_LOST_ACK_E2E_OK: реальный Ctrl+V в WinForms однократно; ответ искусственно потерян, повтор и слепая отмена запрещены');
+          const historyText = 'Вставка из истории при потере ответа';
+          await command('clear');
+          await command('clipboard', historyText);
+          assert.equal(await active(), true, 'перед автовставкой потерян фокус');
+          const historyResult = await lostPage.evaluate(() => window.zspeakly.native.pasteToActive());
+          assert.equal(historyResult.uncertain, true, JSON.stringify(historyResult));
+          await assertText(historyText, 'автовставка из истории');
+          await sleep(1500);
+          assert.equal((await command('state')).text, historyText, 'автовставка повторилась');
+          assert.equal((await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert())).reason, 'нечего убирать');
+          const replacement = 'Замена при потере ответа';
+          assert.equal(await active(), true, 'перед заменой потерян фокус');
+          await command('selectText', 'Старое выделение');
+          assert.equal((await command('state')).foreground, true, 'перед заменой выделения потерян фокус');
+          const replaceResult = await lostPage.evaluate((value) => window.zspeakly.native.replaceSelection(value), replacement);
+          assert.equal(replaceResult.uncertain, true, JSON.stringify(replaceResult));
+          await assertText(replacement, 'замена выделения');
+          await sleep(1500);
+          assert.equal((await command('state')).text, replacement, 'замена повторилась');
+          assert.equal((await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert())).reason, 'нечего убирать');
+          assert.equal((await command('readClipboard')).text, replacement, 'результат замены отсутствует в буфере');
+          console.log('SHARED_PASTE_LOST_ACK_E2E_OK: история и замена: реальный Ctrl+V однократно, ответ искусственно потерян');
+
         }
       } finally {
         if (browser) await browser.close();

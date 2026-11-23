@@ -543,16 +543,24 @@ export default function ClipboardPage() {
     // Если копирование или расшифровка не удались, нельзя вставлять то, что
     // случайно оставалось в системном буфере до этого действия.
     if (!(await copyItem(item))) return;
-    try {
-      const paste = window.zspeakly?.native?.pasteToActive;
-      if (!paste || (await paste()) !== true) throw new Error('paste-unavailable');
-    } catch {
+    const paste = window.zspeakly?.native?.pasteToActive;
+    let outcome = false;
+    try { if (paste) outcome = await paste(); }
+    catch { outcome = { uncertain: true }; }
+    if (outcome === true) return;
+    if (outcome !== false) {
       push({
-        title: 'Автовставка не удалась',
-        description: 'Проверьте окно назначения и при необходимости вставьте вручную.',
+        title: 'Не удалось подтвердить автовставку',
+        description: 'Текст мог попасть в окно. Проверьте его перед повтором.',
         tone: 'warn',
       });
+      return;
     }
+    push({
+      title: 'Автовставка не удалась',
+      description: 'Проверьте окно назначения и при необходимости вставьте вручную.',
+      tone: 'warn',
+    });
   };
 
   return (

@@ -86,6 +86,8 @@ describe('проверка настоящего движка в CI', () => {
     expect(entry).toContain('const result = await type(text)');
     expect(runner).toContain('SENDINPUT_LOST_ACK_E2E_OK');
     expect(runner).toContain('PASTE_LOST_ACK_E2E_OK');
+    expect(runner).toContain('SHARED_PASTE_LOST_ACK_E2E_OK');
+    expect(entry).toContain('host.paste = async');
     expect(entry).toContain('const result = await input.paste()');
     expect(runner).toContain("await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert())");
     expect(runner).toContain("assert.equal((await command('state')).text, text");

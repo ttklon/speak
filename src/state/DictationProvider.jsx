@@ -429,9 +429,9 @@ export function DictationProvider({ children }) {
           placed,
         });
         pushToast({
-          title: placed === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${commandTitle(cleaned)}`,
-          description: [truncate(result, 90), note].filter(Boolean).join(' — '),
-          tone: placed === 'failed' || note ? 'warn' : 'success',
+          title: placed === 'uncertain' ? 'Не удалось подтвердить замену' : placed === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${commandTitle(cleaned)}`,
+          description: placed === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором; результат сохранён в истории.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
+          tone: placed === 'uncertain' || placed === 'failed' || note ? 'warn' : 'success',
           ttl: 8000,
         });
         setState('done');

@@ -2292,7 +2292,13 @@ function registerIpc() {
       return { own: false, app: '', title: '' };
     }
   });
-  ipcMain.handle('text:paste', () => pasteToActiveWindow());
+  ipcMain.handle('text:paste', () => {
+    // Это другая вставка: старая команда undo не должна стирать чужой текст.
+    lastInsertedText = '';
+    lastInsertedAt = 0;
+    lastInsertTarget = { app: '', title: '', at: 0 };
+    return pasteToActiveWindowSafely();
+  });
   ipcMain.handle('text:read-selection', () => readSelection());
   ipcMain.handle('text:replace-selection', (_e, text) => replaceSelection(text));
 
@@ -3113,17 +3119,20 @@ function readSelection() {
 }
 
 /** Заменить выделение результатом: кладём в буфер и жмём Ctrl+V. */
-function replaceSelection(text) {
-  return new Promise((resolve) => {
-    lastInsertedText = String(text || '');
-    lastInsertedAt = Date.now();
-    lastClipboardText = lastInsertedText;
-    clipboard.writeText(String(text || ''));
-    setTimeout(() => {
-      const ok = pasteToActiveWindow();
-      setTimeout(() => resolve(ok), 180);
-    }, 60);
-  });
+async function replaceSelection(text) {
+  // Backspace не вернёт заменённое выделение даже при успешном Ctrl+V.
+  lastInsertedText = '';
+  lastInsertedAt = 0;
+  lastInsertTarget = { app: '', title: '', at: 0 };
+  const value = String(text || '');
+  lastClipboardText = value;
+  clipboard.writeText(value);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const [outcome] = await Promise.all([
+    pasteToActiveWindowSafely(),
+    new Promise((resolve) => setTimeout(resolve, 180)),
+  ]);
+  return outcome;
 }
 
 /**
@@ -3267,8 +3276,8 @@ function pasteViaMshta() {
   });
 }
 
-// Резерв для диктовки: после вероятного нажатия нельзя посылать Ctrl+V
-// вторым способом. Для прежнего IPC text:paste пока сохранён старый контракт.
+// После вероятного нажатия нельзя посылать Ctrl+V вторым способом.
+// Результат: true, false (не запускался) или { uncertain: true }.
 async function pasteToActiveWindowSafely() {
   if (process.platform !== 'win32') return false;
   hideWindowForInsert();
@@ -3295,60 +3304,6 @@ async function pasteToActiveWindowSafely() {
       sendKeys('^v', (ok, notStarted) => resolve(ok ? true : notStarted ? false : { uncertain: true }), { timeout: 8000 });
     });
   } finally { restoreWindowAfterInsert(); }
-}
-
-function pasteToActiveWindow() {
-  if (process.platform !== 'win32') return Promise.resolve(false);
-
-  hideWindowForInsert();
-
-  // Резидентный помощник: Ctrl+V уходит из уже работающего процесса. Раньше
-  // здесь на каждую вставку запускался powershell.exe — на слабом ПК это
-  // заметная доля паузы между «замолчал» и «текст появился».
-  if (inputHost.available()) {
-    return inputHost.paste().then((res) => {
-      if (res?.ok) {
-        restoreWindowAfterInsert();
-        return true;
-      }
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          sendKeys('^v', (ok) => {
-            restoreWindowAfterInsert();
-            resolve(ok);
-          });
-        }, 60);
-      });
-    });
-  }
-
-  return new Promise((resolve) => {
-    const helper = process.env.ZSPEAKLY_INPUT;
-    if (helper && fs.existsSync(helper)) {
-      execFile(helper, ['ctrl+v'], { windowsHide: true }, (err) => {
-        if (!err) {
-          restoreWindowAfterInsert();
-          resolve(true);
-          return;
-        }
-        console.warn('[paste] helper failed, fallback', err.message);
-        setTimeout(() => {
-          sendKeys('^v', (ok) => {
-            restoreWindowAfterInsert();
-            resolve(ok);
-          });
-        }, 120);
-      });
-      return;
-    }
-
-    setTimeout(() => {
-      sendKeys('^v', (ok) => {
-        restoreWindowAfterInsert();
-        resolve(ok);
-      });
-    }, 60);
-  });
 }
 
 /**

@@ -791,6 +791,68 @@ await check('меню трея показывает актуальное соч�
   return Boolean(item && /Ctrl \+ Shift \+ D/.test(item.label) && /Диктовка/.test(JSON.stringify(last)));
 });
 
+await check('автовставка из буфера: после потери ответа нет второго Ctrl+V', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  host.paste = async () => ({ ok: false, reason: 'timeout' });
+  try {
+    clipboardText.value = 'содержимое буфера'; spawnCalls.length = 0;
+    const result = await handlers.get('text:paste')({});
+    if (!result?.uncertain) throw new Error(`неизвестный результат скрыт: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => (c.args || []).some((arg) => /SendWait/.test(String(arg))))) throw new Error('Ctrl+V повторён через SendKeys');
+    if (clipboardText.value !== 'содержимое буфера') throw new Error('буфер изменился');
+    const undo = await handlers.get('text:undo-last')({});
+    if (undo?.reason !== 'нечего убирать') throw new Error('разрешено слепое undo');
+  } finally {
+    host.available = available; host.paste = paste;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('замена выделения: после потери ответа нет повтора и слепой отмены', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  host.paste = async () => ({ ok: false, reason: 'timeout' });
+  try {
+    clipboardText.value = 'старый буфер'; spawnCalls.length = 0;
+    const result = await handlers.get('text:replace-selection')({}, 'замена выделения');
+    if (!result?.uncertain) throw new Error(`неизвестный результат скрыт: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => (c.args || []).some((arg) => /SendWait/.test(String(arg))))) throw new Error('Ctrl+V повторён через SendKeys');
+    if (clipboardText.value !== 'замена выделения') throw new Error('результат не скопирован');
+    const undo = await handlers.get('text:undo-last')({});
+    if (undo?.reason !== 'нечего убирать') throw new Error('разрешено слепое undo');
+  } finally {
+    host.available = available; host.paste = paste;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('общая вставка: известный отказ запуска хоста разрешает один резервный SendKeys', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  host.paste = async () => ({ ok: false, reason: 'host-not-started' });
+  try {
+    for (const [channel, args] of [['text:paste', []], ['text:replace-selection', ['резервная замена']]]) {
+      spawnCalls.length = 0;
+      const result = await handlers.get(channel)({}, ...args);
+      const sends = spawnCalls.filter((c) => (c.args || []).some((a) => /SendWait/.test(String(a))));
+      if (result !== true || sends.length !== 1) throw new Error(`${channel}: результат ${JSON.stringify(result)}, SendKeys ${sends.length}`);
+    }
+  } finally {
+    host.available = available; host.paste = paste;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
 await check('замена выделения пишет в буфер', async () => {
   await handlers.get('text:replace-selection')({}, 'готовый текст');
   if (clipboardText.value !== 'готовый текст') throw new Error(`в буфере: ${clipboardText.value}`);
