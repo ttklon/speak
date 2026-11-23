@@ -8381,6 +8381,48 @@ async function scenarioAiOff(browser) {
 
 /* ── режимы диктовки, кнопки окна, звук и эффект печати ───────────────── */
 
+// Неподтверждённый старый буфер не становится текстом команды или агента.
+async function scenarioSelectionUnverified(browser) {
+  const patch = () => {
+    window.zspeakly.native.readSelection = async () => ({ text: 'старый секрет', reason: 'unverified' });
+    window.__prompts = [];
+    window.zspeakly.native.httpPost = async (payload) => {
+      window.__prompts.push(payload?.body?.prompt || '');
+      return { ok: true, data: { response: 'Ответ тестовой модели' } };
+    };
+  };
+  const voice = await openPage(browser, '#/home', { settle: 600, patchNative: patch });
+  takeErrors(voice);
+  await emit(voice, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(900);
+  const voiceState = await voice.evaluate(() => ({ body: document.body.innerText, prompts: window.__prompts, calls: window.__bridgeCalls || [] }));
+  record('безопасность', 'неподтверждённое выделение не запускает голосовую команду',
+    /Выделение не подтверждено/.test(voiceState.body) && !/Слушаю/.test(voiceState.body) && voiceState.prompts.length === 0 && !voiceState.calls.some((c) => c.channel === 'text:replace-selection'));
+  record('безопасность', 'голосовая команда без выделения: без ошибок консоли', takeErrors(voice).length === 0);
+  await voice.close();
+
+  const hotkey = await openPage(browser, '#/hotkeys', { settle: 400, patchNative: patch });
+  takeErrors(hotkey);
+  const preset = await hotkey.evaluate(() => (window.__e2e.read('zs.presets') || [])[0]?.id);
+  await emit(hotkey, 'text-action', preset);
+  await sleep(900);
+  const hotkeyState = await hotkey.evaluate(() => ({ body: document.body.innerText, prompts: window.__prompts, calls: window.__bridgeCalls || [] }));
+  record('безопасность', 'неподтверждённое выделение не запускает AI-инструкцию',
+    Boolean(preset) && /Выделение не подтверждено/.test(hotkeyState.body) && hotkeyState.prompts.length === 0 && !hotkeyState.calls.some((c) => c.channel === 'text:replace-selection'));
+  record('безопасность', 'AI-инструкция без выделения: без ошибок консоли', takeErrors(hotkey).length === 0);
+  await hotkey.close();
+
+  const agent = await openPage(browser, '#/home', { settle: 500, settings: { aiEndpoint: 'http://localhost:11434' }, patchNative: patch });
+  takeErrors(agent);
+  await emit(agent, 'hotkey', { type: 'agent' });
+  await sleep(1200);
+  const agentState = await agent.evaluate(() => ({ body: document.body.innerText, prompts: window.__prompts }));
+  record('безопасность', 'агент предупреждает и не отправляет неподтверждённый контекст',
+    /Выделение не подтверждено/.test(agentState.body) && /Агент ответит без контекста/.test(agentState.body) && agentState.prompts.length === 1 && !/Контекст:|старый секрет|unverified/.test(agentState.prompts[0]));
+  record('безопасность', 'агент без подтверждённого выделения: без ошибок консоли', takeErrors(agent).length === 0);
+  await agent.close();
+}
+
 // Отмена до получения выделения не должна отправлять данные в модель.
 async function scenarioAgentSelectionCancel(browser) {
   const page = await openPage(browser, '#/home', {
@@ -9294,6 +9336,7 @@ async function main() {
       ['чистая установка', scenarioFreshInstall],
       ['снимок экрана', scenarioScreenshotOnce],
       ['диктовка с учётом экрана', scenarioScreenAware],
+      ['безопасное чтение выделения', scenarioSelectionUnverified],
       ['агент отмена выделения', scenarioAgentSelectionCancel],
       ['агент отмена и повтор', scenarioAgentCancelAndRetry],
       ['агент таймаут', scenarioAgentTimeout],

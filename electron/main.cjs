@@ -3084,38 +3084,35 @@ function sendKeys(keys, onDone, { timeout } = {}) {
 
 /**
  * Забрать выделенный текст из активного окна: уходим в трей, жмём Ctrl+C,
- * читаем буфер. Возвращает '' если в буфере не текст.
+ * читаем буфер. На Windows неизвестный результат возвращается без текста.
  */
-function readSelection() {
-  return new Promise((resolve) => {
-    if (process.platform !== 'win32') {
-      resolve(clipboard.readText() || '');
-      return;
-    }
-    const previous = clipboard.readText();
-    mainWindow?.blur();
-    // С помощником не нужно ждать запуск PowerShell: Ctrl+C уходит сразу,
-    // остаётся только дать приложению положить текст в буфер.
+async function readSelection() {
+  if (process.platform !== 'win32') return clipboard.readText() || '';
+  const unverified = { text: '', reason: 'unverified' };
+  let previous;
+  try { previous = clipboard.readText(); } catch { return unverified; }
+  mainWindow?.blur();
+  let copied = false;
+  try {
     if (inputHost.available()) {
-      setTimeout(() => {
-        inputHost.copy().then(() => {
-          setTimeout(() => {
-            const text = clipboard.readText();
-            resolve(text && text !== previous ? text : text || '');
-          }, 160);
-        });
-      }, 60);
-      return;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const result = await inputHost.copy();
+      copied = result?.ok === true;
+      if (copied) await new Promise((resolve) => setTimeout(resolve, 160));
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      copied = await new Promise((resolve) => sendKeys('^c', resolve, { timeout: 8000 }));
+      if (copied) await new Promise((resolve) => setTimeout(resolve, 220));
+      mainWindow?.focus();
     }
-    setTimeout(() => {
-      sendKeys('^c');
-      setTimeout(() => {
-        const text = clipboard.readText();
-        mainWindow?.focus();
-        resolve(text && text !== previous ? text : text || '');
-      }, 220);
-    }, 120);
-  });
+    if (!copied) return unverified;
+    const text = clipboard.readText();
+    // Сравнение отбрасывает старый буфер, но не доказывает, кто его изменил.
+    // Одинаковый текст в выделении и буфере намеренно считается неизвестным.
+    return text && text !== previous ? text : unverified;
+  } catch {
+    return unverified;
+  }
 }
 
 /** Заменить выделение результатом: кладём в буфер и жмём Ctrl+V. */

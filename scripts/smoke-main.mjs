@@ -791,6 +791,49 @@ await check('меню трея показывает актуальное соч�
   return Boolean(item && /Ctrl \+ Shift \+ D/.test(item.label) && /Диктовка/.test(JSON.stringify(last)));
 });
 
+await check('чтение выделения: старый буфер не выдаётся за выделение', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, copy = host.copy;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  try {
+    clipboardText.value = 'старый секрет из буфера';
+    host.copy = async () => ({ ok: true });
+    const unchanged = await handlers.get('text:read-selection')({});
+    if (unchanged?.reason !== 'unverified' || unchanged?.text) throw new Error(`старый буфер принят: ${JSON.stringify(unchanged)}`);
+    host.copy = async () => { clipboardText.value = 'новый буфер'; return { ok: false, reason: 'timeout' }; };
+    const failed = await handlers.get('text:read-selection')({});
+    if (failed?.reason !== 'unverified' || failed?.text) throw new Error(`неподтверждённое копирование принято: ${JSON.stringify(failed)}`);
+    host.copy = async () => { throw new Error('потерян ответ IPC'); };
+    const rejected = await handlers.get('text:read-selection')({});
+    if (rejected?.reason !== 'unverified' || rejected?.text) throw new Error('исключение COPY выдало старый буфер');
+    host.copy = async () => { clipboardText.value = 'реально скопированное выделение'; return { ok: true }; };
+    const success = await handlers.get('text:read-selection')({});
+    if (success !== 'реально скопированное выделение') throw new Error(`новое выделение потеряно: ${JSON.stringify(success)}`);
+  } finally {
+    host.available = available; host.copy = copy;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('чтение выделения: отказ резервного SendKeys не возвращает старый буфер', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => false;
+  spawnPlan.execError = true;
+  try {
+    clipboardText.value = 'предыдущий буфер';
+    const result = await handlers.get('text:read-selection')({});
+    if (result?.reason !== 'unverified' || result?.text) throw new Error('неуспешный SendKeys выдал старый буфер');
+  } finally {
+    spawnPlan.execError = false; host.available = available;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
 await check('автовставка из буфера: после потери ответа нет второго Ctrl+V', async () => {
   const platform = process.platform;
   const host = require(path.resolve('electron/inputHost.cjs')).host;

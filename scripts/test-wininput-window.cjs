@@ -194,6 +194,31 @@ async function main() {
           assert.equal(after.text, previous, `Electron ${mode}: прежний буфер не сохранён`);
           console.log(`Electron IPC ${mode}: текст получен окном, прежний буфер сохранён (метод ${result.method})`);
         }
+        if (process.env.CI === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+          await page.waitForFunction(async () => Boolean((await window.zspeakly.native.inputStatus())?.helper?.ready), { timeout: 30000, polling: 300 });
+          const oldClipboard = 'Старый синтетический буфер';
+          const selected = 'Выделенный синтетический текст';
+          await command('clipboard', oldClipboard);
+          assert.equal(await active(), true, 'перед чтением выделения потерян фокус');
+          await command('selectText', selected);
+          assert.equal((await command('state')).foreground, true, 'фокус изменился до Ctrl+C');
+          assert.equal(await page.evaluate(() => window.zspeakly.native.readSelection()), selected);
+          assert.equal((await command('readClipboard')).text, selected);
+          // The selected text equals the existing clipboard: deliberately fail closed.
+          assert.equal(await active(), true, 'перед одинаковым выделением потерян фокус');
+          await command('selectText', selected);
+          const same = await page.evaluate(() => window.zspeakly.native.readSelection());
+          assert.equal(same.reason, 'unverified', JSON.stringify(same));
+          assert.equal(same.text, '');
+          await command('clipboard', oldClipboard);
+          assert.equal(await active(), true, 'перед отсутствующим выделением потерян фокус');
+          await command('deselectText');
+          const none = await page.evaluate(() => window.zspeakly.native.readSelection());
+          assert.equal(none.reason, 'unverified', JSON.stringify(none));
+          assert.equal(none.text, '');
+          assert.equal((await command('readClipboard')).text, oldClipboard);
+          console.log('SELECTION_STALE_CLIPBOARD_E2E_OK: реальный Ctrl+C, отсутствие выделения и совпадающий текст');
+        }
         // Only disposable CI may start with a deliberately empty system clipboard.
         if (process.env.CI === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
           const text = 'Синтетическая вставка в пустой буфер';

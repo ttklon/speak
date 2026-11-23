@@ -1384,7 +1384,13 @@ export function DictationProvider({ children }) {
       diag.warn('agent', 'Истекло время ожидания агента');
     }, 25000);
     try {
-      const source = await (window.zspeakly?.native?.readSelection?.() || Promise.resolve(''));
+      let source = '';
+      try {
+        if (window.zspeakly?.native?.readSelection) source = await readSelectionText();
+      } catch {
+        if (!isCurrent()) return;
+        pushToast({ title: 'Выделение не подтверждено', description: 'Агент ответит без контекста. Проверьте выделение и буфер.', tone: 'warn' });
+      }
       if (!isCurrent()) return;
       const prompt = source && String(source).trim()
         ? `Контекст:\n${String(source).slice(0, 4000)}\n\nВопрос: ${base}`
@@ -1473,15 +1479,20 @@ export function DictationProvider({ children }) {
       pushToast({ title: 'Не удалось получить выделение вовремя', description: 'Попробуйте снова.', tone: 'warn' });
     }, 5000);
     let selection = '';
+    let selectionError = false;
     try {
       selection = String((await readSelectionText()) || '').trim();
     } catch {
-      selection = '';
+      selectionError = true;
     }
     clearTimeout(timer);
     if (commandRequestRef.current !== request) return;
     commandRequestRef.current = null;
     if (recRef.current || busy()) return;
+    if (selectionError) {
+      pushToast({ title: 'Выделение не подтверждено', description: 'Если выделение совпадает с буфером, скопируйте другой безопасный текст и снова выделите нужное.', tone: 'warn', ttl: 9000 });
+      return;
+    }
     if (!selection) {
       pushToast({
         title: COMMAND_ERRORS['no-selection'].title,

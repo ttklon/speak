@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { writeSelectionText } from './hotkeys/selection.js';
+import { readSelectionText, writeSelectionText } from './hotkeys/selection.js';
 
 afterEach(() => { delete window.zspeakly; });
 describe('результат замены выделения', () => {
@@ -16,5 +16,21 @@ describe('результат замены выделения', () => {
     expect(await writeSelectionText('тест')).toBe('inserted');
     window.zspeakly.native.replaceSelection = async () => false;
     expect(await writeSelectionText('тест')).toBe('failed');
+  });
+});
+
+
+describe('чтение выделения', () => {
+  it('не передаёт неподтверждённый буфер в команду', async () => {
+    window.zspeakly = { native: { readSelection: async () => ({ text: 'старый секрет', reason: 'unverified' }) } };
+    await expect(readSelectionText()).rejects.toMatchObject({ code: 'selection-unverified' });
+  });
+  it('принимает строку, пустое значение и прежний объект с текстом', async () => {
+    window.zspeakly = { native: { readSelection: async () => 'выделение' } };
+    expect(await readSelectionText()).toBe('выделение');
+    window.zspeakly.native.readSelection = async () => '';
+    expect(await readSelectionText()).toBe('');
+    window.zspeakly.native.readSelection = async () => ({ text: 'другой мост' });
+    expect(await readSelectionText()).toBe('другой мост');
   });
 });

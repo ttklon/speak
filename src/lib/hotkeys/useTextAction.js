@@ -77,7 +77,7 @@ export function useTextAction() {
           tone: where === 'uncertain' || where === 'failed' || note ? 'warn' : 'success',
         });
       } catch (err) {
-        push({ title: 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });
+        push({ title: err?.code === 'selection-unverified' ? 'Выделение не подтверждено' : 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });
       } finally {
         if (mounted.current) setBusy(null);
       }
