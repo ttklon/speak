@@ -171,6 +171,74 @@ describe('помощник ввода', () => {
     }
   });
 
+  it('таймаут TYPE не доказывает, что текст не попал в окно', async () => {
+    vi.useFakeTimers();
+    const proc = fakeProcess();
+    const host = new InputHost({ timeoutMs: 100, launch: () => proc });
+    try {
+      const pending = host.type('привет');
+      await vi.advanceTimersByTimeAsync(101);
+      expect(await pending).toMatchObject({ ok: false, typed: 0, reason: 'timeout', uncertain: true });
+    } finally { host.stop(); vi.useRealTimers(); }
+  });
+
+  it('поздний ответ после таймаута не выдаётся за ответ следующей команды', async () => {
+    vi.useFakeTimers();
+    const processes = [];
+    const host = new InputHost({ timeoutMs: 100, launch: () => {
+      const proc = fakeProcess(); processes.push(proc); return proc;
+    } });
+    try {
+      const first = host.type('один');
+      await vi.advanceTimersByTimeAsync(101);
+      expect((await first).reason).toBe('timeout');
+      const second = host.type('два');
+      let settled = false;
+      second.then(() => { settled = true; });
+      processes[0].reply({ ok: true, typed: 3 });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(processes).toHaveLength(2);
+      processes[1].reply({ ok: true, typed: 3 });
+      expect(await second).toMatchObject({ ok: true, typed: 3 });
+    } finally { host.stop(); vi.useRealTimers(); }
+  });
+
+  it('при таймауте все отправленные команды становятся неопределёнными, новый запуск ждёт завершения старого', async () => {
+    vi.useFakeTimers();
+    const processes = [];
+    const host = new InputHost({ timeoutMs: 100, launch: () => {
+      const proc = fakeProcess(); proc.kill = () => {}; processes.push(proc); return proc;
+    } });
+    try {
+      const first = host.type('один');
+      await vi.advanceTimersByTimeAsync(20);
+      const second = host.type('два');
+      await vi.advanceTimersByTimeAsync(81);
+      expect(await first).toMatchObject({ reason: 'timeout', uncertain: true });
+      expect(await second).toMatchObject({ reason: 'host-aborted', uncertain: true });
+      expect(await host.type('три')).toMatchObject({ reason: 'host-restarting', uncertain: true });
+      expect(processes).toHaveLength(1);
+      processes[0].emit('error', new Error('kill failed'));
+      expect(await host.type('четыре')).toMatchObject({ reason: 'host-restarting', uncertain: true });
+      processes[0].emit('exit', 0);
+      const fresh = host.type('пять');
+      expect(processes).toHaveLength(2);
+      processes[0].reply({ ok: true, typed: 4 });
+      processes[0].emit('close', 0);
+      expect(host.status().running).toBe(true);
+      processes[1].reply({ ok: true, typed: 4 });
+      expect(await fresh).toMatchObject({ ok: true, typed: 4 });
+    } finally { host.stop(); vi.useRealTimers(); }
+  });
+
+  it('отказ TYPE без подтверждённого количества не является нулевым вводом', async () => {
+    const proc = fakeProcess({ onCommand: () => ({ ok: false, reason: 'exception' }) });
+    const host = new InputHost({ launch: () => proc });
+    try { expect(await host.type('тест')).toMatchObject({ ok: false, typed: 0, uncertain: true }); }
+    finally { host.stop(); }
+  });
+
   it('на не-Windows помощник честно говорит, что недоступен', async () => {
     const host = new InputHost({ platform: 'linux' });
     expect(host.available()).toBe(false);

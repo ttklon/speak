@@ -12,7 +12,7 @@
  * Честность важнее удобства: скрипт печатает прогресс, и если SendInput успел
  * отправить только часть символов, вызывающий код обязан НЕ повторять вставку
  * через буфер — иначе текст задвоится. Поэтому sendUnicodeText возвращает
- * точное число отправленных символов.
+ * нижнюю оценку отправленных UTF-16 единиц; подтверждение доставки отсутствует.
  */
 
 const WINDOWS_ONLY = 'win32';
@@ -147,14 +147,14 @@ function parseOutput(out, total) {
 function sendUnicodeText({ text, execFile, timeoutMs = 20000, platform = process.platform } = {}) {
   const value = String(text || '');
   const total = value.length;
-  if (!value) return Promise.resolve({ ok: false, sent: 0, total: 0, reason: 'empty' });
+  if (!value) return Promise.resolve({ ok: false, sent: 0, total: 0, reason: 'empty', uncertain: false });
   if (platform !== WINDOWS_ONLY) {
     // На других системах честно говорим, что приём недоступен, — вызывающий
     // код откатится на буфер, а не сделает вид, что ввёл текст.
-    return Promise.resolve({ ok: false, sent: 0, total, reason: 'windows-only', skipped: true });
+    return Promise.resolve({ ok: false, sent: 0, total, reason: 'windows-only', skipped: true, uncertain: false });
   }
   if (typeof execFile !== 'function') {
-    return Promise.resolve({ ok: false, sent: 0, total, reason: 'no-exec' });
+    return Promise.resolve({ ok: false, sent: 0, total, reason: 'no-exec', uncertain: false });
   }
 
   const child = execFile(
@@ -183,15 +183,20 @@ function sendUnicodeText({ text, execFile, timeoutMs = 20000, platform = process
       collected += String(d);
     });
     child.on?.('error', (err) => {
-      finish({ ok: false, sent: 0, total, reason: String(err?.message || err) });
+      finish({ ok: false, sent: 0, total, reason: String(err?.message || err), uncertain: true });
     });
     child.on?.('close', (code) => {
       const parsed = parseOutput(collected, total);
+      const ok = parsed.ok && code === 0;
+      // err:empty выдаётся до цикла SendInput. Любой другой обрыв может
+      // скрыть уже отправленные клавиши, даже если счётчик ещё не пришёл.
+      const noInput = code === 3 && collected.trim() === 'err:empty';
       finish({
-        ok: parsed.ok && code === 0,
+        ok,
         sent: parsed.sent,
         total,
         reason: parsed.reason || (code === 0 ? '' : `exit ${code}`),
+        uncertain: !ok && !noInput,
       });
     });
   });

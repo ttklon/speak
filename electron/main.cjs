@@ -2054,8 +2054,21 @@ function registerIpc() {
         lastInsertInfo = { at: Date.now(), ok: true, method: 'sendinput', ms: Date.now() - started, reason: '' };
         return { ok: true, method: 'sendinput', ms: Date.now() - started };
       }
+      if (direct && typeof direct === 'object' && direct.uncertain) {
+        // Не знаем, сколько уже введено: повтор и слепой Backspace опасны.
+        lastInsertedText = '';
+        lastInsertedAt = 0;
+        lastInsertTarget = { app: '', title: '', at: 0 };
+        lastInsertInfo = { at: Date.now(), ok: false, method: 'sendinput', ms: Date.now() - started,
+          reason: 'результат ввода не подтверждён' };
+        return { ok: false, method: 'sendinput', uncertain: true, total: value.length,
+          reason: 'результат ввода не подтверждён' };
+      }
       if (direct && typeof direct === 'object' && direct.partial > 0) {
-        // Часть уже в окне: буфером дублировать нельзя, иначе текст задвоится.
+        // Часть уже в окне: нельзя повторять или стирать всю фразу вслепую.
+        lastInsertedText = '';
+        lastInsertedAt = 0;
+        lastInsertTarget = { app: '', title: '', at: 0 };
         lastClipboardText = clipboard.readText() || '';
         lastInsertInfo = {
           at: Date.now(),
@@ -3154,8 +3167,9 @@ function hideWindowForInsert() {
  *
  * Возвращает:
  *   true — текст введён целиком;
- *   { ok: false, partial, total } — введена только часть, повторять нельзя;
- *   null — SendInput не дал ничего, можно спокойно идти путём буфера.
+ *   { ok: false, partial, total } — подтверждена часть, повторять нельзя;
+ *   { uncertain: true } — результат неизвестен, повторять нельзя;
+ *   null — известен отказ до ввода, можно попробовать буфер.
  */
 async function insertViaSendInput(value) {
   hideWindowForInsert();
@@ -3172,6 +3186,10 @@ async function insertViaSendInput(value) {
       restoreWindowAfterInsert();
       return { ok: false, partial: fast.typed, total: fast.total, reason: fast.reason || '' };
     }
+    if (fast?.uncertain) {
+      restoreWindowAfterInsert();
+      return { ok: false, uncertain: true };
+    }
   }
   res = await sendUnicodeText({ text: value, execFile });
   restoreWindowAfterInsert();
@@ -3182,6 +3200,7 @@ async function insertViaSendInput(value) {
     console.warn('[insert] SendInput ввёл часть текста:', res.sent, 'из', res.total);
     return { ok: false, partial: res.sent, total: res.total, reason: res.reason || '' };
   }
+  if (res.uncertain) return { ok: false, uncertain: true };
   return null;
 }
 

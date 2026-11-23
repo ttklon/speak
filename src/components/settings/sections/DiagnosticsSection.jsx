@@ -199,10 +199,10 @@ export default function DiagnosticsSection() {
     try {
       res = await bridge.insertText(INSERT_PROBE);
     } catch (error) {
-      res = { ok: false, reason: String(error?.message || error) };
+      res = { ok: false, uncertain: true, reason: 'ответ не получен' };
     }
     setProbeBusy(false);
-    setProbe(res || { ok: false, reason: 'нет ответа' });
+    setProbe(res || { ok: false, uncertain: true, reason: 'нет ответа' });
     const status = bridge.inputStatus ? await bridge.inputStatus().catch(() => null) : null;
     if (status) setInputStatus(status);
     diag.info('insert', res?.ok ? 'Проверка вставки: текст доставлен' : 'Проверка вставки: отказ', {
@@ -220,7 +220,7 @@ export default function DiagnosticsSection() {
         title: appeared ? 'Вставка работает' : 'Вставка не дошла до окна',
         description: appeared
           ? 'Дальше диктовка будет вставляться так же.'
-          : 'Причина и способ записаны в журнал. Текст всегда остаётся в буфере — его можно вставить через Ctrl+V.',
+          : 'Причина и способ записаны в журнал. Проверьте целевое окно и настройки вставки.',
         tone: appeared ? 'success' : 'warn',
         ttl: 10000,
       });
@@ -732,7 +732,9 @@ export default function DiagnosticsSection() {
                 : probe
                   ? probe.ok
                     ? 'Текст отправлен в активное окно. Появился?'
-                    : `Вставка отказала: ${probe.reason || 'причина неизвестна'}. Текст остался в буфере — вставьте через Ctrl+V.`
+                    : probe.uncertain || probe.partial > 0
+                      ? 'Результат ввода не подтверждён: текст мог попасть в окно полностью или частично. Проверьте окно перед повтором.'
+                      : `Вставка отказала: ${probe.reason || 'причина неизвестна'}. Текст остался в буфере — вставьте через Ctrl+V.`
                   : 'Нажмите, переключитесь в Блокнот или Word и дождитесь пробного текста.'}
             </div>
           </div>

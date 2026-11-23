@@ -21,8 +21,8 @@
  *   TYPE <base64>   → {"ok":true,"typed":N}        текст через SendInput
  *   TARGET          → {"ok":true,"title64":"…"}    заголовок активного окна
  *
- * Если процесс не поднялся или умер, вызывающий код обязан честно откатиться
- * на прежний путь (одноразовый PowerShell) — молча «вставить ничего» нельзя.
+ * Если процесс не поднялся, можно использовать прежний путь. После отправки
+ * команды потеря ответа не доказывает, что ввод не состоялся: повтор опасен.
  */
 
 const { spawn } = require('node:child_process');
@@ -195,6 +195,7 @@ class InputHost {
     this.platform = platform;
     this.timeoutMs = timeoutMs;
     this.proc = null;
+    this.retiring = null;
     this.ready = false;
     this.pending = [];
     this.buffer = '';
@@ -214,6 +215,7 @@ class InputHost {
    */
   start() {
     if (this.proc) return true;
+    if (this.retiring) return false;
     if (!this.available()) return false;
     if (Date.now() < this.retryAfter) return false;
     try {
@@ -239,20 +241,22 @@ class InputHost {
     }
     this.stats.spawned += 1;
     this.buffer = '';
-    this.proc.stdout?.setEncoding?.('utf8');
-    this.proc.stdout?.on?.('data', (chunk) => this._onData(chunk));
-    this.proc.on?.('error', () => this._onExit());
-    this.proc.on?.('close', () => this._onExit());
-    this.proc.on?.('exit', () => this._onExit());
+    const proc = this.proc;
+    proc.stdout?.setEncoding?.('utf8');
+    proc.stdout?.on?.('data', (chunk) => { if (this.proc === proc) this._onData(chunk); });
+    proc.on?.('error', () => { if (this.proc === proc) this._abort('host-error'); });
+    proc.on?.('close', () => this._onExit(proc));
+    proc.on?.('exit', () => this._onExit(proc));
     return true;
   }
 
-  _onExit() {
+  _onExit(proc) {
+    if (this.retiring === proc) { this.retiring = null; return; }
+    if (this.proc !== proc) return; // позднее событие старого процесса
     const wasReady = this.ready;
     this.proc = null;
     this.ready = false;
-    // Не отвеченные запросы нельзя оставлять висеть: вызывающий код должен
-    // получить отказ и откатиться на одноразовый путь.
+    // Не отвеченные запросы нельзя оставлять висеть; команда могла исполниться.
     const pending = this.pending;
     this.pending = [];
     for (const item of pending) {
@@ -264,6 +268,26 @@ class InputHost {
     // запрещён политикой или падает при старте.
     this.failures = wasReady ? 0 : this.failures + 1;
     this.retryAfter = Date.now() + Math.min(30000, 1000 * 2 ** Math.min(4, this.failures));
+  }
+
+  // При потере порядка ответов закрываем весь поток команд. Результат любого
+  // уже отправленного запроса неизвестен; ожидание завершения процесса не
+  // доказывает, что он не успел нажать клавиши.
+  _abort(reason, timedOut) {
+    const proc = this.proc;
+    if (!proc) return;
+    this.proc = null;
+    this.retiring = proc;
+    this.ready = false;
+    this.buffer = '';
+    const pending = this.pending;
+    this.pending = [];
+    for (const item of pending) {
+      this.stats.failed += 1;
+      clearTimeout(item.timer);
+      item.resolve({ ok: false, reason: item === timedOut ? reason : 'host-aborted' });
+    }
+    try { proc.kill?.(); } catch { /* блокируем запуск, пока не придёт exit */ }
   }
 
   _onData(chunk) {
@@ -299,23 +323,17 @@ class InputHost {
 
   /** Отправить команду и дождаться ответа. Никогда не бросает. */
   request(command) {
-    if (!this.start()) return Promise.resolve({ ok: false, reason: 'host-not-started' });
+    if (!this.start()) return Promise.resolve({ ok: false, reason: this.retiring ? 'host-restarting' : 'host-not-started' });
     this.stats.requests += 1;
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        const index = this.pending.findIndex((p) => p.timer === timer);
-        if (index >= 0) this.pending.splice(index, 1);
-        this.stats.failed += 1;
-        resolve({ ok: false, reason: 'timeout' });
-      }, this.timeoutMs);
-      this.pending.push({ resolve, timer });
+      const item = { resolve, timer: null };
+      item.timer = setTimeout(() => this._abort('timeout', item), this.timeoutMs);
+      this.pending.push(item);
       try {
         this.proc.stdin.write(`${command}\n`);
       } catch {
-        clearTimeout(timer);
-        this.pending.pop();
-        this.stats.failed += 1;
-        resolve({ ok: false, reason: 'write-failed' });
+        // Даже исключение записи не гарантирует, что команда не дошла.
+        this._abort('write-failed', item);
       }
     });
   }
@@ -349,12 +367,13 @@ class InputHost {
     const value = String(text || '');
     if (!value) return Promise.resolve({ ok: false, typed: 0, reason: 'empty' });
     const encoded = Buffer.from(value, 'utf8').toString('base64');
-    return this.request(`TYPE ${encoded}`).then((res) => ({
-      ok: res?.ok === true && Number(res?.typed) === value.length,
-      typed: Number(res?.typed) || 0,
-      total: value.length,
-      reason: res?.reason || '',
-    }));
+    return this.request(`TYPE ${encoded}`).then((res) => {
+      const typed = Number.isInteger(res?.typed) && res.typed >= 0 && res.typed <= value.length ? res.typed : 0;
+      const ok = res?.ok === true && typed === value.length;
+      return { ok, typed, total: value.length, reason: res?.reason || '',
+        // Только отказ запуска гарантирует, что команда не отправлялась.
+        uncertain: !ok && res?.reason !== 'host-not-started' };
+    });
   }
 
   status() {
@@ -369,15 +388,7 @@ class InputHost {
   }
 
   stop() {
-    const proc = this.proc;
-    this.proc = null;
-    this.ready = false;
-    try {
-      proc?.stdin?.end?.();
-      proc?.kill?.();
-    } catch {
-      /* процесс уже мёртв */
-    }
+    this._abort('host-stopped');
   }
 }
 

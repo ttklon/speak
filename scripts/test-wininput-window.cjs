@@ -249,6 +249,40 @@ async function main() {
           const build = process.env.ZS_TEST_PACKAGED_EXE ? 'приложение после NSIS' : packaged ? 'упакованное приложение' : 'Electron из исходников';
           console.log(`Виртуальная диктовка Windows + ${build} + GigaAM → WinForms: ${entry.text}; метод ${inputStatus.last.method}, буфер сохранён.`);
         }
+        if (!packaged && process.env.CI === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+          // Separate process with the real host and IPC: only the host's
+          // acknowledgement is replaced after a confirmed real key injection.
+          await browser.close();
+          browser = await puppeteer.launch({
+            executablePath: executable, headless: false, ignoreDefaultArgs: true,
+            env: { ...process.env, ZS_E2E_PROFILE: profile, ZSPEAKLY_DEV_URL: 'none', ZS_INPUT_LOST_E2E: '1' },
+            args: [path.resolve('scripts/e2e/electron-input-lost-entry.cjs')], timeout: 60000,
+          });
+          const lostTarget = await browser.waitForTarget((t) => t.type() === 'page' && t.url().includes('index.html'), { timeout: 30000 });
+          const lostPage = await lostTarget.page();
+          await lostPage.waitForSelector('.app-window', { timeout: 30000 });
+          await lostPage.waitForFunction(async () => Boolean((await window.zspeakly?.native?.inputStatus())?.helper?.ready), { timeout: 30000, polling: 300 });
+          assert.equal(await lostPage.evaluate(() => window.zspeakly.store.getSync('zs:test-id')), nonce);
+          await lostPage.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'sendinput' });
+          });
+          const text = 'Один реальный ввод при потере ответа';
+          const previous = 'Тестовый буфер при потере ответа';
+          await command('clear');
+          await command('clipboard', previous);
+          assert.equal(await active(), true, 'перед проверкой потери ответа потерян фокус');
+          const result = await lostPage.evaluate((value) => window.zspeakly.native.insertText(value), text);
+          assert.equal(result.ok, false, JSON.stringify(result));
+          assert.equal(result.uncertain, true, JSON.stringify(result));
+          await assertText(text, 'неподтверждённый ввод');
+          await sleep(1500);
+          assert.equal((await command('state')).text, text, 'текст повторно отправлен после потери ответа');
+          assert.equal((await command('readClipboard')).text, previous, 'буфер изменился после потери ответа');
+          const undo = await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert());
+          assert.equal(undo.reason, 'нечего убирать', JSON.stringify(undo));
+          console.log('SENDINPUT_LOST_ACK_E2E_OK: реальный ввод в WinForms однократно; ответ искусственно потерян, повтор и слепая отмена запрещены');
+        }
       } finally {
         if (browser) await browser.close();
         padded?.cleanup();

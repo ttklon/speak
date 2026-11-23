@@ -76,6 +76,19 @@ describe('проверка настоящего движка в CI', () => {
     expect(target).toContain('[System.Windows.Forms.Clipboard]::Clear()');
   });
 
+  it('проверка потерянного подтверждения защищена и проверяет реальный ввод', () => {
+    const runner = readFileSync('scripts/test-wininput-window.cjs', 'utf8');
+    const entry = readFileSync('scripts/e2e/electron-input-lost-entry.cjs', 'utf8');
+    expect(entry).toContain("process.platform !== 'win32'");
+    expect(entry).toContain("process.env.CI !== 'true'");
+    expect(entry).toContain("process.env.RUNNER_ENVIRONMENT !== 'github-hosted'");
+    expect(entry).toContain("process.env.ZS_INPUT_LOST_E2E !== '1'");
+    expect(entry).toContain('const result = await type(text)');
+    expect(runner).toContain('SENDINPUT_LOST_ACK_E2E_OK');
+    expect(runner).toContain("await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert())");
+    expect(runner).toContain("assert.equal((await command('state')).text, text");
+  });
+
   it('ошибка выполненного теста не подавляется настройкой шага', () => {
     const step = workflow.split('      - name: Тест настоящего движка распознавания (whisper.cpp)')[1]?.split('\n  package:')[0];
     expect(step).toBeTruthy();

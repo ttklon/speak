@@ -2346,12 +2346,58 @@ async function scenarioInsertFailed(browser) {
   record(
     'сценарии',
     'вставка без буфера: обрыв на середине — правдивый тост, без повтора',
-    /введено 7 из 40/i.test(partial.toast) && partial.inserts === 1,
+    /отправлено не менее 7 из 40/i.test(partial.toast) && partial.inserts === 1,
     `${partial.inserts} вставок · ${partial.toast.slice(0, 70)}`,
   );
   const partialErrors = takeErrors(partialPage);
   record('сценарии', 'вставка без буфера: без ошибок консоли', partialErrors.length === 0, partialErrors[0] || '');
   await partialPage.close();
+
+  const uncertainPage = await openPage(browser, '#/home', {
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'неопределённый ввод' });
+      window.__insertCount = 0;
+      window.zspeakly.native.insertText = async () => {
+        window.__insertCount += 1;
+        return { ok: false, method: 'sendinput', uncertain: true };
+      };
+    },
+  });
+  takeErrors(uncertainPage);
+  await uncertainPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await uncertainPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const uncertain = await uncertainPage.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
+    inserts: window.__insertCount,
+    history: (window.__e2e.read('zs.dictations') || [])[0]?.text || '',
+  }));
+  record('сценарии', 'неподтверждённый ввод: предупреждение без обещания Ctrl+V и повтора',
+    /не удалось подтвердить ввод/i.test(uncertain.toast) && /проверьте/i.test(uncertain.toast)
+      && !/нажмите Ctrl\+V/i.test(uncertain.toast) && uncertain.inserts === 1 && /неопределённый ввод/i.test(uncertain.history),
+    `${uncertain.inserts} вставок · ${uncertain.toast.slice(0, 120)}`);
+  const uncertainErrors = takeErrors(uncertainPage);
+  record('сценарии', 'неподтверждённый ввод: без ошибок консоли', uncertainErrors.length === 0, uncertainErrors[0] || '');
+  await uncertainPage.close();
+
+  const rejectedPage = await openPage(browser, '#/home', {
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'потерян ответ от вставки' });
+      window.zspeakly.native.insertText = async () => { throw new Error('IPC response lost'); };
+    },
+  });
+  takeErrors(rejectedPage);
+  await rejectedPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await rejectedPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const rejectedToast = await rejectedPage.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
+  record('сценарии', 'потеря ответа IPC предупреждает проверить окно, а не обещает буфер',
+    /Не удалось подтвердить ввод/.test(rejectedToast) && /Проверьте окно/.test(rejectedToast) && !/нажмите Ctrl\+V/i.test(rejectedToast));
+  const rejectedErrors = takeErrors(rejectedPage);
+  record('сценарии', 'потеря ответа IPC: без ошибок консоли', rejectedErrors.length === 0, rejectedErrors[0] || '');
+  await rejectedPage.close();
 }
 
 // Плавающая плашка не должна обещать живой текст там, где его нет: у whisper.cpp
@@ -6413,6 +6459,13 @@ async function scenarioDiagnostics(browser) {
       (/с ожидания/.test(speedGroup) || /Замеров пока нет/.test(speedGroup)),
     `${speedRows.slice(0, 120)} || ${speedGroup.slice(0, 120)}`,
   );
+  await page.evaluate(() => { window.zspeakly.native.insertText = async () => ({ ok: false, uncertain: true }); });
+  const probed = await clickIn(page, '', 'Проверить вставку');
+  await sleep(3500);
+  const probeText = await page.evaluate(() => document.body.innerText);
+  record('сценарии', 'диагностика: неизвестный результат ввода не обещает содержимое буфера',
+    probed && /Результат ввода не подтверждён/.test(probeText) && /Проверьте окно перед повтором/.test(probeText)
+      && !/Текст остался в буфере — вставьте через Ctrl\+V/.test(probeText));
   const errors = takeErrors(page);
   record('сценарии', 'диагностика: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();

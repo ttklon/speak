@@ -711,14 +711,24 @@ export function DictationProvider({ children }) {
           // говорим об этом, иначе диктовка выглядит «сломанной».
           Promise.resolve(native.insertText(cleaned))
             .then((res) => {
+              if (res && typeof res === 'object' && res.uncertain === true) {
+                pushToast({
+                  title: 'Не удалось подтвердить ввод',
+                  description: 'Текст мог попасть в окно полностью или частично. Проверьте его перед повтором; текст сохранён в истории диктовок.',
+                  tone: 'warn',
+                  ttl: 15000,
+                });
+                diag.warn('stt', 'Результат ввода неизвестен', { method: 'sendinput' });
+                return;
+              }
               // Вставка «без буфера» может оборваться на середине текста:
               // тогда буфер не трогали, дублировать нечего, но человек должен
               // знать, что часть фразы уже в окне, а часть — только в истории.
               if (res && typeof res === 'object' && res.partial > 0) {
                 pushToast({
-                  title: `Введено ${res.partial} из ${res.total || '?'} символов`,
+                  title: `Отправлено не менее ${res.partial} из ${res.total || '?'} символов`,
                   description:
-                    'Ввод прервался на середине. Остаток не вставляю, чтобы не задвоить, — он есть в истории диктовок.',
+                    'Ввод прервался. Проверьте окно перед повтором: текст мог попасть частично, он есть в истории диктовок.',
                   tone: 'warn',
                   ttl: 12000,
                 });
@@ -745,7 +755,14 @@ export function DictationProvider({ children }) {
                 });
               }
             })
-            .catch(() => {});
+            .catch(() => {
+              pushToast({
+                title: 'Не удалось подтвердить ввод',
+                description: 'Ответ приложения не получен. Проверьте окно перед повтором; текст сохранён в истории диктовок.',
+                tone: 'warn', ttl: 15000,
+              });
+              diag.warn('stt', 'Ответ о вводе не получен');
+            });
         }
         if (settingsRef.current.readAloud) {
           const readOnce = Date.now() - readFailWarnedAt.current > 5 * 60 * 1000;

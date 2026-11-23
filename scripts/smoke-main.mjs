@@ -904,10 +904,59 @@ await check('вставка без буфера: обрыв на середин�
     if (clipboardText.value !== 'чужой буфер') throw new Error(`буфер тронут: ${clipboardText.value}`);
     const usedPaste = spawnCalls.some((c) => (c.args || []).some((a) => /SendWait|\^v/.test(String(a))));
     if (usedPaste) throw new Error('после обрыва текст вставили буфером — будет дубль');
+    const undo = await handlers.get('text:undo-last')({});
+    if (undo?.reason !== 'нечего убирать') throw new Error(`частичный ввод можно стереть целиком: ${JSON.stringify(undo)}`);
   } finally {
     spawnPlan.sendInput = null;
     handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('неподтверждённый ввод: нет повтора через PowerShell и буфер', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available;
+  const type = host.type;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  host.available = () => true;
+  host.type = async (text) => ({ ok: false, typed: 0, total: text.length, reason: 'timeout', uncertain: true });
+  try {
+    clipboardText.value = 'содержимое до вставки';
+    spawnPlan.sendInput = { out: 'ok:22\n', code: 0 }; // старый код повторяет ввод
+    spawnCalls.length = 0;
+    const result = await handlers.get('text:insert')({}, 'уже могло быть введено');
+    if (!result || result.ok !== false || result.uncertain !== true) throw new Error(`не сообщили о неизвестном результате: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((call) => String(call.file).includes('powershell') || String(call.file).includes('mshta'))) throw new Error('ввод повторён другим способом');
+    if (clipboardText.value !== 'содержимое до вставки') throw new Error('буфер изменён');
+    const undo = await handlers.get('text:undo-last')({});
+    if (undo?.reason !== 'нечего убирать') throw new Error(`неопределённый ввод можно стереть вслепую: ${JSON.stringify(undo)}`);
+  } finally {
+    host.available = available; host.type = type; spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('без ответа одноразового SendInput не повторяем через буфер', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'sendinput' });
+  try {
+    clipboardText.value = 'предыдущий буфер';
+    spawnPlan.sendInput = { out: '', code: 1 };
+    spawnCalls.length = 0;
+    const result = await handlers.get('text:insert')({}, 'отправленный текст');
+    if (!result?.uncertain || result.ok !== false) throw new Error(`неопределённость скрыта: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((call) => String(call.file).includes('mshta'))) throw new Error('ввод повторён через Ctrl+V');
+    if (clipboardText.value !== 'предыдущий буфер') throw new Error('буфер изменён');
+  } finally {
+    spawnPlan.sendInput = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
   }
 });
 
