@@ -133,6 +133,70 @@ describe('запись экрана', () => {
     expect(ticks).not.toHaveBeenCalled();
   });
 
+  it('завершает запись при окончании видеодорожки, даже если звуковая ещё активна', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    let ended;
+    const video = { kind: 'video', stop: vi.fn(), addEventListener: vi.fn((type, cb) => { if (type === 'ended') ended = cb; }), removeEventListener: vi.fn() };
+    const audio = { kind: 'audio', stop: vi.fn() };
+    vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: async () => ({ getTracks: () => [video, audio] }) } });
+    const rec = await startScreenRecording();
+    expect(ended).toBeTypeOf('function');
+    ended();
+    expect(instances[0].state).toBe('inactive');
+    await vi.runAllTimersAsync();
+    expect((await rec.finished).blob.size).toBe(1024 * 1024);
+    expect(audio.stop).toHaveBeenCalled();
+    expect(video.removeEventListener).toHaveBeenCalledWith('ended', ended);
+  });
+
+  it('ошибка остановки по завершению видеодорожки освобождает все дорожки и отклоняет результат', async () => {
+    let ended;
+    const video = { kind: 'video', stop: vi.fn(), addEventListener: (_, cb) => { ended = cb; }, removeEventListener: vi.fn() };
+    const audio = { kind: 'audio', stop: vi.fn() };
+    vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: async () => ({ getTracks: () => [video, audio] }) } });
+    class BrokenRecorder {
+      static isTypeSupported() { return true; }
+      constructor() { this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() { throw new Error('stop failed'); }
+    }
+    vi.stubGlobal('MediaRecorder', BrokenRecorder);
+    const rec = await startScreenRecording();
+    const failure = expect(rec.finished).rejects.toThrow('Не удалось завершить запись');
+    ended();
+    await failure;
+    expect(video.stop).toHaveBeenCalled();
+    expect(audio.stop).toHaveBeenCalled();
+    expect(video.removeEventListener).toHaveBeenCalled();
+  });
+
+  it('при ошибке сборки Blob отклоняет результат вместо зависания', async () => {
+    const { tracks } = installDisplay();
+    class Recorder {
+      static isTypeSupported() { return true; }
+      constructor() { this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; this.onstop(); }
+    }
+    vi.stubGlobal('MediaRecorder', Recorder);
+    const rec = await startScreenRecording();
+    vi.stubGlobal('Blob', class { constructor() { throw new Error('allocation failed'); } });
+    await expect(rec.stop()).rejects.toThrow('Не удалось обработать запись');
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('помечает частичный результат, если MediaRecorder сообщил об ошибке', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    installDisplay();
+    const rec = await startScreenRecording();
+    instances[0].onerror?.({ error: new Error('capture error') });
+    const done = rec.stop();
+    await vi.runAllTimersAsync();
+    expect((await done).interrupted).toBe(true);
+  });
+
   it('после отмены игнорирует поздний dataavailable перед onstop', async () => {
     const { tracks } = installDisplay();
     let instance;

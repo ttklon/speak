@@ -3181,6 +3181,107 @@ async function scenarioScreenRecordingCleanup(browser) {
   await page.close();
 }
 
+async function scenarioScreenRecordingSave(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__savedVideos = [];
+    window.__recordStarts = 0;
+    window.__saveMode = 'ok';
+    window.zspeakly.native.saveFile = async (payload) => {
+      window.__savedVideos.push(payload);
+      if (window.__saveMode === 'wait') return new Promise((resolve) => { window.__resolveSave = () => resolve({ ok: true, path: 'C:\\Videos\\retry.webm' }); });
+      if (window.__saveMode === 'throw') throw new Error('disk failure');
+      if (window.__saveMode === 'fail') return { ok: false, reason: 'disk failure' };
+      return { ok: true, path: 'C:\\Videos\\test.webm' };
+    };
+    Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: async () => ({ getTracks: () => [{ kind: 'video', stop() {} }] }) });
+    window.MediaRecorder = class {
+      static isTypeSupported() { return true; }
+      constructor() { window.__recordStarts++; window.__testRecorder = this; this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        const bytes = new Uint8Array(1024 * 1024);
+        for (let i = 0; i < bytes.length; i++) bytes[i] = i % 251;
+        this.ondataavailable?.({ data: new Blob([bytes], { type: 'video/webm' }) });
+        this.onstop?.();
+      }
+    };
+  });
+  const start = async () => { await page.click('.clip-hotkey[title^="Запись экрана"]'); await sleep(250); };
+  await start();
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(2800);
+  let state = await page.evaluate(() => {
+    const saved = window.__savedVideos[0];
+    const bytes = saved?.base64 ? atob(saved.base64) : '';
+    let matches = bytes.length === 1024 * 1024;
+    for (let i = 0; matches && i < bytes.length; i++) matches = bytes.charCodeAt(i) === i % 251;
+    return { count: window.__savedVideos.length, matches, body: document.body.innerText };
+  });
+  record('сохранность', 'запись экрана: видео 1 МиБ передаётся целиком и один раз', state.count === 1 && state.matches && /Запись сохранена/.test(state.body));
+  await start();
+  await page.evaluate(() => window.__testRecorder.stop());
+  await sleep(2800);
+  state = await page.evaluate(() => ({ count: window.__savedVideos.length, body: document.body.innerText }));
+  record('сохранность', 'запись экрана: системная остановка тоже сохраняет один раз', state.count === 2 && /Запись сохранена/.test(state.body));
+  const savedEntries = ((await storeOf(page, 'zs.clipboard')) || []).filter((item) => item.source === 'Запись экрана — ZSpeakly').length;
+  await page.evaluate(() => { window.__saveMode = 'fail'; });
+  await start();
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(2800);
+  state = await page.evaluate(() => ({ count: window.__savedVideos.length, lastToast: [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '', body: document.body.innerText }));
+  record('сохранность', 'запись экрана: отказ записи предупреждает и предлагает повтор', state.count === 3 && /Не удалось сохранить запись/.test(state.lastToast) && /Повторить сохранение/.test(state.body));
+  const failedEntries = ((await storeOf(page, 'zs.clipboard')) || []).filter((item) => item.source === 'Запись экрана — ZSpeakly').length;
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(200);
+  const blocked = await page.evaluate(() => ({ starts: window.__recordStarts, body: document.body.innerText }));
+  record('сохранность', 'запись экрана: при отказе нет ложной записи истории и новый захват заблокирован', failedEntries === savedEntries && blocked.starts === 3 && /Сначала сохраните или удалите предыдущую запись/.test(blocked.body));
+  await page.evaluate(() => { window.__saveMode = 'ok'; [...document.querySelectorAll('button')].find((el) => /Повторить сохранение/.test(el.innerText))?.click(); });
+  await sleep(800);
+  state = await page.evaluate(() => ({ count: window.__savedVideos.length, body: document.body.innerText }));
+  record('сохранность', 'запись экрана: повтор сохраняет ранее полученное видео', state.count === 4 && /Запись сохранена/.test(state.body) && !/Повторить сохранение/.test(state.body));
+  await page.evaluate(() => { window.__saveMode = 'throw'; });
+  await start();
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(2800);
+  state = await page.evaluate(() => ({ count: window.__savedVideos.length, title: [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '', body: document.body.innerText }));
+  record('сохранность', 'запись экрана: исключение моста оставляет возможность повтора', state.count === 5 && /Не удалось сохранить запись/.test(state.title) && /Повторить сохранение/.test(state.body));
+  await page.evaluate(() => { window.__saveMode = 'wait'; [...document.querySelectorAll('button')].find((el) => /Повторить сохранение/.test(el.innerText))?.click(); });
+  await sleep(300);
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  state = await page.evaluate(() => ({ count: window.__savedVideos.length, starts: window.__recordStarts, body: document.body.innerText }));
+  record('сохранность', 'запись экрана: во время сохранения новый захват не начинается', state.count === 6 && state.starts === 4 && /Сохраняем запись/.test(state.body));
+  await page.evaluate(() => window.__resolveSave());
+  await sleep(400);
+  await page.evaluate(() => { window.__saveMode = 'ok'; });
+  await start();
+  await page.evaluate(() => { window.__testRecorder.onerror?.({}); window.__testRecorder.stop(); });
+  await sleep(2800);
+  state = await page.evaluate(() => ({ count: window.__savedVideos.length, title: [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '', body: document.body.innerText }));
+  record('сохранность', 'запись экрана: ошибка захвата помечает сохранённое видео как возможно неполное', state.count === 7 && /Запись могла прерваться/.test(state.title) && /Видео может быть неполным/.test(state.body));
+  await page.evaluate(() => { window.__saveMode = 'fail'; });
+  await start();
+  await page.click('.clip-hotkey[title^="Запись экрана"]');
+  await sleep(2800);
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((el) => /Удалить несохранённую запись/.test(el.innerText))?.click());
+  await sleep(200);
+  const confirmation = await page.evaluate(() => document.body.innerText.includes('Удалить несохранённую запись?'));
+  await page.evaluate(() => [...document.querySelectorAll('.modal button')].find((el) => /^Отмена$/i.test(el.innerText.trim()))?.click());
+  await sleep(200);
+  const kept = await page.evaluate(() => document.body.innerText.includes('Повторить сохранение'));
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((el) => /Удалить несохранённую запись/.test(el.innerText))?.click());
+  await sleep(200);
+  await page.evaluate(() => [...document.querySelectorAll('.modal button')].find((el) => /^Удалить запись$/i.test(el.innerText.trim()))?.click());
+  await sleep(200);
+  const removed = await page.evaluate(() => !document.body.innerText.includes('Повторить сохранение'));
+  record('сохранность', 'запись экрана: удаление несохранённого видео требует подтверждения', confirmation && kept && removed);
+  const errors = takeErrors(page);
+  record('сохранность', 'запись экрана: сценарий сохранения без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioClipboardImageCopy(browser) {
   const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
   const page = await openPage(browser, '#/clipboard', {
@@ -8746,6 +8847,7 @@ async function main() {
       ['безопасность вставки буфера', scenarioClipboardPasteFailure],
       ['копирование изображения буфера', scenarioClipboardImageCopy],
       ['захват экрана при уходе', scenarioScreenRecordingCleanup],
+      ['сохранение записи экрана', scenarioScreenRecordingSave],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['прямые ссылки', scenarioDeepLinks],

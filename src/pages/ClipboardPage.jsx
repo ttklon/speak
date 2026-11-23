@@ -23,6 +23,7 @@ import { CLIPBOARD_TABS, DEFAULT_SETTINGS } from '../lib/config.js';
 import { dayLabel, formatSeconds, kindLabel, timeHM, truncate } from '../lib/utils.js';
 import { navigate, useRoute } from '../lib/router.js';
 import { startScreenRecording, isRecordingSupported } from '../lib/media/recorder.js';
+import { saveScreenRecording } from '../lib/media/saveRecording.js';
 
 const TABS = [{ id: 'all', label: 'Все' }, ...CLIPBOARD_TABS];
 
@@ -58,6 +59,7 @@ export default function ClipboardPage() {
   // очистка истории — только после подтверждения: один промах мыши не должен
   // стирать всё, что накопилось за день
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmDiscardVideo, setConfirmDiscardVideo] = useState(false);
   // подпись к «скриншоту с заметкой»: раньше текст предлагал её дописать,
   // но дописать было негде
   const [noteDraft, setNoteDraft] = useState('');
@@ -70,6 +72,10 @@ export default function ClipboardPage() {
   const [decrypted, setDecrypted] = useState({});
   const [recording, setRecording] = useState(null);
   const [recordMs, setRecordMs] = useState(0);
+  const [pendingVideo, setPendingVideo] = useState(null);
+  const [savingVideo, setSavingVideo] = useState(false);
+  const savingVideoRef = useRef(false);
+  const pendingVideoRef = useRef(null);
   const recordingRef = useRef(null);
   const captureStarting = useRef(false);
   const captureStopping = useRef(false);
@@ -176,59 +182,70 @@ export default function ClipboardPage() {
   );
   const selected = useMemo(() => explicit || filtered[0], [explicit, filtered]);
 
-  /** Запись экрана: старт/стоп, постер в историю и файл в «Видео». */
+  const savePendingVideo = async (result) => {
+    if (!result || savingVideoRef.current) return;
+    savingVideoRef.current = true;
+    if (mounted.current) setSavingVideo(true);
+    try {
+      const saved = await saveScreenRecording(result.blob, result.name, window.zspeakly?.native);
+      pendingVideoRef.current = null;
+      if (!mounted.current) return;
+      setPendingVideo(null);
+      if (saved.saved) {
+        let historyFailed = false;
+        try {
+          addClipboardItem({
+            kind: 'file',
+            text: `Запись экрана · ${formatSeconds(result.durationMs)} · ${result.sizeMb} МБ`,
+            image: result.poster || '',
+            source: 'Запись экрана — ZSpeakly',
+            createdAt: Date.now(),
+          });
+        } catch { historyFailed = true; }
+        const notes = [result.interrupted && 'Видео может быть неполным.', historyFailed && 'Не удалось добавить запись в историю.', saved.path || 'Файл в папке Видео.'].filter(Boolean).join(' ');
+        push({
+          title: result.interrupted ? 'Запись могла прерваться' : 'Запись сохранена',
+          description: notes,
+          tone: result.interrupted || historyFailed ? 'warn' : 'success',
+        });
+      } else {
+        push({ title: 'Загрузка запрошена', description: result.interrupted ? 'Запись могла прерваться. Проверьте файл в браузере.' : 'Проверьте, что браузер сохранил файл.', tone: result.interrupted ? 'warn' : 'success' });
+      }
+    } catch {
+      if (mounted.current) push({
+        title: 'Не удалось сохранить запись',
+        description: 'Видео пока в памяти. Повторите сохранение; частичный файл может остаться в папке Видео.',
+        tone: 'warn',
+        ttl: 7000,
+      });
+    } finally {
+      savingVideoRef.current = false;
+      captureStopping.current = false;
+      if (mounted.current) setSavingVideo(false);
+    }
+  };
+
+  /** Запись экрана: один обработчик результата для кнопки и системной остановки. */
   const toggleRecording = async () => {
-    if (captureStarting.current || captureStopping.current) return;
+    if (captureStarting.current || captureStopping.current || savingVideoRef.current) return;
+    if (pendingVideoRef.current) {
+      push({ title: 'Сначала сохраните или удалите предыдущую запись', tone: 'warn' });
+      return;
+    }
     const active = recordingRef.current;
     if (active) {
       captureStopping.current = true;
-      let result;
       try {
-        result = await active.stop();
+        await active.stop();
       } catch {
+        if (recordingRef.current !== active) return;
         try { active.cancel(); } catch { /* дорожки останавливаются в cancel */ }
-        if (recordingRef.current === active) recordingRef.current = null;
+        recordingRef.current = null;
+        captureStopping.current = false;
         if (mounted.current) {
           setRecording(null);
           push({ title: 'Не удалось остановить запись', description: 'Попытались остановить захват; видео не сохранено.', tone: 'warn' });
         }
-        return;
-      } finally {
-        captureStopping.current = false;
-      }
-      if (!mounted.current) return;
-      setRecording(null);
-      if (!result?.blob?.size) {
-        push({ title: 'Запись пустая', tone: 'warn' });
-        return;
-      }
-      const item = {
-        kind: 'file',
-        text: `Запись экрана · ${formatSeconds(result.durationMs)} · ${result.sizeMb} МБ`,
-        image: result.poster || '',
-        source: 'Запись экрана — ZSpeakly',
-        createdAt: Date.now(),
-      };
-      addClipboardItem(item);
-      // сохраняем файл рядом, чтобы видео не потерялось
-      const bridge = window.zspeakly?.native;
-      if (bridge?.saveFile) {
-        const buf = await result.blob.arrayBuffer();
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-        const saved = await bridge.saveFile({ name: `ZSpeakly-${Date.now()}.webm`, base64 });
-        push({
-          title: 'Запись сохранена',
-          description: saved?.ok ? saved.path : 'Видео добавлено в буфер обмена',
-          tone: 'success',
-        });
-      } else {
-        const url = URL.createObjectURL(result.blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ZSpeakly-${Date.now()}.webm`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 4000);
-        push({ title: 'Запись сохранена', description: 'Файл скачан в «Загрузки»', tone: 'success' });
       }
       return;
     }
@@ -254,9 +271,29 @@ export default function ClipboardPage() {
       setRecordMs(0);
       setRecording(rec);
       push({ title: 'Запись пошла', description: 'Нажмите «Запись экрана» ещё раз, чтобы остановить. При уходе со страницы запись отменится.', tone: 'success' });
-      rec.finished.then(() => {
-        if (recordingRef.current === rec) recordingRef.current = null;
-        if (mounted.current) setRecording((cur) => (cur === rec ? null : cur));
+      rec.finished.then(async (result) => {
+        // Отмена на уходе и ошибка stop не должны запускать сохранение.
+        if (!mounted.current || recordingRef.current !== rec) return;
+        recordingRef.current = null;
+        captureStopping.current = true;
+        setRecording(null);
+        if (!result?.blob?.size) {
+          captureStopping.current = false;
+          push({ title: 'Запись пустая', tone: 'warn' });
+          return;
+        }
+        const pending = { ...result, name: `ZSpeakly-${Date.now()}.webm` };
+        pendingVideoRef.current = pending;
+        setPendingVideo(pending);
+        await savePendingVideo(pending);
+      }).catch(() => {
+        if (!mounted.current || recordingRef.current !== rec) return;
+        recordingRef.current = null;
+        captureStopping.current = false;
+        if (mounted.current) {
+          setRecording(null);
+          push({ title: 'Не удалось обработать запись', description: 'Видео не сохранено.', tone: 'warn' });
+        }
       });
     } catch (err) {
       if (mounted.current) push({
@@ -558,6 +595,17 @@ export default function ClipboardPage() {
         })}
       </div>
       {recording ? <p className="page__sub" role="status">При переходе на другую страницу запись отменится и не сохранится. Сначала остановите её здесь.</p> : null}
+      {pendingVideo ? (
+        <div className="stack-8" role="status">
+          <p className="page__sub">{savingVideo ? 'Сохраняем запись…' : 'Запись осталась только в памяти. При уходе со страницы или закрытии приложения она будет потеряна.'}</p>
+          {!savingVideo ? (
+            <div className="row-8">
+              <Button size="sm" onClick={() => savePendingVideo(pendingVideoRef.current)}>Повторить сохранение</Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmDiscardVideo(true)}>Удалить несохранённую запись</Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="clip-toolbar">
         <SearchInput
@@ -828,6 +876,14 @@ export default function ClipboardPage() {
           Очистить историю
         </button>
       </div>
+      <ConfirmDialog
+        open={confirmDiscardVideo}
+        onClose={() => setConfirmDiscardVideo(false)}
+        onConfirm={() => { pendingVideoRef.current = null; setPendingVideo(null); }}
+        title="Удалить несохранённую запись?"
+        description="Видео находится только в памяти и будет потеряно без возможности повтора."
+        confirmLabel="Удалить запись"
+      />
       <ConfirmDialog
         open={confirmClear}
         onClose={() => setConfirmClear(false)}

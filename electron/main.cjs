@@ -2462,15 +2462,42 @@ function registerIpc() {
     return app.getLoginItemSettings().openAtLogin;
   });
   ipcMain.handle('app:save-file', async (_e, payload) => {
-    // payload: { name, base64 } — сохраняем в «Видео» / «Загрузки»
+    // payload: { name, base64 } — файл записи экрана в «Видео»
     try {
+      const encoded = payload?.base64;
+      if (typeof encoded !== 'string' || !encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+        return { ok: false, reason: 'неверные данные записи' };
+      }
+      const data = Buffer.from(encoded, 'base64');
+      if (!data.length) return { ok: false, reason: 'пустая запись' };
       const dir = app.getPath('videos');
       fs.mkdirSync(dir, { recursive: true });
-      const target = path.join(dir, String(payload?.name || 'zspeakly.webm').replace(/[\\/:*?"<>|]/g, '_'));
-      fs.writeFileSync(target, Buffer.from(String(payload?.base64 || ''), 'base64'));
-      return { ok: true, path: target };
-    } catch (err) {
-      return { ok: false, reason: err.message };
+      const name = String(payload?.name || 'zspeakly.webm').replace(/[\\/:*?"<>|]/g, '_');
+      const parsed = path.parse(name);
+      const stem = parsed.name && !/^\.+$/.test(parsed.name) ? parsed.name : 'zspeakly';
+      const ext = parsed.ext || '.webm';
+      for (let i = 0; i < 1000; i += 1) {
+        const target = path.join(dir, `${stem}${i ? `-${i}` : ''}${ext}`);
+        let fd;
+        try {
+          fd = fs.openSync(target, 'wx');
+        } catch (err) {
+          if (err?.code === 'EEXIST') continue;
+          throw err;
+        }
+        try {
+          fs.writeFileSync(fd, data);
+          fs.closeSync(fd);
+          return { ok: true, path: target };
+        } catch (err) {
+          try { fs.closeSync(fd); } catch { /* уже закрыт */ }
+          try { fs.unlinkSync(target); } catch { return { ok: false, reason: 'частичный файл мог остаться в папке Видео' }; }
+          throw err;
+        }
+      }
+      return { ok: false, reason: 'не удалось подобрать свободное имя файла' };
+    } catch {
+      return { ok: false, reason: 'не удалось записать файл в папку Видео' };
     }
   });
 

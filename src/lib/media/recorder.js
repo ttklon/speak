@@ -46,6 +46,21 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
   }
   const chunks = [];
   let cancelled = false;
+  let interrupted = false;
+  const videoTracks = stream.getTracks().filter((track) => track.kind === 'video');
+  const removeEndedListeners = () => videoTracks.forEach((track) => track.removeEventListener?.('ended', onVideoEnded));
+  let failFinished;
+  const onVideoEnded = () => {
+    if (cancelled || recorder.state === 'inactive') return;
+    try {
+      recorder.stop();
+    } catch {
+      if (tick) clearInterval(tick);
+      removeEndedListeners();
+      stopTracks();
+      failFinished(new Error('Не удалось завершить запись'));
+    }
+  };
   const startedAt = Date.now();
   const tick = onTick ? setInterval(() => onTick(Date.now() - startedAt), 1000) : null;
 
@@ -53,31 +68,44 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
     if (!cancelled && e.data && e.data.size) chunks.push(e.data);
   };
 
-  const finished = new Promise((resolve) => {
+  recorder.onerror = () => { interrupted = true; };
+  const finished = new Promise((resolve, reject) => {
+    failFinished = reject;
     recorder.onstop = async () => {
       if (tick) clearInterval(tick);
+      removeEndedListeners();
       stopTracks();
-      const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
-      chunks.length = 0;
-      const poster = cancelled || !blob.size ? '' : await grabPoster(blob);
-      // Отмена могла прийти, пока создавался постер.
-      const output = cancelled ? new Blob([], { type: mimeType || 'video/webm' }) : blob;
-      resolve({
-        blob: output,
-        poster: cancelled ? '' : poster,
-        durationMs: Date.now() - startedAt,
-        sizeMb: Math.round((output.size / (1024 * 1024)) * 10) / 10,
-      });
+      try {
+        const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+        chunks.length = 0;
+        const poster = cancelled || !blob.size ? '' : await grabPoster(blob);
+        // Отмена могла прийти, пока создавался постер.
+        const output = cancelled ? new Blob([], { type: mimeType || 'video/webm' }) : blob;
+        resolve({
+          blob: output,
+          poster: cancelled ? '' : poster,
+          durationMs: Date.now() - startedAt,
+          sizeMb: Math.round((output.size / (1024 * 1024)) * 10) / 10,
+          interrupted,
+        });
+      } catch {
+        chunks.length = 0;
+        reject(new Error('Не удалось обработать запись'));
+      }
     };
   });
 
   try {
+    videoTracks.forEach((track) => track.addEventListener?.('ended', onVideoEnded));
     recorder.start(1000);
   } catch (err) {
     if (tick) clearInterval(tick);
+    removeEndedListeners();
     stopTracks();
     throw err;
   }
+  // Дорожка могла завершиться до установки обработчика.
+  if (videoTracks.some((track) => track.readyState === 'ended')) onVideoEnded();
 
   return {
     mimeType,
@@ -91,6 +119,7 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
       try {
         if (recorder.state !== 'inactive') recorder.stop();
       } finally {
+        removeEndedListeners();
         stopTracks();
         if (tick) clearInterval(tick);
       }
@@ -125,7 +154,7 @@ async function grabPoster(blob) {
   } catch {
     return '';
   } finally {
-    if (url) URL.revokeObjectURL(url);
+    try { if (url) URL.revokeObjectURL(url); } catch { /* окно уже закрывается */ }
   }
 }
 

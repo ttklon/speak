@@ -1253,6 +1253,72 @@ await check('по умолчанию наружу ничего не отправ
   if (res?.ok) throw new Error('отправка прошла без настроенного приёмника');
 });
 
+await check('запись экрана: повторное сохранение не перезаписывает прежний файл', async () => {
+  const save = handlers.get('app:save-file');
+  const first = await save({}, { name: 'zs-test-video.webm', base64: Buffer.from('first-video').toString('base64') });
+  const second = await save({}, { name: 'zs-test-video.webm', base64: Buffer.from('second-video').toString('base64') });
+  try {
+    if (!first?.ok || !second?.ok || first.path === second.path || fs.readFileSync(first.path, 'utf8') !== 'first-video' || fs.readFileSync(second.path, 'utf8') !== 'second-video') throw new Error('запись перезаписана или не сохранилась');
+  } finally {
+    if (first?.path) fs.rmSync(first.path, { force: true });
+    if (second?.path) fs.rmSync(second.path, { force: true });
+  }
+});
+
+await check('запись экрана: пустые и повреждённые данные не создают файл', async () => {
+  const save = handlers.get('app:save-file');
+  const target = path.join(userData, 'zs-test-invalid.webm');
+  for (const base64 of ['', '!!!!', 'a', 'ab=c']) {
+    const result = await save({}, { name: 'zs-test-invalid.webm', base64 });
+    if (result?.ok || fs.existsSync(target)) throw new Error('некорректные данные приняты');
+  }
+});
+
+await check('запись экрана: ошибка записи не оставляет частичный файл', async () => {
+  const save = handlers.get('app:save-file');
+  const realWrite = fs.writeFileSync;
+  let injected = false;
+  try {
+    fs.writeFileSync = function (file, data, options) {
+      if (!injected && (typeof file === 'number' || String(file).includes('zs-test-partial.webm'))) {
+        realWrite.call(this, file, 'partial');
+        injected = true;
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
+      return realWrite.call(this, file, data, options);
+    };
+    const result = await save({}, { name: 'zs-test-partial.webm', base64: Buffer.from('video').toString('base64') });
+    if (!injected || result?.ok || fs.existsSync(path.join(userData, 'zs-test-partial.webm'))) throw new Error('ошибка не обработана или частичный файл остался');
+  } finally {
+    fs.writeFileSync = realWrite;
+    fs.rmSync(path.join(userData, 'zs-test-partial.webm'), { force: true });
+  }
+});
+
+await check('запись экрана: ошибка удаления частичного файла не скрывается', async () => {
+  const save = handlers.get('app:save-file');
+  const realWrite = fs.writeFileSync;
+  const realUnlink = fs.unlinkSync;
+  let injected = false;
+  try {
+    fs.writeFileSync = function (file, data, options) {
+      if (!injected && typeof file === 'number') {
+        realWrite.call(this, file, 'partial');
+        injected = true;
+        throw new Error('disk full');
+      }
+      return realWrite.call(this, file, data, options);
+    };
+    fs.unlinkSync = () => { throw new Error('delete failed'); };
+    const result = await save({}, { name: 'zs-test-leftover.webm', base64: Buffer.from('video').toString('base64') });
+    if (!injected || result?.ok || !/частичный файл мог остаться/i.test(result?.reason || '')) throw new Error('ошибка удаления не сообщена');
+  } finally {
+    fs.writeFileSync = realWrite;
+    fs.unlinkSync = realUnlink;
+    fs.rmSync(path.join(userData, 'zs-test-leftover.webm'), { force: true });
+  }
+});
+
 // ── Экранный контекст и словарь уходят в whisper как --prompt ───────────────
 await check('резервная копия сохраняется файлом через main', async () => {
   const save = handlers.get('data:save-backup');
