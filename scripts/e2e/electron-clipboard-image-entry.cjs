@@ -46,6 +46,31 @@ app.whenReady().then(async () => {
     assert.equal(image.isEmpty(), false);
     assert.deepEqual(image.getSize(), { width: 1, height: 1 });
     console.log('CLIPBOARD_IMAGE_E2E_OK');
+
+    // Тот же изолированный раннер: настоящее системное копирование совпадает
+    // с заранее закреплённой записью в тестовом профиле. Монитор включаем
+    // только после открытия страницы и установки синтетического текста.
+    await win.webContents.executeJavaScript("location.hash = '#/clipboard'");
+    const pageDeadline = Date.now() + 15000;
+    while (Date.now() < pageDeadline && !await win.webContents.executeJavaScript("Boolean(document.querySelector('.clip-hotkey'))")) await wait(100);
+    assert.ok(await win.webContents.executeJavaScript("Boolean(document.querySelector('.clip-hotkey'))"), 'не открылась страница буфера');
+    await wait(500);
+    const pinnedText = 'закреплённая строка для CI';
+    clipboard.writeText(pinnedText);
+    await win.webContents.executeJavaScript("window.zspeakly.store.set('zs:settings', { ...window.zspeakly.store.getSync('zs:settings'), clipboardMonitor: true })");
+    let entries;
+    const captureDeadline = Date.now() + 25000;
+    while (Date.now() < captureDeadline) {
+      entries = await win.webContents.executeJavaScript("window.zspeakly.store.getSync('zs.clipboard') || []");
+      if (entries.some((item) => item.text === 'закреплённая строка для CI' && !item.pinned)) break;
+      await wait(200);
+    }
+    assert.ok(entries?.some((item) => item.text === pinnedText && !item.pinned), 'системное событие не появилось в истории');
+    const pinned = entries.find((item) => item.id === 'pinned-ci');
+    assert.ok(pinned?.pinned && pinned.text === pinnedText && pinned.source === 'исходный источник', 'повтор удалил или изменил закреплённую запись');
+    await win.webContents.executeJavaScript("window.zspeakly.store.set('zs:settings', { ...window.zspeakly.store.getSync('zs:settings'), clipboardMonitor: false })");
+    await wait(700); // ожидаем отложенную запись тестового профиля
+    console.log('CLIPBOARD_PIN_E2E_OK');
     clearTimeout(timer);
     clipboard.clear();
     app.exit(0);

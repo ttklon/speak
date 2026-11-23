@@ -25,6 +25,10 @@ describe('сквозной тест изображения в буфере', () 
     expect(entry).toContain('window.zspeakly.native.writeClipboard');
     expect(entry).toContain('clipboard.readImage()');
     expect(entry).toContain('clipboard.readText()');
+    expect(entry).toContain('CLIPBOARD_PIN_E2E_OK');
+    expect(entry).toContain('clipboardMonitor: true');
+    expect(entry).toContain("window.zspeakly.store.getSync('zs.clipboard')");
+    expect(runner).toContain("profile['zs.clipboard']");
     expect(entry).not.toContain('native.writeClipboard =');
   });
 

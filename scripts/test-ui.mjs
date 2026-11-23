@@ -2923,6 +2923,58 @@ async function scenarioPinnedLimit(browser) {
   await page.close();
 }
 
+async function scenarioClipboardPinnedDedup(browser) {
+  const now = Date.now();
+  const pinned = { id: 'pin-original', kind: 'text', text: 'закреплённое повторение', source: 'исходный источник', createdAt: now - 5000, pinned: true };
+  const page = await openPage(browser, '#/clipboard', {
+    settle: 500,
+    settings: { clipboardMaxItems: 100 },
+    storeSeed: { 'zs.clipboard': [
+      pinned,
+      { id: 'plain-old', kind: 'text', text: 'незакреплённое повторение', source: 'старый', createdAt: now - 4000 },
+      { id: 'note-original', kind: 'note', text: 'одинаковая подпись', image: 'data:image/png;base64,OLD', source: 'старая заметка', createdAt: now - 3000 },
+      { id: 'file-original', kind: 'file', text: 'Запись экрана · 1 с · 1 МБ', image: 'data:image/png;base64,OLD', source: 'старый файл', createdAt: now - 2000 },
+    ] },
+  });
+  takeErrors(page);
+  await page.evaluate(() => {
+    const emit = (item) => window.__e2e.emit('clipboard:item', item);
+    emit({ kind: 'text', text: 'закреплённое повторение', source: 'новый источник', createdAt: Date.now() });
+    emit({ kind: 'text', text: 'закреплённое повторение', source: 'ещё один источник', createdAt: Date.now() + 1 });
+    emit({ kind: 'text', text: 'незакреплённое повторение', source: 'новый', createdAt: Date.now() });
+    // Синтетические события вызывают тот же addClipboardItem, что и результат
+    // скриншота/сохранения; реальный сбор картинок намеренно не расширяем.
+    emit({ id: 'note-new', kind: 'note', text: 'одинаковая подпись', image: 'data:image/png;base64,NEW', source: 'новая заметка', createdAt: Date.now() });
+    emit({ id: 'file-new', kind: 'file', text: 'Запись экрана · 1 с · 1 МБ', image: 'data:image/png;base64,NEW', source: 'новый файл', createdAt: Date.now() });
+  });
+  await sleep(700);
+  const items = await page.evaluate(() => window.__e2e.read('zs.clipboard') || []);
+  const pinnedAfter = items.find((item) => item.id === pinned.id);
+  record('сохранность', 'буфер: повторное копирование не удаляет закреплённую запись', Boolean(pinnedAfter?.pinned) && pinnedAfter.createdAt === pinned.createdAt && pinnedAfter.source === pinned.source);
+  const pinnedDuplicates = items.filter((item) => item.kind === 'text' && item.text === pinned.text);
+  record('сохранность', 'буфер: повтор рядом с закреплённой записью остаётся один и обновляет источник', pinnedDuplicates.length === 2 && pinnedDuplicates.some((item) => !item.pinned && item.source === 'ещё один источник'));
+  record('сохранность', 'буфер: повтор обычного текста обновляет незакреплённую запись', items.filter((item) => item.kind === 'text' && item.text === 'незакреплённое повторение').length === 1 && !items.some((item) => item.id === 'plain-old') && items.some((item) => item.source === 'новый'));
+  record('сохранность', 'буфер: одинаковая подпись не удаляет другую заметку или видео', ['note-original', 'note-new', 'file-original', 'file-new'].every((id) => items.some((item) => item.id === id)));
+  await clickIn(page, '', 'Очистить историю');
+  await sleep(200);
+  await clickIn(page, '.modal', 'Очистить');
+  await sleep(400);
+  const afterClear = await page.evaluate(() => window.__e2e.read('zs.clipboard') || []);
+  record('сохранность', 'буфер: после очистки исходная закреплённая запись сохраняется', afterClear.length === 1 && afterClear[0].id === pinned.id && afterClear[0].pinned);
+  // Новая страница с тем же localStorage, но без повторного внедрения seed.
+  const reopened = await browser.newPage();
+  await reopened.evaluateOnNewDocument(installMockBridge);
+  await reopened.goto(`${BASE}/#/clipboard`, { waitUntil: 'domcontentloaded' });
+  await reopened.waitForSelector('.app-window', { timeout: 15000 });
+  await sleep(400);
+  const afterReload = await reopened.evaluate(() => window.__e2e.read('zs.clipboard') || []);
+  record('сохранность', 'буфер: закрепление и исходные метаданные переживают перезагрузку мока', afterReload.length === 1 && afterReload[0].id === pinned.id && afterReload[0].pinned && afterReload[0].createdAt === pinned.createdAt && afterReload[0].source === pinned.source);
+  await reopened.close();
+  const errors = takeErrors(page);
+  record('сохранность', 'буфер: повторное копирование без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Пароли в буфере: в профиле только шифр, открытый текст появляется лишь после
 // «Показать»/«Копировать» — и только если main смог расшифровать.
 async function scenarioPasswordVault(browser) {
@@ -9020,6 +9072,7 @@ async function main() {
       ['живая расшифровка', scenarioLiveWhisper],
       ['пауза и отмена распознавания', scenarioPauseAndCancel],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
+      ['повторение закреплённого буфера', scenarioClipboardPinnedDedup],
       ['пароли', scenarioPasswordVault],
       ['приватность буфера', scenarioClipboardSecretPrivacy],
       ['безопасность вставки буфера', scenarioClipboardPasteFailure],

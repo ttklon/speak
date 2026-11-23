@@ -18,6 +18,7 @@ import { pruneByAge } from '../lib/retention.js';
 import { migrateSettings } from '../lib/settingsMigration.js';
 import { tuneSettings } from '../lib/autotune.js';
 import { trimByBytes } from '../lib/clipboardBudget.js';
+import { isReplaceableClipboardDuplicate } from '../lib/clipboardHistory.js';
 import { trimDictations } from '../lib/dictationBudget.js';
 import { BACKUP_FORMAT, prepareBackup } from '../lib/backup.js';
 import {
@@ -301,11 +302,9 @@ export function AppDataProvider({ children }) {
     (item) => {
       setClipboard((prev) => {
         if (item.hidePasswords && item.kind === 'password') return prev;
-        // у зашифрованного пароля текста нет — сравниваем шифр, иначе все
-        // пароли схлопывались бы в одну запись
-        const sameKey = (a, b) =>
-          a.kind === b.kind && Boolean(a.cipher || a.text) && (a.cipher || a.text) === (b.cipher || b.text);
-        const dedup = prev.filter((p) => !sameKey(p, item));
+        // Закреплённое не удаляется при повторном копировании. Разные заметки,
+        // изображения и видео могут иметь одинаковый текст, но это не дубликаты.
+        const dedup = prev.filter((entry) => !isReplaceableClipboardDuplicate(entry, item));
         const next = [{ ...item, id: item.id || uid('clip'), createdAt: item.createdAt || Date.now() }, ...dedup];
         // Лимит истории не должен выбрасывать закреплённое: человек закрепил
         // запись именно для того, чтобы она осталась.
