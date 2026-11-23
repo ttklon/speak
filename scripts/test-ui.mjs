@@ -3181,6 +3181,59 @@ async function scenarioScreenRecordingCleanup(browser) {
   await page.close();
 }
 
+async function scenarioScreenRecordingStopTimeout(browser) {
+  const page = await openPage(browser, '#/clipboard', { settle: 500 });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__timeoutCaptures = [];
+    const realTimeout = window.setTimeout.bind(window);
+    // Ускоряем только 15-секундный watchdog, остальные таймеры не меняем.
+    window.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 15000 ? 300 : ms, ...args);
+    Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: async () => {
+      const track = { kind: 'video', stopped: 0, stop() { this.stopped++; }, addEventListener(type, fn) { if (type === 'ended') this.ended = fn; }, removeEventListener() {} };
+      window.__timeoutCaptures.push({ track });
+      return { getTracks: () => [track] };
+    } });
+    window.MediaRecorder = class {
+      static isTypeSupported() { return true; }
+      constructor() { this.state = 'inactive'; window.__timeoutCaptures.at(-1).recorder = this; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; } // Нет последнего события onstop.
+    };
+  });
+  const button = '.clip-hotkey[title^="Запись экрана"]';
+  await page.click(button);
+  await sleep(200);
+  await page.click(button);
+  await sleep(650);
+  let state = await page.evaluate(() => ({
+    stopped: window.__timeoutCaptures[0].track.stopped,
+    body: document.body.innerText,
+    saves: window.__bridgeCalls.filter((c) => (c.channel || c.ch) === 'app:save-file').length,
+  }));
+  record('сохранность', 'запись экрана: таймаут stop освобождает захват и сообщает о потере', state.stopped > 0 && state.saves === 0 && /видео не сохранено/i.test(state.body) && !/Остановить/.test(state.body));
+  await page.evaluate(() => {
+    const recorder = window.__timeoutCaptures[0].recorder;
+    recorder.ondataavailable?.({ data: new Blob(['late']) });
+    recorder.onstop?.();
+  });
+  await page.click(button);
+  await sleep(250);
+  state = await page.evaluate(() => ({ count: window.__timeoutCaptures.length, body: document.body.innerText, saves: window.__bridgeCalls.filter((c) => (c.channel || c.ch) === 'app:save-file').length }));
+  record('сохранность', 'запись экрана: поздний onstop не сохраняет старое видео и новая запись доступна', state.count === 2 && state.saves === 0 && /Остановить/.test(state.body));
+  await page.evaluate(() => {
+    const capture = window.__timeoutCaptures[1];
+    capture.recorder.state = 'inactive';
+    capture.track.ended();
+  });
+  await sleep(650);
+  state = await page.evaluate(() => ({ stopped: window.__timeoutCaptures[1].track.stopped, body: document.body.innerText, saves: window.__bridgeCalls.filter((c) => (c.channel || c.ch) === 'app:save-file').length }));
+  record('сохранность', 'запись экрана: системная остановка без onstop также сообщает об ошибке', state.stopped > 0 && state.saves === 0 && /Не удалось обработать запись/.test(state.body) && !/Остановить/.test(state.body));
+  const errors = takeErrors(page);
+  record('сохранность', 'запись экрана: таймаут stop без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioScreenRecordingNoAudio(browser) {
   const page = await openPage(browser, '#/clipboard', { settle: 500 });
   takeErrors(page);
@@ -8972,6 +9025,7 @@ async function main() {
       ['безопасность вставки буфера', scenarioClipboardPasteFailure],
       ['копирование изображения буфера', scenarioClipboardImageCopy],
       ['захват экрана при уходе', scenarioScreenRecordingCleanup],
+      ['таймаут остановки записи экрана', scenarioScreenRecordingStopTimeout],
       ['сохранение записи экрана', scenarioScreenRecordingSave],
       ['ограничения записи экрана', scenarioScreenRecordingLimits],
       ['запись экрана без аудио', scenarioScreenRecordingNoAudio],

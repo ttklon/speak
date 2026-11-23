@@ -60,27 +60,46 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
   const videoTracks = stream.getTracks().filter((track) => track.kind === 'video');
   const removeEndedListeners = () => videoTracks.forEach((track) => track.removeEventListener?.('ended', onVideoEnded));
   let failFinished;
+  let resolveFinished;
   let deadline;
+  let stopDeadline;
+  let stopRequested = false;
+  let finishing = false;
+  let settled = false;
   const startedAt = Date.now();
   const tick = onTick ? setInterval(() => onTick(Date.now() - startedAt), 1000) : null;
-  const clearTimers = () => { if (tick) clearInterval(tick); if (deadline) clearTimeout(deadline); };
+  const clearTimers = () => {
+    if (tick) clearInterval(tick);
+    if (deadline) clearTimeout(deadline);
+    if (stopDeadline) clearTimeout(stopDeadline);
+  };
+  const cleanup = () => { clearTimers(); removeEndedListeners(); stopTracks(); };
+  const failStop = () => {
+    if (settled || finishing) return;
+    settled = true;
+    cleanup();
+    chunks.length = 0;
+    failFinished(new Error('Не удалось завершить запись'));
+  };
   const requestStop = (reason = '') => {
-    if (cancelled || recorder.state === 'inactive') return;
+    if (cancelled || settled || finishing) return;
     if (reason && !limitReason) limitReason = reason;
+    if (deadline) { clearTimeout(deadline); deadline = null; }
+    // Даже неактивный MediaRecorder может так и не доставить событие stop.
+    // Не объявляем накопленные фрагменты готовым WebM без финального события.
+    if (!stopDeadline) stopDeadline = setTimeout(failStop, 15000);
+    if (recorder.state === 'inactive' || stopRequested) return;
+    stopRequested = true;
     try {
       recorder.stop();
     } catch {
-      clearTimers();
-      removeEndedListeners();
-      stopTracks();
-      chunks.length = 0;
-      failFinished(new Error('Не удалось завершить запись'));
+      failStop();
     }
   };
   const onVideoEnded = () => requestStop();
 
   recorder.ondataavailable = (e) => {
-    if (cancelled || limitReason === 'overflow' || !e.data?.size) return;
+    if (cancelled || settled || finishing || limitReason === 'overflow' || !e.data?.size) return;
     // Не сохраняем усечённый WebM как успешную запись: последний фрагмент
     // может превышать оставшийся запас даже после команды stop().
     if (bufferedBytes + e.data.size > RECORDING_MAX_BYTES) {
@@ -95,19 +114,21 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
     if (bufferedBytes >= RECORDING_STOP_BYTES) requestStop('size');
   };
 
-  recorder.onerror = () => { interrupted = true; };
+  recorder.onerror = () => { interrupted = true; requestStop(); };
   const finished = new Promise((resolve, reject) => {
     failFinished = reject;
+    resolveFinished = resolve;
     recorder.onstop = async () => {
-      clearTimers();
-      removeEndedListeners();
-      stopTracks();
+      if (settled || finishing) return;
+      finishing = true;
+      cleanup();
       try {
         const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
         chunks.length = 0;
         const poster = cancelled || !blob.size ? '' : await grabPoster(blob);
         // Отмена могла прийти, пока создавался постер.
         const output = cancelled ? new Blob([], { type: mimeType || 'video/webm' }) : blob;
+        settled = true;
         resolve({
           blob: output,
           poster: cancelled ? '' : poster,
@@ -118,6 +139,7 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
           limitReason: cancelled ? '' : limitReason,
         });
       } catch {
+        settled = true;
         chunks.length = 0;
         reject(new Error('Не удалось обработать запись'));
       }
@@ -141,18 +163,28 @@ export async function startScreenRecording({ audio = true, onTick } = {}) {
     mimeType,
     hasAudioTrack,
     stop: () => {
-      if (recorder.state !== 'inactive') recorder.stop();
+      requestStop();
       return finished;
     },
     cancel: () => {
+      if (settled) return;
       cancelled = true;
       chunks.length = 0;
+      // При отмене результат намеренно пуст, ожидать onstop необязательно.
+      if (!finishing) {
+        settled = true;
+        try {
+          resolveFinished({ blob: new Blob([], { type: mimeType || 'video/webm' }), poster: '', durationMs: Date.now() - startedAt, sizeMb: 0, interrupted, hasAudioTrack, limitReason: '' });
+        } catch {
+          failFinished(new Error('Не удалось обработать запись'));
+        }
+      }
       try {
-        if (recorder.state !== 'inactive') recorder.stop();
+        if (recorder.state !== 'inactive' && !stopRequested) recorder.stop();
+      } catch {
+        // Отмена уже исключает сохранение, очистка потока важнее ошибки stop.
       } finally {
-        removeEndedListeners();
-        stopTracks();
-        clearTimers();
+        cleanup();
       }
     },
     finished,

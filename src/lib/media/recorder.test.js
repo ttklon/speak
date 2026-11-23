@@ -359,6 +359,124 @@ describe('запись экрана', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-recording');
   });
 
+  it('при отсутствии onstop ручная остановка освобождает захват и отклоняется, поздние события не сохраняются', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    const { tracks } = installDisplay();
+    const rec = await startScreenRecording();
+    const recorder = instances[0];
+    recorder.stop = vi.fn(() => { recorder.state = 'inactive'; });
+    const failure = expect(rec.stop()).rejects.toThrow('Не удалось завершить запись');
+    recorder.ondataavailable({ data: new Blob(['часть']) });
+    await vi.advanceTimersByTimeAsync(15000);
+    await failure;
+    expect(tracks[0].stop).toHaveBeenCalled();
+    recorder.ondataavailable?.({ data: new Blob(['поздно']) });
+    recorder.onstop?.();
+    expect(recorder.stop).toHaveBeenCalledOnce();
+  });
+
+  it('если видеодорожка закончилась при уже неактивном рекордере без onstop, ожидание ограничено', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    let ended;
+    const video = { kind: 'video', stop: vi.fn(), addEventListener: (_, cb) => { ended = cb; }, removeEventListener: vi.fn() };
+    vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: async () => ({ getTracks: () => [video] }) } });
+    const rec = await startScreenRecording();
+    const failure = expect(rec.finished).rejects.toThrow('Не удалось завершить запись');
+    instances[0].state = 'inactive';
+    ended();
+    await vi.advanceTimersByTimeAsync(15000);
+    await failure;
+    expect(video.stop).toHaveBeenCalled();
+    expect(video.removeEventListener).toHaveBeenCalled();
+  });
+
+  it('отмена без onstop немедленно завершает результат пустым и освобождает поток', async () => {
+    const { instances } = installMedia();
+    const { tracks } = installDisplay();
+    const rec = await startScreenRecording();
+    instances[0].stop = () => { instances[0].state = 'inactive'; };
+    rec.cancel();
+    expect((await rec.finished).blob.size).toBe(0);
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('ожидает запоздавший onstop и очищает таймер, не запрашивая stop дважды', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    const { tracks } = installDisplay();
+    const rec = await startScreenRecording();
+    const recorder = instances[0];
+    const stop = vi.fn(); // состояние задерживается, как в неисправном API
+    recorder.stop = stop;
+    const result = rec.stop();
+    rec.stop();
+    expect(stop).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(14000);
+    recorder.state = 'inactive';
+    recorder.ondataavailable({ data: new Blob(['ok']) });
+    recorder.onstop();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await result).blob.size).toBe(2);
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('ошибка рекордера без события остановки также освобождает поток по таймауту', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    const { tracks } = installDisplay();
+    const rec = await startScreenRecording();
+    const failure = expect(rec.finished).rejects.toThrow('Не удалось завершить запись');
+    instances[0].stop = () => { instances[0].state = 'inactive'; };
+    instances[0].onerror();
+    await vi.advanceTimersByTimeAsync(15000);
+    await failure;
+    expect(tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('отмена после запроса остановки не ждёт таймера и игнорирует поздние данные', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    installDisplay();
+    const rec = await startScreenRecording();
+    instances[0].stop = () => { instances[0].state = 'inactive'; };
+    const pending = rec.stop();
+    rec.cancel();
+    await vi.advanceTimersByTimeAsync(15000);
+    instances[0].ondataavailable?.({ data: new Blob(['late']) });
+    instances[0].onstop?.();
+    expect((await pending).blob.size).toBe(0);
+  });
+
+  it('ручной stop перед лимитом не переименовывается в остановку по времени во время ожидания onstop', async () => {
+    vi.useFakeTimers();
+    const { instances } = installMedia();
+    installDisplay();
+    const rec = await startScreenRecording();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 - 1000);
+    const recorder = instances[0];
+    recorder.stop = () => { recorder.state = 'inactive'; };
+    const result = rec.stop();
+    await vi.advanceTimersByTimeAsync(2000);
+    recorder.ondataavailable({ data: new Blob(['ok']) });
+    recorder.onstop();
+    await vi.runAllTimersAsync();
+    expect((await result).limitReason).toBe('');
+  });
+
+  it('отмена не вызывает stop повторно, если состояние рекордера не сменилось', async () => {
+    const { instances } = installMedia();
+    const { tracks } = installDisplay();
+    const rec = await startScreenRecording();
+    instances[0].stop = vi.fn();
+    rec.stop();
+    rec.cancel();
+    expect(instances[0].stop).toHaveBeenCalledOnce();
+    expect(tracks[0].stop).toHaveBeenCalled();
+    expect((await rec.finished).blob.size).toBe(0);
+  });
+
   it('если браузер не умеет ни один кодек — пишем без mimeType', async () => {
     installMedia({ supported: [] });
     installDisplay();
