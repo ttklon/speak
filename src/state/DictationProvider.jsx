@@ -718,7 +718,7 @@ export function DictationProvider({ children }) {
                   tone: 'warn',
                   ttl: 15000,
                 });
-                diag.warn('stt', 'Результат ввода неизвестен', { method: 'sendinput' });
+                diag.warn('stt', 'Результат ввода неизвестен', { method: res.method || '' });
                 return;
               }
               // Вставка «без буфера» может оборваться на середине текста:

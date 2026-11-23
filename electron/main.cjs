@@ -2105,13 +2105,27 @@ function registerIpc() {
     let pasted = false;
     let method = '';
     let reason = '';
+    const uncertainPaste = (attempt) => {
+      // События уже могли попасть в окно; не повторять и не стирать вслепую.
+      lastInsertedText = '';
+      lastInsertedAt = 0;
+      lastInsertTarget = { app: '', title: '', at: 0 };
+      lastInsertInfo = { at: Date.now(), ok: false, method: 'clipboard', ms: Date.now() - started,
+        reason: 'результат вставки не подтверждён' };
+      logger.warn('insert', 'Результат вставки не подтверждён', { keep: true, method: attempt, chars: value.length });
+      return { ok: false, method: 'clipboard', uncertain: true, reason: 'результат вставки не подтверждён' };
+    };
     if (process.platform === 'win32' && input.status().ready) {
       hideWindowForInsert();
-      const fast = await input.paste();
-      restoreWindowAfterInsert();
-      if (fast?.ok) {
+      let fast;
+      try { fast = await input.paste(); }
+      catch { fast = { ok: false, uncertain: true }; }
+      finally { restoreWindowAfterInsert(); }
+      if (fast?.ok === true) {
         pasted = true;
         method = 'win-input';
+      } else if (fast?.uncertain !== false) {
+        return uncertainPaste('win-input');
       } else {
         reason = String(fast?.reason || '');
       }
@@ -2119,17 +2133,28 @@ function registerIpc() {
     // mshta: не зависит от политик PowerShell и не требует сборки помощника
     if (!pasted) {
       hideWindowForInsert();
-      pasted = await pasteViaMshta();
-      restoreWindowAfterInsert();
-      method = pasted ? 'mshta' : '';
-      if (!pasted && !reason) reason = 'Ctrl+V через mshta не сработал';
+      let attempt;
+      try { attempt = await pasteViaMshta(); }
+      catch { attempt = { ok: false, uncertain: true }; }
+      finally { restoreWindowAfterInsert(); }
+      if (attempt.ok) {
+        pasted = true;
+        method = 'mshta';
+      } else if (attempt.uncertain) {
+        return uncertainPaste('mshta');
+      } else if (!reason) reason = 'Ctrl+V через mshta не сработал';
     }
     if (!pasted) {
-      pasted = await pasteToActiveWindow();
+      const fallback = await pasteToActiveWindowSafely();
+      if (fallback?.uncertain) return uncertainPaste('fallback');
+      pasted = fallback === true;
       method = pasted ? 'powershell' : '';
       if (!pasted) reason = reason ? `${reason}; PowerShell не помог` : 'Ctrl+V не сработал (PowerShell)';
     }
     if (!pasted) {
+      lastInsertedText = '';
+      lastInsertedAt = 0;
+      lastInsertTarget = { app: '', title: '', at: 0 };
       // Вставка не удалась — и тогда текст ОСТАЁТСЯ в буфере: именно это
       // обещает тост «Текст скопирован в буфер, нажмите Ctrl+V». Раньше буфер
       // всё равно восстанавливался через 700 мс, и обещанного текста там не было.
@@ -3024,24 +3049,30 @@ function registerIpc() {
 }
 
 // Отправка клавиш в активное окно через PowerShell SendKeys (Windows-only)
-function sendKeys(keys, onDone) {
+function isNotStarted(error) {
+  return ['ENOENT', 'EACCES'].includes(error?.code) && /^spawn\b/.test(String(error?.syscall || ''));
+}
+
+function sendKeys(keys, onDone, { timeout } = {}) {
   if (process.platform !== 'win32') {
-    onDone?.(false);
+    onDone?.(false, true);
     return false;
   }
   const script = `Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 90; [System.Windows.Forms.SendKeys]::SendWait('${keys}')`;
-  execFile(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
-    { windowsHide: true },
-    (err) => {
-      if (err) console.warn('[sendKeys] failed', err.message);
-      // SendKeys не работает в окнах с повышенными правами и в некоторых играх:
-      // вызывающий код должен узнать, что вставка не удалась, и сказать человеку
-      // «текст в буфере, нажмите Ctrl+V» вместо тишины.
-      onDone?.(!err);
-    },
-  );
+  try {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
+      { windowsHide: true, ...(timeout ? { timeout } : {}) },
+      (err) => {
+        if (err) console.warn('[sendKeys] failed');
+        onDone?.(!err, Boolean(err && isNotStarted(err)));
+      },
+    );
+  } catch {
+    onDone?.(false, true); // синхронный отказ до запуска
+    return false;
+  }
   return true;
 }
 
@@ -3214,20 +3245,56 @@ async function insertViaSendInput(value) {
 function pasteViaMshta() {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
-      resolve(false);
+      resolve({ ok: false, uncertain: false });
       return;
     }
     const script = 'vbscript:CreateObject("WScript.Shell").SendKeys("^v"):close()';
-    execFile(
-      'mshta.exe',
-      [script],
-      { windowsHide: true, timeout: 8000 },
-      (error) => {
-        if (error) console.warn('[paste] mshta failed', error.message);
-        resolve(!error);
-      },
-    );
+    try {
+      execFile(
+        'mshta.exe',
+        [script],
+        { windowsHide: true, timeout: 8000 },
+        (error) => {
+          if (!error) { resolve({ ok: true }); return; }
+          // Только ошибка spawn до запуска доказывает, что SendKeys не выполнялся.
+          const notStarted = isNotStarted(error);
+          resolve({ ok: false, uncertain: !notStarted });
+        },
+      );
+    } catch {
+      resolve({ ok: false, uncertain: false }); // синхронный отказ до создания процесса
+    }
   });
+}
+
+// Резерв для диктовки: после вероятного нажатия нельзя посылать Ctrl+V
+// вторым способом. Для прежнего IPC text:paste пока сохранён старый контракт.
+async function pasteToActiveWindowSafely() {
+  if (process.platform !== 'win32') return false;
+  hideWindowForInsert();
+  try {
+    if (inputHost.available()) {
+      let result;
+      try { result = await inputHost.paste(); } catch { return { uncertain: true }; }
+      if (result?.ok === true) return true;
+      if (result?.reason !== 'host-not-started') return { uncertain: true };
+    } else {
+      const helper = process.env.ZSPEAKLY_INPUT;
+      if (helper && fs.existsSync(helper)) {
+        const outcome = await new Promise((resolve) => {
+          try {
+            execFile(helper, ['ctrl+v'], { windowsHide: true, timeout: 8000 }, (error) => {
+              resolve(!error ? true : isNotStarted(error) ? false : { uncertain: true });
+            });
+          } catch { resolve(false); }
+        });
+        if (outcome !== false) return outcome;
+      }
+    }
+    return await new Promise((resolve) => {
+      sendKeys('^v', (ok, notStarted) => resolve(ok ? true : notStarted ? false : { uncertain: true }), { timeout: 8000 });
+    });
+  } finally { restoreWindowAfterInsert(); }
 }
 
 function pasteToActiveWindow() {

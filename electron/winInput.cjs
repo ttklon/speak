@@ -317,7 +317,7 @@ function parseHelperOutput(stdout = '') {
   return { ok: false, reason: `непонятный ответ: ${line.slice(0, 120)}` };
 }
 
-function createWinInput({ baseDir, platform = process.platform, exists = fs.existsSync, timeoutMs = 6000 } = {}) {
+function createWinInput({ baseDir, platform = process.platform, exists = fs.existsSync, timeoutMs = 6000, spawnProcess = spawn } = {}) {
   const paths = helperPaths(baseDir);
   let state = { ready: false, reason: 'не проверяли', compiler: '', path: paths.exe };
 
@@ -394,20 +394,22 @@ function createWinInput({ baseDir, platform = process.platform, exists = fs.exis
   }
 
   function run(args) {
+    const isPaste = args[0] === 'paste';
+    const result = (payload, uncertain) => isPaste && payload.ok !== true ? { ...payload, ok: false, uncertain } : payload;
     return new Promise((resolve) => {
       if (!isWindows) {
-        resolve({ ok: false, reason: 'только Windows' });
+        resolve(result({ ok: false, reason: 'только Windows' }, false));
         return;
       }
       if (!exists(paths.exe)) {
-        resolve({ ok: false, reason: 'помощник ввода не собран' });
+        resolve(result({ ok: false, reason: 'помощник ввода не собран' }, false));
         return;
       }
       let child;
       try {
-        child = spawn(paths.exe, args, { windowsHide: true });
+        child = spawnProcess(paths.exe, args, { windowsHide: true });
       } catch (error) {
-        resolve({ ok: false, reason: String(error?.message || error) });
+        resolve(result({ ok: false, reason: String(error?.message || error) }, false));
         return;
       }
       let stdout = '';
@@ -418,7 +420,7 @@ function createWinInput({ baseDir, platform = process.platform, exists = fs.exis
         } catch {
           /* уже завершился */
         }
-        resolve({ ok: false, reason: 'помощник не ответил вовремя' });
+        resolve(result({ ok: false, reason: 'помощник не ответил вовремя' }, true));
       }, timeoutMs);
       child.stdout?.on('data', (chunk) => {
         stdout += chunk;
@@ -428,13 +430,14 @@ function createWinInput({ baseDir, platform = process.platform, exists = fs.exis
       });
       child.on('error', (error) => {
         clearTimeout(timer);
-        resolve({ ok: false, reason: String(error?.message || error) });
+        resolve(result({ ok: false, reason: String(error?.message || error) }, true));
       });
-      child.on('close', () => {
+      child.on('close', (code) => {
         clearTimeout(timer);
         const parsed = parseHelperOutput(stdout);
+        if (isPaste && parsed.ok === true && code !== 0) { parsed.ok = false; parsed.reason = 'помощник завершился с ошибкой'; }
         if (!parsed.ok && !parsed.reason && stderr) parsed.reason = String(stderr).slice(0, 200);
-        resolve(parsed);
+        resolve(result(parsed, true));
       });
     });
   }

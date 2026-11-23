@@ -282,6 +282,25 @@ async function main() {
           const undo = await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert());
           assert.equal(undo.reason, 'нечего убирать', JSON.stringify(undo));
           console.log('SENDINPUT_LOST_ACK_E2E_OK: реальный ввод в WinForms однократно; ответ искусственно потерян, повтор и слепая отмена запрещены');
+          await lostPage.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'clipboard' });
+          });
+          const pasteText = 'Одна вставка Ctrl+V при потере ответа';
+          await command('clear');
+          await command('clipboard', 'Предыдущий синтетический буфер');
+          assert.equal(await active(), true, 'перед потерей ответа Ctrl+V потерян фокус');
+          const pasteResult = await lostPage.evaluate((value) => window.zspeakly.native.insertText(value), pasteText);
+          assert.equal(pasteResult.ok, false, JSON.stringify(pasteResult));
+          assert.equal(pasteResult.uncertain, true, JSON.stringify(pasteResult));
+          assert.equal(pasteResult.method, 'clipboard', JSON.stringify(pasteResult));
+          await assertText(pasteText, 'неподтверждённый Ctrl+V');
+          await sleep(1500);
+          assert.equal((await command('state')).text, pasteText, 'Ctrl+V отправлен повторно');
+          assert.equal((await command('readClipboard')).text, pasteText, 'буфер неожиданно восстановлен');
+          const pasteUndo = await lostPage.evaluate(() => window.zspeakly.native.undoLastInsert());
+          assert.equal(pasteUndo.reason, 'нечего убирать', JSON.stringify(pasteUndo));
+          console.log('PASTE_LOST_ACK_E2E_OK: реальный Ctrl+V в WinForms однократно; ответ искусственно потерян, повтор и слепая отмена запрещены');
         }
       } finally {
         if (browser) await browser.close();

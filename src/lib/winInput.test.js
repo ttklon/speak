@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 // Модуль живёт в main-процессе (CommonJS) — проверяем его как есть.
 import { createRequire } from 'node:module';
 
@@ -79,6 +80,43 @@ describe('честный отказ вне Windows', () => {
     const state = input.status();
     expect(state.platform).toBe('linux');
     expect(typeof state.reason).toBe('string');
+  });
+});
+
+describe('неподтверждённый Ctrl+V помощника', () => {
+  function fakeChild() {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    return child;
+  }
+  it('таймаут, авария и отказ SendInput не доказывают отсутствие вставки', async () => {
+    vi.useFakeTimers();
+    try {
+      const timed = fakeChild();
+      const a = createWinInput({ platform: 'win32', exists: () => true, timeoutMs: 100, spawnProcess: () => timed });
+      const promise = a.paste();
+      await vi.advanceTimersByTimeAsync(101);
+      expect(await promise).toMatchObject({ ok: false, uncertain: true });
+      expect(timed.kill).toHaveBeenCalledOnce();
+      const failed = fakeChild();
+      const b = createWinInput({ platform: 'win32', exists: () => true, spawnProcess: () => failed });
+      const p = b.paste();
+      failed.stdout.emit('data', Buffer.from('{"ok":false,"reason":"sendinput-failed"}'));
+      failed.emit('close', 1);
+      expect(await p).toMatchObject({ ok: false, uncertain: true });
+      const crashed = fakeChild();
+      const c = createWinInput({ platform: 'win32', exists: () => true, spawnProcess: () => crashed });
+      const q = c.paste(); crashed.emit('error', new Error('failed'));
+      expect(await q).toMatchObject({ ok: false, uncertain: true });
+    } finally { vi.useRealTimers(); }
+  });
+  it('отказ до запуска позволяет запасной путь', async () => {
+    const noExe = createWinInput({ platform: 'win32', exists: () => false });
+    expect(await noExe.paste()).toMatchObject({ ok: false, uncertain: false });
+    const notStarted = createWinInput({ platform: 'win32', exists: () => true, spawnProcess: () => { throw new Error('spawn'); } });
+    expect(await notStarted.paste()).toMatchObject({ ok: false, uncertain: false });
   });
 });
 

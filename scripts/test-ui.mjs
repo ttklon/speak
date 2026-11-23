@@ -2381,6 +2381,24 @@ async function scenarioInsertFailed(browser) {
   record('сценарии', 'неподтверждённый ввод: без ошибок консоли', uncertainErrors.length === 0, uncertainErrors[0] || '');
   await uncertainPage.close();
 
+  const uncertainClipboardPage = await openPage(browser, '#/home', {
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'сомнительная вставка через буфер' });
+      window.zspeakly.native.insertText = async () => ({ ok: false, method: 'clipboard', uncertain: true });
+    },
+  });
+  takeErrors(uncertainClipboardPage);
+  await uncertainClipboardPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await uncertainClipboardPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const clipboardWarning = await uncertainClipboardPage.evaluate(() => [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '));
+  record('сценарии', 'Ctrl+V без подтверждения: проверить окно перед повтором, не обещать буфер',
+    /Не удалось подтвердить ввод/.test(clipboardWarning) && /Проверьте/.test(clipboardWarning) && !/нажмите Ctrl\+V/i.test(clipboardWarning));
+  const clipboardWarningErrors = takeErrors(uncertainClipboardPage);
+  record('сценарии', 'Ctrl+V без подтверждения: без ошибок консоли', clipboardWarningErrors.length === 0, clipboardWarningErrors[0] || '');
+  await uncertainClipboardPage.close();
+
   const rejectedPage = await openPage(browser, '#/home', {
     patchNative: () => {
       window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'потерян ответ от вставки' });
