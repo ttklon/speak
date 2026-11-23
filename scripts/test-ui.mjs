@@ -3493,7 +3493,7 @@ async function scenarioClipboardImageCopy(browser) {
   await sleep(300);
   state = await page.evaluate(() => ({ writes: window.__imageWrites, pastes: window.__pastes, fallback: window.__fallbackWrites, toast: document.body.innerText }));
   record('безопасность', 'буфер: отказ картинки не подменяется текстом и не запускает вставку',
-    state.writes.length === 2 && state.writes[1].image === image && state.pastes === 0 && state.fallback === 0 && /Не удалось скопировать/.test(state.toast));
+    state.writes.length === 2 && state.writes[1].image === image && state.pastes === 0 && state.fallback === 0 && /Не удалось скопировать/.test(state.toast) && /повреждено или слишком велико/.test(state.toast));
 
   await page.evaluate(() => { window.zspeakly.native.writeClipboard = async (payload) => { window.__imageWrites.push(payload); return true; }; });
   await page.evaluate(() => document.querySelectorAll('.clip-preview__actions button')[1]?.click());

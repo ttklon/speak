@@ -515,7 +515,7 @@ export default function ClipboardPage() {
     } catch {
       push({
         title: 'Не удалось скопировать',
-        description: item.image && !textOnly ? 'Не удалось подтвердить копирование изображения.' : 'Выделите текст в карточке и нажмите Ctrl+C.',
+        description: item.image && !textOnly ? 'Изображение может быть повреждено или слишком велико, либо системный буфер недоступен.' : 'Выделите текст в карточке и нажмите Ctrl+C.',
         tone: 'warn',
       });
       return false;

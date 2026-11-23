@@ -36,6 +36,7 @@ const { randomUUID } = require('node:crypto');
 const { cleanupTemp } = require('./tempCleanup.cjs');
 const { requestLocal } = require('./localHttp.cjs');
 const { RECORDING_MAX_BYTES } = require('./recordingLimits.cjs');
+const { validateImageDataUrl, validImageDimensions } = require('./clipboardImage.cjs');
 const {
   app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut,
   clipboard, shell, dialog, screen, session, safeStorage,
@@ -2254,11 +2255,11 @@ function registerIpc() {
     // картинка приоритетнее текста: «Копировать» для снимка должен дать сам снимок
     const image = payload.image;
     if (image != null && image !== '') {
-      if (typeof image !== 'string' || !image.startsWith('data:image/')) return false;
+      if (!validateImageDataUrl(image)) return false;
       try {
         const { nativeImage } = require('electron');
         const img = nativeImage.createFromDataURL(image);
-        if (!img.isEmpty()) {
+        if (!img.isEmpty() && validImageDimensions(img.getSize())) {
           clipboard.writeImage(img);
           return true;
         }

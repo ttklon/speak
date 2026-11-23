@@ -660,6 +660,19 @@ jobs:
           if [ "$code" -ne 0 ]; then echo "::error title=Electron backup::$message"; exit "$code"; fi
           echo "::notice title=Electron backup::$message"
 
+      # Системный буфер изменяется только на одноразовом GitHub-hosted Windows.
+      - name: Изображение в буфере Electron
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set +e
+          node scripts/test-electron-clipboard-image.cjs > electron-clipboard-image.log 2>&1
+          code=$?
+          cat electron-clipboard-image.log
+          message=$(tail -c 3000 electron-clipboard-image.log | tr '\r\n' '  ' | sed 's/%/%25/g')
+          if [ "$code" -ne 0 ]; then echo "::error title=Electron clipboard image::$message"; exit "$code"; fi
+          echo "::notice title=Electron clipboard image::$message"
+
       # Изолированный экран CI закрыт синтетическим окном; WebM хранится только
       # во временной папке и удаляется тестом, не загружается артефактом.
       - name: Реальная запись экрана Electron

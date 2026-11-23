@@ -192,7 +192,7 @@ const electronStub = {
   },
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => true }),
-    createFromDataURL: () => ({ isEmpty: () => false, __fromDataUrl: true }),
+    createFromDataURL: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }), __fromDataUrl: true }),
     createEmpty: () => ({}),
   },
   ipcMain: {
@@ -1036,11 +1036,52 @@ await check('скриншот не попадает в историю дважд
 
 await check('clipboard:write кладёт картинку, а не только текст', async () => {
   const ok = await handlers.get('clipboard:write')({}, {
-    image: 'data:image/png;base64,iVBORw0KGgo=',
+    image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
     text: 'подпись',
   });
   if (!ok) throw new Error('канал вернул false');
   if (!clipboardImage.value) throw new Error('картинка не попала в буфер');
+});
+
+await check('clipboard:write отклоняет слишком большой data URL и опасные размеры PNG до нативного декодирования', async () => {
+  const original = electronStub.nativeImage.createFromDataURL;
+  let decodes = 0;
+  try {
+    electronStub.nativeImage.createFromDataURL = () => { decodes++; return { isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }; };
+    const pngHeader = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+    pngHeader.writeUInt32BE(50000, 16);
+    pngHeader.writeUInt32BE(50000, 20);
+    const cases = [
+      'data:image/png;base64,' + 'A'.repeat(16 * 1024 * 1024),
+      'data:image/png;base64,' + pngHeader.toString('base64'),
+      'data:image/png;base64,@@@@',
+    ];
+    const rejectedIncorrectly = [];
+    for (const [index, image] of cases.entries()) {
+      clipboardText.value = 'прежний текст';
+      clipboardImage.value = null;
+      const ok = await handlers.get('clipboard:write')({}, { image, text: 'подпись' });
+      if (ok || clipboardText.value !== 'прежний текст' || clipboardImage.value) rejectedIncorrectly.push(index);
+    }
+    if (rejectedIncorrectly.length || decodes) throw new Error(`небезопасные случаи: ${rejectedIncorrectly.join(',')}; вызовов декодера: ${decodes}`);
+  } finally {
+    electronStub.nativeImage.createFromDataURL = original;
+  }
+});
+
+await check('clipboard:write не пишет декодированную картинку с недопустимым размером', async () => {
+  const original = electronStub.nativeImage.createFromDataURL;
+  try {
+    for (const size of [{ width: 50000, height: 1 }, { width: 8001, height: 5000 }, { width: 0, height: 10 }]) {
+      electronStub.nativeImage.createFromDataURL = () => ({ isEmpty: () => false, getSize: () => size });
+      clipboardText.value = 'прежний текст';
+      clipboardImage.value = null;
+      const ok = await handlers.get('clipboard:write')({}, { image: 'data:image/jpeg;base64,AAA=', text: 'подпись' });
+      if (ok || clipboardText.value !== 'прежний текст' || clipboardImage.value) throw new Error('недопустимая картинка изменила буфер');
+    }
+  } finally {
+    electronStub.nativeImage.createFromDataURL = original;
+  }
 });
 
 await check('clipboard:write не подменяет картинку подписью при ошибке декодирования', async () => {
@@ -1050,7 +1091,7 @@ await check('clipboard:write не подменяет картинку подпи
       electronStub.nativeImage.createFromDataURL = decode;
       clipboardText.value = 'прежний текст';
       clipboardImage.value = null;
-      const ok = await handlers.get('clipboard:write')({}, { image: 'data:image/png;base64,bad', text: 'подпись' });
+      const ok = await handlers.get('clipboard:write')({}, { image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', text: 'подпись' });
       if (ok || clipboardText.value !== 'прежний текст' || clipboardImage.value) throw new Error('ошибочная картинка заменена текстом');
     }
     clipboardText.value = 'прежний текст';
