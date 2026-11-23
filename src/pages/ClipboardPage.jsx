@@ -378,9 +378,9 @@ export default function ClipboardPage() {
     setRevealed((prev) => new Set(prev).add(item.id));
   };
 
-  const copyItem = async (item) => {
+  const copyItem = async (item, textOnly = false) => {
     try {
-      // пароль лежит в профиле зашифрованным: сначала расшифровываем
+      // Если есть шифр, сначала получаем открытое значение через main.
       const value = item.cipher ? await revealText(item) : item.text || '';
       if (item.cipher && value == null) {
         push({
@@ -389,22 +389,28 @@ export default function ClipboardPage() {
           tone: 'warn',
           ttl: 7000,
         });
-        return;
+        return false;
+      }
+      if (textOnly && !value) {
+        push({ title: 'В записи нет текста', tone: 'warn' });
+        return false;
       }
       // нативный мост первым: в file:// браузерное API часто запрещено
-      await writeClipboard(value, item.image);
+      await writeClipboard(value, textOnly ? undefined : item.image);
       setJustCopied(item.id);
       setTimeout(() => setJustCopied(null), 1400);
       // Не раскрывать распознанный пароль в уведомлении даже после копирования.
       // Обычный текст тоже может содержать нераспознанный секрет.
       const description = item.kind === 'password' || item.cipher ? 'Значение скопировано в системный буфер.' : truncate(value, 60);
       push({ title: 'Скопировано', description, tone: 'success', ttl: 1800 });
+      return true;
     } catch {
       push({
         title: 'Не удалось скопировать',
-        description: 'Выделите текст в карточке и нажмите Ctrl+C.',
+        description: item.image && !textOnly ? 'Не удалось подтвердить копирование изображения.' : 'Выделите текст в карточке и нажмите Ctrl+C.',
         tone: 'warn',
       });
+      return false;
     }
   };
 
@@ -426,8 +432,19 @@ export default function ClipboardPage() {
   };
 
   const copyPaste = async (item) => {
-    await copyItem(item);
-    window.zspeakly?.native?.pasteToActive?.();
+    // Если копирование или расшифровка не удались, нельзя вставлять то, что
+    // случайно оставалось в системном буфере до этого действия.
+    if (!(await copyItem(item))) return;
+    try {
+      const paste = window.zspeakly?.native?.pasteToActive;
+      if (!paste || (await paste()) !== true) throw new Error('paste-unavailable');
+    } catch {
+      push({
+        title: 'Автовставка не удалась',
+        description: 'Проверьте окно назначения и при необходимости вставьте вручную.',
+        tone: 'warn',
+      });
+    }
   };
 
   return (
@@ -741,7 +758,7 @@ export default function ClipboardPage() {
                     variant="ghost"
                     size="sm"
                     icon={<Copy size={12} />}
-                    onClick={() => copyItem(selected)}
+                    onClick={() => copyItem(selected, true)}
                   >
                     Копировать как обычный текст
                   </Button>

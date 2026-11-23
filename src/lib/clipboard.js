@@ -25,6 +25,10 @@ export async function writeClipboard(text, image) {
     }
   }
 
+  // Текстовый fallback не может заменить изображение: он молча скопировал бы
+  // подпись (или пустую строку), а интерфейс сообщил бы об успешной картинке.
+  if (image != null && image !== '') throw new Error('clipboard-image-unavailable');
+
   // предзагруженный мост буфера (sendSync, доступен даже из file://)
   if (typeof window !== 'undefined' && window.zspeakly?.clipboard?.writeText) {
     try {
@@ -45,19 +49,22 @@ export async function writeClipboard(text, image) {
   }
 
   // document.execCommand('copy') — старый, но работает без разрешений
+  let area;
   try {
-    const area = document.createElement('textarea');
+    area = document.createElement('textarea');
     area.value = value;
     area.setAttribute('readonly', '');
     area.style.position = 'fixed';
     area.style.opacity = '0';
     document.body.appendChild(area);
     area.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(area);
-    if (ok) return 'execCommand';
+    if (document.execCommand('copy')) return 'execCommand';
   } catch {
     /* совсем не вышло */
+  } finally {
+    // Даже при исключении не оставляем скрытое поле с копируемым текстом в DOM.
+    try { if (area) area.value = ''; } catch { /* окно уже закрывается */ }
+    try { if (area?.parentNode) area.parentNode.removeChild(area); } catch { /* окно уже закрывается */ }
   }
 
   throw new Error('clipboard-unavailable');

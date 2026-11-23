@@ -3064,6 +3064,111 @@ async function scenarioClipboardSecretPrivacy(browser) {
   await page.close();
 }
 
+async function scenarioClipboardPasteFailure(browser) {
+  const page = await openPage(browser, '#/clipboard', {
+    settle: 500,
+    storeSeed: { 'zs.clipboard': [
+      { id: 'broken-pw', kind: 'password', text: '', cipher: 'invalid-cipher', source: 'test password', createdAt: Date.now() },
+      { id: 'copy-text', kind: 'text', text: 'тестовый текст для вставки', source: 'test text', createdAt: Date.now() - 1 },
+    ] },
+  });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__pasteCount = 0;
+    window.__written = [];
+    window.zspeakly.native.pasteToActive = async () => { window.__pasteCount++; return true; };
+    window.zspeakly.native.revealSecret = async () => null;
+    window.zspeakly.native.writeClipboard = async () => false;
+    window.zspeakly.clipboard.writeText = () => { throw new Error('write unavailable'); };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('write unavailable'); } } });
+    document.execCommand = () => false;
+  });
+  await page.click('.clip-card[title="Пароль (зашифрован)"]', { clickCount: 2 });
+  await sleep(400);
+  let state = await page.evaluate(() => ({ count: window.__pasteCount, toast: document.body.innerText }));
+  record('безопасность', 'буфер: при отказе расшифровки не вставляется старый буфер',
+    state.count === 0 && /Пароль не расшифрован/.test(state.toast));
+  await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+  await sleep(400);
+  state = await page.evaluate(() => ({ count: window.__pasteCount, toast: document.body.innerText }));
+  record('безопасность', 'буфер: при отказе записи не запускается вставка',
+    state.count === 0 && /Не удалось скопировать/.test(state.toast));
+  await page.evaluate(() => {
+    window.zspeakly.native.writeClipboard = async (payload) => { window.__written.push(payload.text); return true; };
+  });
+  await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+  await sleep(400);
+  state = await page.evaluate(() => ({ count: window.__pasteCount, written: window.__written }));
+  record('безопасность', 'буфер: после успешного копирования вставка запрашивается один раз',
+    state.count === 1 && state.written.at(-1) === 'тестовый текст для вставки');
+  await page.evaluate(() => { window.zspeakly.native.pasteToActive = async () => false; });
+  await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+  await sleep(400);
+  let warning = await page.evaluate(() => [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '');
+  record('безопасность', 'буфер: отказ автовставки объясняется после копирования', /Автовставка не удалась/.test(warning));
+  await page.evaluate(() => { window.zspeakly.native.pasteToActive = async () => { throw new Error('paste failed'); }; });
+  await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+  await sleep(400);
+  warning = await page.evaluate(() => [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '');
+  record('безопасность', 'буфер: исключение автовставки не теряется', /Автовставка не удалась/.test(warning));
+  const errors = takeErrors(page);
+  record('безопасность', 'буфер: ошибки копирования не ломают интерфейс', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+async function scenarioClipboardImageCopy(browser) {
+  const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
+  const page = await openPage(browser, '#/clipboard', {
+    settle: 500,
+    storeSeed: { 'zs.clipboard': [
+      { id: 'note-img', kind: 'note', text: 'подпись для теста', image, source: 'test note', createdAt: Date.now() },
+      { id: 'image-only', kind: 'image', text: '', image, source: 'test image', createdAt: Date.now() - 1 },
+    ] },
+  });
+  takeErrors(page);
+  await page.evaluate(() => {
+    window.__imageWrites = [];
+    window.__fallbackWrites = 0;
+    window.__pastes = 0;
+    window.zspeakly.native.writeClipboard = async (payload) => { window.__imageWrites.push(payload); return true; };
+    window.zspeakly.native.pasteToActive = async () => { window.__pastes++; return true; };
+    window.zspeakly.clipboard.writeText = () => { window.__fallbackWrites++; };
+    document.querySelector('[aria-label="Список"]')?.click();
+  });
+  await sleep(300);
+  await page.evaluate(() => [...document.querySelectorAll('.clip-list__item')].find((el) => el.innerText.includes('подпись для теста'))?.click());
+  await sleep(200);
+  await page.evaluate(() => [...document.querySelectorAll('.clip-preview__actions button')].find((el) => /Копировать как обычный текст/i.test(el.innerText))?.click());
+  await sleep(300);
+  let state = await page.evaluate(() => ({ writes: window.__imageWrites, pastes: window.__pastes }));
+  record('безопасность', 'буфер: «как обычный текст» копирует подпись без картинки',
+    state.writes.length === 1 && state.writes[0].text === 'подпись для теста' && !state.writes[0].image && state.pastes === 0);
+
+  await page.evaluate(() => { window.zspeakly.native.writeClipboard = async (payload) => { window.__imageWrites.push(payload); return false; }; });
+  await page.evaluate(() => document.querySelectorAll('.clip-preview__actions button')[1]?.click());
+  await sleep(300);
+  state = await page.evaluate(() => ({ writes: window.__imageWrites, pastes: window.__pastes, fallback: window.__fallbackWrites, toast: document.body.innerText }));
+  record('безопасность', 'буфер: отказ картинки не подменяется текстом и не запускает вставку',
+    state.writes.length === 2 && state.writes[1].image === image && state.pastes === 0 && state.fallback === 0 && /Не удалось скопировать/.test(state.toast));
+
+  await page.evaluate(() => { window.zspeakly.native.writeClipboard = async (payload) => { window.__imageWrites.push(payload); return true; }; });
+  await page.evaluate(() => document.querySelectorAll('.clip-preview__actions button')[1]?.click());
+  await sleep(300);
+  state = await page.evaluate(() => ({ writes: window.__imageWrites, pastes: window.__pastes }));
+  record('безопасность', 'буфер: успешное копирование картинки передаёт картинку и запрашивает вставку',
+    state.writes.length === 3 && state.writes[2].image === image && state.pastes === 1);
+
+  await page.evaluate(() => [...document.querySelectorAll('.clip-list__item')].find((el) => el.innerText.includes('test image'))?.click());
+  await sleep(200);
+  await page.evaluate(() => [...document.querySelectorAll('.clip-preview__actions button')].find((el) => /Копировать как обычный текст/i.test(el.innerText))?.click());
+  await sleep(300);
+  state = await page.evaluate(() => ({ writes: window.__imageWrites.length, title: [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '' }));
+  record('безопасность', 'буфер: копирование пустого текста предупреждает и не меняет буфер', state.writes === 3 && /В записи нет текста/.test(state.title));
+  const errors = takeErrors(page);
+  record('безопасность', 'буфер: сценарий изображения без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioDictionary(browser) {
   const page = await openPage(browser, '#/dictionary');
   takeErrors(page);
@@ -8573,6 +8678,8 @@ async function main() {
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['пароли', scenarioPasswordVault],
       ['приватность буфера', scenarioClipboardSecretPrivacy],
+      ['безопасность вставки буфера', scenarioClipboardPasteFailure],
+      ['копирование изображения буфера', scenarioClipboardImageCopy],
       ['словарь', scenarioDictionary],
       ['буфер', scenarioClipboard],
       ['прямые ссылки', scenarioDeepLinks],

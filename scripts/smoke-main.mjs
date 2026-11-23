@@ -1012,6 +1012,24 @@ await check('clipboard:write кладёт картинку, а не только
   if (!clipboardImage.value) throw new Error('картинка не попала в буфер');
 });
 
+await check('clipboard:write не подменяет картинку подписью при ошибке декодирования', async () => {
+  const original = electronStub.nativeImage.createFromDataURL;
+  try {
+    for (const decode of [() => ({ isEmpty: () => true }), () => { throw new Error('decode failed'); }]) {
+      electronStub.nativeImage.createFromDataURL = decode;
+      clipboardText.value = 'прежний текст';
+      clipboardImage.value = null;
+      const ok = await handlers.get('clipboard:write')({}, { image: 'data:image/png;base64,bad', text: 'подпись' });
+      if (ok || clipboardText.value !== 'прежний текст' || clipboardImage.value) throw new Error('ошибочная картинка заменена текстом');
+    }
+    clipboardText.value = 'прежний текст';
+    const invalid = await handlers.get('clipboard:write')({}, { image: 'not-a-data-url', text: 'подпись' });
+    if (invalid || clipboardText.value !== 'прежний текст') throw new Error('неверный тип картинки заменён текстом');
+  } finally {
+    electronStub.nativeImage.createFromDataURL = original;
+  }
+});
+
 await check('хоткей диктовки не выдёргивает окно поверх чужого приложения', async () => {
   const visible = { value: false };
   // подменяем видимость у всех окон: mainWindow мог быть создан не последним.

@@ -2252,7 +2252,8 @@ function registerIpc() {
     if (!payload) return false;
     // картинка приоритетнее текста: «Копировать» для снимка должен дать сам снимок
     const image = payload.image;
-    if (typeof image === 'string' && image.startsWith('data:image/')) {
+    if (image != null && image !== '') {
+      if (typeof image !== 'string' || !image.startsWith('data:image/')) return false;
       try {
         const { nativeImage } = require('electron');
         const img = nativeImage.createFromDataURL(image);
@@ -2260,9 +2261,12 @@ function registerIpc() {
           clipboard.writeImage(img);
           return true;
         }
-      } catch (err) {
-        console.warn('[clipboard] image write failed', err.message);
+      } catch {
+        // Не выводим содержимое или сообщение декодера в журнал.
+        console.warn('[clipboard] image write failed');
       }
+      // Не выдаём подпись за успешно скопированное изображение.
+      return false;
     }
     if (payload.text) {
       clipboard.writeText(String(payload.text));
