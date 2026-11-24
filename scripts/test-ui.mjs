@@ -709,7 +709,7 @@ async function scenarioVoiceCommands(browser) {
   record(
     'сценарии',
     'голос: «запятая», «точка» и «с новой строки» становятся знаками',
-    saved === 'Привет, как дела.\nКупить хлеб.',
+    saved === 'Привет, как дела.\nКупить хлеб и.',
     JSON.stringify(saved),
   );
   const inserts = await page.evaluate(() =>
@@ -730,6 +730,39 @@ async function scenarioVoiceCommands(browser) {
   const errors = takeErrors(page);
   record('сценарии', 'голос: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
+}
+
+async function scenarioVoiceDeleteSafety(browser) {
+  const cases = [
+    ['Скажи «удалить последнее слово» вслух', 'Скажи «удалить последнее слово» вслух.'],
+    ['Первое предложение. Второе предложение. удалить последнее предложение', 'Первое предложение.'],
+    ['Привет не готов удалить последнее слово', 'Привет не.'],
+    ['Привет 👩‍💻 удалить последнее слово', 'Привет.'],
+    ['первое второе удалить последнюю фразу', 'Первое второе удалить последнюю фразу.'],
+    ['Предыдущее. Доклад И. И. Иванова удалить последнее предложение', 'Предыдущее. Доклад И. И. Иванова удалить последнее предложение.'],
+    ['Пожалуйста не удалить последнее предложение', 'Пожалуйста не удалить последнее предложение.'],
+    ['Первый пункт\nВторой пункт удалить последнее предложение', 'Первый пункт.'],
+  ];
+  for (const [spoken, expected] of cases) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false },
+      storeSeed: { 'zs.dictations': [], 'zs.mockSttText': spoken },
+    });
+    takeErrors(page);
+    await clickText(page, 'Начать диктовку'); await sleep(1100);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await sleep(2300);
+    const result = await page.evaluate(() => ({
+      saved: window.__e2e.read('zs.dictations')?.[0]?.text,
+      inserted: (window.__bridgeCalls || []).find((c) => c.channel === 'text:insert')?.args?.[0],
+    }));
+    record('сценарии', `голосовое удаление: ${spoken}`, result.saved === expected && result.inserted === expected, JSON.stringify(result));
+    await page.close();
+  }
 }
 
 /**
@@ -10010,6 +10043,7 @@ async function main() {
       ['онбординг', scenarioOnboarding],
       ['диктовка', scenarioDictation],
       ['голосовые команды', scenarioVoiceCommands],
+      ['безопасные голосовые удаления', scenarioVoiceDeleteSafety],
       ['оформление под окно', scenarioAppFormat],
       ['язык под окно', scenarioAppLanguage],
       ['web speech завершение', scenarioWebSpeechFinalization],

@@ -25,7 +25,7 @@
  */
 
 /** Слова и одиночные символы: пробелы не токены, их расставляет сборка. */
-const TOKEN_RE = /[\p{L}\p{N}]+(?:[’'‑-][\p{L}\p{N}]+)*|[^\s]/gu;
+const TOKEN_RE = /[0-9#*]\uFE0F?\u20E3|\p{Regional_Indicator}{2}|\p{Extended_Pictographic}(?:[\uFE0E\uFE0F\p{Emoji_Modifier}\u{E0020}-\u{E007F}]|\u200D\p{Extended_Pictographic})*|[\p{L}\p{N}][\p{L}\p{N}\p{M}]*(?:[’'‑-][\p{L}\p{N}][\p{L}\p{N}\p{M}]*)*|[^\s]/gu;
 
 /** Пунктуация, которая «прилипает» к предыдущему слову. */
 const TAIL_PUNCT = new Set([',', '.', ';', ':', '!', '?', '…', '—', '–', '-', '%', '»', ')', ']']);
@@ -87,16 +87,12 @@ const RU_COMMANDS = [
   { words: ['точка'], act: { kind: 'tail', value: '.', guard: 'dot' } },
 ];
 
-/** «удалить последнее слово» и родственные формы. */
+/** «Фраза» и «строка» не синонимы слова или предложения: не исполняем их как другую команду. */
 const DELETE_VERBS = ['удалить', 'удали', 'убери', 'убрать', 'стереть', 'сотри'];
 const DELETE_NOUNS = {
   слово: 'deleteWord',
   слова: 'deleteWord',
-  фразу: 'deleteWord',
-  фраза: 'deleteWord',
   предложение: 'deleteSentence',
-  строчку: 'deleteSentence',
-  строку: 'deleteSentence',
 };
 for (const verb of DELETE_VERBS) {
   for (const [noun, kind] of Object.entries(DELETE_NOUNS)) {
@@ -134,10 +130,25 @@ export function commandsFor(language = 'ru') {
   return base.sort((a, b) => b.words.length - a.words.length);
 }
 
-// The command renderer normalises punctuation. Protect clearly recognisable
-// technical fragments as whole tokens so a command elsewhere in the phrase
-// does not turn example.com into "example. Com" or split a URL into pieces.
-// This is intentionally a narrow heuristic, not a general code parser.
+// Existing quoted text is literal, including an unfinished quote to end of line.
+// Spoken open/close-quote commands are not affected by this protection.
+function protectQuotedFragments(source) {
+  const values = [];
+  let prefix = 'zsquotedfragment';
+  while (source.toLowerCase().includes(prefix)) prefix += 'x';
+  const text = source.replace(/«[^»\r\n]*(?:»|$)|“[^”\r\n]*(?:”|$)|"[^"\r\n]*(?:"|$)/gmu, (value) => {
+    const index = values.push(value) - 1;
+    return `${prefix}${index}z`;
+  });
+  const quoteToken = new RegExp(`^${prefix}\\d+z$`, 'iu');
+  return {
+    text,
+    isQuote: (value) => quoteToken.test(value),
+    restore: (value) => value.replace(new RegExp(`${prefix}(\\d+)z`, 'giu'), (match, index) => values[Number(index)] ?? match),
+  };
+}
+
+// Protect recognisable technical fragments, not a general code parser.
 function protectTechnicalFragments(source) {
   const protectedValues = [];
   let prefix = 'zsprotectedfragment';
@@ -149,8 +160,9 @@ function protectTechnicalFragments(source) {
     const isUrl = /^https?:\/\/[^\s]+$/iu.test(core);
     const isPath = /^(?:\/|[a-z]:\\)[^\s]+$/iu.test(core);
     const isEmail = /^[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}$/u.test(core);
+    const isNumeric = /^\d+(?:[.,]\d+)+$/u.test(core);
     const isDotted = /^(?:[\p{L}\p{N}_-]+\.)+[\p{L}_][\p{L}\p{N}_-]*(?:\([^\s()]*\))?$/u.test(core);
-    if (!isUrl && !isPath && !isEmail && !isDotted) return fragment;
+    if (!isUrl && !isPath && !isEmail && !isDotted && !isNumeric) return fragment;
     const index = protectedValues.push(core) - 1;
     return `${prefix}${index}z${punctuation}`;
   });
@@ -205,36 +217,45 @@ function pushTail(parts, value) {
   parts.push({ kind: value === '»' || value === ')' || value === ']' ? 'close' : 'tail', text: value });
 }
 
-/** Слова, которые после удаления остаются висеть в конце: «купить хлеб и». */
-const TRAILING_GLUE = new Set([
-  'и', 'а', 'но', 'или', 'в', 'во', 'на', 'с', 'со', 'к', 'по', 'из', 'от',
-  'до', 'для', 'что', 'же', 'ли', 'не', 'ни', 'у', 'о', 'об', 'за', 'под',
-  'над', 'при', 'про', 'без', 'через', 'это', 'этот', 'эта', 'эти',
-]);
-
-function deleteLastWord(parts) {
+/** Удаляем только последнее слово, не угадывая, что делать с союзом или «не». */
+function deleteLastWord(parts, isQuote) {
   let i = parts.length - 1;
   while (i >= 0 && parts[i].kind !== 'word') i -= 1;
-  if (i < 0) return;
+  if (i < 0) return true;
+  // Цитата может содержать много слов: удалять её целиком командой для
+  // одного слова было бы неожиданно. Оставляем команду в тексте.
+  if (isQuote(parts[i].text)) return false;
   parts.splice(i, 1);
-  // предлог или союз, оставшийся последним, — тоже мусор: «купить хлеб и»
-  let j = parts.length - 1;
-  while (j >= 0 && parts[j].kind !== 'word') j -= 1;
-  if (j >= 0 && TRAILING_GLUE.has(parts[j].text.toLowerCase())) parts.splice(j, 1);
-  // хвостовая пунктуация после удалённого слова тоже лишняя
   while (parts.length > i && parts[parts.length - 1].kind !== 'word') {
     const last = parts[parts.length - 1];
     if (last.kind === 'open') break;
     parts.pop();
   }
+  return true;
 }
 
-function deleteLastSentence(parts) {
-  // убираем всё до ближайшего конца предложения включительно
-  while (parts.length) {
-    const last = parts.pop();
-    if (last.kind === 'tail' && /[.!?…]/.test(last.text)) return;
+function deleteLastSentence(parts, isQuote) {
+  // Сначала пропускаем завершающие знаки: они принадлежат удаляемому
+  // предложению. Останавливаемся перед знаком предыдущего предложения либо
+  // на границе строки; десятичные числа защищены как единый фрагмент.
+  let lastWord = parts.length - 1;
+  while (lastWord >= 0 && parts[lastWord].kind !== 'word') lastWord -= 1;
+  if (lastWord < 0) return true;
+  let boundary = lastWord - 1;
+  while (boundary >= 0) {
+    const part = parts[boundary];
+    if (part.kind === 'sourceBreak' || part.kind === 'break' ||
+        (part.kind === 'tail' && /^[.!?…]$/u.test(part.text))) break;
+    boundary -= 1;
   }
+  // Точка после одиночной буквы может быть инициалом или сокращением,
+  // а не концом предыдущего предложения. В сомнении оставляем текст.
+  if (boundary >= 1 && parts[boundary].text === '.' && parts[boundary - 1].kind === 'word' &&
+      /^\p{L}$/u.test(parts[boundary - 1].text)) return false;
+  // В непрозрачной цитате может быть несколько предложений. Не угадываем.
+  if (parts.slice(boundary + 1).some((part) => part.kind === 'word' && isQuote(part.text))) return false;
+  parts.splice(boundary + 1);
+  return true;
 }
 
 /** Сборка текста из частей: пробелы, кавычки и переносы — по правилам. */
@@ -305,7 +326,8 @@ export function applyVoiceCommands(text, { language = 'ru', preserveFormatting =
   const source = String(text || '');
   if (!source.trim()) return '';
   const commands = commandsFor(language);
-  const protectedText = protectTechnicalFragments(source);
+  const protectedQuotes = protectQuotedFragments(source);
+  const protectedText = protectTechnicalFragments(protectedQuotes.text);
   const tokens = tokenize(protectedText.text);
   const parts = [];
   let capitalizeNext = false;
@@ -328,6 +350,8 @@ export function applyVoiceCommands(text, { language = 'ru', preserveFormatting =
         }
         if (!ok) continue;
         if (cmd.act.guard === 'dot' && !dotAllowed(tokens, i, i + cmd.words.length)) continue;
+        // «не удалить ...» — текст с отрицанием, а не распоряжение удалить.
+        if ((cmd.act.kind === 'deleteWord' || cmd.act.kind === 'deleteSentence') && ['не', 'not', "don't", 'don’t', 'never'].includes(tokens[i - 1]?.low)) continue;
         // «это не запятая, а точка» — человек говорит о знаках, а не диктует их
         if (cmd.act.kind === 'tail' && cmd.words.length === 1) {
           if (neighborWord(tokens, i - 1, -1) === 'не') continue;
@@ -345,8 +369,16 @@ export function applyVoiceCommands(text, { language = 'ru', preserveFormatting =
       else if (act.kind === 'open') parts.push({ kind: 'open', text: act.value });
       else if (act.kind === 'close') parts.push({ kind: 'close', text: act.value });
       else if (act.kind === 'break') parts.push({ kind: 'break', value: act.value });
-      else if (act.kind === 'deleteWord') deleteLastWord(parts);
-      else if (act.kind === 'deleteSentence') deleteLastSentence(parts);
+      else if (act.kind === 'deleteWord') {
+        if (!deleteLastWord(parts, protectedQuotes.isQuote)) {
+          for (const token of tokens.slice(i, end)) parts.push({ kind: 'word', text: token.raw });
+        }
+      }
+      else if (act.kind === 'deleteSentence') {
+        if (!deleteLastSentence(parts, protectedQuotes.isQuote)) {
+          for (const token of tokens.slice(i, end)) parts.push({ kind: 'word', text: token.raw });
+        }
+      }
       else if (act.kind === 'capitalizeNext') {
         // человек говорит «иван с большой буквы» уже после слова — поднимаем
         // предыдущее слово; если его нет, то следующее
@@ -402,7 +434,7 @@ export function applyVoiceCommands(text, { language = 'ru', preserveFormatting =
     .split('\n')
     .map(finishLine);
   const out = lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').replace(/\n+$/, '');
-  return protectedText.restore(out);
+  return protectedQuotes.restore(protectedText.restore(out));
 }
 
 /** Подсказка для интерфейса: что можно говорить вместо клавиатуры. */
