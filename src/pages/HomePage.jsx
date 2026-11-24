@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Loader2, Mic, Pause, Pencil, Play, RotateCw, Search, Square, Trash2, X } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useDictation } from '../state/DictationProvider.jsx';
-import { writeClipboard } from '../lib/clipboard.js';
+import { clipboardCopyError, writeClipboard } from '../lib/clipboard.js';
 import { typeOut } from '../lib/feedback.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
@@ -144,8 +144,8 @@ export default function HomePage() {
     try {
       await writeClipboard(text);
       push({ title: 'Скопировано в буфер', description: truncate(text, 64), tone: 'success' });
-    } catch {
-      push({ title: 'Не удалось скопировать', tone: 'warn' });
+    } catch (err) {
+      push(clipboardCopyError(err));
     }
   };
 

@@ -11,31 +11,60 @@ function native() {
   return typeof window !== 'undefined' ? window.zspeakly?.native : null;
 }
 
+function copyError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+/** Тексты отказов без содержимого буфера или скопированных секретов. */
+export function clipboardCopyError(err, fallbackDescription = '') {
+  if (err?.code === 'clipboard-busy') return {
+    title: 'Буфер занят',
+    description: 'Другая операция с текстом ещё выполняется. Копирование не запускалось; повторите позже.',
+    tone: 'warn',
+  };
+  if (err?.code === 'clipboard-uncertain') return {
+    title: 'Не удалось подтвердить копирование',
+    description: 'Буфер мог измениться. Проверьте его перед повтором.',
+    tone: 'warn',
+  };
+  return { title: 'Не удалось скопировать', description: fallbackDescription, tone: 'warn' };
+}
+
 /** Записать текст (и/или картинку) в системный буфер. */
 export async function writeClipboard(text, image) {
   const value = String(text ?? '');
-
+  const electron = typeof window !== 'undefined' && window.zspeakly?.isElectron === true;
   const bridge = native();
   if (bridge?.writeClipboard) {
-    try {
-      const ok = await bridge.writeClipboard({ text: value, image });
-      if (ok) return 'native';
-    } catch {
-      /* падать не должны — идём дальше */
+    let result;
+    try { result = await bridge.writeClipboard({ text: value, image }); }
+    catch {
+      // IPC мог оборваться после записи: не обходить main другим способом.
+      if (electron) throw copyError('clipboard-uncertain');
     }
+    if (result === true) return 'native';
+    if (result?.busy === true) throw copyError('clipboard-busy');
+    if (electron) {
+      if (result !== false) throw copyError('clipboard-uncertain');
+      throw copyError(image != null && image !== '' ? 'clipboard-image-unavailable' : 'clipboard-unavailable');
+    }
+  } else if (electron) {
+    // Прямой preload/браузерный путь обошёл бы блокировку main-процесса.
+    throw copyError('clipboard-unavailable');
   }
 
-  // Текстовый fallback не может заменить изображение: он молча скопировал бы
-  // подпись (или пустую строку), а интерфейс сообщил бы об успешной картинке.
-  if (image != null && image !== '') throw new Error('clipboard-image-unavailable');
+  // Текстовый fallback не может заменить изображение.
+  if (image != null && image !== '') throw copyError('clipboard-image-unavailable');
 
-  // предзагруженный мост буфера (sendSync, доступен даже из file://)
   if (typeof window !== 'undefined' && window.zspeakly?.clipboard?.writeText) {
     try {
-      window.zspeakly.clipboard.writeText(value);
-      return 'bridge';
-    } catch {
-      /* идём дальше */
+      const result = await window.zspeakly.clipboard.writeText(value);
+      if (result?.busy === true) throw copyError('clipboard-busy');
+      if (result !== false) return 'bridge';
+    } catch (err) {
+      if (err?.code === 'clipboard-busy') throw err;
     }
   }
 
@@ -62,12 +91,11 @@ export async function writeClipboard(text, image) {
   } catch {
     /* совсем не вышло */
   } finally {
-    // Даже при исключении не оставляем скрытое поле с копируемым текстом в DOM.
     try { if (area) area.value = ''; } catch { /* окно уже закрывается */ }
     try { if (area?.parentNode) area.parentNode.removeChild(area); } catch { /* окно уже закрывается */ }
   }
 
-  throw new Error('clipboard-unavailable');
+  throw copyError('clipboard-unavailable');
 }
 
 /** Прочитать текст из буфера. */

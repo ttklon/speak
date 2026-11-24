@@ -17,7 +17,7 @@ import { navigate } from '../../lib/router.js';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 import { useDictation } from '../../state/DictationProvider.jsx';
-import { writeClipboard } from '../../lib/clipboard.js';
+import { clipboardCopyError, writeClipboard } from '../../lib/clipboard.js';
 
 const GROUP_ICONS = {
   Страницы: ArrowRight,
@@ -137,7 +137,7 @@ export default function CommandPalette({ open, onClose }) {
                   },
             ),
           )
-          .catch(() => push({ title: 'Не удалось скопировать', tone: 'warn' }));
+          .catch((err) => push(clipboardCopyError(err)));
         return;
       }
       if (target.id === 'clear-draft') {

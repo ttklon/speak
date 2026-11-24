@@ -35,6 +35,43 @@ describe('буфер обмена', () => {
     expect(writeText).toHaveBeenCalledWith('обычный текст');
   });
 
+  it('не считает busy успехом и не пытается обойти его другим способом', async () => {
+    const fallback = vi.fn();
+    globalThis.window = { zspeakly: { isElectron: true, native: { writeClipboard: async () => ({ busy: true }) }, clipboard: { writeText: fallback } } };
+    await expect(writeClipboard('не перезаписывать')).rejects.toMatchObject({ code: 'clipboard-busy' });
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('при потере ответа Electron не обходит блокировку другим способом', async () => {
+    const fallback = vi.fn();
+    globalThis.window = { zspeakly: { isElectron: true, native: { writeClipboard: async () => { throw new Error('IPC'); } }, clipboard: { writeText: fallback } } };
+    await expect(writeClipboard('не перезаписывать')).rejects.toMatchObject({ code: 'clipboard-uncertain' });
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('не обходит отказ Electron запасными способами', async () => {
+    const fallback = vi.fn();
+    globalThis.window = { zspeakly: { isElectron: true, native: { writeClipboard: async () => false }, clipboard: { writeText: fallback } } };
+    await expect(writeClipboard('не перезаписывать')).rejects.toMatchObject({ code: 'clipboard-unavailable' });
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('не обходит отсутствие моста Electron и неожиданный ответ', async () => {
+    for (const native of [{}, { writeClipboard: async () => ({ unexpected: true }) }]) {
+      const fallback = vi.fn();
+      globalThis.window = { zspeakly: { isElectron: true, native, clipboard: { writeText: fallback } } };
+      await expect(writeClipboard('текст')).rejects.toMatchObject({ code: native.writeClipboard ? 'clipboard-uncertain' : 'clipboard-unavailable' });
+      expect(fallback).not.toHaveBeenCalled();
+    }
+  });
+
+  it('передаёт пустую строку через защищённый Electron IPC', async () => {
+    const write = vi.fn(async () => true);
+    globalThis.window = { zspeakly: { isElectron: true, native: { writeClipboard: write } } };
+    await expect(writeClipboard('')).resolves.toBe('native');
+    expect(write).toHaveBeenCalledWith({ text: '', image: undefined });
+  });
+
   it('не подменяет изображение текстом при отказе нативной записи', async () => {
     const writeText = vi.fn();
     globalThis.window = {

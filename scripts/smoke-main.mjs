@@ -996,7 +996,8 @@ await check('вставка истории не должна перезапис�
     await started;
     const pasted = await handlers.get('text:paste-item')({}, { text: 'элемент истории' });
     const oldPaste = await handlers.get('text:paste')({});
-    if (!pasted?.busy || !oldPaste?.busy || pasteCalls || clipboardText.value !== 'первая диктовка') {
+    const manualCopy = await handlers.get('clipboard:write')({}, { text: 'ручное копирование' });
+    if (!pasted?.busy || !oldPaste?.busy || !manualCopy?.busy || pasteCalls || clipboardText.value !== 'первая диктовка') {
       throw new Error(`конфликт не отклонён: ${JSON.stringify(pasted)}, ${JSON.stringify(oldPaste)}, буфер=${clipboardText.value}, вызовов=${pasteCalls}`);
     }
   } finally {
@@ -1026,7 +1027,10 @@ await check('вставка истории блокирует диктовку �
     const replace = await handlers.get('text:replace-selection')({}, 'новая замена');
     const item = await handlers.get('text:paste-item')({}, { text: 'вторая запись' });
     const pasteResult = await handlers.get('text:paste')({});
-    if (!insert?.busy || read?.reason !== 'busy' || !replace?.busy || !item?.busy || !pasteResult?.busy || pasteCalls !== 1 || clipboardText.value !== 'элемент истории') throw new Error('конфликт не был отклонён до изменения буфера');
+    const copy = await handlers.get('clipboard:write')({}, { text: 'ручное копирование' });
+    const copyImage = await handlers.get('clipboard:write')({}, { image: 'data:image/png;base64,AAA=' });
+    const screenshot = await handlers.get('clipboard:screenshot')({});
+    if (!insert?.busy || read?.reason !== 'busy' || !replace?.busy || !item?.busy || !pasteResult?.busy || !copy?.busy || !copyImage?.busy || !screenshot?.busy || pasteCalls !== 1 || clipboardText.value !== 'элемент истории') throw new Error('конфликт не был отклонён до изменения буфера');
     release({ ok: true });
     const result = await first;
     if (!result?.copied || result.outcome !== true) throw new Error(`исходная операция: ${JSON.stringify(result)}`);
@@ -1110,7 +1114,9 @@ await check('две диктовки: период восстановления 
     if (selection?.reason !== 'busy' || !replacement?.busy || clipboardText.value !== 'первая фраза') throw new Error('выделение не отклонено в период восстановления');
     const history = await handlers.get('text:paste-item')({}, { text: 'элемент истории' });
     const paste = await handlers.get('text:paste')({});
-    if (!history?.busy || !paste?.busy || clipboardText.value !== 'первая фраза') throw new Error('история не отклонена в период восстановления');
+    const copy = await handlers.get('clipboard:write')({}, { text: 'ручное копирование' });
+    const screenshot = await handlers.get('clipboard:screenshot')({});
+    if (!history?.busy || !paste?.busy || !copy?.busy || !screenshot?.busy || clipboardText.value !== 'первая фраза') throw new Error('копирование не отклонено в период восстановления');
     await new Promise((r) => setTimeout(r, 650));
     if (clipboardText.value !== 'исходный буфер') throw new Error(`буфер не восстановлен: ${clipboardText.value}`);
     const retry = await handlers.get('text:insert')({}, 'вторая фраза');
@@ -1230,7 +1236,8 @@ await check('диктовка и выделение: занятая замена
     const replacement = await handlers.get('text:replace-selection')({}, 'вторая замена');
     const selection = await handlers.get('text:read-selection')({});
     const dictation = await handlers.get('text:insert')({}, 'фраза диктовки');
-    if (!replacement?.busy || selection?.reason !== 'busy' || !dictation?.busy) throw new Error(`операции не отклонены: ${JSON.stringify({ replacement, selection, dictation })}`);
+    const copy = await handlers.get('clipboard:write')({}, { text: 'копирование во время замены' });
+    if (!replacement?.busy || selection?.reason !== 'busy' || !dictation?.busy || !copy?.busy) throw new Error(`операции не отклонены: ${JSON.stringify({ replacement, selection, dictation })}`);
     if (clipboardText.value !== 'первая замена' || calls !== 1 || dictationPastes) throw new Error('первый буфер перезаписан или нажаты клавиши');
   } finally {
     release?.({ ok: true }); if (first) await first;
@@ -1822,6 +1829,38 @@ await check('захват экрана: loopback только при явном 
   } finally {
     stub.getSources = original;
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  }
+});
+
+await check('скриншот: начавшаяся во время захвата диктовка защищена от записи снимка', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const originalSources = electronStub.desktopCapturer.getSources;
+  const originalImage = clipboardImage.value;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  let releaseCapture, captureStarted, releaseInsert, insertStarted, capture, insert;
+  const capturing = new Promise((r) => { captureStarted = r; });
+  const inserting = new Promise((r) => { insertStarted = r; });
+  electronStub.desktopCapturer.getSources = () => { captureStarted(); return new Promise((r) => { releaseCapture = r; }); };
+  spawnPlan.clipboardHelper = () => { insertStarted(); return new Promise((r) => { releaseInsert = r; }); };
+  try {
+    clipboardImage.value = null;
+    capture = handlers.get('clipboard:screenshot')({});
+    await capturing;
+    insert = handlers.get('text:insert')({}, 'диктовка во время захвата');
+    await inserting;
+    releaseCapture([{ name: 'test', thumbnail: { getSize: () => ({ width: 20, height: 20 }) } }]);
+    const shot = await capture;
+    if (!shot?.busy || shot.ok !== false || clipboardImage.value || clipboardText.value !== 'диктовка во время захвата') throw new Error('снимок перезаписал буфер занятой диктовки');
+  } finally {
+    releaseCapture?.([]); releaseInsert?.({ ok: true });
+    if (capture) await capture; if (insert) await insert;
+    await new Promise((r) => setTimeout(r, 650));
+    electronStub.desktopCapturer.getSources = originalSources; clipboardImage.value = originalImage;
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
   }
 });
 

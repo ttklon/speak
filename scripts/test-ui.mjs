@@ -3224,6 +3224,55 @@ async function scenarioClipboardSecretPrivacy(browser) {
   await page.close();
 }
 
+async function scenarioManualClipboardBusy(browser) {
+  const page = await openPage(browser, '#/clipboard', {
+    settle: 500,
+    storeSeed: { 'zs.clipboard': [{ id: 'copy-one', kind: 'text', text: 'Запись для копирования', source: 'test', createdAt: Date.now() }] },
+    patchNative: () => {
+      window.__unsafeFallback = 0;
+      window.zspeakly.native.writeClipboard = async () => ({ busy: true });
+      window.zspeakly.clipboard.writeText = () => { window.__unsafeFallback++; };
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { window.__unsafeFallback++; } } });
+      document.execCommand = () => { window.__unsafeFallback++; return true; };
+      window.zspeakly.native.screenshot = async () => ({ ok: false, busy: true, reason: 'Другая операция с текстом ещё выполняется. Снимок не скопирован и не сохранён; повторите позже.' });
+    },
+  });
+  takeErrors(page);
+  await page.click('.clip-card[title="Запись для копирования"]');
+  await sleep(200);
+  await page.evaluate(() => [...document.querySelectorAll('.clip-actions button')].find((b) => /^копировать$/i.test(b.innerText.trim()))?.click());
+  await sleep(300);
+  let state = await page.evaluate(() => ({ toast: [...document.querySelectorAll('.toast')].at(-1)?.innerText || '', fallback: window.__unsafeFallback }));
+  record('безопасность', 'ручное копирование: busy не объявляется успехом и не обходит main', /Буфер занят/.test(state.toast) && /Копирование не запускалось/.test(state.toast) && state.fallback === 0, state.toast);
+  await page.evaluate(() => { window.zspeakly.native.writeClipboard = async () => { throw new Error('IPC lost'); }; });
+  await page.evaluate(() => [...document.querySelectorAll('.clip-actions button')].find((b) => /^копировать$/i.test(b.innerText.trim()))?.click());
+  await sleep(300);
+  state = await page.evaluate(() => ({ toast: [...document.querySelectorAll('.toast')].at(-1)?.innerText || '', fallback: window.__unsafeFallback }));
+  record('безопасность', 'ручное копирование: потерянный IPC не повторяется и сообщается как неизвестный', /Не удалось подтвердить копирование/.test(state.toast) && /Буфер мог измениться/.test(state.toast) && state.fallback === 0, state.toast);
+  const before = await page.evaluate(() => (window.__e2e.read('zs.clipboard') || []).length);
+  await page.evaluate(() => [...document.querySelectorAll('.clip-hotkey')].find((el) => /^Скриншот/.test(el.innerText.trim()))?.click());
+  await sleep(350);
+  state = await page.evaluate(() => ({ toast: [...document.querySelectorAll('.toast')].at(-1)?.innerText || '', count: (window.__e2e.read('zs.clipboard') || []).length }));
+  record('безопасность', 'скриншот: busy объясняет отказ и не создаёт запись', /Не удалось сделать скриншот/.test(state.toast) && /не скопирован и не сохранён/.test(state.toast) && state.count === before, state.toast);
+  record('безопасность', 'ручное копирование и скриншот: без ошибок консоли', takeErrors(page).length === 0);
+  await page.close();
+
+  const home = await openPage(browser, '#/home', {
+    settle: 500,
+    storeSeed: { 'zs.dictations': [{ id: 'history-copy', text: 'Текст из истории', createdAt: Date.now(), words: 3, durationMs: 1000 }] },
+    patchNative: () => { window.zspeakly.native.writeClipboard = async () => ({ busy: true }); },
+  });
+  takeErrors(home);
+  await home.click('.recent__row');
+  await sleep(250);
+  await home.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Копировать/i.test(b.innerText))?.click());
+  await sleep(300);
+  const homeToast = await home.evaluate(() => [...document.querySelectorAll('.toast')].at(-1)?.innerText || '');
+  record('безопасность', 'история диктовок: занятый буфер не объявляется скопированным', /Буфер занят/.test(homeToast) && /Копирование не запускалось/.test(homeToast), homeToast);
+  record('безопасность', 'история диктовок: без ошибок консоли', takeErrors(home).length === 0);
+  await home.close();
+}
+
 async function scenarioClipboardPasteFailure(browser) {
   const page = await openPage(browser, '#/clipboard', {
     settle: 500,
@@ -9345,6 +9394,7 @@ async function main() {
       ['повторение закреплённого буфера', scenarioClipboardPinnedDedup],
       ['пароли', scenarioPasswordVault],
       ['приватность буфера', scenarioClipboardSecretPrivacy],
+      ['безопасное ручное копирование', scenarioManualClipboardBusy],
       ['безопасность вставки буфера', scenarioClipboardPasteFailure],
       ['копирование изображения буфера', scenarioClipboardImageCopy],
       ['захват экрана при уходе', scenarioScreenRecordingCleanup],

@@ -142,7 +142,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
   // Синхронное чтение буфера — удобно для страницы буфера обмена
   clipboard: {
     readText: () => clipboard.readText(),
-    writeText: (text) => clipboard.writeText(String(text ?? '')),
+    // Запись тоже должна проходить через общую проверку занятого буфера.
+    writeText: (text) => ipcRenderer.invoke('clipboard:write', { text: String(text ?? '') }),
   },
 
   onNavigate: (cb) => on('navigate', cb),

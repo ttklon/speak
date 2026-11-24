@@ -2271,6 +2271,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('clipboard:screenshot', async () => {
+    if (textInputBusy) return { ok: false, busy: true, reason: 'Другая операция с текстом ещё выполняется. Снимок не скопирован и не сохранён; повторите позже.' };
     try {
       const { desktopCapturer } = require('electron');
       const display = screen.getPrimaryDisplay();
@@ -2282,6 +2283,9 @@ function registerIpc() {
       const source = sources[0];
       if (!source) return { ok: false, reason: 'экран недоступен' };
       const image = source.thumbnail;
+      // Пока ожидали захват, могла начаться другая операция с буфером.
+      // Проверка и синхронная запись идут без yield между ними.
+      if (textInputBusy) return { ok: false, busy: true, reason: 'Другая операция с текстом ещё выполняется. Снимок не скопирован и не сохранён; повторите позже.' };
       clipboard.writeImage(image);
       // Событие clipboard:item здесь НЕ отправляем: рендерер сам добавляет
       // снимок по ответу (иначе каждый снимок попадал в историю дважды).
@@ -2322,13 +2326,17 @@ function registerIpc() {
       // Не выдаём подпись за успешно скопированное изображение.
       return false;
     }
-    if (payload.text) {
-      clipboard.writeText(String(payload.text));
+    if (typeof payload.text === 'string') {
+      clipboard.writeText(payload.text);
       return true;
     }
     return false;
   }
-  ipcMain.handle('clipboard:write', (_e, payload) => writeClipboardPayload(payload));
+  ipcMain.handle('clipboard:write', (_e, payload) => {
+    if (textInputBusy) return { busy: true };
+    // Проверка и синхронная запись не прерываются другими IPC.
+    return writeClipboardPayload(payload);
+  });
 
   ipcMain.handle('hotkey:set', (_e, payload) => {
     // payload: строка-акселератор (диктовка) или { dictationKey, textActions, voiceHotkeys }

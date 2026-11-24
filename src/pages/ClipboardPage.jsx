@@ -14,7 +14,7 @@ import {
   Video,
 } from 'lucide-react';
 import { useAppData } from '../state/AppDataProvider.jsx';
-import { readClipboard, writeClipboard } from '../lib/clipboard.js';
+import { clipboardCopyError, readClipboard, writeClipboard } from '../lib/clipboard.js';
 import { useToast } from '../state/ToastProvider.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
@@ -512,12 +512,8 @@ export default function ClipboardPage() {
       const description = item.kind === 'password' || item.cipher ? 'Значение скопировано в системный буфер.' : truncate(value, 60);
       push({ title: 'Скопировано', description, tone: 'success', ttl: 1800 });
       return true;
-    } catch {
-      push({
-        title: 'Не удалось скопировать',
-        description: item.image && !textOnly ? 'Изображение может быть повреждено или слишком велико, либо системный буфер недоступен.' : 'Выделите текст в карточке и нажмите Ctrl+C.',
-        tone: 'warn',
-      });
+    } catch (err) {
+      push(clipboardCopyError(err, item.image && !textOnly ? 'Изображение может быть повреждено или слишком велико, либо системный буфер недоступен.' : 'Выделите текст в карточке и нажмите Ctrl+C.'));
       return false;
     }
   };

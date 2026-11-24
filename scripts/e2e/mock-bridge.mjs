@@ -554,10 +554,7 @@ export function installMockBridge() {
     native,
     clipboard: {
       readText: () => clipboardText,
-      writeText: (text) => {
-        record('clipboard:write-text', [String(text ?? '')]);
-        clipboardText = String(text ?? '');
-      },
+      writeText: (text) => native.writeClipboard({ text: String(text ?? '') }),
     },
     onNavigate: subscribe('navigate'),
     setZoom: (factor) => record('zoom', [factor]),

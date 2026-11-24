@@ -6,7 +6,7 @@ import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { diag, localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
-import { writeClipboard } from '../../../lib/clipboard.js';
+import { clipboardCopyError, writeClipboard } from '../../../lib/clipboard.js';
 import { analyseQuality, qualityReportText } from '../../../lib/qualityReport.js';
 import { APP } from '../../../lib/config.js';
 import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
@@ -398,7 +398,7 @@ export default function DiagnosticsSection() {
         tone: 'success',
       });
     } catch (err) {
-      push({ title: 'Скопировать не удалось', description: String(err?.message || err), tone: 'warn' });
+      push(clipboardCopyError(err, String(err?.message || err)));
     }
   };
 
@@ -556,7 +556,7 @@ export default function DiagnosticsSection() {
                   tone: 'success',
                 });
               } catch (err) {
-                push({ title: 'Скопировать не удалось', description: String(err?.message || err), tone: 'warn' });
+                push(clipboardCopyError(err, String(err?.message || err)));
               }
             }}
           >

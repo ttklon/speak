@@ -417,6 +417,12 @@ async function main() {
             assert.equal(blockedReplace.busy, true, JSON.stringify(blockedReplace));
             const blockedHistory = await concurrentPage.evaluate(() => window.zspeakly.native.pasteClipboardItem({ text: 'Невставленная запись' }));
             assert.equal(blockedHistory.busy, true, JSON.stringify(blockedHistory));
+            const blockedCopy = await concurrentPage.evaluate(() => window.zspeakly.native.writeClipboard({ text: 'Ручное копирование' }));
+            assert.equal(blockedCopy.busy, true, JSON.stringify(blockedCopy));
+            const blockedLegacy = await concurrentPage.evaluate(() => window.zspeakly.clipboard.writeText('Прямой мост'));
+            assert.equal(blockedLegacy.busy, true, JSON.stringify(blockedLegacy));
+            const blockedShot = await concurrentPage.evaluate(() => window.zspeakly.native.screenshot());
+            assert.equal(blockedShot.busy, true, JSON.stringify(blockedShot));
             assert.equal((await command('state')).text, firstText, 'вторая вставка попала в окно');
             assert.equal((await command('readClipboard')).text, firstText, 'вторая вставка изменила буфер');
             fs.writeFileSync(path.join(dir, 'concurrent-dictation-release'), 'release');
@@ -430,6 +436,10 @@ async function main() {
             await assertText(firstText + secondText, 'повтор после освобождения');
             await sleep(1200);
             assert.equal((await command('readClipboard')).text, initial, 'буфер изменился после ручного повтора');
+            const copyAfter = await concurrentPage.evaluate(() => window.zspeakly.native.writeClipboard({ text: 'Копирование после освобождения' }));
+            assert.equal(copyAfter, true, JSON.stringify(copyAfter));
+            assert.equal((await command('readClipboard')).text, 'Копирование после освобождения');
+            console.log('MANUAL_COPY_OVERLAP_E2E_OK: ручное копирование и скриншот отклонены, повтор копирования после освобождения');
             console.log('DICTATION_OVERLAP_E2E_OK: реальный Ctrl+V, задержанный ответ, отказ второй вставке и ручной повтор');
             console.log('DICTATION_SELECTION_OVERLAP_E2E_OK: диктовка блокирует чтение и замену выделения');
           } finally {
