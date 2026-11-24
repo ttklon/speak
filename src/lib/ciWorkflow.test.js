@@ -106,6 +106,8 @@ describe('проверка настоящего движка в CI', () => {
     expect(entry).toContain('host.paste = async');
     expect(runner).toContain('DICTATION_SELECTION_OVERLAP_E2E_OK');
     expect(runner).toContain('SELECTION_DICTATION_OVERLAP_E2E_OK');
+    expect(runner).toContain('HISTORY_DICTATION_OVERLAP_E2E_OK');
+    expect(runner).toContain('native.pasteClipboardItem');
     expect(runner).toContain('DICTATION_OVERLAP_E2E_OK');
     expect(runner).toContain('second.busy, true');
   });

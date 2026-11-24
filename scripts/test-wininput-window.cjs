@@ -415,6 +415,8 @@ async function main() {
             assert.equal(blockedRead.text, '', JSON.stringify(blockedRead));
             const blockedReplace = await concurrentPage.evaluate(() => window.zspeakly.native.replaceSelection('Не должна вставиться'));
             assert.equal(blockedReplace.busy, true, JSON.stringify(blockedReplace));
+            const blockedHistory = await concurrentPage.evaluate(() => window.zspeakly.native.pasteClipboardItem({ text: 'Невставленная запись' }));
+            assert.equal(blockedHistory.busy, true, JSON.stringify(blockedHistory));
             assert.equal((await command('state')).text, firstText, 'вторая вставка попала в окно');
             assert.equal((await command('readClipboard')).text, firstText, 'вторая вставка изменила буфер');
             fs.writeFileSync(path.join(dir, 'concurrent-dictation-release'), 'release');
@@ -486,6 +488,58 @@ async function main() {
           } finally {
             fs.writeFileSync(path.join(dir, 'concurrent-selection-release'), 'release');
             if (replacementPending) await replacementPending.catch(() => {});
+          }
+
+          // As above, but history copy and Ctrl+V share a single IPC lock.
+          await browser.close();
+          browser = await puppeteer.launch({
+            executablePath: executable, headless: false, ignoreDefaultArgs: true,
+            env: { ...process.env, ZS_E2E_PROFILE: profile, ZSPEAKLY_DEV_URL: 'none',
+              ZS_CONCURRENT_E2E: '1', ZS_CONCURRENT_DIR: dir, ZS_CONCURRENT_KIND: 'history' },
+            args: [path.resolve('scripts/e2e/electron-insert-concurrency-entry.cjs')], timeout: 60000,
+          });
+          const historyTarget = await browser.waitForTarget((t) => t.type() === 'page' && t.url().includes('index.html'), { timeout: 30000 });
+          const historyPage = await historyTarget.page();
+          await historyPage.waitForSelector('.app-window', { timeout: 30000 });
+          await historyPage.waitForFunction(async () => { const status = await window.zspeakly?.native?.inputStatus(); return Boolean(status?.ready && status?.helper?.ready); }, { timeout: 30000, polling: 300 });
+          await historyPage.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'clipboard' });
+          });
+          const historyItem = 'Синтетическая запись буфера';
+          const historyRetry = ' Продолжение диктовки';
+          await command('clear');
+          await command('clipboard', 'Старый буфер');
+          assert.equal(await active(), true, 'перед вставкой истории потерян фокус');
+          let historyPending;
+          try {
+            historyPending = historyPage.evaluate((text) => window.zspeakly.native.pasteClipboardItem({ text }), historyItem);
+            await waitFile(path.join(dir, 'concurrent-history-ready'));
+            await assertText(historyItem, 'вставка истории');
+            const blockedDictation = await historyPage.evaluate((text) => window.zspeakly.native.insertText(text), historyRetry);
+            assert.equal(blockedDictation.busy, true, JSON.stringify(blockedDictation));
+            const blockedRead = await historyPage.evaluate(() => window.zspeakly.native.readSelection());
+            assert.equal(blockedRead.reason, 'busy', JSON.stringify(blockedRead));
+            const blockedReplace = await historyPage.evaluate(() => window.zspeakly.native.replaceSelection('Не вставлять'));
+            assert.equal(blockedReplace.busy, true, JSON.stringify(blockedReplace));
+            const blockedHistory = await historyPage.evaluate(() => window.zspeakly.native.pasteClipboardItem({ text: 'Другая запись' }));
+            assert.equal(blockedHistory.busy, true, JSON.stringify(blockedHistory));
+            assert.equal((await command('state')).text, historyItem, 'конкурирующий IPC изменил поле');
+            assert.equal((await command('readClipboard')).text, historyItem, 'конкурирующий IPC изменил буфер');
+            fs.writeFileSync(path.join(dir, 'concurrent-history-release'), 'release');
+            const result = await historyPending;
+            assert.equal(result.copied, true, JSON.stringify(result));
+            assert.equal(result.outcome, true, JSON.stringify(result));
+            assert.equal(await active(), true, 'перед повтором потерян фокус');
+            const retry = await historyPage.evaluate((text) => window.zspeakly.native.insertText(text), historyRetry);
+            assert.equal(retry.ok, true, JSON.stringify(retry));
+            await assertText(historyItem + historyRetry, 'ручной повтор после истории');
+            await sleep(1200);
+            assert.equal((await command('readClipboard')).text, historyItem, 'буфер после повтора не восстановлен');
+            console.log('HISTORY_DICTATION_OVERLAP_E2E_OK: история и диктовка блокируют друг друга, ручной повтор');
+          } finally {
+            fs.writeFileSync(path.join(dir, 'concurrent-history-release'), 'release');
+            if (historyPending) await historyPending.catch(() => {});
           }
 
         }

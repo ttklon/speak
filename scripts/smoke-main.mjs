@@ -486,7 +486,7 @@ await check('main загружается без реального Electron', ()
 });
 await check('IPC-каналы зарегистрированы', () => {
   const need = [
-    'stt:transcribe-pcm', 'text:insert', 'text:undo-last', 'text:paste', 'text:read-selection',
+    'stt:transcribe-pcm', 'text:insert', 'text:undo-last', 'text:paste', 'text:paste-item', 'text:read-selection',
     'text:replace-selection', 'clipboard:screenshot', 'hotkey:set', 'app:auto-launch',
     'models:status', 'models:compare', 'models:download', 'models:download-engine', 'models:cancel', 'models:delete',
     'update:check', 'update:download', 'update:install', 'app:notify', 'app:save-file',
@@ -979,6 +979,89 @@ await check('«Отмени»: неподтверждённый курсор н�
   }
 });
 
+await check('вставка истории не должна перезаписывать буфер незавершённой диктовки', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  let release, notify, first, pasteCalls = 0;
+  const started = new Promise((r) => { notify = r; });
+  spawnPlan.clipboardHelper = () => { notify(); return new Promise((r) => { release = r; }); };
+  host.available = () => true;
+  host.paste = async () => { pasteCalls++; return { ok: true }; };
+  try {
+    first = handlers.get('text:insert')({}, 'первая диктовка');
+    await started;
+    const pasted = await handlers.get('text:paste-item')({}, { text: 'элемент истории' });
+    const oldPaste = await handlers.get('text:paste')({});
+    if (!pasted?.busy || !oldPaste?.busy || pasteCalls || clipboardText.value !== 'первая диктовка') {
+      throw new Error(`конфликт не отклонён: ${JSON.stringify(pasted)}, ${JSON.stringify(oldPaste)}, буфер=${clipboardText.value}, вызовов=${pasteCalls}`);
+    }
+  } finally {
+    release?.({ ok: true }); if (first) await first;
+    await new Promise((r) => setTimeout(r, 650));
+    spawnPlan.clipboardHelper = null;
+    host.available = available; host.paste = paste;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('вставка истории блокирует диктовку и выделение до ответа Ctrl+V', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  let release, notify, first, pasteCalls = 0;
+  const started = new Promise((r) => { notify = r; });
+  host.available = () => true;
+  host.paste = () => { pasteCalls++; notify(); return new Promise((r) => { release = r; }); };
+  try {
+    first = handlers.get('text:paste-item')({}, { text: 'элемент истории' });
+    await started;
+    const insert = await handlers.get('text:insert')({}, 'новая диктовка');
+    const read = await handlers.get('text:read-selection')({});
+    const replace = await handlers.get('text:replace-selection')({}, 'новая замена');
+    const item = await handlers.get('text:paste-item')({}, { text: 'вторая запись' });
+    const pasteResult = await handlers.get('text:paste')({});
+    if (!insert?.busy || read?.reason !== 'busy' || !replace?.busy || !item?.busy || !pasteResult?.busy || pasteCalls !== 1 || clipboardText.value !== 'элемент истории') throw new Error('конфликт не был отклонён до изменения буфера');
+    release({ ok: true });
+    const result = await first;
+    if (!result?.copied || result.outcome !== true) throw new Error(`исходная операция: ${JSON.stringify(result)}`);
+    const after = await handlers.get('text:paste-item')({}, { image: 'invalid-image', text: 'не вставлять подпись' });
+    if (!after?.copyFailed || pasteCalls !== 1 || clipboardText.value !== 'элемент истории') throw new Error('ошибка изображения вызвала вставку');
+  } finally {
+    release?.({ ok: true }); if (first) await first;
+    host.available = available; host.paste = paste;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('вставка истории освобождает блокировку при ошибке записи и неизвестном ответе', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste, write = electronStub.clipboard.writeText;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  let pasteCalls = 0;
+  host.available = () => true;
+  host.paste = async () => { pasteCalls++; return { ok: false, reason: 'timeout' }; };
+  try {
+    electronStub.clipboard.writeText = () => { throw new Error('write failed'); };
+    const failed = await handlers.get('text:paste-item')({}, { text: 'ошибка' });
+    if (!failed?.copyFailed || pasteCalls) throw new Error('копирование не остановило вставку');
+    electronStub.clipboard.writeText = write;
+    const uncertain = await handlers.get('text:paste-item')({}, { text: 'элемент истории' });
+    if (!uncertain?.copied || !uncertain?.outcome?.uncertain || pasteCalls !== 1) throw new Error('неизвестный результат повторён или скрыт');
+    const next = await handlers.get('text:read-selection')({});
+    if (next?.reason === 'busy') throw new Error('блокировка не освобождена');
+  } finally {
+    electronStub.clipboard.writeText = write; host.available = available; host.paste = paste;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
 await check('две диктовки: вторая не меняет буфер во время незавершённой вставки', async () => {
   const platform = process.platform;
   const settings = handlers.get('store:get')({}, 'zs:settings') || {};
@@ -1025,6 +1108,9 @@ await check('две диктовки: период восстановления 
     const selection = await handlers.get('text:read-selection')({});
     const replacement = await handlers.get('text:replace-selection')({}, 'замена в период восстановления');
     if (selection?.reason !== 'busy' || !replacement?.busy || clipboardText.value !== 'первая фраза') throw new Error('выделение не отклонено в период восстановления');
+    const history = await handlers.get('text:paste-item')({}, { text: 'элемент истории' });
+    const paste = await handlers.get('text:paste')({});
+    if (!history?.busy || !paste?.busy || clipboardText.value !== 'первая фраза') throw new Error('история не отклонена в период восстановления');
     await new Promise((r) => setTimeout(r, 650));
     if (clipboardText.value !== 'исходный буфер') throw new Error(`буфер не восстановлен: ${clipboardText.value}`);
     const retry = await handlers.get('text:insert')({}, 'вторая фраза');

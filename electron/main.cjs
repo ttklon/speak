@@ -2232,11 +2232,30 @@ function registerIpc() {
       return { own: false, app: '', title: '' };
     }
   });
-  ipcMain.handle('text:paste', () => {
-    // Это другая вставка: старая команда undo не должна стирать чужой текст.
-    lastInsertedText = '';
-    lastInsertedAt = 0;
-    return pasteToActiveWindowSafely();
+  ipcMain.handle('text:paste', async () => {
+    if (textInputBusy) return { busy: true };
+    textInputBusy = true;
+    try {
+      // Это другая вставка: старая команда undo не должна стирать чужой текст.
+      lastInsertedText = '';
+      lastInsertedAt = 0;
+      return await pasteToActiveWindowSafely();
+    } finally { textInputBusy = false; }
+  });
+  // Для истории копирование и вставка — один защищённый IPC; между ними
+  // другая защищённая операция не может заменить содержимое буфера.
+  ipcMain.handle('text:paste-item', async (_e, payload) => {
+    if (textInputBusy) return { busy: true };
+    textInputBusy = true;
+    try {
+      let copied = false;
+      try { copied = writeClipboardPayload(payload); } catch { /* запись могла не состояться */ }
+      if (!copied) return { copyFailed: true };
+      lastInsertedText = '';
+      lastInsertedAt = 0;
+      try { return { copied: true, outcome: await pasteToActiveWindowSafely() }; }
+      catch { return { copied: true, outcome: { uncertain: true } }; }
+    } finally { textInputBusy = false; }
   });
   ipcMain.handle('text:read-selection', async () => {
     if (textInputBusy) return { text: '', reason: 'busy' };
@@ -2283,7 +2302,7 @@ function registerIpc() {
     hasImage: !clipboard.readImage().isEmpty(),
     formats: clipboard.availableFormats(),
   }));
-  ipcMain.handle('clipboard:write', (_e, payload) => {
+  function writeClipboardPayload(payload) {
     if (!payload) return false;
     // картинка приоритетнее текста: «Копировать» для снимка должен дать сам снимок
     const image = payload.image;
@@ -2308,7 +2327,8 @@ function registerIpc() {
       return true;
     }
     return false;
-  });
+  }
+  ipcMain.handle('clipboard:write', (_e, payload) => writeClipboardPayload(payload));
 
   ipcMain.handle('hotkey:set', (_e, payload) => {
     // payload: строка-акселератор (диктовка) или { dictationKey, textActions, voiceHotkeys }

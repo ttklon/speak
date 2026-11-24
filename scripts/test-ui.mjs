@@ -3236,46 +3236,58 @@ async function scenarioClipboardPasteFailure(browser) {
   await page.evaluate(() => {
     window.__pasteCount = 0;
     window.__written = [];
-    window.zspeakly.native.pasteToActive = async () => { window.__pasteCount++; return true; };
+    window.__legacyWrites = 0;
+    window.zspeakly.native.pasteClipboardItem = async (payload) => { window.__pasteCount++; window.__written.push(payload); return { copyFailed: true }; };
+    window.zspeakly.native.writeClipboard = async () => { window.__legacyWrites++; return true; };
+    window.zspeakly.native.pasteToActive = async () => { window.__legacyWrites++; return true; };
     window.zspeakly.native.revealSecret = async () => null;
-    window.zspeakly.native.writeClipboard = async () => false;
-    window.zspeakly.clipboard.writeText = () => { throw new Error('write unavailable'); };
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('write unavailable'); } } });
-    document.execCommand = () => false;
   });
   await page.click('.clip-card[title="Пароль (зашифрован)"]', { clickCount: 2 });
   await sleep(400);
   let state = await page.evaluate(() => ({ count: window.__pasteCount, toast: document.body.innerText }));
-  record('безопасность', 'буфер: при отказе расшифровки не вставляется старый буфер',
-    state.count === 0 && /Пароль не расшифрован/.test(state.toast));
+  record('безопасность', 'буфер: при отказе расшифровки не вставляется старый буфер', state.count === 0 && /Пароль не расшифрован/.test(state.toast));
   await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
   await sleep(400);
-  state = await page.evaluate(() => ({ count: window.__pasteCount, toast: document.body.innerText }));
-  record('безопасность', 'буфер: при отказе записи не запускается вставка',
-    state.count === 0 && /Не удалось скопировать/.test(state.toast));
-  await page.evaluate(() => {
-    window.zspeakly.native.writeClipboard = async (payload) => { window.__written.push(payload.text); return true; };
-  });
+  state = await page.evaluate(() => ({ count: window.__pasteCount, legacy: window.__legacyWrites, toast: document.body.innerText }));
+  record('безопасность', 'буфер: отказ копирования не вызывает раздельную вставку', state.count === 1 && state.legacy === 0 && /Не удалось скопировать/.test(state.toast) && /Вставка не запускалась/.test(state.toast));
+  await page.evaluate(() => { window.zspeakly.native.pasteClipboardItem = async (payload) => { window.__pasteCount++; window.__written.push(payload); return { busy: true }; }; });
   await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
   await sleep(400);
-  state = await page.evaluate(() => ({ count: window.__pasteCount, written: window.__written }));
-  record('безопасность', 'буфер: после успешного копирования вставка запрашивается один раз',
-    state.count === 1 && state.written.at(-1) === 'тестовый текст для вставки');
-  await page.evaluate(() => { window.zspeakly.native.pasteToActive = async () => false; });
+  state = await page.evaluate(() => ({ count: window.__pasteCount, legacy: window.__legacyWrites, toast: [...document.querySelectorAll('.toast')].at(-1)?.innerText || '' }));
+  record('безопасность', 'буфер: занятый канал не копирует и не повторяет действие', state.count === 2 && state.legacy === 0 && /не вставлена и не скопирована/.test(state.toast), state.toast);
+  await page.evaluate(() => { window.zspeakly.native.pasteClipboardItem = async (payload) => { window.__pasteCount++; window.__written.push(payload); return { copied: true, outcome: true }; }; });
+  await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+  await sleep(400);
+  state = await page.evaluate(() => ({ count: window.__pasteCount, written: window.__written, legacy: window.__legacyWrites }));
+  record('безопасность', 'буфер: передаёт элемент в один защищённый запрос', state.count === 3 && state.legacy === 0 && state.written.at(-1).text === 'тестовый текст для вставки');
+  await page.evaluate(() => { window.zspeakly.native.pasteClipboardItem = async () => ({ copied: true, outcome: false }); });
   await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
   await sleep(400);
   let warning = await page.evaluate(() => [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '');
   record('безопасность', 'буфер: отказ автовставки объясняется после копирования', /Автовставка не удалась/.test(warning));
-  await page.evaluate(() => { window.zspeakly.native.pasteToActive = async () => { throw new Error('paste failed'); }; });
+  await page.evaluate(() => { window.zspeakly.native.pasteClipboardItem = async () => { throw new Error('IPC lost'); }; });
   await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
   await sleep(400);
   warning = await page.evaluate(() => [...document.querySelectorAll('.toast__title')].at(-1)?.innerText || '');
   record('безопасность', 'буфер: исключение IPC не считается известным отказом', /Не удалось подтвердить автовставку/.test(warning));
-  await page.evaluate(() => { window.zspeakly.native.pasteToActive = async () => ({ uncertain: true }); });
+  await page.evaluate(() => { window.zspeakly.native.pasteClipboardItem = async () => ({ copied: true, outcome: { uncertain: true } }); });
   await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
   await sleep(400);
   const uncertainToast = await page.evaluate(() => [...document.querySelectorAll('.toast')].at(-1)?.innerText || '');
-  record('безопасность', 'буфер: неизвестная автовставка требует проверки перед повтором', /Не удалось подтвердить автовставку/.test(uncertainToast) && /Проверьте его перед повтором/.test(uncertainToast), uncertainToast);
+  record('безопасность', 'буфер: неизвестная автовставка требует проверки перед повтором', /Не удалось подтвердить автовставку/.test(uncertainToast) && /Проверьте окно перед повтором/.test(uncertainToast), uncertainToast);
+  await page.evaluate(() => { delete window.zspeakly.native.pasteClipboardItem; });
+  await page.click('.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+  await sleep(400);
+  state = await page.evaluate(() => ({ legacy: window.__legacyWrites, toast: [...document.querySelectorAll('.toast')].at(-1)?.innerText || '' }));
+  record('безопасность', 'буфер: отсутствующий IPC не вызывает небезопасный fallback', state.legacy === 0 && /Автовставка недоступна/.test(state.toast));
+  await page.evaluate(() => {
+    window.zspeakly.native.revealSecret = async () => 'СекретДляПроверки123!';
+    window.zspeakly.native.pasteClipboardItem = async (payload) => { window.__passwordPayload = payload; return { copied: true, outcome: true }; };
+  });
+  await page.click('.clip-card[title="Пароль (зашифрован)"]', { clickCount: 2 });
+  await sleep(400);
+  state = await page.evaluate(() => ({ payload: window.__passwordPayload, body: document.body.innerText }));
+  record('безопасность', 'буфер: расшифрованный пароль передаётся без раскрытия в интерфейсе', state.payload?.text === 'СекретДляПроверки123!' && !state.body.includes('СекретДляПроверки123!'));
   const errors = takeErrors(page);
   record('безопасность', 'буфер: ошибки копирования не ломают интерфейс', errors.length === 0, errors[0] || '');
   await page.close();
@@ -3640,7 +3652,7 @@ async function scenarioClipboardImageCopy(browser) {
     window.__fallbackWrites = 0;
     window.__pastes = 0;
     window.zspeakly.native.writeClipboard = async (payload) => { window.__imageWrites.push(payload); return true; };
-    window.zspeakly.native.pasteToActive = async () => { window.__pastes++; return true; };
+    window.zspeakly.native.pasteClipboardItem = async (payload) => { window.__imageWrites.push(payload); window.__pastes++; return { copyFailed: true }; };
     window.zspeakly.clipboard.writeText = () => { window.__fallbackWrites++; };
     document.querySelector('[aria-label="Список"]')?.click();
   });
@@ -3658,14 +3670,14 @@ async function scenarioClipboardImageCopy(browser) {
   await sleep(300);
   state = await page.evaluate(() => ({ writes: window.__imageWrites, pastes: window.__pastes, fallback: window.__fallbackWrites, toast: document.body.innerText }));
   record('безопасность', 'буфер: отказ картинки не подменяется текстом и не запускает вставку',
-    state.writes.length === 2 && state.writes[1].image === image && state.pastes === 0 && state.fallback === 0 && /Не удалось скопировать/.test(state.toast) && /повреждено или слишком велико/.test(state.toast));
+    state.writes.length === 2 && state.writes[1].image === image && state.pastes === 1 && state.fallback === 0 && /Не удалось скопировать/.test(state.toast) && /Вставка не запускалась/.test(state.toast));
 
-  await page.evaluate(() => { window.zspeakly.native.writeClipboard = async (payload) => { window.__imageWrites.push(payload); return true; }; });
+  await page.evaluate(() => { window.zspeakly.native.pasteClipboardItem = async (payload) => { window.__imageWrites.push(payload); window.__pastes++; return { copied: true, outcome: true }; }; });
   await page.evaluate(() => document.querySelectorAll('.clip-preview__actions button')[1]?.click());
   await sleep(300);
   state = await page.evaluate(() => ({ writes: window.__imageWrites, pastes: window.__pastes }));
   record('безопасность', 'буфер: успешное копирование картинки передаёт картинку и запрашивает вставку',
-    state.writes.length === 3 && state.writes[2].image === image && state.pastes === 1);
+    state.writes.length === 3 && state.writes[2].image === image && state.pastes === 2);
 
   await page.evaluate(() => [...document.querySelectorAll('.clip-list__item')].find((el) => el.innerText.includes('test image'))?.click());
   await sleep(200);

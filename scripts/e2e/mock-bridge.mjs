@@ -250,6 +250,12 @@ export function installMockBridge() {
       record('text:paste');
       return true;
     },
+    pasteClipboardItem: async (payload) => {
+      record('text:paste-item', [payload]);
+      if (!payload?.image && !payload?.text) return { copyFailed: true };
+      clipboardText = payload.text || '';
+      return { copied: true, outcome: true };
+    },
     // как настоящий main: строка, а не объект
     readSelection: async () => {
       record('text:read-selection');

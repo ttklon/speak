@@ -540,18 +540,47 @@ export default function ClipboardPage() {
   };
 
   const copyPaste = async (item) => {
-    // Если копирование или расшифровка не удались, нельзя вставлять то, что
-    // случайно оставалось в системном буфере до этого действия.
-    if (!(await copyItem(item))) return;
-    const paste = window.zspeakly?.native?.pasteToActive;
     let outcome = false;
-    try { if (paste) outcome = await paste(); }
-    catch { outcome = { uncertain: true }; }
+    if (window.zspeakly?.isElectron) {
+      const pasteItem = window.zspeakly?.native?.pasteClipboardItem;
+      if (!pasteItem) {
+        push({ title: 'Автовставка недоступна', description: 'Запись не копировалась. Скопируйте её вручную.', tone: 'warn' });
+        return;
+      }
+      const value = item.cipher ? await revealText(item) : item.text || '';
+      if (item.cipher && value == null) {
+        push({ title: 'Пароль не расшифрован', description: 'Системное хранилище Windows недоступно.', tone: 'warn', ttl: 7000 });
+        return;
+      }
+      let result;
+      try { result = await pasteItem({ text: value, image: item.image }); }
+      catch { result = null; } // IPC мог оборваться после Ctrl+V.
+      if (result?.busy) {
+        push({ title: 'Другая операция с текстом ещё выполняется', description: 'Запись не вставлена и не скопирована. Повторите действие позже.', tone: 'warn' });
+        return;
+      }
+      if (result?.copyFailed) {
+        push({ title: 'Не удалось скопировать', description: 'Вставка не запускалась. Проверьте запись и системный буфер.', tone: 'warn' });
+        return;
+      }
+      if (!result?.copied) outcome = { uncertain: true };
+      else {
+        setJustCopied(item.id);
+        setTimeout(() => setJustCopied(null), 1400);
+        outcome = result.outcome;
+      }
+    } else {
+      // В браузере нет системного IPC: сохраняем прежний явный fallback.
+      if (!(await copyItem(item))) return;
+      const paste = window.zspeakly?.native?.pasteToActive;
+      try { if (paste) outcome = await paste(); }
+      catch { outcome = { uncertain: true }; }
+    }
     if (outcome === true) return;
     if (outcome !== false) {
       push({
         title: 'Не удалось подтвердить автовставку',
-        description: 'Текст мог попасть в окно. Проверьте его перед повтором.',
+        description: 'Содержимое могло попасть в окно. Проверьте окно перед повтором.',
         tone: 'warn',
       });
       return;

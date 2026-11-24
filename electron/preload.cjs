@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     insertTarget: () => ipcRenderer.invoke('text:target'),
     inputStatus: () => ipcRenderer.invoke('input:status'),
     pasteToActive: () => ipcRenderer.invoke('text:paste'),
+    pasteClipboardItem: (payload) => ipcRenderer.invoke('text:paste-item', payload),
     readSelection: () => ipcRenderer.invoke('text:read-selection'),
     replaceSelection: (text) => ipcRenderer.invoke('text:replace-selection', text),
     readClipboard: () => ipcRenderer.invoke('clipboard:read'),
