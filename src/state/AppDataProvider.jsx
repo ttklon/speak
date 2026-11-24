@@ -19,7 +19,8 @@ import { migrateSettings } from '../lib/settingsMigration.js';
 import { tuneSettings } from '../lib/autotune.js';
 import { trimByBytes } from '../lib/clipboardBudget.js';
 import { isReplaceableClipboardDuplicate } from '../lib/clipboardHistory.js';
-import { trimDictations } from '../lib/dictationBudget.js';
+import { DICTATION_MAX_BYTES, dictationBytes, trimDictations } from '../lib/dictationBudget.js';
+import { useToast } from './ToastProvider.jsx';
 import { BACKUP_FORMAT, prepareBackup } from '../lib/backup.js';
 import {
   asList,
@@ -79,6 +80,7 @@ const DEFAULT_STATS = {
 };
 
 export function AppDataProvider({ children }) {
+  const { push } = useToast();
   const [settings, setSettings] = usePersistentState(STORAGE_KEYS.settings, () => DEFAULT_SETTINGS, {
     merge: DEFAULT_SETTINGS,
   });
@@ -187,9 +189,22 @@ export function AppDataProvider({ children }) {
 
   const addDictation = useCallback(
     (item) => {
+      if (dictationBytes(item) > DICTATION_MAX_BYTES) {
+        // Иначе trimDictations начнёт с записи, которая не влезает, и
+        // вернёт [] — уничтожив не только её, но и всю прежнюю историю.
+        push({
+          title: 'Запись слишком большая для истории',
+          description: 'Она не сохранена в истории. Скопируйте текст отсюда вручную до закрытия уведомления или приложения.',
+          recoverText: item.text,
+          recoverLabel: 'Несохранённый текст истории',
+          tone: 'warn', ttl: 0,
+        });
+        return false;
+      }
       setDictations((prev) => trimDictations([item, ...prev]));
+      return true;
     },
-    [setDictations],
+    [push, setDictations],
   );
 
   const deleteDictation = useCallback(
@@ -199,11 +214,16 @@ export function AppDataProvider({ children }) {
 
   /** Пользователь поправил расшифровку — сохраняем исправленный текст. */
   const updateDictation = useCallback(
-    (id, patch, { expectedText } = {}) =>
+    (id, patch, { expectedText } = {}) => {
+      // Не записывать правку, которая при следующем запуске обнулит историю.
+      if (typeof patch?.text === 'string' && dictationBytes({ text: patch.text }) > DICTATION_MAX_BYTES) return false;
       setDictations((prev) =>
         prev.map((d) => (d.id === id && (expectedText === undefined || d.text === expectedText)
           ? { ...d, ...patch, editedAt: Date.now() } : d)),
-      ),
+      );
+      // Это принятие запроса, не подтверждение совпадения expectedText или диска.
+      return true;
+    },
     [setDictations],
   );
 

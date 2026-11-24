@@ -420,7 +420,7 @@ export function DictationProvider({ children }) {
           command: cleaned,
           sttMs: sttMs || undefined,
         };
-        addDictation(item);
+        const savedToHistory = addDictation(item);
         recordWords(item.words, 0);
         diag.info('stt', 'Команда голосом выполнена', {
           command: cleaned,
@@ -430,7 +430,7 @@ export function DictationProvider({ children }) {
         });
         pushToast({
           title: placed === 'busy' ? 'Другая операция с текстом ещё выполняется' : placed === 'uncertain' ? 'Не удалось подтвердить замену' : placed === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${commandTitle(cleaned)}`,
-          description: placed === 'busy' ? 'Результат не вставлен и не скопирован, но сохранён в истории.' : placed === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором; результат сохранён в истории.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
+          description: placed === 'busy' ? (savedToHistory ? 'Результат не вставлен и не скопирован, но сохранён в истории.' : 'Результат не вставлен и не скопирован; он доступен в отдельном уведомлении для ручного сохранения.') : placed === 'uncertain' ? (savedToHistory ? 'Текст мог попасть в окно. Проверьте его перед повтором; результат сохранён в истории.' : 'Текст мог попасть в окно. Проверьте его перед повтором; результат доступен в отдельном уведомлении.') : [truncate(result, 90), note].filter(Boolean).join(' — '),
           tone: placed === 'busy' || placed === 'uncertain' || placed === 'failed' || note ? 'warn' : 'success',
           ttl: 8000,
         });
@@ -560,7 +560,10 @@ export function DictationProvider({ children }) {
               const improved = formatForApp(late, where.style);
               if (!improved || improved === cleaned) return;
               // Не переписываем ручную правку пользователя, сделанную после вставки.
-              if (updateDictation) updateDictation(itemId, { text: improved, words: words(improved) }, { expectedText: cleaned });
+              if (updateDictation && updateDictation(itemId, { text: improved, words: words(improved) }, { expectedText: cleaned }) === false) {
+                diag.warn('stt', 'Поздняя правка не помещается в историю', { chars: improved.length });
+                return;
+              }
               diag.info('stt', 'Модель вернула позднюю правку диктовки', {
                 before: cleaned.length,
                 after: improved.length,
@@ -686,8 +689,8 @@ export function DictationProvider({ children }) {
       }
       if (cleaned) {
         setLast(item);
-        lastItemId.current = item.id;
-        addDictation(item);
+        const savedToHistory = addDictation(item);
+        lastItemId.current = savedToHistory ? item.id : null;
         recordWords(item.words, durationMs);
         // словарь учится на том, что человек реально диктует: это меняет
         // порядок подсказки движку, а не только вид списка
@@ -714,7 +717,7 @@ export function DictationProvider({ children }) {
               if (res && typeof res === 'object' && res.busy === true) {
                 pushToast({
                   title: 'Вставка ещё занята',
-                  description: 'Эта фраза не отправлялась в окно и не скопирована в буфер. Она сохранена в истории — вставьте её оттуда, когда предыдущая операция завершится.',
+                  description: savedToHistory ? 'Эта фраза не отправлялась в окно и не скопирована в буфер. Она сохранена в истории — вставьте её оттуда, когда предыдущая операция завершится.' : 'Фраза не отправлялась в окно и не скопирована; сохраните её из отдельного уведомления.',
                   tone: 'warn', ttl: 15000,
                 });
                 diag.warn('stt', 'Вставка отклонена: предыдущая ещё выполняется');
@@ -723,7 +726,7 @@ export function DictationProvider({ children }) {
               if (res && typeof res === 'object' && res.uncertain === true) {
                 pushToast({
                   title: 'Не удалось подтвердить ввод',
-                  description: 'Текст мог попасть в окно полностью или частично. Проверьте его перед повтором; текст сохранён в истории диктовок.',
+                  description: savedToHistory ? 'Текст мог попасть в окно полностью или частично. Проверьте его перед повтором; текст сохранён в истории диктовок.' : 'Текст мог попасть в окно полностью или частично. Проверьте окно; полный текст доступен в отдельном уведомлении.',
                   tone: 'warn',
                   ttl: 15000,
                 });
@@ -736,8 +739,9 @@ export function DictationProvider({ children }) {
               if (res && typeof res === 'object' && res.partial > 0) {
                 pushToast({
                   title: `Отправлено не менее ${res.partial} из ${res.total || '?'} символов`,
-                  description:
-                    'Ввод прервался. Проверьте окно перед повтором: текст мог попасть частично, он есть в истории диктовок.',
+                  description: savedToHistory
+                    ? 'Ввод прервался. Проверьте окно перед повтором: текст мог попасть частично, он есть в истории диктовок.'
+                    : 'Ввод прервался. Проверьте окно перед повтором; полный текст доступен в отдельном уведомлении.',
                   tone: 'warn',
                   ttl: 12000,
                 });
@@ -753,7 +757,7 @@ export function DictationProvider({ children }) {
                     : 'Автоматическая вставка не сработала.';
                 pushToast({
                   title: 'Текст в буфере — нажмите Ctrl+V',
-                  description: `${why} Текст не потерян: он в буфере обмена и в истории.`,
+                  description: savedToHistory ? `${why} Текст не потерян: он в буфере обмена и в истории.` : `${why} Полный текст доступен в отдельном уведомлении.`,
                   tone: 'warn',
                   ttl: 12000,
                 });
@@ -767,7 +771,7 @@ export function DictationProvider({ children }) {
             .catch(() => {
               pushToast({
                 title: 'Не удалось подтвердить ввод',
-                description: 'Ответ приложения не получен. Проверьте окно перед повтором; текст сохранён в истории диктовок.',
+                description: savedToHistory ? 'Ответ приложения не получен. Проверьте окно перед повтором; текст сохранён в истории диктовок.' : 'Ответ приложения не получен. Проверьте окно перед повтором; текст доступен в отдельном уведомлении.',
                 tone: 'warn', ttl: 15000,
               });
               diag.warn('stt', 'Ответ о вводе не получен');
@@ -924,7 +928,7 @@ export function DictationProvider({ children }) {
         sttModel: settingsRef.current.whisperModel,
         sttParts: windows.length > 1 ? windows.length : undefined,
       };
-      addDictation(item);
+      const savedToHistory = addDictation(item);
       noteDictionaryUsage(text);
       // Слова считаем в общую статистику, секунды — нет: это не продиктованная
       // речь, и «речи продиктовано» не должно расти от чужой записи.
@@ -939,8 +943,8 @@ export function DictationProvider({ children }) {
       });
       pushToast({
         title: 'Файл расшифрован',
-        description: `${name} · ${formatDuration(decoded.durationMs)} · ${item.words} слов — в «Недавних»`,
-        tone: 'success',
+        description: savedToHistory ? `${name} · ${formatDuration(decoded.durationMs)} · ${item.words} слов — в «Недавних»` : `${name} · результат не помещается в историю; сохраните текст из отдельного уведомления.`,
+        tone: savedToHistory ? 'success' : 'warn',
         ttl: 9000,
       });
       return item;
@@ -1436,9 +1440,11 @@ export function DictationProvider({ children }) {
         language: settingsNow.language,
         source: 'agent',
       };
-      addDictation(item);
+      const accepted = addDictation(item);
       setState('idle');
-      pushToast({ title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' });
+      pushToast(accepted
+        ? { title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' }
+        : { title: 'Ответ агента не помещается в историю', description: 'Сохраните полный текст из отдельного уведомления.', tone: 'warn' });
     } catch (err) {
       if (!isCurrent()) return;
       diag.error('agent', 'Ошибка агента', { reason: String(err?.message || err) });
@@ -1567,6 +1573,10 @@ export function DictationProvider({ children }) {
       return { ok: false, reason: check.reason };
     }
     if (!last || retrying) return { ok: false, reason: 'нечего уточнять' };
+    if (lastItemId.current !== last.id) {
+      pushToast({ title: 'Нельзя уточнить запись вне истории', description: 'Сначала сохраните полный текст из уведомления вручную.', tone: 'warn' });
+      return { ok: false, reason: 'history-limit' };
+    }
     setRetrying(true);
     try {
       const res = await native.transcribePcm({
@@ -1595,13 +1605,16 @@ export function DictationProvider({ children }) {
         });
         return { ok: true, replaced: false, text: last.text, note: verdict.note };
       }
-      updateDictation(last.id, {
+      if (updateDictation(last.id, {
         text: res.text,
         sttMs: res.ms,
         sttThorough: true,
         sttSecondPass: true,
         sttModel: res.model || settingsRef.current.whisperModel,
-      });
+      }) === false) {
+        pushToast({ title: 'Точный проход не помещается в историю', description: 'Текст не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: res.text, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
+        return { ok: false, reason: 'history-limit', text: res.text };
+      }
       setLast((prev) => (prev ? { ...prev, text: res.text, sttThorough: true, sttSecondPass: true } : prev));
       pushToast({
         title: 'Точный проход услышал больше',

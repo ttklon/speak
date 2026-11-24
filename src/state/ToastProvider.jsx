@@ -49,7 +49,7 @@ export function ToastProvider({ children }) {
               <div className="toast__title">{t.title}</div>
               {t.description ? <div className="toast__desc">{t.description}</div> : null}
               {t.recoverText ? (
-                <textarea className="toast__recover" aria-label="Невставленный результат инструкции" readOnly value={t.recoverText} rows={4} />
+                <textarea className="toast__recover" aria-label={t.recoverLabel || 'Невставленный результат инструкции'} readOnly value={t.recoverText} rows={4} />
               ) : null}
               {t.action?.label ? (
                 <button
