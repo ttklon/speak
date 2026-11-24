@@ -405,14 +405,19 @@ async function main() {
           let firstPending;
           try {
             firstPending = concurrentPage.evaluate((value) => window.zspeakly.native.insertText(value), firstText);
-            await waitFile(path.join(dir, 'concurrent-paste-ready'));
+            await waitFile(path.join(dir, 'concurrent-dictation-ready'));
             await assertText(firstText, 'первая параллельная вставка');
             const second = await concurrentPage.evaluate((value) => window.zspeakly.native.insertText(value), secondText);
             assert.equal(second.ok, false, JSON.stringify(second));
             assert.equal(second.busy, true, JSON.stringify(second));
+            const blockedRead = await concurrentPage.evaluate(() => window.zspeakly.native.readSelection());
+            assert.equal(blockedRead.reason, 'busy', JSON.stringify(blockedRead));
+            assert.equal(blockedRead.text, '', JSON.stringify(blockedRead));
+            const blockedReplace = await concurrentPage.evaluate(() => window.zspeakly.native.replaceSelection('Не должна вставиться'));
+            assert.equal(blockedReplace.busy, true, JSON.stringify(blockedReplace));
             assert.equal((await command('state')).text, firstText, 'вторая вставка попала в окно');
             assert.equal((await command('readClipboard')).text, firstText, 'вторая вставка изменила буфер');
-            fs.writeFileSync(path.join(dir, 'concurrent-paste-release'), 'release');
+            fs.writeFileSync(path.join(dir, 'concurrent-dictation-release'), 'release');
             const first = await firstPending;
             assert.equal(first.ok, true, JSON.stringify(first));
             await sleep(1200);
@@ -424,9 +429,63 @@ async function main() {
             await sleep(1200);
             assert.equal((await command('readClipboard')).text, initial, 'буфер изменился после ручного повтора');
             console.log('DICTATION_OVERLAP_E2E_OK: реальный Ctrl+V, задержанный ответ, отказ второй вставке и ручной повтор');
+            console.log('DICTATION_SELECTION_OVERLAP_E2E_OK: диктовка блокирует чтение и замену выделения');
           } finally {
-            fs.writeFileSync(path.join(dir, 'concurrent-paste-release'), 'release');
+            fs.writeFileSync(path.join(dir, 'concurrent-dictation-release'), 'release');
             if (firstPending) await firstPending.catch(() => {});
+          }
+
+          // Start a fresh Electron to hold the *selection* paste response,
+          // after its real Ctrl+V, and try dictation in the opposite direction.
+          await browser.close();
+          browser = await puppeteer.launch({
+            executablePath: executable, headless: false, ignoreDefaultArgs: true,
+            env: { ...process.env, ZS_E2E_PROFILE: profile, ZSPEAKLY_DEV_URL: 'none',
+              ZS_CONCURRENT_E2E: '1', ZS_CONCURRENT_DIR: dir, ZS_CONCURRENT_KIND: 'selection' },
+            args: [path.resolve('scripts/e2e/electron-insert-concurrency-entry.cjs')], timeout: 60000,
+          });
+          const selectionTarget = await browser.waitForTarget((t) => t.type() === 'page' && t.url().includes('index.html'), { timeout: 30000 });
+          const selectionPage = await selectionTarget.page();
+          await selectionPage.waitForSelector('.app-window', { timeout: 30000 });
+          await selectionPage.waitForFunction(async () => { const status = await window.zspeakly?.native?.inputStatus(); return Boolean(status?.ready && status?.helper?.ready); }, { timeout: 30000, polling: 300 });
+          await selectionPage.evaluate(async () => {
+            const current = await window.zspeakly.store.get('zs:settings');
+            await window.zspeakly.store.set('zs:settings', { ...current, insertMethod: 'clipboard' });
+          });
+          const originalSelection = 'Синтетическое выделение';
+          const selectionResult = 'Синтетическая замена';
+          const refusedDictation = ' Отложенная диктовка';
+          assert.equal(await active(), true, 'перед заменой потерян фокус');
+          await command('selectText', originalSelection);
+          const selected = await command('state');
+          assert.equal(selected.foreground, true, 'окно с выделением не активно');
+          assert.equal(selected.selectionLength, originalSelection.length, 'текст не выделен');
+          let replacementPending;
+          try {
+            replacementPending = selectionPage.evaluate((value) => window.zspeakly.native.replaceSelection(value), selectionResult);
+            await waitFile(path.join(dir, 'concurrent-selection-ready'));
+            await assertText(selectionResult, 'первая замена выделения');
+            const blockedDictation = await selectionPage.evaluate((value) => window.zspeakly.native.insertText(value), refusedDictation);
+            assert.equal(blockedDictation.ok, false, JSON.stringify(blockedDictation));
+            assert.equal(blockedDictation.busy, true, JSON.stringify(blockedDictation));
+            const blockedRead = await selectionPage.evaluate(() => window.zspeakly.native.readSelection());
+            assert.equal(blockedRead.reason, 'busy', JSON.stringify(blockedRead));
+            const blockedReplace = await selectionPage.evaluate(() => window.zspeakly.native.replaceSelection('Вторая замена'));
+            assert.equal(blockedReplace.busy, true, JSON.stringify(blockedReplace));
+            assert.equal((await command('state')).text, selectionResult, 'другая операция изменила поле');
+            assert.equal((await command('readClipboard')).text, selectionResult, 'другая операция изменила буфер');
+            fs.writeFileSync(path.join(dir, 'concurrent-selection-release'), 'release');
+            assert.equal(await replacementPending, true, 'первая замена не подтвердилась');
+            assert.equal(await active(), true, 'перед ручным повтором диктовки потерян фокус');
+            const retry = await selectionPage.evaluate((value) => window.zspeakly.native.insertText(value), refusedDictation);
+            assert.equal(retry.ok, true, JSON.stringify(retry));
+            await assertText(selectionResult + refusedDictation, 'диктовка после замены');
+            await sleep(1200);
+            assert.equal((await command('readClipboard')).text, selectionResult, 'буфер после повтора не восстановлен');
+            console.log('SELECTION_DICTATION_OVERLAP_E2E_OK: замена блокирует диктовку и выделение, ручной повтор');
+          } finally {
+            fs.writeFileSync(path.join(dir, 'concurrent-selection-release'), 'release');
+            if (replacementPending) await replacementPending.catch(() => {});
           }
 
         }

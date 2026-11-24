@@ -103,6 +103,9 @@ describe('проверка настоящего движка в CI', () => {
     expect(entry).toContain("process.env.RUNNER_ENVIRONMENT !== 'github-hosted'");
     expect(entry).toContain("process.env.ZS_CONCURRENT_E2E !== '1'");
     expect(entry).toContain('await input.paste()');
+    expect(entry).toContain('host.paste = async');
+    expect(runner).toContain('DICTATION_SELECTION_OVERLAP_E2E_OK');
+    expect(runner).toContain('SELECTION_DICTATION_OVERLAP_E2E_OK');
     expect(runner).toContain('DICTATION_OVERLAP_E2E_OK');
     expect(runner).toContain('second.busy, true');
   });
