@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const directory = process.env.ZS_CONCURRENT_DIR;
 const kind = process.env.ZS_CONCURRENT_KIND || 'dictation';
-if (!['dictation', 'selection', 'history'].includes(kind)) throw new Error('неизвестный режим теста');
+if (!['dictation', 'selection', 'history', 'history-external'].includes(kind)) throw new Error('неизвестный режим теста');
 let held = false;
 async function holdFirst(result) {
   if (!held) {

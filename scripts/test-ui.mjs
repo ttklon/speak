@@ -3474,6 +3474,30 @@ async function scenarioClipboardPasteFailure(browser) {
   await sleep(400);
   state = await page.evaluate(() => ({ payload: window.__passwordPayload, body: document.body.innerText }));
   record('безопасность', 'буфер: расшифрованный пароль передаётся без раскрытия в интерфейсе', state.payload?.text === 'СекретДляПроверки123!' && !state.body.includes('СекретДляПроверки123!'));
+  await sleep(1600); // старый индикатор успешного копирования уже исчез
+  for (const during of [false, true]) {
+    for (const password of [false, true]) {
+      await page.evaluate((value) => {
+        window.__currentConflict = value;
+        window.zspeakly.native.pasteClipboardItem = async (payload) => {
+          window.__pasteCount++; window.__written.push(payload);
+          return { copied: true, outcome: window.__currentConflict ? { clipboardChanged: true, uncertain: true } : { clipboardChanged: true } };
+        };
+      }, during);
+      const beforeCount = await page.evaluate(() => window.__pasteCount);
+      await page.click(password ? '.clip-card[title="Пароль (зашифрован)"]' : '.clip-card[title="тестовый текст для вставки"]', { clickCount: 2 });
+      await sleep(400);
+      const conflict = await page.evaluate(() => ({
+        toast: [...document.querySelectorAll('.toast')].at(-1)?.innerText || '',
+        count: window.__pasteCount, legacy: window.__legacyWrites,
+        body: document.body.innerText, history: window.__e2e.read('zs.clipboard') || [],
+      }));
+      record('безопасность', `буфер: ${password ? 'пароль' : 'текст'} при смене буфера ${during ? 'во время' : 'до'} Ctrl+V`,
+        /буфер/i.test(conflict.toast) && (during ? /другое содержимое/i.test(conflict.toast) && /проверьте окно/i.test(conflict.toast) : /не запускалась/i.test(conflict.toast) && /скопируйте запись/i.test(conflict.toast)) &&
+          conflict.count === beforeCount + 1 && conflict.legacy === 0 && conflict.history.length === 2 && !conflict.body.includes('СекретДляПроверки123!'),
+        JSON.stringify({ toast: conflict.toast, count: conflict.count, legacy: conflict.legacy }));
+    }
+  }
   const errors = takeErrors(page);
   record('безопасность', 'буфер: ошибки копирования не ломают интерфейс', errors.length === 0, errors[0] || '');
   await page.close();

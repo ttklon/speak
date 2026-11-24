@@ -1067,6 +1067,115 @@ await check('вставка истории освобождает блокиро
   }
 });
 
+await check('внешняя смена текстового буфера до вставки истории не отправляет Ctrl+V', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste, write = electronStub.clipboard.writeText;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  let calls = 0;
+  host.available = () => true; host.paste = async () => { calls++; return { ok: true }; };
+  electronStub.clipboard.writeText = (text) => { write(text); clipboardText.value = 'чужой буфер'; };
+  try {
+    const result = await handlers.get('text:paste-item')({}, { text: 'запись истории' });
+    if (!result?.copied || !result.outcome?.clipboardChanged || result.outcome.uncertain || calls) throw new Error(`не остановились до Ctrl+V: ${JSON.stringify(result)}, calls=${calls}`);
+    if (clipboardText.value !== 'чужой буфер') throw new Error('чужой буфер перезаписан');
+  } finally { electronStub.clipboard.writeText = write; host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('внешняя смена буфера при отказе хоста останавливает резерв истории', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  host.paste = async () => { clipboardText.value = 'чужой буфер'; return { ok: false, reason: 'host-not-started' }; };
+  try {
+    spawnCalls.length = 0;
+    const result = await handlers.get('text:paste-item')({}, { text: 'запись истории' });
+    if (!result?.outcome?.clipboardChanged || result.outcome.uncertain) throw new Error(`не остановились: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /powershell/i.test(String(c.file)) && (c.args || []).some((a) => /SendWait/.test(String(a))))) throw new Error('резервный Ctrl+V запущен');
+    if (clipboardText.value !== 'чужой буфер') throw new Error('чужой буфер перезаписан');
+  } finally { host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('смена буфера во время Ctrl+V для текста истории не считается успехом', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  try {
+    for (const reply of [{ ok: true }, { ok: false, reason: 'timeout' }]) {
+      host.paste = async () => { clipboardText.value = 'чужой буфер'; return reply; };
+      const result = await handlers.get('text:paste-item')({}, { text: 'запись истории' });
+      if (!result?.outcome?.uncertain || !result.outcome.clipboardChanged) throw new Error(`неизвестный результат скрыт: ${JSON.stringify(result)}`);
+      if (clipboardText.value !== 'чужой буфер') throw new Error('чужой буфер перезаписан');
+    }
+  } finally { host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('неизвестные форматы текстовой истории блокируют Ctrl+V', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste, formats = electronStub.clipboard.availableFormats;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  let calls = 0;
+  host.available = () => true; host.paste = async () => { calls++; return { ok: true }; };
+  electronStub.clipboard.availableFormats = () => { throw new Error('formats unavailable'); };
+  try {
+    const result = await handlers.get('text:paste-item')({}, { text: 'запись истории' });
+    if (!result?.outcome?.clipboardChanged || result.outcome.uncertain || calls) throw new Error(`неизвестные форматы не остановили вставку: ${JSON.stringify(result)}, calls=${calls}`);
+  } finally { electronStub.clipboard.availableFormats = formats; host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('текст истории: одинаковый текст с новыми форматами не идёт в резервный Ctrl+V', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste, formats = electronStub.clipboard.availableFormats;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  let currentFormats = ['text/plain'];
+  electronStub.clipboard.availableFormats = () => currentFormats;
+  host.available = () => true;
+  host.paste = async () => { currentFormats = ['text/plain', 'text/html']; return { ok: false, reason: 'host-not-started' }; };
+  try {
+    spawnCalls.length = 0;
+    const result = await handlers.get('text:paste-item')({}, { text: 'запись истории' });
+    if (!result?.outcome?.clipboardChanged || result.outcome.uncertain) throw new Error(`форматы не проверены: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /powershell/i.test(String(c.file)) && (c.args || []).some((a) => /SendWait/.test(String(a))))) throw new Error('резервный Ctrl+V запущен');
+    if (clipboardText.value !== 'запись истории') throw new Error('буфер перезаписан');
+    const next = await handlers.get('text:paste-item')({}, { image: 'invalid' });
+    if (!next?.copyFailed) throw new Error('блокировка не освобождена');
+  } finally { electronStub.clipboard.availableFormats = formats; host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('ошибка чтения текстового буфера отменяет вставку истории', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste, read = electronStub.clipboard.readText;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  let calls = 0;
+  electronStub.clipboard.readText = () => { throw new Error('read failed'); };
+  host.available = () => true; host.paste = async () => { calls++; return { ok: true }; };
+  try {
+    const result = await handlers.get('text:paste-item')({}, { text: 'запись истории' });
+    if (!result?.outcome?.clipboardChanged || result.outcome.uncertain || calls) throw new Error(`ошибка чтения не остановила вставку: ${JSON.stringify(result)}`);
+  } finally { electronStub.clipboard.readText = read; host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('история с изображением по-прежнему вставляет изображение, а не подпись', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  let calls = 0;
+  host.available = () => true; host.paste = async () => { calls++; return { ok: true }; };
+  try {
+    clipboardText.value = 'прежний текст'; clipboardImage.value = null;
+    const result = await handlers.get('text:paste-item')({}, { image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', text: 'подпись' });
+    if (!result?.copied || result.outcome !== true || calls !== 1 || !clipboardImage.value || clipboardText.value !== 'прежний текст') throw new Error('картинка заменена текстом или вставка остановлена');
+  } finally { host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
 await check('две диктовки: вторая не меняет буфер во время незавершённой вставки', async () => {
   const platform = process.platform;
   const settings = handlers.get('store:get')({}, 'zs:settings') || {};

@@ -561,9 +561,11 @@ export default function ClipboardPage() {
       }
       if (!result?.copied) outcome = { uncertain: true };
       else {
-        setJustCopied(item.id);
-        setTimeout(() => setJustCopied(null), 1400);
         outcome = result.outcome;
+        if (outcome === true || outcome === false) {
+          setJustCopied(item.id);
+          setTimeout(() => setJustCopied(null), 1400);
+        }
       }
     } else {
       // В браузере нет системного IPC: сохраняем прежний явный fallback.
@@ -573,17 +575,27 @@ export default function ClipboardPage() {
       catch { outcome = { uncertain: true }; }
     }
     if (outcome === true) return;
+    if (outcome?.clipboardChanged) {
+      push({
+        title: outcome.uncertain ? 'Не удалось подтвердить автовставку' : 'Буфер изменился до автовставки',
+        description: outcome.uncertain
+          ? 'Во время вставки буфер изменился или его состояние не удалось проверить. В окно могло попасть другое содержимое. Проверьте окно перед повтором.'
+          : 'Буфер изменился или его состояние не удалось проверить. Автовставка не запускалась; скопируйте запись заново, когда будете готовы.',
+        tone: 'warn',
+      });
+      return;
+    }
     if (outcome !== false) {
       push({
         title: 'Не удалось подтвердить автовставку',
-        description: 'Содержимое могло попасть в окно. Проверьте окно перед повтором.',
+        description: 'В окно могло попасть содержимое буфера, в том числе другое. Проверьте окно перед повтором.',
         tone: 'warn',
       });
       return;
     }
     push({
       title: 'Автовставка не удалась',
-      description: 'Проверьте окно назначения и при необходимости вставьте вручную.',
+      description: 'Проверьте окно и содержимое буфера или скопируйте запись заново перед ручной вставкой.',
       tone: 'warn',
     });
   };

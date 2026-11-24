@@ -552,6 +552,45 @@ async function main() {
             if (historyPending) await historyPending.catch(() => {});
           }
 
+          // A real paste has happened but its helper reply is held. The other
+          // process then changes the OS clipboard before Electron sees the reply.
+          await browser.close();
+          browser = await puppeteer.launch({
+            executablePath: executable, headless: false, ignoreDefaultArgs: true,
+            env: { ...process.env, ZS_E2E_PROFILE: profile, ZSPEAKLY_DEV_URL: 'none',
+              ZS_CONCURRENT_E2E: '1', ZS_CONCURRENT_DIR: dir, ZS_CONCURRENT_KIND: 'history-external' },
+            args: [path.resolve('scripts/e2e/electron-insert-concurrency-entry.cjs')], timeout: 60000,
+          });
+          const externalTarget = await browser.waitForTarget((t) => t.type() === 'page' && t.url().includes('index.html'), { timeout: 30000 });
+          const externalPage = await externalTarget.page();
+          await externalPage.waitForSelector('.app-window', { timeout: 30000 });
+          await externalPage.waitForFunction(async () => Boolean((await window.zspeakly?.native?.inputStatus())?.helper?.ready), { timeout: 30000, polling: 300 });
+          await command('clear');
+          await command('clipboard', 'Прежний тестовый буфер');
+          assert.equal(await active(), true, 'перед проверкой внешнего буфера потерян фокус');
+          const inputText = 'Запись истории для проверки';
+          const externalText = 'Внешний синтетический текст';
+          let externalPending;
+          try {
+            externalPending = externalPage.evaluate((text) => window.zspeakly.native.pasteClipboardItem({ text }), inputText);
+            await waitFile(path.join(dir, 'concurrent-history-external-ready'));
+            await assertText(inputText, 'история до внешнего копирования');
+            await command('clipboard', externalText);
+            assert.equal((await command('readClipboard')).text, externalText, 'внешнее копирование не произошло');
+            fs.writeFileSync(path.join(dir, 'concurrent-history-external-release'), 'release');
+            const result = await externalPending;
+            assert.equal(result.copied, true, JSON.stringify(result));
+            assert.equal(result.outcome?.uncertain, true, JSON.stringify(result));
+            assert.equal(result.outcome?.clipboardChanged, true, JSON.stringify(result));
+            await sleep(1000);
+            assert.equal((await command('state')).text, inputText, 'вставка повторилась');
+            assert.equal((await command('readClipboard')).text, externalText, 'внешний буфер перезаписан');
+            console.log('HISTORY_EXTERNAL_CLIPBOARD_E2E_OK: реальный IPC и Ctrl+V; внешний WinForms изменил буфер до искусственно задержанного ответа');
+          } finally {
+            fs.writeFileSync(path.join(dir, 'concurrent-history-external-release'), 'release');
+            if (externalPending) await externalPending.catch(() => {});
+          }
+
         }
       } finally {
         if (browser) await browser.close();

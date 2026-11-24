@@ -2274,8 +2274,31 @@ function registerIpc() {
       if (!copied) return { copyFailed: true };
       lastInsertedText = '';
       lastInsertedAt = 0;
-      try { return { copied: true, outcome: await pasteToActiveWindowSafely() }; }
-      catch { return { copied: true, outcome: { uncertain: true } }; }
+      // Только текст: изображение не сравнивается по подписи и требует
+      // отдельной проверки данных изображения. Не выводим текст/пароль в лог.
+      const text = (payload.image == null || payload.image === '') && typeof payload.text === 'string' ? payload.text : null;
+      const formats = () => {
+        try {
+          const current = clipboard.availableFormats();
+          return Array.isArray(current) ? JSON.stringify([...current].sort()) : null;
+        } catch { return null; }
+      };
+      const insertedFormats = text !== null ? formats() : null;
+      // Сравнение не атомарно и не обнаруживает совпадающие копии или ABA.
+      const clipboardStillOurs = text === null ? null : () => {
+        try { return insertedFormats !== null && clipboard.readText() === text && formats() === insertedFormats; }
+        catch { return false; }
+      };
+      try {
+        const outcome = await pasteToActiveWindowSafely(clipboardStillOurs);
+        if (outcome?.clipboardChanged) return { copied: true, outcome };
+        if (clipboardStillOurs && !clipboardStillOurs()) {
+          return { copied: true, outcome: outcome === false ? { clipboardChanged: true } : { clipboardChanged: true, uncertain: true } };
+        }
+        return { copied: true, outcome };
+      } catch {
+        return { copied: true, outcome: { uncertain: true, ...(clipboardStillOurs && !clipboardStillOurs() ? { clipboardChanged: true } : {}) } };
+      }
     } finally { textInputBusy = false; }
   });
   ipcMain.handle('text:read-selection', async () => {
