@@ -2,7 +2,7 @@
 import { DEFAULT_SETTINGS } from './config.js';
 import { DICTATION_MAX_ITEMS, trimDictations } from './dictationBudget.js';
 import { sanitizeDictionary, sanitizeHotkeys, sanitizeInstructions, sanitizePresets, sanitizeStats } from './sanitize.js';
-import { sanitizeSnippets, SNIPPET_LIMITS } from './snippets.js';
+import { sanitizeSnippets } from './snippets.js';
 import { APP_PROFILE_LIMITS, sanitizeAppProfiles } from './appProfiles.js';
 
 // Ограничиваем чтение до JSON.parse: история по умолчанию до 8 МиБ UTF-16,
@@ -167,7 +167,6 @@ export function prepareBackup(payload) {
     const ids = new Set();
     for (const item of payload.snippets) {
       if (!isObject(item) || typeof item.trigger !== 'string' || typeof item.body !== 'string' ||
-        item.trigger.replace(/\s+/gu, ' ').trim().length > SNIPPET_LIMITS.trigger || item.body.length > SNIPPET_LIMITS.body ||
         (item.createdAt != null && (typeof item.createdAt !== 'number' || !Number.isFinite(item.createdAt) || item.createdAt < 0)) ||
         (item.id != null && (typeof item.id !== 'string' || !item.id || ids.has(item.id)))) fail('быстрые блоки');
       if (item.id) ids.add(item.id);

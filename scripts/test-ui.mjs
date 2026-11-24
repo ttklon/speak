@@ -793,6 +793,82 @@ async function scenarioSnippets(browser) {
   await page.close();
 }
 
+async function scenarioSnippetSafety(browser) {
+  for (const [target, body] of [['Telegram', '  первая  строка\n    вторая.\n'], ['Outlook', 'адрес без точки'], ['Telegram', 'отмени']]) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false },
+      storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'моя подпись',
+        'zs.snippets': [{ id: 's1', trigger: 'моя подпись', body, createdAt: Date.now() }] },
+    });
+    takeErrors(page);
+    await page.evaluate((app) => { window.zspeakly.native.insertTarget = async () => ({ own: false, app, title: app }); }, target);
+    await clickText(page, 'Начать диктовку'); await sleep(1100);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await sleep(2300);
+    const result = await page.evaluate(() => ({
+      saved: window.__e2e.read('zs.dictations')?.[0]?.text,
+      inserted: (window.__bridgeCalls || []).find((c) => c.channel === 'text:insert')?.args?.[0],
+    }));
+    record('сценарии', `быстрый блок: точный текст в ${target} (${JSON.stringify(body)})`, result.saved === body && result.inserted === body, JSON.stringify(result));
+    await page.close();
+  }
+  const page = await openPage(browser, '#/dictionary', {
+    storeSeed: { 'zs.snippets': [{ id: 'original', trigger: 'моя подпись', body: 'исходный текст', createdAt: Date.now() }] },
+  });
+  takeErrors(page);
+  await clickText(page, 'Добавить блок');
+  await page.type('#snip-trigger', 'Моя, подпись!');
+  await page.type('#snip-body', 'новый текст');
+  await clickText(page, 'Сохранить'); await sleep(300);
+  const result = await page.evaluate(() => ({ list: window.__e2e.read('zs.snippets'), body: document.querySelector('#snip-body')?.value, text: document.body.innerText }));
+  record('сценарии', 'быстрый блок: дубликат не заменяет оригинал, черновик остаётся', result.list?.length === 1 && result.list[0].body === 'исходный текст' && result.body === 'новый текст' && /уже существует/i.test(result.text), JSON.stringify({ list: result.list, body: result.body }));
+  await page.close();
+  const long = await openPage(browser, '#/dictionary', { storeSeed: { 'zs.snippets': [] } });
+  await clickText(long, 'Добавить блок');
+  await long.type('#snip-trigger', 'большой блок');
+  await long.evaluate(() => {
+    const el = document.querySelector('#snip-body');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, 'x'.repeat(4001));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await clickText(long, 'Сохранить'); await sleep(250);
+  const longResult = await long.evaluate(() => ({ length: document.querySelector('#snip-body')?.value.length,
+    list: window.__e2e.read('zs.snippets'), text: document.body.innerText }));
+  record('сценарии', 'быстрый блок: длинный текст остаётся в форме без обрезки', longResult.length === 4001 && !longResult.list?.length && /Блок не сохранён/.test(longResult.text), JSON.stringify({length: longResult.length, count: longResult.list?.length}));
+  await long.close();
+
+  const legacyBody = `  ${'a'.repeat(4100)}\n`;
+  const legacy = await openPage(browser, '#/dictionary', { storeSeed: { 'zs.snippets': [
+    { id: 'a', trigger: 'моя подпись', body: legacyBody, createdAt: 123 },
+    { id: 'b', trigger: 'Моя, подпись!', body: 'второй', createdAt: 124 },
+  ] } });
+  const visible = await legacy.evaluate(() => ({
+    hints: [...document.querySelectorAll('.snippet-row')].filter((row) => /диктовка не развернёт/i.test(row.innerText)).length,
+    full: document.querySelector('.snippet-row textarea')?.value,
+  }));
+  record('сценарии', 'быстрый блок: конфликт виден, длинный исходный текст доступен целиком', visible.hints === 2 && visible.full === legacyBody, `предупреждений: ${visible.hints}, длина: ${visible.full?.length}`);
+  await legacy.click('.snippet-row button[aria-label^="Удалить блок"]'); await sleep(250);
+  await clickText(legacy, 'Вернуть'); await sleep(300);
+  const restored = await legacy.evaluate(() => window.__e2e.read('zs.snippets'));
+  record('сценарии', 'быстрый блок: отмена удаления возвращает старый текст и не затирает дубликат', restored?.length === 2 && restored.find((s) => s.id === 'a')?.body === legacyBody && restored.find((s) => s.id === 'b')?.body === 'второй');
+  await legacy.close();
+
+  const voice = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, aiProcessing: true },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'сократи вдвое',
+      'zs.snippets': [{ id: 's1', trigger: 'сократи вдвое', body: 'совсем другая инструкция', createdAt: Date.now() }] }, settle: 700,
+  });
+  await emit(voice, 'hotkey', { type: 'toggle', mode: 'toggle', command: true }); await sleep(1200);
+  await emit(voice, 'hotkey', { type: 'toggle', mode: 'toggle', command: true }); await sleep(2600);
+  const command = await voice.evaluate(() => window.__e2e.read('zs.dictations')?.[0]);
+  record('сценарии', 'быстрый блок: не подменяет голосовую инструкцию', command?.source === 'command' && /сократи вдвое/i.test(command?.command) && !/другая инструкция/i.test(command?.command), JSON.stringify(command?.command));
+  await voice.close();
+}
+
 /**
  * «Файл в текст»: готовая запись → текст в «Недавних», без вставки в окно.
  *
@@ -9947,6 +10023,7 @@ async function main() {
       ['команда «отмени»', scenarioUndoCommand],
       ['«отмени» в другом окне', scenarioUndoRefusal],
       ['быстрые блоки', scenarioSnippets],
+      ['безопасность быстрых блоков', scenarioSnippetSafety],
       ['файл в текст', scenarioAudioFile],
       ['команда голосом', scenarioVoiceCommand],
       ['оговорки', scenarioSelfCorrection],

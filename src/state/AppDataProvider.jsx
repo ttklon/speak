@@ -109,9 +109,15 @@ export function AppDataProvider({ children }) {
   // Быстрые блоки: сказал «моя подпись» — вставился текст. Хранятся рядом со
   // словарём, потому что это тоже «мои слова», но правило другое: словарь
   // правит написание, блок заменяет всю фразу.
-  const [snippets, setSnippets] = usePersistentState(STORAGE_KEYS.snippets, () => [], {
+  const [snippets, setSnippetsState] = usePersistentState(STORAGE_KEYS.snippets, () => [], {
     sanitize: sanitizeSnippets,
   });
+  const snippetsRef = useRef(snippets);
+  const setSnippets = useCallback((next) => {
+    const value = typeof next === 'function' ? next(snippetsRef.current) : next;
+    snippetsRef.current = value;
+    setSnippetsState(value);
+  }, [setSnippetsState]);
   // Чистим и по весу: история с картинками могла вырасти до десятков мегабайт,
   // и её разбор при запуске был заметен как «приложение долго открывается».
   const [clipboard, setClipboard] = usePersistentState(STORAGE_KEYS.clipboard, () => [], {
@@ -348,24 +354,39 @@ export function AppDataProvider({ children }) {
   const addSnippet = useCallback(
     (trigger, body) => {
       const cleanTrigger = String(trigger || '').replace(/\s+/gu, ' ').trim();
-      const cleanBody = String(body || '').trim();
-      if (!cleanTrigger || !cleanBody) return null;
-      const entry = {
-        id: uid('snip'),
-        trigger: cleanTrigger.slice(0, SNIPPET_LIMITS.trigger),
-        body: cleanBody.slice(0, SNIPPET_LIMITS.body),
-        createdAt: Date.now(),
-      };
-      // Тот же триггер (без учёта регистра и знаков) не дублируем, а заменяем:
-      // иначе человек не поймёт, какой из двух блоков сработал.
-      const key = normalizePhrase(entry.trigger);
-      setSnippets((prev) => [entry, ...prev.filter((s) => normalizePhrase(s.trigger) !== key)]);
+      const cleanBody = String(body || '');
+      const key = normalizePhrase(cleanTrigger);
+      let problem = '';
+      if (!key || !cleanBody.trim()) problem = 'Укажите фразу и непустой текст.';
+      else if (cleanTrigger.length > SNIPPET_LIMITS.trigger || cleanBody.length > SNIPPET_LIMITS.body)
+        problem = `Фраза — не более ${SNIPPET_LIMITS.trigger}, текст — не более ${SNIPPET_LIMITS.body} символов. Ничего не обрезано.`;
+      else if (snippetsRef.current.some((s) => normalizePhrase(s.trigger) === key))
+        problem = 'Блок с такой фразой уже существует. Старый текст не изменён; выберите другую фразу.';
+      else if (snippetsRef.current.length >= SNIPPET_LIMITS.count)
+        problem = `Достигнут лимит ${SNIPPET_LIMITS.count} блоков. Существующие блоки не изменены.`;
+      if (problem) {
+        push({ title: 'Блок не сохранён', description: problem, tone: 'warn', ttl: 9000 });
+        return null;
+      }
+      const entry = { id: uid('snip'), trigger: cleanTrigger, body: cleanBody, createdAt: Date.now() };
+      setSnippets((prev) => [entry, ...prev]);
       return entry;
     },
-    [setSnippets],
+    [push, setSnippets],
   );
 
   const removeSnippet = useCallback((id) => setSnippets((prev) => prev.filter((s) => s.id !== id)), [setSnippets]);
+
+  // Отмена удаления возвращает исходный объект, даже если он старее лимитов.
+  const restoreSnippet = useCallback((entry) => {
+    if (snippetsRef.current.some((s) => s.id === entry.id)) {
+      push({ title: 'Блок не восстановлен', description: 'Идентификатор уже занят. Скопируйте текст вручную.',
+        recoverText: entry.body, recoverLabel: 'Текст удалённого блока', tone: 'warn', ttl: 0 });
+      return false;
+    }
+    setSnippets((prev) => [entry, ...prev]);
+    return true;
+  }, [push, setSnippets]);
 
   const addClipboardItem = useCallback(
     (item) => {
@@ -564,6 +585,7 @@ export function AppDataProvider({ children }) {
       snippets,
       addSnippet,
       removeSnippet,
+      restoreSnippet,
       clipboard,
       addClipboardItem,
       removeClipboardItem,
@@ -601,6 +623,7 @@ export function AppDataProvider({ children }) {
       snippets,
       addSnippet,
       removeSnippet,
+      restoreSnippet,
       clipboard,
       addClipboardItem,
       removeClipboardItem, updateClipboardItem, toggleClipboardPin, clearClipboard, voiceHotkeys, toggleHotkey,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SNIPPET_LIMITS, expandSnippet, matchSnippet, normalizePhrase, sanitizeSnippets } from './snippets.js';
+import { expandSnippet, matchSnippet, normalizePhrase, sanitizeSnippets } from './snippets.js';
 
 const signature = { id: 's1', trigger: 'моя подпись', body: 'С уважением,\nИван Петров\n+7 900 000-00-00' };
 
@@ -22,12 +22,12 @@ describe('быстрые блоки', () => {
     expect(out.snippet).toBeNull();
   });
 
-  it('лишние пробелы и регистр в триггере не создают двойников', () => {
+  it('унаследованные дубликаты не удаляются при загрузке', () => {
     const list = sanitizeSnippets([
       { trigger: 'Моя   подпись', body: 'один' },
       { trigger: 'моя подпись', body: 'два' },
     ]);
-    expect(list).toHaveLength(1);
+    expect(list).toHaveLength(2);
     expect(list[0].body).toBe('один');
   });
 
@@ -47,10 +47,10 @@ describe('быстрые блоки', () => {
     expect(sanitizeSnippets([1, null, 'x'])).toEqual([]);
   });
 
-  it('длина ограничена: блок не превращается в документ', () => {
+  it('ранее сохранённые длинные блоки не обрезаются при загрузке', () => {
     const long = sanitizeSnippets([{ trigger: 'т'.repeat(200), body: 'б'.repeat(9000) }]);
-    expect(long[0].trigger.length).toBe(SNIPPET_LIMITS.trigger);
-    expect(long[0].body.length).toBe(SNIPPET_LIMITS.body);
+    expect(long[0].trigger.length).toBe(200);
+    expect(long[0].body.length).toBe(9000);
   });
 
   it('без блоков текст не меняется, даже если это пустая строка', () => {
@@ -62,5 +62,18 @@ describe('быстрые блоки', () => {
     const out = expandSnippet('моя подпись.', [signature]);
     expect(out.text).not.toMatch(/\.$/u);
     expect(out.text.startsWith('С уважением')).toBe(true);
+  });
+});
+
+describe('наследованные блоки и неоднозначные триггеры', () => {
+  it('находит сохранённый блок после первых 200', () => {
+    const list = Array.from({ length: 201 }, (_, i) => ({ id: `s${i}`, trigger: `блок ${i}`, body: `текст ${i}` }));
+    expect(matchSnippet('блок 200', list)?.text).toBe('текст 200');
+  });
+  it('не выбирает произвольно один из двух одинаковых триггеров', () => {
+    expect(matchSnippet('моя подпись', [
+      { id: 'a', trigger: 'моя подпись', body: 'оригинал' },
+      { id: 'b', trigger: 'Моя, подпись!', body: 'другой' },
+    ])).toBeNull();
   });
 });

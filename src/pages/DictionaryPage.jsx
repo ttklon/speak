@@ -7,7 +7,7 @@ import { Button, SearchInput, Tabs } from '../components/ui/Controls.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import { Toggle } from '../components/ui/Toggle.jsx';
 import { dayLabel } from '../lib/utils.js';
-import { SNIPPET_LIMITS, snippetExamples } from '../lib/snippets.js';
+import { SNIPPET_LIMITS, normalizePhrase, snippetExamples } from '../lib/snippets.js';
 import { rankDictionary } from '../lib/dictionary/rank.js';
 
 export default function DictionaryPage() {
@@ -19,6 +19,7 @@ export default function DictionaryPage() {
     snippets,
     addSnippet,
     removeSnippet,
+    restoreSnippet,
     settings,
     updateSettings,
   } = useAppData();
@@ -33,6 +34,14 @@ export default function DictionaryPage() {
   const [snipOpen, setSnipOpen] = useState(false);
   const [snipTrigger, setSnipTrigger] = useState('');
   const [snipBody, setSnipBody] = useState('');
+  const snippetPhraseCounts = useMemo(() => {
+    const counts = new Map();
+    for (const snippet of snippets) {
+      const phrase = normalizePhrase(snippet.trigger);
+      counts.set(phrase, (counts.get(phrase) || 0) + 1);
+    }
+    return counts;
+  }, [snippets]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -229,9 +238,16 @@ export default function DictionaryPage() {
               <div key={snippet.id} className="snippet-row">
                 <div className="grow" style={{ textAlign: 'left' }}>
                   <div className="snippet-row__trigger">«{snippet.trigger}»</div>
+                  {snippetPhraseCounts.get(normalizePhrase(snippet.trigger)) > 1 && (
+                    <div className="field__hint">Фраза совпадает с другим блоком — диктовка не развернёт её, пока дубликат не удалён.</div>
+                  )}
                   <div className="snippet-row__body">
                     {snippet.body.length > 90 ? `${snippet.body.slice(0, 90)}…` : snippet.body}
                   </div>
+                  <details>
+                    <summary>Показать полный текст</summary>
+                    <textarea className="input" rows={5} readOnly value={snippet.body} aria-label={`Полный текст блока «${snippet.trigger}»`} />
+                  </details>
                 </div>
                 <button
                   type="button"
@@ -246,7 +262,7 @@ export default function DictionaryPage() {
                       ttl: 8000,
                       action: {
                         label: 'Вернуть',
-                        onClick: () => addSnippet(snippet.trigger, snippet.body),
+                        onClick: () => restoreSnippet(snippet),
                       },
                     });
                   }}
@@ -294,13 +310,12 @@ export default function DictionaryPage() {
               id="snip-trigger"
               className="input"
               data-autofocus
-              maxLength={SNIPPET_LIMITS.trigger}
               value={snipTrigger}
               placeholder="Например: моя подпись"
               onChange={(e) => setSnipTrigger(e.target.value)}
             />
             <span className="field__hint">
-              Блок срабатывает, только если сказать эту фразу целиком и ничего больше.
+              Блок срабатывает, только если сказать эту фразу целиком и ничего больше. Не более {SNIPPET_LIMITS.trigger} символов.
             </span>
           </div>
           <div className="field">
@@ -311,11 +326,11 @@ export default function DictionaryPage() {
               id="snip-body"
               className="input"
               rows={5}
-              maxLength={SNIPPET_LIMITS.body}
               value={snipBody}
               placeholder={'С уважением,\nИван Петров\n+7 900 000-00-00'}
               onChange={(e) => setSnipBody(e.target.value)}
             />
+            <span className="field__hint">Не более {SNIPPET_LIMITS.body} символов. Пробелы и переносы сохраняются.</span>
           </div>
         </div>
       </Modal>

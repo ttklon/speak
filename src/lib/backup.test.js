@@ -89,6 +89,14 @@ describe('подготовка резервной копии', () => {
     expect(prepareBackup({ dictations: [], profile: { name } }).profile.name).toBe(name);
   });
 
+  it('восстанавливает унаследованные длинные блоки, дубликаты и блоки сверх лимита без потери текста', () => {
+    const snippets = Array.from({ length: 201 }, (_, i) => ({
+      id: `s${i}`, trigger: i === 200 ? 'ФРАЗА 0' : `фраза ${i}`,
+      body: i === 0 ? `  ${'x'.repeat(4100)}\n` : `текст ${i}`, createdAt: 123,
+    }));
+    expect(prepareBackup({ snippets }).snippets).toEqual(snippets);
+  });
+
   it('проверяет дату блока и целое количество использований слова', () => {
     for (const date of ['сломано', -5, JSON.parse('1e400')]) {
       expect(() => prepareBackup({ snippets: [{ trigger: 'фраза', body: 'текст', createdAt: date }] })).toThrow();

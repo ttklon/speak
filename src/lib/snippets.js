@@ -41,25 +41,29 @@ export function normalizePhrase(text) {
  */
 export function sanitizeSnippets(list) {
   if (!Array.isArray(list)) return [];
-  const seen = new Set();
   const out = [];
+  const reserved = new Set(list.filter((item) => item && typeof item === 'object' && item.id).map((item) => String(item.id)));
+  const used = new Set();
   for (const raw of list) {
     if (!raw || typeof raw !== 'object') continue;
     const trigger = String(raw.trigger ?? '')
       .replace(/\s+/gu, ' ')
-      .trim()
-      .slice(0, SNIPPET_LIMITS.trigger);
-    const body = String(raw.body ?? '').slice(0, SNIPPET_LIMITS.body);
+      .trim();
+    const body = String(raw.body ?? '');
     const key = normalizePhrase(trigger);
-    if (!key || !body.trim() || seen.has(key)) continue;
-    seen.add(key);
+    if (!key || !body.trim()) continue;
+    let id = raw.id ? String(raw.id) : '';
+    if (!id || used.has(id)) {
+      let n = out.length + 1;
+      do { id = `snip-recovered-${n++}`; } while (used.has(id) || reserved.has(id));
+    }
+    used.add(id);
     out.push({
-      id: String(raw.id || `snip-${out.length + 1}`),
+      id,
       trigger,
       body,
       createdAt: Number(raw.createdAt) || Date.now(),
     });
-    if (out.length >= SNIPPET_LIMITS.count) break;
   }
   return out;
 }
@@ -74,14 +78,10 @@ export function sanitizeSnippets(list) {
 export function matchSnippet(text, snippets) {
   const phrase = normalizePhrase(text);
   if (!phrase) return null;
-  for (const snippet of sanitizeSnippets(snippets)) {
-    if (normalizePhrase(snippet.trigger) === phrase) {
-      // Точка в конце сказанного не должна попасть в блок: это пунктуация
-      // фразы, а не часть подписи.
-      return { snippet, text: snippet.body };
-    }
-  }
-  return null;
+  const matches = sanitizeSnippets(snippets).filter((snippet) => normalizePhrase(snippet.trigger) === phrase);
+  // Унаследованные дубликаты остаются доступными для просмотра и удаления,
+  // но неоднозначный триггер нельзя разворачивать произвольным образом.
+  return matches.length === 1 ? { snippet: matches[0], text: matches[0].body } : null;
 }
 
 /**

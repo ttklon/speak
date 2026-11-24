@@ -346,7 +346,7 @@ export function DictationProvider({ children }) {
       // фразы. Срабатывает только на точное совпадение: «поставь мою подпись
       // в конце» должно остаться речью, а не превратиться в подпись.
       let snippetHit = null;
-      if (spoken && insert && sessionOpts.current.insert !== false) {
+      if (spoken && insert && sessionOpts.current.insert !== false && !sessionOpts.current.command) {
         const expanded = expandSnippet(cleaned, snippetsRef.current || []);
         if (expanded.snippet) {
           snippetHit = expanded.snippet;
@@ -466,7 +466,7 @@ export function DictationProvider({ children }) {
         insert &&
         sessionOpts.current.insert !== false &&
         settingsRef.current.undoCommand !== false &&
-        isUndoCommand(cleaned)
+        !snippetHit && isUndoCommand(cleaned)
       ) {
         const native = window.zspeakly?.native;
         setDraft('');
@@ -634,7 +634,7 @@ export function DictationProvider({ children }) {
       // Оформление под окно: мессенджер — без точки, письмо — с заглавной
       // и точкой; для редактора кода исходное оформление не меняется.
       // Ничего не переписываем, только знаки и регистр первой буквы.
-      if (cleaned && where.style !== 'neutral') {
+      if (cleaned && !snippetHit && where.style !== 'neutral') {
         const shaped = formatForApp(cleaned, where.style);
         if (shaped && shaped !== cleaned) {
           diag.info('stt', 'Оформление под окно', {
