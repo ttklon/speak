@@ -74,7 +74,7 @@ export function useTextAction() {
         if (where === 'busy') {
           push({
             title: 'Другая операция с текстом ещё выполняется',
-            description: 'Результат не вставлен и не скопирован. Скопируйте его вручную отсюда. Текст исчезнет при закрытии уведомления или приложения.',
+            description: ['Результат не вставлен и не скопирован. Скопируйте его вручную отсюда. Текст исчезнет при закрытии уведомления или приложения.', note].filter(Boolean).join(' '),
             recoverText: result,
             tone: 'warn', ttl: 0,
           });
@@ -83,17 +83,38 @@ export function useTextAction() {
         if (where === 'clipboard-changed' || where === 'clipboard-changed-uncertain') {
           push({
             title: where === 'clipboard-changed' ? 'Буфер изменился до замены' : 'Не удалось подтвердить замену',
-            description: where === 'clipboard-changed'
+            description: [where === 'clipboard-changed'
               ? 'Буфер изменился или его состояние не удалось проверить; замена не отправлялась. Скопируйте результат отсюда до закрытия уведомления или приложения.'
-              : 'Во время замены буфер изменился или его состояние не удалось проверить. В окно мог попасть другой текст. Проверьте окно перед повтором; сохраните результат отсюда до закрытия уведомления или приложения.',
+              : 'Во время замены буфер изменился или его состояние не удалось проверить. В окно мог попасть другой текст. Проверьте окно перед повтором; сохраните результат отсюда до закрытия уведомления или приложения.', note].filter(Boolean).join(' '),
+            recoverText: result, tone: 'warn', ttl: 0,
+          });
+          return;
+        }
+        if (where === 'copied') {
+          push({
+            title: 'Только копирование результата',
+            description: ['Автоматическая замена не выполнялась. Проверьте буфер перед вставкой или сохраните результат отсюда до закрытия уведомления или приложения.', note].filter(Boolean).join(' '),
+            recoverText: result, tone: 'warn', ttl: 0,
+          });
+          return;
+        }
+        if (where === 'uncertain' || where === 'failed') {
+          push({
+            title: where === 'uncertain' ? 'Не удалось подтвердить замену' : 'Не удалось заменить выделение',
+            description: [
+              where === 'uncertain'
+                ? 'В окно мог попасть текст, в том числе другое содержимое буфера. Проверьте его перед повтором.'
+                : 'Проверьте окно перед повтором; не полагайтесь на содержимое буфера.',
+              'Сохраните полный результат отсюда до закрытия уведомления или приложения.', note,
+            ].filter(Boolean).join(' '),
             recoverText: result, tone: 'warn', ttl: 0,
           });
           return;
         }
         push({
-          title: where === 'uncertain' ? 'Не удалось подтвердить замену' : where === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${instruction.title}`,
-          description: where === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
-          tone: where === 'uncertain' || where === 'failed' || note ? 'warn' : 'success',
+          title: `Готово: ${instruction.title}`,
+          description: [truncate(result, 90), note].filter(Boolean).join(' — '),
+          tone: note ? 'warn' : 'success',
         });
       } catch (err) {
         push({ title: err?.code === 'selection-busy' ? 'Другая операция ещё выполняется' : err?.code === 'selection-unverified' ? 'Выделение не подтверждено' : 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });

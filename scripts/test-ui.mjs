@@ -960,6 +960,30 @@ async function scenarioVoiceCommand(browser) {
     result.toasts.slice(0, 100) || 'тоста нет',
   );
 
+  const copyOnly = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, aiProcessing: true },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'сократи вдвое' }, settle: 700,
+    patchNative: () => {
+      delete window.zspeakly.native.replaceSelection;
+      window.__copyCount = 0;
+      window.zspeakly.native.writeClipboard = async ({ text }) => { window.__copied = text; window.__copyCount++; return true; };
+    },
+  });
+  takeErrors(copyOnly);
+  await emit(copyOnly, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(1200);
+  await emit(copyOnly, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(2600);
+  const copyState = await copyOnly.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    history: window.__e2e.read('zs.dictations') || [], copied: window.__copied, count: window.__copyCount,
+  }));
+  record('безопасность', 'голосовая команда: только копирование не выдаётся за замену',
+    /замена не выполнялась/i.test(copyState.toast) && /проверьте/i.test(copyState.toast) && !/Готово: сократить/.test(copyState.toast) &&
+      copyState.count === 1 && Boolean(copyState.copied) && copyState.history[0]?.text === copyState.copied, JSON.stringify(copyState));
+  record('безопасность', 'голосовая команда: только копирование без ошибок консоли', takeErrors(copyOnly).length === 0);
+  await copyOnly.close();
+
   const uncertain = await openPage(browser, '#/home', {
     settings: { aiDictationRewrite: false, aiProcessing: true },
     storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'сократи вдвое' }, settle: 700,
@@ -8356,6 +8380,120 @@ async function scenarioTextActionEvent(browser) {
   await page.close();
 }
 
+// Результат горячей AI-инструкции нигде не хранится кроме уведомления.
+async function scenarioTextActionRecovery(browser) {
+  for (const mode of ['refused', 'lost', 'unknown', 'copy-only', 'success']) {
+    const page = await openPage(browser, '#/hotkeys', {
+      settle: 400, settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434' },
+      storeSeed: { 'zs.dictations': [] },
+      patchNative: () => {
+        window.__longResult = 'Результат инструкции с подробностями и важными данными. '.repeat(6) + 'Конец результата.';
+        window.__replaceCount = 0; window.__copyCount = 0;
+        window.zspeakly.native.writeClipboard = async (payload) => { window.__copyCount++; window.__sentResult = payload.text; return true; };
+        window.zspeakly.native.httpPost = async () => ({ ok: true, data: { response: window.__longResult } });
+        window.zspeakly.native.replaceSelection = async (text) => {
+          window.__replaceCount++; window.__sentResult = text;
+          if (window.__mode === 'lost') throw new Error('IPC lost');
+          if (window.__mode === 'unknown') return { uncertain: true };
+          return window.__mode === 'success';
+        };
+      },
+    });
+    takeErrors(page);
+    await page.evaluate((value) => { window.__mode = value; if (value === 'copy-only') delete window.zspeakly.native.replaceSelection; }, mode);
+    const id = await page.evaluate(() => (window.__e2e.read('zs.presets') || [])[0]?.id);
+    await emit(page, 'text-action', id);
+    await sleep(1400);
+    if (mode !== 'success') {
+      await page.evaluate(() => { location.hash = '#/home'; });
+      await sleep(4200);
+    }
+    const state = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      result: document.querySelector('[aria-label="Невставленный результат инструкции"]')?.value || '',
+      expected: window.__longResult, sent: window.__sentResult,
+      count: window.__replaceCount, copies: window.__copyCount, history: window.__e2e.read('zs.dictations') || [],
+    }));
+    if (mode === 'success') {
+      record('безопасность', 'AI-инструкция: успешная замена не создаёт поле восстановления',
+        /Готово:/.test(state.toast) && !state.result && state.count === 1 && state.sent === state.expected, JSON.stringify(state));
+    } else if (mode === 'copy-only') {
+      record('безопасность', 'AI-инструкция: только копирование не выдаётся за замену',
+        /замена не выполнялась/i.test(state.toast) && /проверьте/i.test(state.toast) && !/Готово:/.test(state.toast) &&
+        state.result === state.expected && state.sent === state.expected && state.count === 0 && state.copies === 1 && state.history.length === 0,
+        JSON.stringify({ toast: state.toast, length: state.result.length, count: state.count, copies: state.copies }));
+    } else {
+      record('безопасность', `AI-инструкция: ${mode} сохраняет полный временный результат и предупреждает о проверке`,
+        /проверьте/i.test(state.toast) && !/Готово:/.test(state.toast) && /до закрытия уведомления или приложения/i.test(state.toast) &&
+        state.result.length > 90 && state.result === state.expected && state.sent === state.expected && state.count === 1 && state.history.length === 0,
+        JSON.stringify({ toast: state.toast, length: state.result.length, count: state.count, history: state.history.length }));
+    }
+    record('безопасность', `AI-инструкция: ${mode} без ошибок консоли`, takeErrors(page).length === 0);
+    await page.close();
+  }
+}
+
+async function scenarioTextActionPartialRecovery(browser) {
+  for (const mode of ['busy', 'changed', 'changed-during', 'uncertain', 'refused', 'copied']) {
+    const page = await openPage(browser, '#/hotkeys', {
+      settle: 400, settings: { aiProcessing: false, language: 'ru', translateTarget: 'en' },
+      storeSeed: { 'zs.dictations': [] },
+      patchNative: () => {
+        window.zspeakly.native.readSelection = async () => 'привет квазикристалл';
+        window.zspeakly.native.httpPost = async () => ({ ok: false });
+        window.zspeakly.native.writeClipboard = async ({ text }) => { window.__written = text; return true; };
+        window.zspeakly.native.replaceSelection = async (text) => {
+          window.__written = text;
+          if (window.__mode === 'busy') return { busy: true };
+          if (window.__mode === 'changed') return { clipboardChanged: true };
+          if (window.__mode === 'changed-during') return { clipboardChanged: true, uncertain: true };
+          if (window.__mode === 'uncertain') return { uncertain: true };
+          return false;
+        };
+      },
+    });
+    takeErrors(page);
+    await page.evaluate((value) => { window.__mode = value; if (value === 'copied') delete window.zspeakly.native.replaceSelection; }, mode);
+    const id = await page.evaluate(() => (window.__e2e.read('zs.presets') || []).find((p) => p.id === 'to-english')?.id);
+    await emit(page, 'text-action', id);
+    await sleep(1400);
+    const state = await page.evaluate(() => ({
+      toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+      result: document.querySelector('[aria-label="Невставленный результат инструкции"]')?.value || '', written: window.__written,
+    }));
+    record('безопасность', `AI-инструкция: ${mode} сохраняет предупреждение о частичном переводе`,
+      /Часть слов осталась без перевода/i.test(state.toast) && Boolean(state.result) && state.result === state.written, JSON.stringify(state));
+    record('безопасность', `AI-инструкция: ${mode} частичный перевод без ошибок консоли`, takeErrors(page).length === 0);
+    await page.close();
+  }
+}
+
+async function scenarioVoicePartialRecovery(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, language: 'ru', translateTarget: 'en' },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'переведи на английский' }, settle: 700,
+    patchNative: () => {
+      window.zspeakly.native.readSelection = async () => 'привет квазикристалл';
+      window.zspeakly.native.httpPost = async () => ({ ok: false });
+      window.zspeakly.native.replaceSelection = async (text) => { window.__written = text; return { uncertain: true }; };
+    },
+  });
+  takeErrors(page);
+  await emit(page, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(1200);
+  await emit(page, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(2600);
+  const state = await page.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    history: window.__e2e.read('zs.dictations') || [], written: window.__written,
+  }));
+  record('безопасность', 'голосовая команда: неизвестная замена сохраняет предупреждение о частичном переводе',
+    /Не удалось подтвердить замену/.test(state.toast) && /Часть слов осталась без перевода/i.test(state.toast) &&
+    state.written === 'Hello квазикристалл' && state.history[0]?.text === state.written, JSON.stringify(state));
+  record('безопасность', 'голосовая команда: частичный перевод без ошибок консоли', takeErrors(page).length === 0);
+  await page.close();
+}
+
 async function scenarioHotkeyConflict(browser) {
   // конфликт всплывает при запуске — сообщение должно быть видно и на главной
   const page = await openPage(browser, '#/home', { settle: 400 });
@@ -9924,6 +10062,9 @@ async function main() {
       ['чистая установка', scenarioFreshInstall],
       ['снимок экрана', scenarioScreenshotOnce],
       ['диктовка с учётом экрана', scenarioScreenAware],
+      ['восстановление AI-инструкции', scenarioTextActionRecovery],
+      ['предупреждение перевода AI-инструкции', scenarioTextActionPartialRecovery],
+      ['предупреждение перевода голосовой команды', scenarioVoicePartialRecovery],
       ['конфликт операций выделения', scenarioSelectionBusy],
       ['безопасное чтение выделения', scenarioSelectionUnverified],
       ['агент отмена выделения', scenarioAgentSelectionCancel],
