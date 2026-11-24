@@ -51,7 +51,8 @@ export async function readSelectionText() {
  * Вернуть текст на место выделения.
  * 'inserted' — вставили в чужое окно, 'copied' — только в буфер (браузер),
  * 'failed' — известный отказ, 'busy' — операция не начиналась,
- * 'uncertain' — результат вставки неизвестен.
+ * 'uncertain' — результат вставки неизвестен; clipboard-changed и
+ * clipboard-changed-uncertain — конфликт до или во время Ctrl+V.
  */
 export async function writeSelectionText(text) {
   const bridge = nativeBridge();
@@ -61,6 +62,7 @@ export async function writeSelectionText(text) {
       if (outcome === true) return 'inserted';
       if (outcome === false) return 'failed';
       if (outcome?.busy === true) return 'busy';
+      if (outcome?.clipboardChanged === true) return outcome.uncertain === true ? 'clipboard-changed-uncertain' : 'clipboard-changed';
       return 'uncertain';
     } catch {
       // Ответ IPC может потеряться уже после отправки клавиш.

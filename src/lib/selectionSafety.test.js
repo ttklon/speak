@@ -16,6 +16,12 @@ describe('результат замены выделения', () => {
     window.zspeakly.native.replaceSelection = async () => undefined;
     expect(await writeSelectionText('тест')).toBe('uncertain');
   });
+  it('различает изменение буфера до и во время замены', async () => {
+    window.zspeakly = { native: { replaceSelection: async () => ({ clipboardChanged: true }) } };
+    expect(await writeSelectionText('тест')).toBe('clipboard-changed');
+    window.zspeakly.native.replaceSelection = async () => ({ clipboardChanged: true, uncertain: true });
+    expect(await writeSelectionText('тест')).toBe('clipboard-changed-uncertain');
+  });
   it('сохраняет известные результаты старого моста', async () => {
     window.zspeakly = { native: { replaceSelection: async () => true } };
     expect(await writeSelectionText('тест')).toBe('inserted');

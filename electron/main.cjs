@@ -3121,11 +3121,29 @@ async function replaceSelection(text) {
   const value = String(text || '');
   lastClipboardText = value;
   clipboard.writeText(value);
+  const formats = () => {
+    try {
+      const current = clipboard.availableFormats();
+      return Array.isArray(current) ? JSON.stringify([...current].sort()) : null;
+    } catch { return null; }
+  };
+  const insertedFormats = formats();
+  // Это сравнение содержимого, а не атомарная гарантия владения буфером.
+  const clipboardStillOurs = () => {
+    try { return insertedFormats !== null && clipboard.readText() === value && formats() === insertedFormats; }
+    catch { return false; }
+  };
   await new Promise((resolve) => setTimeout(resolve, 60));
   const [outcome] = await Promise.all([
-    pasteToActiveWindowSafely(),
+    pasteToActiveWindowSafely(clipboardStillOurs),
     new Promise((resolve) => setTimeout(resolve, 180)),
   ]);
+  if (outcome?.clipboardChanged) return outcome;
+  if (!clipboardStillOurs()) {
+    // При известном отказе Ctrl+V не посылался; иначе в окно мог попасть
+    // другой текст, и повторять операцию автоматически нельзя.
+    return outcome === false ? { clipboardChanged: true } : { clipboardChanged: true, uncertain: true };
+  }
   return outcome;
 }
 
@@ -3271,7 +3289,8 @@ function pasteViaMshta() {
 }
 
 // После вероятного нажатия нельзя посылать Ctrl+V вторым способом.
-// Результат: true, false (не запускался) или { uncertain: true }.
+// Результат: true, false (не запускался), { uncertain: true } или
+// { clipboardChanged: true } (проверка до следующей попытки не прошла).
 async function pasteToActiveWindowSafely(beforePaste = null) {
   if (process.platform !== 'win32') return false;
   const canPaste = () => !beforePaste || beforePaste();

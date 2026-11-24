@@ -430,7 +430,15 @@ export function DictationProvider({ children }) {
           ms: Date.now() - commandStart,
           placed,
         });
-        pushToast({
+        if (placed === 'clipboard-changed' || placed === 'clipboard-changed-uncertain') {
+          pushToast({
+            title: placed === 'clipboard-changed' ? 'Буфер изменился до замены' : 'Не удалось подтвердить замену',
+            description: placed === 'clipboard-changed'
+              ? 'Буфер изменился или его состояние не удалось проверить; замена не отправлялась. Скопируйте результат отсюда до закрытия уведомления или приложения.'
+              : 'Во время замены буфер изменился или его состояние не удалось проверить. В окно мог попасть другой текст. Проверьте окно перед повтором; сохраните результат отсюда до закрытия уведомления или приложения.',
+            recoverText: result, recoverLabel: 'Результат команды для ручного сохранения', tone: 'warn', ttl: 0,
+          });
+        } else pushToast({
           title: placed === 'busy' ? 'Другая операция с текстом ещё выполняется' : placed === 'uncertain' ? 'Не удалось подтвердить замену' : placed === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${commandTitle(cleaned)}`,
           description: placed === 'busy' ? (savedToHistory ? 'Результат не вставлен и не скопирован, но сохранён в истории.' : 'Результат не вставлен и не скопирован; он доступен в отдельном уведомлении для ручного сохранения.') : placed === 'uncertain' ? (savedToHistory ? 'Текст мог попасть в окно. Проверьте его перед повтором; результат сохранён в истории.' : 'Текст мог попасть в окно. Проверьте его перед повтором; результат доступен в отдельном уведомлении.') : [truncate(result, 90), note].filter(Boolean).join(' — '),
           tone: placed === 'busy' || placed === 'uncertain' || placed === 'failed' || note ? 'warn' : 'success',

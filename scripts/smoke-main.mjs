@@ -1281,6 +1281,95 @@ await check('чтение выделения блокирует диктовку
   }
 });
 
+await check('смена буфера до замены выделения не отправляет Ctrl+V', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  const write = electronStub.clipboard.writeText;
+  let calls = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  host.paste = async () => { calls++; return { ok: true }; };
+  electronStub.clipboard.writeText = (text) => { write(text); setTimeout(() => { clipboardText.value = 'чужая копия'; }, 0); };
+  try {
+    clipboardText.value = 'старый буфер'; spawnCalls.length = 0;
+    const result = await handlers.get('text:replace-selection')({}, 'результат команды');
+    if (!result?.clipboardChanged || result.uncertain || calls) throw new Error(`не остановились до Ctrl+V: ${JSON.stringify(result)}, calls=${calls}`);
+    if (clipboardText.value !== 'чужая копия') throw new Error('чужой буфер перезаписан');
+  } finally {
+    electronStub.clipboard.writeText = write; host.available = available; host.paste = paste;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('смена буфера при отказе хоста блокирует запасной Ctrl+V для замены', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  host.paste = async () => { clipboardText.value = 'чужая копия'; return { ok: false, reason: 'host-not-started' }; };
+  try {
+    spawnCalls.length = 0;
+    const result = await handlers.get('text:replace-selection')({}, 'результат команды');
+    if (!result?.clipboardChanged || result.uncertain) throw new Error(`нет безопасного отказа: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /powershell/i.test(String(c.file)) && (c.args || []).some((a) => /SendWait/.test(String(a))))) throw new Error('резервный Ctrl+V запущен');
+    if (clipboardText.value !== 'чужая копия') throw new Error('чужой буфер перезаписан');
+  } finally { host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('смена буфера во время замены выделения делает результат неизвестным', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true;
+  host.paste = async () => { clipboardText.value = 'чужая копия'; return { ok: true }; };
+  try {
+    const result = await handlers.get('text:replace-selection')({}, 'результат команды');
+    if (!result?.uncertain || !result?.clipboardChanged) throw new Error(`неизвестная замена выдана за успех: ${JSON.stringify(result)}`);
+    if (clipboardText.value !== 'чужая копия') throw new Error('чужой буфер перезаписан');
+  } finally { host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true }); }
+});
+
+await check('неизвестные форматы буфера отменяют замену выделения', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  const formats = electronStub.clipboard.availableFormats;
+  let calls = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true; host.paste = async () => { calls++; return { ok: true }; };
+  electronStub.clipboard.availableFormats = () => { throw new Error('formats unavailable'); };
+  try {
+    const result = await handlers.get('text:replace-selection')({}, 'результат команды');
+    if (!result?.clipboardChanged || result.uncertain || calls) throw new Error(`форматы не проверены: ${JSON.stringify(result)}, calls=${calls}`);
+  } finally {
+    electronStub.clipboard.availableFormats = formats; host.available = available; host.paste = paste;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('новые форматы при том же тексте отменяют замену выделения', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  const formats = electronStub.clipboard.availableFormats, write = electronStub.clipboard.writeText;
+  let currentFormats = ['text/plain'], calls = 0;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  host.available = () => true; host.paste = async () => { calls++; return { ok: true }; };
+  electronStub.clipboard.availableFormats = () => currentFormats;
+  electronStub.clipboard.writeText = (text) => { write(text); setTimeout(() => { currentFormats = ['text/plain', 'text/html']; }, 0); };
+  try {
+    const result = await handlers.get('text:replace-selection')({}, 'результат команды');
+    if (!result?.clipboardChanged || result.uncertain || calls) throw new Error(`смена форматов не замечена: ${JSON.stringify(result)}, calls=${calls}`);
+    if (clipboardText.value !== 'результат команды') throw new Error('буфер перезаписан');
+  } finally {
+    electronStub.clipboard.availableFormats = formats; electronStub.clipboard.writeText = write;
+    host.available = available; host.paste = paste; Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
 await check('ошибка замены выделения освобождает блокировку', async () => {
   const platform = process.platform;
   const settings = handlers.get('store:get')({}, 'zs:settings') || {};

@@ -80,6 +80,16 @@ export function useTextAction() {
           });
           return;
         }
+        if (where === 'clipboard-changed' || where === 'clipboard-changed-uncertain') {
+          push({
+            title: where === 'clipboard-changed' ? 'Буфер изменился до замены' : 'Не удалось подтвердить замену',
+            description: where === 'clipboard-changed'
+              ? 'Буфер изменился или его состояние не удалось проверить; замена не отправлялась. Скопируйте результат отсюда до закрытия уведомления или приложения.'
+              : 'Во время замены буфер изменился или его состояние не удалось проверить. В окно мог попасть другой текст. Проверьте окно перед повтором; сохраните результат отсюда до закрытия уведомления или приложения.',
+            recoverText: result, tone: 'warn', ttl: 0,
+          });
+          return;
+        }
         push({
           title: where === 'uncertain' ? 'Не удалось подтвердить замену' : where === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${instruction.title}`,
           description: where === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
