@@ -2992,6 +2992,26 @@ await check('порядок в подсказке: закреплённое и �
   if (!(order[0] < order[1] && order[1] < order[2])) throw new Error(`порядок неверный: ${prompt}`);
 });
 
+await check('подсказка: длинный термин не скрывает следующие, равные ранги учитывают дату, контекст не удаляет произношение', async () => {
+  const saved = await handlers.get('store:get')({}, 'zs:dictionary');
+  try {
+    const promptFor = async (dictionary, contextPrompt = '') => {
+      await handlers.get('store:set')({}, 'zs:dictionary', dictionary);
+      runWhisper('Проверка'); spawnCalls.length = 0;
+      await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(500), durationMs: 500, lang: 'ru', model: 'small', useDictionary: true, contextPrompt });
+      const call = spawnCalls.find((c) => String(c.file).includes('whisper'));
+      const i = call?.args.indexOf('--prompt') ?? -1;
+      return i < 0 ? '' : call.args[i + 1];
+    };
+    const long = await promptFor([{ word: 'Я'.repeat(321), pinned: true }, { word: 'Короткий' }]);
+    const ranked = await promptFor([{ word: 'Старое', createdAt: 10 }, { word: 'Новое', createdAt: 20 }]);
+    const pron = await promptFor([{ word: 'ZSpeakly', pronunciation: 'зи-спикли' }], 'ZSpeakly');
+    if (!long.includes('Короткий') || long.includes('Я'.repeat(321))) throw new Error('длинное слово вытеснило короткое');
+    if (!(ranked.indexOf('Новое') >= 0 && ranked.indexOf('Новое') < ranked.indexOf('Старое'))) throw new Error('даты не учитываются');
+    if (!pron.includes('зи-спикли') || pron.split('ZSpeakly').length !== 2) throw new Error('контекст скрыл произношение');
+  } finally { await handlers.get('store:set')({}, 'zs:dictionary', saved); }
+});
+
 // ── VAD: длинная диктовка режется по паузам ─────────────────────────────────
 const silencePcm = (ms = 500) => new Uint8Array(Math.round((16000 * ms) / 1000) * 2);
 

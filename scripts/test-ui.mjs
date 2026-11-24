@@ -6429,6 +6429,32 @@ async function scenarioDictionaryDataSafety(browser) {
   await conflict.close();
 }
 
+async function scenarioDictionaryLearning(browser) {
+  const page = await openPage(browser, '#/home', { settings: { aiDictationRewrite: false, dictionaryEnabled: true },
+    storeSeed: { 'zs.dictations': [{ id: 'learn', text: 'купи зелинку и хлеб', createdAt: Date.now() }], 'zs.dictionary': [], 'zs.mockSttText': 'купи зелинку и хлеб' } });
+  takeErrors(page);
+  await page.click('.recent__row');
+  await clickText(page, 'Исправить', '.snippet button'); await sleep(250);
+  await page.click('.modal textarea', { clickCount: 3 }); await page.type('.modal textarea', 'купи Зелёнку и хлеб');
+  await clickText(page, 'Сохранить', '.modal button'); await sleep(250);
+  const proposal = await page.evaluate(() => ({ text: document.querySelector('.learn-card')?.innerText || '', readOnly: document.querySelector('.modal textarea')?.readOnly }));
+  record('сценарии', 'обучение словаря сохраняет написание с ё и регистр в предложении', /Зелёнку/.test(proposal.text) && /зелинку/.test(proposal.text) && proposal.readOnly, JSON.stringify(proposal));
+  await clickText(page, 'Добавить слово', '.modal button'); await sleep(350);
+  const added = await page.evaluate(() => window.__e2e.read('zs.dictionary'));
+  record('сценарии', 'обучение словаря сохраняет точное написание и произношение', added?.length === 1 && added[0].word === 'Зелёнку' && added[0].pronunciation === 'зелинку', JSON.stringify(added));
+  await clickText(page, 'Начать диктовку'); await sleep(1100);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  }); await sleep(2300);
+  const result = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text, insert: window.__bridgeCalls.find((c) => c.channel === 'text:insert')?.args?.[0] }));
+  record('сценарии', 'обученное слово применяется к следующей диктовке', result.text === 'Купи Зелёнку и хлеб.' && result.insert === result.text, JSON.stringify(result));
+  const errors = takeErrors(page);
+  record('сценарии', 'обучение словаря без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioDictionarySafety(browser) {
   const conflictPage = await openPage(browser, '#/dictionary', { storeSeed: { 'zs.dictionary': [
     { id: 'one', word: 'Клара', pronunciation: 'клера' }, { id: 'two', word: 'Клэр', pronunciation: 'клера' },
@@ -10312,6 +10338,7 @@ async function main() {
       ['словарь: кириллица', scenarioDictionaryAliases],
       ['словарь: безопасность замены', scenarioDictionarySafety],
       ['словарь: сохранность записей', scenarioDictionaryDataSafety],
+      ['словарь: обучение', scenarioDictionaryLearning],
       ['разбор точности', scenarioQualityReport],
       ['совет по модели', scenarioHardwareFit],
       ['узкое окно', scenarioNarrowWindow],

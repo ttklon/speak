@@ -414,19 +414,22 @@ function buildSttPrompt({ context = '', dictionary = [], tail = '' } = {}) {
     return (
       Number(field(b, 'pinned') === true) - Number(field(a, 'pinned') === true) ||
       Number(field(b, 'hits') || 0) - Number(field(a, 'hits') || 0) ||
-      Number(field(b, 'lastUsedAt') || 0) - Number(field(a, 'lastUsedAt') || 0)
+      Number(field(b, 'lastUsedAt') || 0) - Number(field(a, 'lastUsedAt') || 0) ||
+      Number(field(b, 'createdAt') || 0) - Number(field(a, 'createdAt') || 0)
     );
   });
   for (const entry of ordered) {
     const word = String(entry && typeof entry === 'object' ? entry.word || '' : entry || '').trim();
     if (word.length < 2) continue;
     const key = word.toLowerCase();
-    if (seen.has(key)) continue;
-    const cost = word.length + (words.length ? 2 : 0);
-    if (used + cost > STT_DICT_LIMIT) break;
-    seen.add(key);
-    words.push(word);
-    used += cost;
+    if (!seen.has(key)) {
+      const cost = word.length + (words.length ? 2 : 0);
+      // Слишком длинная запись не должна скрывать все следующие термины.
+      if (used + cost > STT_DICT_LIMIT) continue;
+      seen.add(key);
+      words.push(word);
+      used += cost;
+    }
     // Произношение — второй способ сказать то же слово: «ZSpeakly» человек
     // произносит «зи-спикли». Маленькая модель слышит звук, а не буквы, и такая
     // пара в подсказке помогает ей связать одно с другим. Это не украшение:
