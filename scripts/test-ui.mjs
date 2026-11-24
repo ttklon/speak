@@ -872,6 +872,15 @@ async function scenarioSnippetSafety(browser) {
   const longResult = await long.evaluate(() => ({ length: document.querySelector('#snip-body')?.value.length,
     list: window.__e2e.read('zs.snippets'), text: document.body.innerText }));
   record('сценарии', 'быстрый блок: длинный текст остаётся в форме без обрезки', longResult.length === 4001 && !longResult.list?.length && /Блок не сохранён/.test(longResult.text), JSON.stringify({length: longResult.length, count: longResult.list?.length}));
+  await long.evaluate(() => {
+    const set = (el, value, prototype) => { Object.getOwnPropertyDescriptor(prototype, 'value').set.call(el, value); el.dispatchEvent(new Event('input', { bubbles: true })); };
+    set(document.querySelector('#snip-trigger'), '«моя подпись»', HTMLInputElement.prototype);
+    set(document.querySelector('#snip-body'), 'исходный текст', HTMLTextAreaElement.prototype);
+  });
+  await clickText(long, 'Сохранить'); await sleep(250);
+  const quoted = await long.evaluate(() => ({ body: document.querySelector('#snip-body')?.value, list: window.__e2e.read('zs.snippets'), text: document.body.innerText }));
+  record('сценарии', 'быстрый блок: триггер с кавычками не обещает срабатывание и сохраняет черновик',
+    quoted.body === 'исходный текст' && !quoted.list?.length && /Уберите кавычки/.test(quoted.text));
   await long.close();
 
   const legacyBody = `  ${'a'.repeat(4100)}\n`;
@@ -932,6 +941,48 @@ function writeToneWav(path, { seconds = 1.2, sampleRate = 16000 } = {}) {
   header.writeUInt32LE(data.length, 40);
   writeFileSync(path, Buffer.concat([header, data]));
   return path;
+}
+
+async function scenarioFileDictionary(browser) {
+  const wav = writeToneWav(join(tmpdir(), 'zspeakly-dictionary-file.wav'));
+  try {
+    for (const enabled of [false, true]) {
+      const page = await openPage(browser, '#/home', { settings: { aiDictationRewrite: false, dictionaryEnabled: enabled },
+        storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'открой зум', 'zs.dictionary': [{ id: 'w1', word: 'Zoom' }] }, settle: 700 });
+      await (await page.$('input[type="file"]')).uploadFile(wav); await sleep(3200);
+      const result = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text,
+        calls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm').map((c) => c.args?.[0]?.useDictionary) }));
+      record('сценарии', `словарь: файл с выключенным/включённым словарём (${enabled})`,
+        result.text === (enabled ? 'открой Zoom' : 'открой зум') && result.calls.length > 0 && result.calls.every((value) => value === enabled), JSON.stringify(result));
+      await page.close();
+    }
+    for (const initiallyEnabled of [false, true]) {
+      const page = await openPage(browser, '#/home', { settings: { aiDictationRewrite: false, dictionaryEnabled: initiallyEnabled },
+        storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'открой зум', 'zs.dictionary': [{ id: 'w1', word: 'Zoom' }] }, settle: 700,
+        patchNative: () => {
+          const original = window.zspeakly.native.transcribePcm;
+          window.zspeakly.native.transcribePcm = async (payload) => {
+            window.__fileStarted = true;
+            await new Promise((resolve) => { window.__releaseFile = resolve; });
+            return original(payload);
+          };
+        } });
+      await (await page.$('input[type="file"]')).uploadFile(wav);
+      await page.waitForFunction(() => window.__fileStarted === true, { timeout: 10000 });
+      await page.evaluate(() => { location.hash = '#/dictionary'; });
+      await page.waitForSelector('[role="switch"]');
+      await page.click('[role="switch"]'); await sleep(400);
+      await page.evaluate(() => window.__releaseFile());
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+      const result = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text,
+        calls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm').map((c) => c.args?.[0]?.useDictionary),
+        enabled: window.__e2e.read('zs.settings')?.dictionaryEnabled }));
+      record('сценарии', `словарь: настройка файла не меняется посреди обработки (${initiallyEnabled})`,
+        result.enabled === !initiallyEnabled && result.calls.every((value) => value === initiallyEnabled) &&
+        result.text === (initiallyEnabled ? 'открой Zoom' : 'открой зум'), JSON.stringify(result));
+      await page.close();
+    }
+  } finally { rmSync(wav, { force: true }); }
 }
 
 async function scenarioAudioFile(browser) {
@@ -6317,6 +6368,46 @@ async function scenarioDecodeMode(browser) {
  * Словарь и кириллица: человек говорит «зум», движок пишет «зум», а в словаре
  * записано Zoom. Раньше такая пара не срабатывала — заменять было нечего.
  */
+async function scenarioDictionarySafety(browser) {
+  const conflictPage = await openPage(browser, '#/dictionary', { storeSeed: { 'zs.dictionary': [
+    { id: 'one', word: 'Клара', pronunciation: 'клера' }, { id: 'two', word: 'Клэр', pronunciation: 'клера' },
+  ] } });
+  const notice = await conflictPage.evaluate(() => document.body.innerText);
+  record('сценарии', 'словарь: предупреждает о неоднозначном произношении и подсказке модели',
+    /Неоднозначные/.test(notice) && /клера/i.test(notice) && /Клара/.test(notice) && /Клэр/.test(notice) && /Подсказка модели/.test(notice));
+  await conflictPage.close();
+  const cases = [
+    { spoken: 'позвони клера', expected: 'Позвони клера.', dict: [{ word: 'Клара', pronunciation: 'клера' }, { word: 'Клэр', pronunciation: 'клера' }] },
+    { spoken: 'открой зум', expected: 'Открой зум.', dictEnabled: false, dict: [{ word: 'Zoom' }] },
+    { spoken: 'доллар', expected: 'Курс.', dict: [{ word: 'курс', pronunciation: 'доллар' }, { word: 'рубль', pronunciation: 'курс' }] },
+    { spoken: 'контакт zoom@example.com и zoom', expected: 'Контакт zoom@example.com и Зум.', dict: [{ word: 'Зум', pronunciation: 'zoom' }] },
+    { spoken: 'старый термин', expected: 'Б.', dict: [{ word: 'А', pronunciation: 'старый' }, { word: 'Б', pronunciation: 'старый термин' }] },
+    { spoken: 'важный текст триггер', expected: 'Важный текст удалить последнее слово.', dict: [{ word: 'удалить последнее слово', pronunciation: 'триггер' }] },
+    { spoken: 'триггер', expected: 'Отмени.', dict: [{ word: 'отмени', pronunciation: 'триггер' }] },
+    { spoken: 'встреча в четыре подстановка', expected: 'Встреча в четыре то есть в три.', dict: [{ word: 'то есть в три', pronunciation: 'подстановка' }] },
+    { spoken: 'активация', expected: 'Моя подпись.', dict: [{ word: 'моя подпись', pronunciation: 'активация' }], snippets: [{ id: 's', trigger: 'моя подпись', body: 'совсем другой текст', createdAt: Date.now() }] },
+    { spoken: '«отмени»', expected: '«отмени».', dict: [] },
+    { spoken: '«моя подпись»', expected: '«моя подпись».', dict: [], snippets: [{ id: 's', trigger: 'моя подпись', body: 'совсем другой текст', createdAt: Date.now() }] },
+  ];
+  for (const { spoken, expected, dict, snippets = [], dictEnabled = true } of cases) {
+    const page = await openPage(browser, '#/home', { settings: { aiDictationRewrite: false, dictionaryEnabled: dictEnabled },
+      storeSeed: { 'zs.dictations': [], 'zs.mockSttText': spoken, 'zs.dictionary': dict.map((d, i) => ({ ...d, id: `w${i}` })), 'zs.snippets': snippets } });
+    takeErrors(page);
+    await clickText(page, 'Начать диктовку'); await sleep(1100);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await sleep(2300);
+    const result = await page.evaluate(() => ({ saved: window.__e2e.read('zs.dictations')?.[0]?.text,
+      inserted: (window.__bridgeCalls || []).find((c) => c.channel === 'text:insert')?.args?.[0],
+      stt: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm' && !c.args?.[0]?.partial && !c.args?.[0]?.pre).map((c) => c.args?.[0]?.useDictionary) }));
+    record('сценарии', `словарь безопасная замена: ${spoken}`, result.saved === expected && result.inserted === expected && (dictEnabled || (result.stt.length > 0 && result.stt.every((value) => value === false))), JSON.stringify(result));
+    await page.close();
+  }
+}
+
 async function scenarioDictionaryAliases(browser) {
   const seeded = {
     'zs.dictionary': [
@@ -10059,6 +10150,7 @@ async function main() {
       ['быстрые блоки', scenarioSnippets],
       ['безопасность быстрых блоков', scenarioSnippetSafety],
       ['файл в текст', scenarioAudioFile],
+      ['файл: словарь включён или выключен', scenarioFileDictionary],
       ['команда голосом', scenarioVoiceCommand],
       ['оговорки', scenarioSelfCorrection],
       ['первый экран', scenarioWhyBetter],
@@ -10157,6 +10249,7 @@ async function main() {
       ['точный проход: заранее изменённая запись', scenarioRetryAlreadyEdited],
       ['режим распознавания', scenarioDecodeMode],
       ['словарь: кириллица', scenarioDictionaryAliases],
+      ['словарь: безопасность замены', scenarioDictionarySafety],
       ['разбор точности', scenarioQualityReport],
       ['совет по модели', scenarioHardwareFit],
       ['узкое окно', scenarioNarrowWindow],

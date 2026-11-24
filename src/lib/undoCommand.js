@@ -39,6 +39,8 @@ export function normalizeUndoPhrase(text = '') {
 
 /** Это команда «убрать последнюю вставку»? */
 export function isUndoCommand(text = '') {
+  // Распознанная цитата — буквальный текст, даже если в ней одна команда.
+  if (/[«»“”"]/u.test(String(text ?? ''))) return false;
   const value = normalizeUndoPhrase(text);
   return Boolean(value) && PHRASES.has(value);
 }

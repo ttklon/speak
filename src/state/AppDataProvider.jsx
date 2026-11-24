@@ -358,6 +358,7 @@ export function AppDataProvider({ children }) {
       const key = normalizePhrase(cleanTrigger);
       let problem = '';
       if (!key || !cleanBody.trim()) problem = 'Укажите фразу и непустой текст.';
+      else if (/[«»“”"]/u.test(cleanTrigger)) problem = 'Уберите кавычки из фразы: цитаты не запускают быстрый блок.';
       else if (cleanTrigger.length > SNIPPET_LIMITS.trigger || cleanBody.length > SNIPPET_LIMITS.body)
         problem = `Фраза — не более ${SNIPPET_LIMITS.trigger}, текст — не более ${SNIPPET_LIMITS.body} символов. Ничего не обрезано.`;
       else if (snippetsRef.current.some((s) => normalizePhrase(s.trigger) === key))

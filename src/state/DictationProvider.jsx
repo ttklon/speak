@@ -304,7 +304,6 @@ export function DictationProvider({ children }) {
       // настройка «Применять словарь при диктовке»: раньше тумблер в разделе
       // «Словарь» только сохранялся, а замены делались всегда
       const applyDict = settingsRef.current.dictionaryEnabled !== false;
-      const corrected = applyDict ? applyDictionary(raw, dictRef.current) : raw;
       // Очистка обычной диктовки не принимает результат с потерянными словами.
       // «Не трогать мой текст» — сильнее: выключает и чистку, и оговорки, и
       // оформление под окно, и переписывание моделью. Словарь, голосовые
@@ -327,10 +326,10 @@ export function DictationProvider({ children }) {
       // Только для сказанного: ответ агента — это написанный моделью текст,
       // и превращать в нём «запятую» в знак было бы ошибкой.
       const commanded = spoken
-        ? applyVoiceCommands(corrected, { language: resolveSessionLang(), preserveFormatting: codeTarget })
-        : corrected;
+        ? applyVoiceCommands(raw, { language: resolveSessionLang(), preserveFormatting: codeTarget })
+        : raw;
       // В редакторе кода даже заглавная буква, точка и пробелы могут менять
-      // программу. Без явных команд оставляем результат словаря как есть.
+      // программу. Без явных команд оставляем распознанное оформление как есть.
       let cleaned = codeTarget ? commanded : polishing ? cleanLines(commanded) : commanded.trim();
       // Оговорки: «встреча в четыре… то есть в три» — в тексте остаётся то,
       // что человек имел в виду. Правило осторожное: убираем только когда
@@ -342,12 +341,16 @@ export function DictationProvider({ children }) {
           diag.info('stt', 'Оговорка убрана', { fixes: fixed.fixes, chars: cleaned.length });
         }
       }
+      // Замены словаря — данные, а не новые команды или маркеры оговорок.
+      // Поэтому применяем их после разбора речи и исправления оговорок.
+      if (applyDict) cleaned = applyDictionary(cleaned, dictRef.current);
       // Быстрый блок: сказал триггер целиком — вставляем готовый текст вместо
       // фразы. Срабатывает только на точное совпадение: «поставь мою подпись
       // в конце» должно остаться речью, а не превратиться в подпись.
       let snippetHit = null;
       if (spoken && insert && sessionOpts.current.insert !== false && !sessionOpts.current.command) {
-        const expanded = expandSnippet(cleaned, snippetsRef.current || []);
+        // Триггер ищем в распознанной речи до замен словаря, а не в их результате.
+        const expanded = expandSnippet(commanded, snippetsRef.current || []);
         if (expanded.snippet) {
           snippetHit = expanded.snippet;
           cleaned = expanded.text;
@@ -466,13 +469,13 @@ export function DictationProvider({ children }) {
         insert &&
         sessionOpts.current.insert !== false &&
         settingsRef.current.undoCommand !== false &&
-        !snippetHit && isUndoCommand(cleaned)
+        !snippetHit && isUndoCommand(commanded)
       ) {
         const native = window.zspeakly?.native;
         setDraft('');
         draftRef.current = '';
         finalRef.current = '';
-        diag.info('stt', 'Команда «отмени»', { text: cleaned });
+        diag.info('stt', 'Команда «отмени»', { text: commanded });
         if (!native?.undoLastInsert) {
           pushToast({
             title: 'Убрать вставку можно только в приложении',
@@ -856,6 +859,8 @@ export function DictationProvider({ children }) {
         return null;
       }
       const job = { cancelled: false };
+      // Один выбор словаря на весь файл, включая декодирование и склейку.
+      const useDictionary = settingsRef.current.dictionaryEnabled !== false;
       fileJobRef.current = job;
       setFileJob({ name, phase: 'decode', done: 0, total: 0, preview: '' });
       const startedAtMs = Date.now();
@@ -902,9 +907,8 @@ export function DictationProvider({ children }) {
             durationMs: win.toMs - win.fromMs,
             lang,
             model: settingsRef.current.whisperModel,
-            // словарь и подсказка — на весь файл: термины известны заранее, и
-            // это тот случай, когда подсказка помогает, а не мешает
-            useDictionary: true,
+            // Та же настройка действует и на подсказку движку, и на результат.
+            useDictionary,
             contextPrompt: '',
           });
           if (res?.ok) {
@@ -935,7 +939,7 @@ export function DictationProvider({ children }) {
       }
       const merged = mergeFileText(parts);
       const corrected =
-        settingsRef.current.dictionaryEnabled !== false ? applyDictionary(merged, dictRef.current) : merged;
+        useDictionary ? applyDictionary(merged, dictRef.current) : merged;
       const text = corrected.trim();
       if (!text) {
         diag.warn('stt', 'Файл без речи', { name, failed, parts: windows.length });

@@ -76,6 +76,7 @@ export function sanitizeSnippets(list) {
  * @returns {{ snippet: object, text: string } | null}
  */
 export function matchSnippet(text, snippets) {
+  if (/[«»“”"]/u.test(String(text ?? ''))) return null;
   const phrase = normalizePhrase(text);
   if (!phrase) return null;
   const matches = sanitizeSnippets(snippets).filter((snippet) => normalizePhrase(snippet.trigger) === phrase);

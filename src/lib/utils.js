@@ -1,6 +1,6 @@
 /** Хелперы: форматирование, склонения, работа с клавишами и текстом. */
 
-import { termVariants } from './dictionary/aliases.js';
+import { applyDictionaryReplacements } from './dictionary/replacements.js';
 
 export function plural(n, one, few, many) {
   const abs = Math.abs(n) % 100;
@@ -150,30 +150,9 @@ export function isComboComplete(combo) {
   return combo.some((k) => !mods.has(k)) || combo.filter((k) => mods.has(k)).length >= 2;
 }
 
-/** Применяет словарь к распознанному тексту (регистронезависимо по границам слов). */
+/** Применяет словарь к исходному тексту без цепных замен. */
 export function applyDictionary(text, entries = []) {
-  if (!text) return text;
-  let out = text;
-  for (const entry of entries) {
-    if (!entry || !entry.word) continue;
-    const word = entry.word.trim();
-    if (!word) continue;
-    // Написания: сам термин, произношение человека и известные пары
-    // («зум» → Zoom, «телеграм» → Telegram). Без последнего словарь работал
-    // только на бумаге: движок пишет кириллицей, а в словаре латиница.
-    const variants = termVariants(entry).map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    if (!variants.length) continue;
-    const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${variants.join('|')})(?=$|[^\\p{L}\\p{N}])`, 'giu');
-    out = out.replace(re, (m, pre, hit, offset) => {
-      // Заглавную поднимаем только в начале предложения: иначе «созвонились в
-      // Zoom» превращалось в «созвонились в Зум» — заглавная посреди фразы.
-      const startsSentence = offset === 0 || /[.!?…]\s*$/.test(out.slice(0, offset));
-      const capitalizedInText = /[A-ZА-ЯЁ]/.test(hit[0]);
-      const replacement = startsSentence && capitalizedInText ? word[0].toUpperCase() + word.slice(1) : word;
-      return `${pre}${replacement}`;
-    });
-  }
-  return out;
+  return applyDictionaryReplacements(text, entries);
 }
 
 /** Простая пост-обработка: капитализация, лишние пробелы, пробел перед знаком. */

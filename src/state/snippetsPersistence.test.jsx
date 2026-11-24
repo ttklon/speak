@@ -94,6 +94,15 @@ describe('быстрые блоки: сохранение и границы', ()
     expect(state.snippets).toEqual([old]);
   });
 
+  it('не обещает срабатывание триггера с кавычками, которые защищены как цитата', async () => {
+    seed([]); await mount();
+    let result;
+    await act(async () => { result = state.addSnippet('«моя подпись»', 'текст'); });
+    expect(result).toBeNull();
+    expect(state.snippets).toEqual([]);
+    expect(container.textContent).toMatch(/кавычки/i);
+  });
+
   it('не обрезает длинный блок и сохраняет авторские пробелы', async () => {
     seed([]); await mount();
     let tooLong, valid;

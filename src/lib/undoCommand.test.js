@@ -66,3 +66,7 @@ describe('undoFailureText', () => {
     expect(undoFailureText('что-то странное')).toContain('что-то странное');
   });
 });
+
+it('распознанные кавычки вокруг фразы делают её текстом, а не Undo', () => {
+  for (const phrase of ['«отмени»', '"отмени"', '“отмени”']) expect(isUndoCommand(phrase)).toBe(false);
+});

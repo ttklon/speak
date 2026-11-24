@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Plus, Search, Star, Trash2 } from 'lucide-react';
 import { knownAliases } from '../lib/dictionary/aliases.js';
+import { dictionaryConflicts } from '../lib/dictionary/replacements.js';
 import { useAppData } from '../state/AppDataProvider.jsx';
 import { useToast } from '../state/ToastProvider.jsx';
 import { Button, SearchInput, Tabs } from '../components/ui/Controls.jsx';
@@ -34,6 +35,7 @@ export default function DictionaryPage() {
   const [snipOpen, setSnipOpen] = useState(false);
   const [snipTrigger, setSnipTrigger] = useState('');
   const [snipBody, setSnipBody] = useState('');
+  const pronunciationConflicts = useMemo(() => dictionaryConflicts(dictionary), [dictionary]);
   const snippetPhraseCounts = useMemo(() => {
     const counts = new Map();
     for (const snippet of snippets) {
@@ -134,9 +136,16 @@ export default function DictionaryPage() {
         </p>
       ) : null}
 
+      {pronunciationConflicts.length > 0 && (
+        <p className="settings-note" role="status">
+          Неоднозначные написания или произношения: {pronunciationConflicts.slice(0, 3).map((c) => `«${c.variant}» (${c.words.join(' / ')})`).join(', ')}
+          {pronunciationConflicts.length > 3 ? ` и ещё ${pronunciationConflicts.length - 3}` : ''}.
+          Эти совпадения не заменяются после распознавания, пока конфликт не устранён. Подсказка модели может влиять на распознавание.
+        </p>
+      )}
       {filtered.length === 0 ? (
         <div className="dict-empty">
-          <p>Пока пусто. Добавьте имя или термин — и он перестанет распознаваться неправильно.</p>
+          <p>Пока пусто. Добавьте имя или термин — это может помочь распознаванию.</p>
           <Button variant="white" size="sm" icon={<Plus size={13} />} onClick={() => setOpen(true)}>
             Добавить слово
           </Button>
@@ -238,6 +247,9 @@ export default function DictionaryPage() {
               <div key={snippet.id} className="snippet-row">
                 <div className="grow" style={{ textAlign: 'left' }}>
                   <div className="snippet-row__trigger">«{snippet.trigger}»</div>
+                  {/[«»“”"]/u.test(snippet.trigger) && (
+                    <div className="field__hint">Фраза содержит кавычки: если они распознаны в речи, блок не запустится. Можно сохранить текст и создать блок без кавычек.</div>
+                  )}
                   {snippetPhraseCounts.get(normalizePhrase(snippet.trigger)) > 1 && (
                     <div className="field__hint">Фраза совпадает с другим блоком — диктовка не развернёт её, пока дубликат не удалён.</div>
                   )}
@@ -315,7 +327,7 @@ export default function DictionaryPage() {
               onChange={(e) => setSnipTrigger(e.target.value)}
             />
             <span className="field__hint">
-              Блок срабатывает, только если сказать эту фразу целиком и ничего больше. Не более {SNIPPET_LIMITS.trigger} символов.
+              Блок срабатывает, только если сказать эту фразу целиком и ничего больше. Не более {SNIPPET_LIMITS.trigger} символов, без кавычек.
             </span>
           </div>
           <div className="field">
