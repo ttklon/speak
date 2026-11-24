@@ -2093,6 +2093,21 @@ function registerIpc() {
     const previousFormats = clipboardFormats();
     clipboard.writeText(value);
     const insertedFormats = clipboardFormats();
+    // Проверка по тексту и форматам не атомарна и не доказывает владельца:
+    // она лишь предотвращает известный конфликт до очередной попытки Ctrl+V.
+    const clipboardStillOurs = () => {
+      try {
+        return insertedFormats !== null && clipboard.readText() === value && clipboardFormats() === insertedFormats;
+      } catch { return false; }
+    };
+    const clipboardChanged = () => {
+      lastInsertedText = '';
+      lastInsertedAt = 0;
+      const reason = 'буфер изменился или его состояние не подтверждено';
+      lastInsertInfo = { at: Date.now(), ok: false, method: 'clipboard', ms: Date.now() - started, reason };
+      logger.warn('insert', 'Буфер изменился до вставки; повтор отменён', { keep: true, chars: value.length });
+      return { ok: false, method: 'clipboard', clipboardChanged: true, reason };
+    };
     // Сначала свой помощник: Ctrl+V через SendInput, без PowerShell и без
     // Add-Type. Именно на этом шаге раньше и ломалось — политика PowerShell
     // запрещала сценарий, вставка молча не происходила, а уведомление «Готово»
@@ -2100,22 +2115,24 @@ function registerIpc() {
     let pasted = false;
     let method = '';
     let reason = '';
-    const uncertainPaste = (attempt) => {
+    const uncertainPaste = (attempt, changed = !clipboardStillOurs()) => {
       // События уже могли попасть в окно; не повторять и не стирать вслепую.
       lastInsertedText = '';
       lastInsertedAt = 0;
       lastInsertInfo = { at: Date.now(), ok: false, method: 'clipboard', ms: Date.now() - started,
         reason: 'результат вставки не подтверждён' };
       logger.warn('insert', 'Результат вставки не подтверждён', { keep: true, method: attempt, chars: value.length });
-      return { ok: false, method: 'clipboard', uncertain: true, reason: 'результат вставки не подтверждён' };
+      return { ok: false, method: 'clipboard', uncertain: true, ...(changed ? { clipboardChanged: true } : {}), reason: 'результат вставки не подтверждён' };
     };
     if (process.platform === 'win32' && input.status().ready) {
+      if (!clipboardStillOurs()) return clipboardChanged();
       hideWindowForInsert();
       let fast;
       try { fast = await input.paste(); }
       catch { fast = { ok: false, uncertain: true }; }
       finally { restoreWindowAfterInsert(); }
       if (fast?.ok === true) {
+        if (!clipboardStillOurs()) return uncertainPaste('clipboard-changed-win-input', true);
         pasted = true;
         method = 'win-input';
       } else if (fast?.uncertain !== false) {
@@ -2126,12 +2143,14 @@ function registerIpc() {
     }
     // mshta: не зависит от политик PowerShell и не требует сборки помощника
     if (!pasted) {
+      if (!clipboardStillOurs()) return clipboardChanged();
       hideWindowForInsert();
       let attempt;
       try { attempt = await pasteViaMshta(); }
       catch { attempt = { ok: false, uncertain: true }; }
       finally { restoreWindowAfterInsert(); }
       if (attempt.ok) {
+        if (!clipboardStillOurs()) return uncertainPaste('clipboard-changed-mshta', true);
         pasted = true;
         method = 'mshta';
       } else if (attempt.uncertain) {
@@ -2139,8 +2158,11 @@ function registerIpc() {
       } else if (!reason) reason = 'Ctrl+V через mshta не сработал';
     }
     if (!pasted) {
-      const fallback = await pasteToActiveWindowSafely();
+      if (!clipboardStillOurs()) return clipboardChanged();
+      const fallback = await pasteToActiveWindowSafely(clipboardStillOurs);
+      if (fallback?.clipboardChanged) return clipboardChanged();
       if (fallback?.uncertain) return uncertainPaste('fallback');
+      if (fallback === true && !clipboardStillOurs()) return uncertainPaste('clipboard-changed-fallback', true);
       pasted = fallback === true;
       method = pasted ? 'powershell' : '';
       if (!pasted) reason = reason ? `${reason}; PowerShell не помог` : 'Ctrl+V не сработал (PowerShell)';
@@ -2148,11 +2170,10 @@ function registerIpc() {
     if (!pasted) {
       lastInsertedText = '';
       lastInsertedAt = 0;
-      // Вставка не удалась — и тогда текст ОСТАЁТСЯ в буфере: именно это
-      // обещает тост «Текст скопирован в буфер, нажмите Ctrl+V». Раньше буфер
-      // всё равно восстанавливался через 700 мс, и обещанного текста там не было.
+      // Автоматически не восстанавливаем прежний буфер после отказа; другое
+      // приложение могло уже изменить его, так что не обещаем его содержимое.
       lastClipboardText = value;
-      logger.error('insert', 'Вставка не удалась, текст оставлен в буфере', {
+      logger.error('insert', 'Вставка не удалась', {
         keep: true,
         ms: Date.now() - started,
         chars: value.length,
@@ -3251,10 +3272,12 @@ function pasteViaMshta() {
 
 // После вероятного нажатия нельзя посылать Ctrl+V вторым способом.
 // Результат: true, false (не запускался) или { uncertain: true }.
-async function pasteToActiveWindowSafely() {
+async function pasteToActiveWindowSafely(beforePaste = null) {
   if (process.platform !== 'win32') return false;
+  const canPaste = () => !beforePaste || beforePaste();
   hideWindowForInsert();
   try {
+    if (!canPaste()) return { clipboardChanged: true };
     if (inputHost.available()) {
       let result;
       try { result = await inputHost.paste(); } catch { return { uncertain: true }; }
@@ -3263,6 +3286,7 @@ async function pasteToActiveWindowSafely() {
     } else {
       const helper = process.env.ZSPEAKLY_INPUT;
       if (helper && fs.existsSync(helper)) {
+        if (!canPaste()) return { clipboardChanged: true };
         const outcome = await new Promise((resolve) => {
           try {
             execFile(helper, ['ctrl+v'], { windowsHide: true, timeout: 8000 }, (error) => {
@@ -3273,6 +3297,7 @@ async function pasteToActiveWindowSafely() {
         if (outcome !== false) return outcome;
       }
     }
+    if (!canPaste()) return { clipboardChanged: true };
     return await new Promise((resolve) => {
       sendKeys('^v', (ok, notStarted) => resolve(ok ? true : notStarted ? false : { uncertain: true }), { timeout: 8000 });
     });

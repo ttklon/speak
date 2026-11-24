@@ -258,6 +258,7 @@ const cpStub = {
         spawnPlan.foregroundCallbacks.push(cb);
       } else {
         setTimeout(() => {
+          if (String(file).includes('mshta')) spawnPlan.onMshtaExit?.();
           const error = String(file).includes('mshta') && spawnPlan.mshtaError
             ? spawnPlan.mshtaError
             : spawnPlan.execError ? new Error('SendKeys недоступен') : null;
@@ -1327,6 +1328,127 @@ await check('блокировка вставки освобождается по
   }
 });
 
+await check('смена буфера после подтверждённого отказа EXE запрещает резервный Ctrl+V', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => {
+    clipboardText.value = 'текст другого приложения';
+    return { ok: false, uncertain: false, reason: 'не запущен' };
+  };
+  try {
+    clipboardText.value = 'прежний буфер'; spawnCalls.length = 0;
+    const result = await handlers.get('text:insert')({}, 'продиктованная фраза');
+    if (!result?.clipboardChanged || result.ok !== false) throw new Error(`нет отказа при смене буфера: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /mshta|powershell/i.test(String(c.file)))) throw new Error('резервный Ctrl+V был запущен');
+    if (clipboardText.value !== 'текст другого приложения') throw new Error('чужой буфер перезаписан');
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('смена буфера после отказа mshta запрещает следующий Ctrl+V', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => ({ ok: false, uncertain: false, reason: 'не запущен' });
+  spawnPlan.mshtaError = Object.assign(new Error('spawn mshta ENOENT'), { code: 'ENOENT', syscall: 'spawn mshta.exe' });
+  spawnPlan.onMshtaExit = () => { clipboardText.value = 'другая копия'; };
+  let hostCalls = 0;
+  host.available = () => true;
+  host.paste = async () => { hostCalls += 1; return { ok: true }; };
+  try {
+    clipboardText.value = 'прежний буфер'; spawnCalls.length = 0;
+    const result = await handlers.get('text:insert')({}, 'продиктованная фраза');
+    if (!result?.clipboardChanged || result.ok !== false || hostCalls) throw new Error(`не остановились: ${JSON.stringify(result)}, host=${hostCalls}`);
+    if (clipboardText.value !== 'другая копия') throw new Error('чужой буфер перезаписан');
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    spawnPlan.clipboardHelper = null; spawnPlan.mshtaError = null; spawnPlan.onMshtaExit = null;
+    host.available = available; host.paste = paste;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('смена буфера при успешном ответе EXE делает ввод неопределённым', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => { clipboardText.value = 'человек скопировал своё'; return { ok: true }; };
+  try {
+    clipboardText.value = 'прежний буфер'; spawnCalls.length = 0;
+    const result = await handlers.get('text:insert')({}, 'продиктованная фраза');
+    if (!result?.uncertain || !result?.clipboardChanged || result.ok !== false) throw new Error(`состояние ввода не признано неизвестным: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /mshta/i.test(String(c.file)))) throw new Error('повтор вставки');
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    if (clipboardText.value !== 'человек скопировал своё') throw new Error('чужой буфер перезаписан');
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('смена буфера внутри резервного хоста блокирует SendKeys', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => ({ ok: false, uncertain: false, reason: 'не запущен' });
+  spawnPlan.mshtaError = Object.assign(new Error('spawn mshta ENOENT'), { code: 'ENOENT', syscall: 'spawn mshta.exe' });
+  host.available = () => true;
+  host.paste = async () => { clipboardText.value = 'чужая копия'; return { ok: false, reason: 'host-not-started' }; };
+  try {
+    clipboardText.value = 'прежний буфер'; spawnCalls.length = 0;
+    const result = await handlers.get('text:insert')({}, 'продиктованная фраза');
+    if (!result?.clipboardChanged || result.ok !== false) throw new Error(`не остановились: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /powershell/i.test(String(c.file)) && (c.args || []).some((a) => /SendWait/.test(String(a))))) throw new Error('SendKeys запущен на чужом буфере');
+    if (clipboardText.value !== 'чужая копия') throw new Error('чужой буфер перезаписан');
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    spawnPlan.clipboardHelper = null; spawnPlan.mshtaError = null;
+    host.available = available; host.paste = paste;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('изменение форматов при том же тексте блокирует резервный Ctrl+V', async () => {
+  const platform = process.platform;
+  const originalFormats = electronStub.clipboard.availableFormats;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  let formats = ['text/plain'];
+  electronStub.clipboard.availableFormats = () => formats;
+  spawnPlan.clipboardHelper = async () => { formats = ['text/plain', 'text/html']; return { ok: false, uncertain: false }; };
+  try {
+    clipboardText.value = 'старый текст'; spawnCalls.length = 0;
+    const result = await handlers.get('text:insert')({}, 'одинаковый текст');
+    if (!result?.clipboardChanged || result.ok !== false) throw new Error(`форматы не проверены: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /mshta/i.test(String(c.file)))) throw new Error('mshta запущена с новыми форматами');
+    if (clipboardText.value !== 'одинаковый текст') throw new Error('чужой буфер перезаписан');
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    electronStub.clipboard.availableFormats = originalFormats;
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
 await check('таймаут Ctrl+V у exe не запускает второй способ', async () => {
   const platform = process.platform;
   const settings = handlers.get('store:get')({}, 'zs:settings') || {};
@@ -1483,7 +1605,7 @@ await check('ошибка резервного SendKeys не объявляет�
   }
 });
 
-await check('неудачная вставка оставляет текст в буфере — как обещает тост', async () => {
+await check('неудачная вставка без внешнего изменения оставляет текст в буфере', async () => {
   const realPlatform = process.platform;
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
   try {
@@ -1724,7 +1846,7 @@ await check('восстановление не стирает другой фо�
   }
 });
 
-await check('ошибка определения форматов не очищает и не восстанавливает буфер', async () => {
+await check('неизвестные форматы блокируют Ctrl+V и не восстанавливают буфер', async () => {
   const platform = process.platform;
   const originalFormats = electronStub.clipboard.availableFormats;
   const originalWrite = electronStub.clipboard.writeText;
@@ -1737,8 +1859,10 @@ await check('ошибка определения форматов не очищ�
   electronStub.clipboard.clear = () => { clears++; };
   try {
     clipboardText.value = '';
+    spawnCalls.length = 0;
     const result = await handlers.get('text:insert')({}, 'диктовка');
-    if (!result?.ok) throw new Error('вставка не удалась');
+    if (!result?.clipboardChanged || result.ok !== false) throw new Error(`небезопасная вставка не отклонена: ${JSON.stringify(result)}`);
+    if (spawnCalls.some((c) => /mshta|powershell/i.test(String(c.file)))) throw new Error('запущен Ctrl+V при неизвестном буфере');
     await new Promise((resolve) => setTimeout(resolve, 700));
     if (writes !== 1 || clears !== 0 || clipboardText.value !== 'диктовка') throw new Error('неизвестное состояние буфера изменено');
   } finally {
@@ -3714,8 +3838,7 @@ await check('фраза-галлюцинация отбрасывается, а 
 });
 
 await check('вне Windows текст остаётся в буфере: вставлять некуда', async () => {
-  // на не-Windows sendKeys не работает, значит вставки не было и буфер должен
-  // сохранить текст — ровно то, что обещает тост «нажмите Ctrl+V»
+  // На не-Windows sendKeys не работает; без внешних изменений текст остаётся.
   clipboardText.value = 'моя заметка';
   const ok = await handlers.get('text:insert')({}, 'надиктованный текст');
   await new Promise((r) => setTimeout(r, 900));

@@ -2349,14 +2349,15 @@ async function scenarioInsertFailed(browser) {
   const state = await page.evaluate(() => ({
     toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText.replace(/\n/g, ' ')).join(' | '),
     stored: (window.__e2e.read('zs.dictations') || [])[0]?.text || '',
+    recover: document.querySelector('.toast__recover')?.value || '',
   }));
   record(
     'сценарии',
-    'вставка не удалась: текст в истории и честный тост «нажмите Ctrl+V»',
+    'вставка не удалась: нет обещания о буфере, полный текст доступен вручную',
     // main отвечает объектом с причиной; интерфейс обязан её показать, а не
     // молчать — молчание и было жалобой «ничего не работает».
-    /нажмите Ctrl\+V/i.test(state.toast) && state.stored === 'Ну привет как дела.',
-    `${state.stored} · ${state.toast.slice(0, 80)}`,
+    !/Текст в буфере|нажмите Ctrl\+V/i.test(state.toast) && state.stored === 'Ну привет как дела.' && state.recover === state.stored,
+    `${state.stored} · ${state.toast.slice(0, 100)}`,
   );
 
   // Тот же отказ, но с причиной от main: она должна дойти до человека.
@@ -2452,6 +2453,62 @@ async function scenarioInsertFailed(browser) {
       && !/нажмите Ctrl\+V/i.test(busy.toast) && busy.inserts === 1 && /вторая тестовая фраза/i.test(busy.history), busy.toast);
   record('безопасность', 'занятая вставка: без ошибок консоли', takeErrors(busyPage).length === 0);
   await busyPage.close();
+
+  const changedPage = await openPage(browser, '#/home', {
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'проверка чужого буфера' });
+      window.__insertCount = 0;
+      window.zspeakly.native.insertText = async () => {
+        window.__insertCount += 1;
+        return { ok: false, clipboardChanged: true, reason: 'буфер изменился' };
+      };
+    },
+  });
+  takeErrors(changedPage);
+  await changedPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await changedPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const changed = await changedPage.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    recover: document.querySelector('.toast__recover')?.value || '',
+    inserts: window.__insertCount,
+    history: (window.__e2e.read('zs.dictations') || [])[0]?.text || '',
+  }));
+  record('безопасность', 'изменённый буфер: нет слепого Ctrl+V или повтора, доступен полный текст',
+    /буфер изменился/i.test(changed.toast) && !/Текст в буфере|нажмите Ctrl\+V/i.test(changed.toast)
+      && changed.inserts === 1 && changed.recover === changed.history && /проверка чужого буфера/i.test(changed.recover),
+    JSON.stringify(changed));
+  record('безопасность', 'изменённый буфер: без ошибок консоли', takeErrors(changedPage).length === 0);
+  await changedPage.close();
+
+  const changedDuringPage = await openPage(browser, '#/home', {
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'моя диктовка' });
+      window.__insertCount = 0;
+      window.zspeakly.native.insertText = async () => {
+        window.__insertCount += 1;
+        return { ok: false, uncertain: true, clipboardChanged: true, reason: 'результат вставки не подтверждён' };
+      };
+    },
+  });
+  takeErrors(changedDuringPage);
+  await changedDuringPage.evaluate(() => document.querySelector('.hero__mic').click());
+  await sleep(700);
+  await changedDuringPage.evaluate(() => window.__e2e.emit('dictation:stop', { from: 'hud' }));
+  await sleep(1600);
+  const changedDuring = await changedDuringPage.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    inserts: window.__insertCount,
+  }));
+  record('безопасность', 'буфер изменился во время Ctrl+V: предупреждение о другом тексте, без повтора',
+    /другой текст/i.test(changedDuring.toast) && /проверьте окно/i.test(changedDuring.toast) &&
+      !/нажмите Ctrl\+V/i.test(changedDuring.toast) && changedDuring.inserts === 1,
+    JSON.stringify(changedDuring));
+  record('безопасность', 'буфер изменился во время Ctrl+V: без ошибок консоли', takeErrors(changedDuringPage).length === 0);
+  await changedDuringPage.close();
 
   const uncertainPage = await openPage(browser, '#/home', {
     patchNative: () => {

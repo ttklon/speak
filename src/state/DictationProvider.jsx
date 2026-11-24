@@ -718,9 +718,8 @@ export function DictationProvider({ children }) {
           diag.info('stt', 'Диктовка вставлена в поле приложения', { chars: cleaned.length });
         }
         if (!local.inserted && insert && sessionOpts.current.insert !== false && native?.insertText) {
-          // main отвечает false, если SendKeys не сработал (окно с правами
-          // администратора, игра, защищённое поле). Текст уже в буфере —
-          // говорим об этом, иначе диктовка выглядит «сломанной».
+          // Буфер может измениться даже после ответа main. Не обещаем его
+          // содержимое и оставляем текст для ручного копирования.
           Promise.resolve(native.insertText(cleaned))
             .then((res) => {
               if (res && typeof res === 'object' && res.busy === true) {
@@ -735,9 +734,12 @@ export function DictationProvider({ children }) {
               if (res && typeof res === 'object' && res.uncertain === true) {
                 pushToast({
                   title: 'Не удалось подтвердить ввод',
-                  description: savedToHistory ? 'Текст мог попасть в окно полностью или частично. Проверьте его перед повтором; текст сохранён в истории диктовок.' : 'Текст мог попасть в окно полностью или частично. Проверьте окно; полный текст доступен в отдельном уведомлении.',
+                  description: res.clipboardChanged
+                    ? 'Во время вставки буфер изменился или его состояние не удалось проверить. В окно мог попасть другой текст. Проверьте окно перед повтором; полный текст доступен ниже до закрытия уведомления или приложения.'
+                    : savedToHistory ? 'Текст мог попасть в окно полностью или частично. Проверьте его перед повтором; текст сохранён в истории диктовок.' : 'Текст мог попасть в окно полностью или частично. Проверьте окно; полный текст доступен в отдельном уведомлении.',
+                  ...(res.clipboardChanged ? { recoverText: cleaned, recoverLabel: 'Текст диктовки для ручного сохранения' } : {}),
                   tone: 'warn',
-                  ttl: 15000,
+                  ttl: res.clipboardChanged ? 0 : 15000,
                 });
                 diag.warn('stt', 'Результат ввода неизвестен', { method: res.method || '' });
                 return;
@@ -765,10 +767,12 @@ export function DictationProvider({ children }) {
                     ? `Причина: ${res.reason}.`
                     : 'Автоматическая вставка не сработала.';
                 pushToast({
-                  title: 'Текст в буфере — нажмите Ctrl+V',
-                  description: savedToHistory ? `${why} Текст не потерян: он в буфере обмена и в истории.` : `${why} Полный текст доступен в отдельном уведомлении.`,
+                  title: res?.clipboardChanged ? 'Буфер изменился до вставки' : 'Не удалось подтвердить вставку',
+                  description: `${why} Проверьте окно перед повтором. Скопируйте полный текст отсюда вручную до закрытия уведомления или приложения.`,
+                  recoverText: cleaned,
+                  recoverLabel: 'Текст диктовки для ручного сохранения',
                   tone: 'warn',
-                  ttl: 12000,
+                  ttl: 0,
                 });
                 diag.warn('stt', 'Вставка не удалась', {
                   method: (res && res.method) || '',
