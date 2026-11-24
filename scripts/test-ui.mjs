@@ -5786,6 +5786,204 @@ async function scenarioRetryLast(browser) {
   await page.close();
 }
 
+// Задерживаем именно повторный проход: пользователь успевает поменять историю
+// или продиктовать новую фразу до прихода старого ответа.
+async function scenarioRetryConflict(browser) {
+  for (const kind of ['edit', 'delete', 'delete-restore', 'new-dictation']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false, liveWhisper: false },
+      storeSeed: { 'zs.dictations': [] },
+      patchNative: () => {
+        let count = 0;
+        window.zspeakly.native.transcribePcm = (payload) => {
+          if (payload?.thorough) return new Promise((resolve) => { window.__resolveRetry = resolve; });
+          count += 1;
+          return Promise.resolve({ ok: true, text: count === 1 ? 'Первый текст.' : 'Новая диктовка.', ms: 200 });
+        };
+      },
+    });
+    takeErrors(page);
+    try {
+      const dictate = async () => {
+        await page.waitForFunction(() => /Начать диктовку/i.test(document.querySelector('.hero__mic')?.innerText || ''), { timeout: 7000 });
+        await page.click('.hero__mic');
+        await page.waitForFunction(() => /Слушаю/i.test(document.body.innerText), { timeout: 5000 });
+        await sleep(900);
+        await page.evaluate(() => {
+          const stop = document.querySelector('[aria-label="Остановить запись"]');
+          if (stop) stop.click();
+          else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+        });
+      };
+      await dictate();
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /Первый текст/i.test(r.text)), { timeout: 10000 });
+      const first = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]);
+      await page.click('.last-result [aria-label="Переспросить точно"]');
+      await page.waitForFunction(() => typeof window.__resolveRetry === 'function', { timeout: 5000 });
+      if (kind === 'edit') {
+        await page.click('.recent__row'); await sleep(150);
+        await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Исправить/.test(b.innerText))?.click());
+        await page.waitForSelector('.modal textarea');
+        const field = await page.$('.modal textarea');
+        await field.click({ clickCount: 3 }); await field.type('Моя ручная правка.');
+        await page.evaluate(() => [...document.querySelectorAll('.modal button')].find((b) => /Сохранить/i.test(b.innerText))?.click());
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => r.text === 'Моя ручная правка.'), { timeout: 5000 });
+      } else if (kind === 'delete' || kind === 'delete-restore') {
+        await page.click('.recent__row'); await sleep(150);
+        await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Удалить/.test(b.innerText))?.click());
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 0, { timeout: 5000 });
+        if (kind === 'delete-restore') {
+          await page.evaluate(() => [...document.querySelectorAll('.toast__action')].find((b) => /Вернуть/.test(b.innerText))?.click());
+          await page.waitForFunction((id) => (window.__e2e.read('zs.dictations') || []).some((r) => r.id === id), { timeout: 5000 }, first.id);
+        }
+      } else {
+        await sleep(2200); // ждём завершения предыдущей диктовки, не повторного прохода
+        await dictate();
+        try {
+          await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => /Новая диктовка/i.test(r.text)), { timeout: 10000 });
+        } catch (err) { throw new Error(`вторая диктовка: ${JSON.stringify(await page.evaluate(() => ({ rows: (window.__e2e.read('zs.dictations') || []).map((r) => r.text), text: document.body.innerText.slice(-350), mic: document.querySelector('.hero__mic')?.innerText })))}; ${err.message}`); }
+      }
+      await page.evaluate(() => window.__resolveRetry({ ok: true, text: 'Первый текст с дополнительными словами.', ms: 300 }));
+      await sleep(900);
+      const actual = await page.evaluate(() => ({
+        rows: (window.__e2e.read('zs.dictations') || []).map((r) => ({ id: r.id, text: r.text })),
+        last: document.querySelector('.last-result__text')?.innerText || '',
+        recover: document.querySelector('.toast__recover')?.value || '',
+        titles: [...document.querySelectorAll('.toast__title')].map((el) => el.innerText),
+      }));
+      const original = actual.rows.find((r) => r.id === first.id);
+      const unchanged = kind === 'delete' ? !original : kind === 'edit' ? original?.text === 'Моя ручная правка.' : original?.text === first.text;
+      const lastCorrect = kind !== 'new-dictation' || /Новая диктовка/i.test(actual.last);
+      record('сценарии', `точный проход: конфликт ${kind} не затирает данные`,
+        unchanged && lastCorrect && actual.recover === 'Первый текст с дополнительными словами.' &&
+        !actual.titles.includes('Точный проход услышал больше'), JSON.stringify(actual));
+      const errors = takeErrors(page);
+      record('сценарии', `точный проход: конфликт ${kind} без ошибок консоли`, errors.length === 0, errors[0] || '');
+    } finally { await page.close(); }
+  }
+}
+
+async function scenarioRetryDoubleClick(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.__retryCount = 0;
+      window.zspeakly.native.transcribePcm = (payload) => {
+        if (!payload?.thorough) return Promise.resolve({ ok: true, text: 'Первый текст.', ms: 200 });
+        window.__retryCount += 1;
+        return new Promise((resolve) => { window.__resolveRetry = resolve; });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.click('.hero__mic'); await sleep(900);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    await page.evaluate(() => {
+      const button = document.querySelector('.last-result [aria-label="Переспросить точно"]');
+      button.click(); button.click();
+    });
+    await page.waitForFunction(() => typeof window.__resolveRetry === 'function', { timeout: 5000 });
+    const count = await page.evaluate(() => window.__retryCount);
+    await page.evaluate(() => window.__resolveRetry({ ok: true, text: 'Первый текст с дополнительными словами.', ms: 300 }));
+    await sleep(500);
+    const text = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
+    record('сценарии', 'точный проход: двойное нажатие запускает один запрос',
+      count === 1 && text === 'Первый текст с дополнительными словами.', `${count} запросов · ${text}`);
+    const errors = takeErrors(page);
+    record('сценарии', 'точный проход: двойное нажатие без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally { await page.close(); }
+}
+
+async function scenarioRetryAlreadyEdited(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.__retryCount = 0;
+      window.zspeakly.native.transcribePcm = (payload) => {
+        if (payload?.thorough) window.__retryCount += 1;
+        return Promise.resolve({ ok: true, text: 'Первый текст.', ms: 200 });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.click('.hero__mic'); await sleep(900);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    await page.click('.recent__row'); await sleep(150);
+    await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Исправить/.test(b.innerText))?.click());
+    await page.waitForSelector('.modal textarea');
+    const field = await page.$('.modal textarea');
+    await field.click({ clickCount: 3 }); await field.type('Моя правка до повтора.');
+    await page.evaluate(() => [...document.querySelectorAll('.modal button')].find((b) => /Сохранить/i.test(b.innerText))?.click());
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || [])[0]?.text === 'Моя правка до повтора.', { timeout: 5000 });
+    await page.click('.last-result [aria-label="Переспросить точно"]'); await sleep(400);
+    const result = await page.evaluate(() => ({
+      count: window.__retryCount,
+      text: (window.__e2e.read('zs.dictations') || [])[0]?.text,
+      titles: [...document.querySelectorAll('.toast__title')].map((el) => el.innerText),
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'точный проход: изменённую заранее запись не перезапрашивает',
+      result.count === 0 && result.text === 'Моя правка до повтора.' && result.titles.includes('Запись изменилась или удалена') && errors.length === 0,
+      JSON.stringify({ ...result, errors }));
+  } finally { await page.close(); }
+}
+
+async function scenarioRetryFailure(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      let tries = 0;
+      window.zspeakly.native.transcribePcm = (payload) => {
+        if (!payload?.thorough) return Promise.resolve({ ok: true, text: 'Первый текст.', ms: 200 });
+        tries += 1;
+        return tries === 1 ? Promise.reject(new Error('мост недоступен'))
+          : Promise.resolve({ ok: true, text: 'Первый текст с дополнительными словами.', ms: 300 });
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.click('.hero__mic'); await sleep(900);
+    await page.evaluate(() => {
+      const stop = document.querySelector('[aria-label="Остановить запись"]');
+      if (stop) stop.click();
+      else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+    });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    await page.click('.last-result [aria-label="Переспросить точно"]');
+    await sleep(500);
+    const failure = await page.evaluate(() => ({
+      title: [...document.querySelectorAll('.toast__title')].map((el) => el.innerText),
+      text: (window.__e2e.read('zs.dictations') || [])[0]?.text,
+      disabled: document.querySelector('.last-result [aria-label="Переспросить точно"]')?.disabled,
+    }));
+    const errors = takeErrors(page);
+    record('сценарии', 'точный проход: ошибка моста показана, исходная история не меняется',
+      failure.title.includes('Точный проход не удался') && failure.text === 'Первый текст.' && failure.disabled === false && errors.length === 0,
+      JSON.stringify({ ...failure, errors }));
+    await page.click('.last-result [aria-label="Переспросить точно"]');
+    await sleep(500);
+    const after = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]?.text || '');
+    record('сценарии', 'точный проход: после ошибки можно повторить вручную',
+      after === 'Первый текст с дополнительными словами.', after);
+  } finally { await page.close(); }
+}
+
 /**
  * «Скорость против точности»: три режима и замер этой машины.
  *
@@ -9507,6 +9705,10 @@ async function main() {
       ['самопроверка диктовки', scenarioSelfTest],
       ['сравнение моделей', scenarioModelCompare],
       ['переспросить точно', scenarioRetryLast],
+      ['точный проход: конфликты', scenarioRetryConflict],
+      ['точный проход: двойное нажатие', scenarioRetryDoubleClick],
+      ['точный проход: ошибка моста', scenarioRetryFailure],
+      ['точный проход: заранее изменённая запись', scenarioRetryAlreadyEdited],
       ['режим распознавания', scenarioDecodeMode],
       ['словарь: кириллица', scenarioDictionaryAliases],
       ['разбор точности', scenarioQualityReport],

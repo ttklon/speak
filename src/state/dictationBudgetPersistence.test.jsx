@@ -105,6 +105,7 @@ describe('бюджет истории при загрузке и правке', 
     await act(async () => { accepted = state.updateDictation('same', { text: 'q'.repeat(100) }, { expectedText: 'устарело' }); });
     expect(accepted).toBe(true); // запрос принят, но совпадений нет
     expect(state.dictations.map((x) => x.text)).toEqual(['y'.repeat(45), 'y'.repeat(45)]);
+    expect(state.getDictationSnapshot('same')).toBeNull(); // неоднозначный ID
   });
 
   it('не обрезает унаследованную историю, превышающую число записей', async () => {
@@ -115,6 +116,26 @@ describe('бюджет истории при загрузке и правке', 
     expect(accepted).toBe(false);
     await remount();
     expect(state.dictations.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+  });
+
+
+  it('снимок меняется при правке и при удалении с восстановлением, даже если текст прежний', async () => {
+    seed([item('one', 10)]);
+    await mount();
+    const initial = state.getDictationSnapshot('one');
+    await act(async () => state.updateDictation('one', { text: 'новый текст' }));
+    expect(state.getDictationSnapshot('one')).not.toBe(initial);
+    await act(async () => state.updateDictation('one', { text: initial.text }));
+    const restoredText = state.getDictationSnapshot('one');
+    expect(restoredText).not.toBe(initial);
+    expect(restoredText.text).toBe(initial.text);
+    await act(async () => {
+      state.deleteDictation('one');
+      expect(state.getDictationSnapshot('one')).toBeNull();
+      state.addDictation(restoredText);
+    });
+    expect(state.getDictationSnapshot('one')).not.toBe(restoredText);
+    expect(state.getDictationSnapshot('one').text).toBe(initial.text);
   });
 
 });

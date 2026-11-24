@@ -223,11 +223,26 @@ export function AppDataProvider({ children }) {
         });
         return false;
       }
-      setDictations((prev) => trimDictations([item, ...prev]));
+      // Даже возврат удалённой записи создаёт новую версию: отложенный ответ
+      // не должен незаметно изменять восстановленный человеком объект.
+      setDictations((prev) => trimDictations([{ ...item }, ...prev]));
       return true;
     },
     [push, setDictations],
   );
+
+  // Непрозрачный снимок для асинхронных операций: обновление создаёт новый
+  // объект, а удаление/восстановление — тоже. Не выбираем произвольно одну из
+  // записей старого профиля, если в нём встретились дублирующиеся ID.
+  const getDictationSnapshot = useCallback((id) => {
+    let found = null;
+    for (const item of dictationsRef.current) {
+      if (item.id !== id) continue;
+      if (found) return null;
+      found = item;
+    }
+    return found;
+  }, []);
 
   const deleteDictation = useCallback(
     (id) => setDictations((prev) => prev.filter((d) => d.id !== id)),
@@ -539,6 +554,7 @@ export function AppDataProvider({ children }) {
       addDictation,
       deleteDictation,
       updateDictation,
+      getDictationSnapshot,
       clearDictations,
       dictionary,
       addDictionaryWord,
@@ -576,7 +592,7 @@ export function AppDataProvider({ children }) {
     }),
     [
       exportBackup, importBackup,
-      settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, clearDictations,
+      settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, getDictationSnapshot, clearDictations,
       dictionary,
       addDictionaryWord,
       removeDictionaryWord,

@@ -126,6 +126,7 @@ export function DictationProvider({ children }) {
     recordWords,
     updateSettings,
     updateDictation,
+    getDictationSnapshot,
     noteDictionaryUsage,
   } = useAppData();
   const [state, setState] = useState('idle'); // idle | listening | processing | done
@@ -1564,6 +1565,7 @@ export function DictationProvider({ children }) {
    * подменить фразу на другую, не лучшую, — хуже, чем оставить как было.
    */
   const [retrying, setRetrying] = useState(false);
+  const retryInFlight = useRef(false);
   const retryLast = useCallback(async () => {
     const native = typeof window !== 'undefined' ? window.zspeakly?.native : null;
     const audio = lastRecordedAudio();
@@ -1572,22 +1574,34 @@ export function DictationProvider({ children }) {
       pushToast({ title: 'Переспросить нечем', description: check.reason, tone: 'warn' });
       return { ok: false, reason: check.reason };
     }
-    if (!last || retrying) return { ok: false, reason: 'нечего уточнять' };
+    if (!last || retrying || retryInFlight.current) return { ok: false, reason: 'нечего уточнять' };
     if (lastItemId.current !== last.id) {
       pushToast({ title: 'Нельзя уточнить запись вне истории', description: 'Сначала сохраните полный текст из уведомления вручную.', tone: 'warn' });
       return { ok: false, reason: 'history-limit' };
     }
+    const snapshot = getDictationSnapshot(last.id);
+    if (!snapshot || snapshot.text !== last.text) {
+      pushToast({ title: 'Запись изменилась или удалена', description: 'Точный проход не запущен, чтобы не перезаписать текущую историю.', tone: 'warn', ttl: 9000 });
+      return { ok: false, reason: 'history-changed' };
+    }
+    retryInFlight.current = true;
     setRetrying(true);
     try {
-      const res = await native.transcribePcm({
-        pcm: audio.pcm,
-        durationMs: audio.durationMs,
-        lang: audio.lang,
-        model: settingsRef.current.whisperModel,
-        useDictionary: settingsRef.current.dictionaryEnabled !== false,
-        // честный проход по просьбе: main не смотрит на замеры скорости
-        thorough: true,
-      });
+      let res;
+      try {
+        res = await native.transcribePcm({
+          pcm: audio.pcm,
+          durationMs: audio.durationMs,
+          lang: audio.lang,
+          model: settingsRef.current.whisperModel,
+          useDictionary: settingsRef.current.dictionaryEnabled !== false,
+          // честный проход по просьбе: main не смотрит на замеры скорости
+          thorough: true,
+        });
+      } catch {
+        pushToast({ title: 'Точный проход не удался', description: 'Не удалось получить ответ приложения. Точный проход не изменил историю; попробуйте ещё раз вручную.', tone: 'warn', ttl: 9000 });
+        return { ok: false, reason: 'bridge-failed' };
+      }
       if (!res?.ok) {
         pushToast({
           title: 'Точный проход не удался',
@@ -1595,6 +1609,21 @@ export function DictationProvider({ children }) {
           tone: 'warn',
         });
         return { ok: false, reason: res?.reason || 'failed' };
+      }
+      // Проверка и updateDictation синхронны: ни другой обработчик, ни React
+      // batch не вклинятся между ними. Снимок меняется и при возврате удаления.
+      if (lastItemId.current !== last.id || getDictationSnapshot(last.id) !== snapshot) {
+        const text = typeof res.text === 'string' ? res.text : '';
+        pushToast({
+          title: 'Запись изменилась во время точного прохода',
+          description: text.trim()
+            ? 'Результат не применён. Скопируйте его отсюда вручную до закрытия уведомления или приложения.'
+            : 'Результат не применён; готового текста для копирования нет.',
+          recoverText: text.trim() ? text : undefined,
+          recoverLabel: 'Неприменённый результат точного прохода',
+          tone: 'warn', ttl: text.trim() ? 0 : 9000,
+        });
+        return { ok: false, reason: 'history-changed', text };
       }
       const verdict = shouldReplaceText(last.text, res.text);
       if (!verdict.replace) {
@@ -1615,7 +1644,7 @@ export function DictationProvider({ children }) {
         pushToast({ title: 'Точный проход превышает бюджет истории', description: 'Текст не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: res.text, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
         return { ok: false, reason: 'history-limit', text: res.text };
       }
-      setLast((prev) => (prev ? { ...prev, text: res.text, sttThorough: true, sttSecondPass: true } : prev));
+      setLast((prev) => (prev?.id === last.id ? { ...prev, text: res.text, sttThorough: true, sttSecondPass: true } : prev));
       pushToast({
         title: 'Точный проход услышал больше',
         description: truncate(res.text, 120),
@@ -1623,9 +1652,10 @@ export function DictationProvider({ children }) {
       });
       return { ok: true, replaced: true, text: res.text, note: verdict.note };
     } finally {
+      retryInFlight.current = false;
       setRetrying(false);
     }
-  }, [last, retrying, updateDictation]);
+  }, [last, retrying, updateDictation, getDictationSnapshot, pushToast]);
 
   const cancelProcessing = useCallback(() => {
     const agent = agentRef.current;
