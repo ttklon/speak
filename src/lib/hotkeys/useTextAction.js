@@ -71,13 +71,22 @@ export function useTextAction() {
           return;
         }
         const where = await writeSelection(result);
+        if (where === 'busy') {
+          push({
+            title: 'Другая операция с текстом ещё выполняется',
+            description: 'Результат не вставлен и не скопирован. Скопируйте его вручную отсюда. Текст исчезнет при закрытии уведомления или приложения.',
+            recoverText: result,
+            tone: 'warn', ttl: 0,
+          });
+          return;
+        }
         push({
           title: where === 'uncertain' ? 'Не удалось подтвердить замену' : where === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${instruction.title}`,
           description: where === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
           tone: where === 'uncertain' || where === 'failed' || note ? 'warn' : 'success',
         });
       } catch (err) {
-        push({ title: err?.code === 'selection-unverified' ? 'Выделение не подтверждено' : 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });
+        push({ title: err?.code === 'selection-busy' ? 'Другая операция ещё выполняется' : err?.code === 'selection-unverified' ? 'Выделение не подтверждено' : 'Инструкция не выполнилась', description: String(err?.message || err), tone: 'warn' });
       } finally {
         if (mounted.current) setBusy(null);
       }

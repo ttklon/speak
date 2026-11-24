@@ -19,6 +19,11 @@ export async function readSelectionText() {
   const bridge = nativeBridge();
   if (bridge?.readSelection) {
     const selected = await bridge.readSelection();
+    if (selected?.reason === 'busy') {
+      const error = new Error('Другая операция с текстом ещё выполняется. Выделение не читалось; попробуйте позже.');
+      error.code = 'selection-busy';
+      throw error;
+    }
     if (selected?.reason === 'unverified') {
       const error = new Error('Не удалось подтвердить выделение. Если оно совпадает с буфером, скопируйте другой безопасный текст, затем снова выделите нужное.');
       error.code = 'selection-unverified';
@@ -45,7 +50,8 @@ export async function readSelectionText() {
 /**
  * Вернуть текст на место выделения.
  * 'inserted' — вставили в чужое окно, 'copied' — только в буфер (браузер),
- * 'failed' — известный отказ, 'uncertain' — результат вставки неизвестен.
+ * 'failed' — известный отказ, 'busy' — операция не начиналась,
+ * 'uncertain' — результат вставки неизвестен.
  */
 export async function writeSelectionText(text) {
   const bridge = nativeBridge();
@@ -54,6 +60,7 @@ export async function writeSelectionText(text) {
       const outcome = await bridge.replaceSelection(text);
       if (outcome === true) return 'inserted';
       if (outcome === false) return 'failed';
+      if (outcome?.busy === true) return 'busy';
       return 'uncertain';
     } catch {
       // Ответ IPC может потеряться уже после отправки клавиш.

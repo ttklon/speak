@@ -8406,6 +8406,80 @@ async function scenarioAiOff(browser) {
 
 /* ── режимы диктовки, кнопки окна, звук и эффект печати ───────────────── */
 
+// Конфликтующие операции не отправляются повторно и не объявляются успехом.
+async function scenarioSelectionBusy(browser) {
+  const voice = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, aiProcessing: true },
+    storeSeed: { 'zs.dictations': [], 'zs.mockSttText': 'сократи вдвое' }, settle: 700,
+    patchNative: () => {
+      window.__replaceCount = 0;
+      window.zspeakly.native.replaceSelection = async () => { window.__replaceCount++; return { busy: true }; };
+    },
+  });
+  takeErrors(voice);
+  await emit(voice, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(1200);
+  await emit(voice, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(2600);
+  const voiceState = await voice.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' | '),
+    history: window.__e2e.read('zs.dictations') || [], count: window.__replaceCount,
+  }));
+  record('безопасность', 'голосовая команда: занятая замена остаётся в истории и не повторяется',
+    /Другая операция с текстом ещё выполняется/.test(voiceState.toast) && /не вставлен и не скопирован/.test(voiceState.toast)
+      && /истории/.test(voiceState.toast) && !/Готово: сократить/.test(voiceState.toast)
+      && voiceState.history[0]?.source === 'command' && Boolean(voiceState.history[0]?.text) && voiceState.count === 1, voiceState.toast);
+  record('безопасность', 'голосовая команда: занятая замена без ошибок консоли', takeErrors(voice).length === 0);
+  await voice.close();
+
+  const hotkey = await openPage(browser, '#/hotkeys', {
+    settle: 400, storeSeed: { 'zs.dictations': [] },
+    patchNative: () => { window.__replaceCount = 0; window.zspeakly.native.replaceSelection = async (text) => { window.__replaceCount++; window.__refusedResult = text; return { busy: true }; }; },
+  });
+  takeErrors(hotkey);
+  const preset = await hotkey.evaluate(() => (window.__e2e.read('zs.presets') || [])[0]?.id);
+  await emit(hotkey, 'text-action', preset);
+  await sleep(1500);
+  const hotkeyState = await hotkey.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].at(-1)?.innerText || '',
+    count: window.__replaceCount, history: window.__e2e.read('zs.dictations') || [],
+    result: document.querySelector('[aria-label="Невставленный результат инструкции"]')?.value, expected: window.__refusedResult,
+  }));
+  record('безопасность', 'AI-инструкция: результат доступен полностью и не сохраняется в истории',
+    Boolean(preset) && /Другая операция с текстом ещё выполняется/.test(hotkeyState.toast)
+      && /не вставлен и не скопирован/.test(hotkeyState.toast) && /исчезнет при закрытии/.test(hotkeyState.toast)
+      && Boolean(hotkeyState.result) && hotkeyState.result === hotkeyState.expected
+      && hotkeyState.count === 1 && hotkeyState.history.length === 0, hotkeyState.toast);
+  await hotkey.evaluate(() => { location.hash = '#/home'; });
+  await sleep(4000);
+  record('безопасность', 'AI-инструкция: временный результат не пропадает при переходе и обычном таймауте',
+    await hotkey.evaluate(() => document.querySelector('[aria-label="Невставленный результат инструкции"]')?.value === window.__refusedResult));
+  await hotkey.evaluate(() => { location.hash = '#/hotkeys'; window.zspeakly.native.readSelection = async () => ({ reason: 'busy', text: '' }); });
+  await sleep(400);
+  for (let i = 0; i < 5; i++) { await emit(hotkey, 'text-action', preset); await sleep(100); }
+  record('безопасность', 'AI-инструкция: следующие уведомления не удаляют невставленный результат',
+    await hotkey.evaluate(() => document.querySelectorAll('.toast').length >= 4 && document.querySelector('[aria-label="Невставленный результат инструкции"]')?.value === window.__refusedResult));
+  await hotkey.evaluate(() => document.querySelector('[aria-label="Невставленный результат инструкции"]').closest('.toast').querySelector('[aria-label="Закрыть"]').click());
+  record('безопасность', 'AI-инструкция: временный результат удаляется только после закрытия',
+    await hotkey.evaluate(() => !document.querySelector('[aria-label="Невставленный результат инструкции"]')));
+  record('безопасность', 'AI-инструкция: занятая замена без ошибок консоли', takeErrors(hotkey).length === 0);
+  await hotkey.close();
+
+  const blocked = await openPage(browser, '#/home', {
+    settle: 500,
+    patchNative: () => { window.zspeakly.native.readSelection = async () => ({ text: '', reason: 'busy' }); },
+  });
+  takeErrors(blocked);
+  await emit(blocked, 'hotkey', { type: 'toggle', mode: 'toggle', command: true });
+  await sleep(1000);
+  const blockedState = await blocked.evaluate(() => ({ body: document.body.innerText, calls: window.__bridgeCalls || [] }));
+  record('безопасность', 'занятое чтение: голосовая команда не начинает запись',
+    /Другая операция ещё выполняется/.test(blockedState.body) && /Выделение не читалось/.test(blockedState.body)
+      && !/Слушаю/.test(blockedState.body) && !blockedState.calls.some((c) => c.channel === 'text:replace-selection'));
+  record('безопасность', 'занятое чтение: без ошибок консоли', takeErrors(blocked).length === 0);
+  await blocked.close();
+}
+
 // Неподтверждённый старый буфер не становится текстом команды или агента.
 async function scenarioSelectionUnverified(browser) {
   const patch = () => {
@@ -9361,6 +9435,7 @@ async function main() {
       ['чистая установка', scenarioFreshInstall],
       ['снимок экрана', scenarioScreenshotOnce],
       ['диктовка с учётом экрана', scenarioScreenAware],
+      ['конфликт операций выделения', scenarioSelectionBusy],
       ['безопасное чтение выделения', scenarioSelectionUnverified],
       ['агент отмена выделения', scenarioAgentSelectionCancel],
       ['агент отмена и повтор', scenarioAgentCancelAndRetry],

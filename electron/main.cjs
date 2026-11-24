@@ -108,8 +108,8 @@ const getWinInput = () => {
 let lastInsertInfo = { at: 0, ok: null, method: '', ms: 0, reason: '' };
 let lastInsertedText = '';
 let lastInsertedAt = 0;
-// Одна диктовка управляет буфером до окончания ввода и восстановления.
-let dictationInsertBusy = false;
+// Диктовка и работа с выделением не должны менять буфер одновременно.
+let textInputBusy = false;
 // Сколько времени движок тратит на секунду речи — по этим замерам решается,
 // можно ли считать сразу «честным» проходом на этой машине.
 const decodeHistory = [];
@@ -2023,13 +2023,13 @@ function registerIpc() {
   ipcMain.handle('text:insert', async (_e, text) => {
     const value = String(text || '');
     if (!value) return { ok: false, reason: 'пустой текст' };
-    if (dictationInsertBusy) return { ok: false, busy: true, reason: 'другая вставка ещё выполняется' };
-    dictationInsertBusy = true;
+    if (textInputBusy) return { ok: false, busy: true, reason: 'другая операция с текстом ещё выполняется' };
+    textInputBusy = true;
     let restoreScheduled = false;
     try {
       return await insertDictation(value, () => { restoreScheduled = true; });
     } finally {
-      if (!restoreScheduled) dictationInsertBusy = false;
+      if (!restoreScheduled) textInputBusy = false;
     }
   });
 
@@ -2189,7 +2189,7 @@ function registerIpc() {
       } catch {
         /* ignore */
       } finally {
-        dictationInsertBusy = false;
+        textInputBusy = false;
       }
     }, 500);
     onRestoreScheduled();
@@ -2238,8 +2238,18 @@ function registerIpc() {
     lastInsertedAt = 0;
     return pasteToActiveWindowSafely();
   });
-  ipcMain.handle('text:read-selection', () => readSelection());
-  ipcMain.handle('text:replace-selection', (_e, text) => replaceSelection(text));
+  ipcMain.handle('text:read-selection', async () => {
+    if (textInputBusy) return { text: '', reason: 'busy' };
+    textInputBusy = true;
+    try { return await readSelection(); }
+    finally { textInputBusy = false; }
+  });
+  ipcMain.handle('text:replace-selection', async (_e, text) => {
+    if (textInputBusy) return { busy: true };
+    textInputBusy = true;
+    try { return await replaceSelection(text); }
+    finally { textInputBusy = false; }
+  });
 
   ipcMain.handle('clipboard:screenshot', async () => {
     try {

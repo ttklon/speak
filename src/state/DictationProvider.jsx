@@ -429,9 +429,9 @@ export function DictationProvider({ children }) {
           placed,
         });
         pushToast({
-          title: placed === 'uncertain' ? 'Не удалось подтвердить замену' : placed === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${commandTitle(cleaned)}`,
-          description: placed === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором; результат сохранён в истории.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
-          tone: placed === 'uncertain' || placed === 'failed' || note ? 'warn' : 'success',
+          title: placed === 'busy' ? 'Другая операция с текстом ещё выполняется' : placed === 'uncertain' ? 'Не удалось подтвердить замену' : placed === 'failed' ? 'Готово, но вставить не удалось' : `Готово: ${commandTitle(cleaned)}`,
+          description: placed === 'busy' ? 'Результат не вставлен и не скопирован, но сохранён в истории.' : placed === 'uncertain' ? 'Текст мог попасть в окно. Проверьте его перед повтором; результат сохранён в истории.' : [truncate(result, 90), note].filter(Boolean).join(' — '),
+          tone: placed === 'busy' || placed === 'uncertain' || placed === 'failed' || note ? 'warn' : 'success',
           ttl: 8000,
         });
         setState('done');
@@ -714,7 +714,7 @@ export function DictationProvider({ children }) {
               if (res && typeof res === 'object' && res.busy === true) {
                 pushToast({
                   title: 'Вставка ещё занята',
-                  description: 'Эта фраза не отправлялась в окно и не скопирована в буфер. Она сохранена в истории — вставьте её оттуда, когда предыдущая вставка завершится.',
+                  description: 'Эта фраза не отправлялась в окно и не скопирована в буфер. Она сохранена в истории — вставьте её оттуда, когда предыдущая операция завершится.',
                   tone: 'warn', ttl: 15000,
                 });
                 diag.warn('stt', 'Вставка отклонена: предыдущая ещё выполняется');
@@ -1396,9 +1396,9 @@ export function DictationProvider({ children }) {
       let source = '';
       try {
         if (window.zspeakly?.native?.readSelection) source = await readSelectionText();
-      } catch {
+      } catch (err) {
         if (!isCurrent()) return;
-        pushToast({ title: 'Выделение не подтверждено', description: 'Агент ответит без контекста. Проверьте выделение и буфер.', tone: 'warn' });
+        pushToast({ title: err?.code === 'selection-busy' ? 'Другая операция ещё выполняется' : 'Выделение не подтверждено', description: 'Агент ответит без контекста. Проверьте выделение и буфер.', tone: 'warn' });
       }
       if (!isCurrent()) return;
       const prompt = source && String(source).trim()
@@ -1488,17 +1488,21 @@ export function DictationProvider({ children }) {
       pushToast({ title: 'Не удалось получить выделение вовремя', description: 'Попробуйте снова.', tone: 'warn' });
     }, 5000);
     let selection = '';
-    let selectionError = false;
+    let selectionError = '';
     try {
       selection = String((await readSelectionText()) || '').trim();
-    } catch {
-      selectionError = true;
+    } catch (err) {
+      selectionError = err?.code || 'selection-unverified';
     }
     clearTimeout(timer);
     if (commandRequestRef.current !== request) return;
     commandRequestRef.current = null;
     if (recRef.current || busy()) return;
     if (selectionError) {
+      if (selectionError === 'selection-busy') {
+        pushToast({ title: 'Другая операция ещё выполняется', description: 'Выделение не читалось. Дождитесь завершения и повторите команду.', tone: 'warn', ttl: 9000 });
+        return;
+      }
       pushToast({ title: 'Выделение не подтверждено', description: 'Если выделение совпадает с буфером, скопируйте другой безопасный текст и снова выделите нужное.', tone: 'warn', ttl: 9000 });
       return;
     }

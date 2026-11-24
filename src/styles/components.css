@@ -691,7 +691,9 @@
   flex-direction: column;
   gap: 8px;
   align-items: center;
-  pointer-events: none;
+  max-height: 80vh;
+  overflow-y: auto;
+  pointer-events: auto;
 }
 
 .toast {
@@ -745,6 +747,19 @@
   color: var(--text-4);
   line-height: 1.45;
   word-break: break-word;
+}
+
+.toast__recover {
+  display: block;
+  width: 100%;
+  min-width: 220px;
+  margin-top: 6px;
+  padding: 6px;
+  resize: vertical;
+  color: var(--text);
+  background: var(--bg-menu);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
 }
 
 .toast__close {

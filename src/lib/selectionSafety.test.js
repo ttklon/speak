@@ -3,6 +3,11 @@ import { readSelectionText, writeSelectionText } from './hotkeys/selection.js';
 
 afterEach(() => { delete window.zspeakly; });
 describe('результат замены выделения', () => {
+  it('отличает занятое действие от неизвестной вставки', async () => {
+    window.zspeakly = { native: { replaceSelection: async () => ({ busy: true }) } };
+    expect(await writeSelectionText('тест')).toBe('busy');
+  });
+
   it('не сообщает об успехе, если ответ о вставке неизвестен или потерян', async () => {
     window.zspeakly = { native: { replaceSelection: async () => ({ uncertain: true }) } };
     expect(await writeSelectionText('тест')).toBe('uncertain');
@@ -21,6 +26,11 @@ describe('результат замены выделения', () => {
 
 
 describe('чтение выделения', () => {
+  it('сообщает, что выделение не читалось, если другая операция занята', async () => {
+    window.zspeakly = { native: { readSelection: async () => ({ text: '', reason: 'busy' }) } };
+    await expect(readSelectionText()).rejects.toMatchObject({ code: 'selection-busy' });
+  });
+
   it('не передаёт неподтверждённый буфер в команду', async () => {
     window.zspeakly = { native: { readSelection: async () => ({ text: 'старый секрет', reason: 'unverified' }) } };
     await expect(readSelectionText()).rejects.toMatchObject({ code: 'selection-unverified' });

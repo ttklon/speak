@@ -1022,6 +1022,9 @@ await check('две диктовки: период восстановления 
     if (!first?.ok) throw new Error('первая вставка не подтвердилась');
     const second = await handlers.get('text:insert')({}, 'вторая фраза');
     if (!second?.busy || second.ok !== false) throw new Error(`вторая вставка не отклонена: ${JSON.stringify(second)}`);
+    const selection = await handlers.get('text:read-selection')({});
+    const replacement = await handlers.get('text:replace-selection')({}, 'замена в период восстановления');
+    if (selection?.reason !== 'busy' || !replacement?.busy || clipboardText.value !== 'первая фраза') throw new Error('выделение не отклонено в период восстановления');
     await new Promise((r) => setTimeout(r, 650));
     if (clipboardText.value !== 'исходный буфер') throw new Error(`буфер не восстановлен: ${clipboardText.value}`);
     const retry = await handlers.get('text:insert')({}, 'вторая фраза');
@@ -1085,6 +1088,121 @@ await check('ошибка восстановления буфера не ост�
     if (!next?.ok) throw new Error(`блокировка не снята: ${JSON.stringify(next)}`);
   } finally {
     electronStub.clipboard.readText = read;
+    await new Promise((r) => setTimeout(r, 650));
+    spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('диктовка и выделение: занятая диктовка блокирует COPY и замену', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, copy = host.copy, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  let release, notify, first, copyCalls = 0, pasteCalls = 0;
+  const started = new Promise((r) => { notify = r; });
+  spawnPlan.clipboardHelper = () => { notify(); return new Promise((r) => { release = r; }); };
+  host.available = () => true;
+  host.copy = async () => { copyCalls++; return { ok: true }; };
+  host.paste = async () => { pasteCalls++; return { ok: true }; };
+  try {
+    clipboardText.value = 'исходный буфер';
+    first = handlers.get('text:insert')({}, 'фраза диктовки');
+    await started;
+    const selection = await handlers.get('text:read-selection')({});
+    const replacement = await handlers.get('text:replace-selection')({}, 'результат команды');
+    if (selection?.reason !== 'busy' || selection?.text) throw new Error(`чтение не отклонено: ${JSON.stringify(selection)}`);
+    if (!replacement?.busy || copyCalls || pasteCalls || clipboardText.value !== 'фраза диктовки') throw new Error('выделение изменило буфер или послало клавиши');
+  } finally {
+    release?.({ ok: true }); if (first) await first;
+    await new Promise((r) => setTimeout(r, 650));
+    spawnPlan.clipboardHelper = null;
+    host.available = available; host.copy = copy; host.paste = paste;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('диктовка и выделение: занятая замена блокирует другие операции', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, paste = host.paste;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  let release, notify, first, calls = 0, dictationPastes = 0;
+  const started = new Promise((r) => { notify = r; });
+  host.available = () => true;
+  host.paste = () => { calls++; if (calls === 1) { notify(); return new Promise((r) => { release = r; }); } return Promise.resolve({ ok: true }); };
+  spawnPlan.clipboardHelper = async () => { dictationPastes++; return { ok: true }; };
+  try {
+    first = handlers.get('text:replace-selection')({}, 'первая замена');
+    await started;
+    const replacement = await handlers.get('text:replace-selection')({}, 'вторая замена');
+    const selection = await handlers.get('text:read-selection')({});
+    const dictation = await handlers.get('text:insert')({}, 'фраза диктовки');
+    if (!replacement?.busy || selection?.reason !== 'busy' || !dictation?.busy) throw new Error(`операции не отклонены: ${JSON.stringify({ replacement, selection, dictation })}`);
+    if (clipboardText.value !== 'первая замена' || calls !== 1 || dictationPastes) throw new Error('первый буфер перезаписан или нажаты клавиши');
+  } finally {
+    release?.({ ok: true }); if (first) await first;
+    await new Promise((r) => setTimeout(r, 650));
+    host.available = available; host.paste = paste; spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('чтение выделения блокирует диктовку и замену до ответа Ctrl+C', async () => {
+  const platform = process.platform;
+  const host = require(path.resolve('electron/inputHost.cjs')).host;
+  const available = host.available, copy = host.copy;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  let release, notify, first, calls = 0;
+  const started = new Promise((r) => { notify = r; });
+  host.available = () => true;
+  host.copy = () => { notify(); return new Promise((r) => { release = r; }); };
+  spawnPlan.clipboardHelper = async () => { calls++; return { ok: true }; };
+  try {
+    clipboardText.value = 'буфер перед копированием';
+    first = handlers.get('text:read-selection')({});
+    await started;
+    const dictation = await handlers.get('text:insert')({}, 'диктовка');
+    const replacement = await handlers.get('text:replace-selection')({}, 'замена');
+    if (!dictation?.busy || !replacement?.busy || calls || clipboardText.value !== 'буфер перед копированием') throw new Error('параллельная операция изменила буфер');
+    clipboardText.value = 'скопированное выделение';
+    release({ ok: true });
+    if (await first !== 'скопированное выделение') throw new Error('выделение не получено');
+    if (!(await handlers.get('text:insert')({}, 'после чтения')).ok) throw new Error('блокировка не освобождена');
+  } finally {
+    release?.({ ok: true }); if (first) await first;
+    await new Promise((r) => setTimeout(r, 650));
+    host.available = available; host.copy = copy; spawnPlan.clipboardHelper = null;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+});
+
+await check('ошибка замены выделения освобождает блокировку', async () => {
+  const platform = process.platform;
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  const write = electronStub.clipboard.writeText;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  handlers.get('store:set')({}, 'zs:settings', { ...settings, insertMethod: 'clipboard' });
+  spawnPlan.clipboardHelper = async () => ({ ok: true });
+  try {
+    electronStub.clipboard.writeText = () => { throw new Error('clipboard write failed'); };
+    let rejected = false;
+    try { await handlers.get('text:replace-selection')({}, 'замена'); } catch { rejected = true; }
+    if (!rejected) throw new Error('исключение не воспроизведено');
+    electronStub.clipboard.writeText = write;
+    if (!(await handlers.get('text:insert')({}, 'следующая диктовка')).ok) throw new Error('блокировка не освобождена');
+  } finally {
+    electronStub.clipboard.writeText = write;
     await new Promise((r) => setTimeout(r, 650));
     spawnPlan.clipboardHelper = null;
     handlers.get('store:set')({}, 'zs:settings', settings);
