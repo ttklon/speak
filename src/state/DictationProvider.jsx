@@ -561,7 +561,7 @@ export function DictationProvider({ children }) {
               if (!improved || improved === cleaned) return;
               // Не переписываем ручную правку пользователя, сделанную после вставки.
               if (updateDictation && updateDictation(itemId, { text: improved, words: words(improved) }, { expectedText: cleaned }) === false) {
-                diag.warn('stt', 'Поздняя правка не помещается в историю', { chars: improved.length });
+                diag.warn('stt', 'Поздняя правка превышает бюджет истории', { chars: improved.length });
                 return;
               }
               diag.info('stt', 'Модель вернула позднюю правку диктовки', {
@@ -943,7 +943,7 @@ export function DictationProvider({ children }) {
       });
       pushToast({
         title: 'Файл расшифрован',
-        description: savedToHistory ? `${name} · ${formatDuration(decoded.durationMs)} · ${item.words} слов — в «Недавних»` : `${name} · результат не помещается в историю; сохраните текст из отдельного уведомления.`,
+        description: savedToHistory ? `${name} · ${formatDuration(decoded.durationMs)} · ${item.words} слов — в «Недавних»` : `${name} · результат не добавлен в историю; сохраните текст из отдельного уведомления.`,
         tone: savedToHistory ? 'success' : 'warn',
         ttl: 9000,
       });
@@ -1444,7 +1444,7 @@ export function DictationProvider({ children }) {
       setState('idle');
       pushToast(accepted
         ? { title: 'Ответ агента готов', description: answer.slice(0, 120), tone: 'success' }
-        : { title: 'Ответ агента не помещается в историю', description: 'Сохраните полный текст из отдельного уведомления.', tone: 'warn' });
+        : { title: 'Ответ агента не добавлен в историю', description: 'Сохраните полный текст из отдельного уведомления.', tone: 'warn' });
     } catch (err) {
       if (!isCurrent()) return;
       diag.error('agent', 'Ошибка агента', { reason: String(err?.message || err) });
@@ -1612,7 +1612,7 @@ export function DictationProvider({ children }) {
         sttSecondPass: true,
         sttModel: res.model || settingsRef.current.whisperModel,
       }) === false) {
-        pushToast({ title: 'Точный проход не помещается в историю', description: 'Текст не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: res.text, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
+        pushToast({ title: 'Точный проход превышает бюджет истории', description: 'Текст не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: res.text, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
         return { ok: false, reason: 'history-limit', text: res.text };
       }
       setLast((prev) => (prev ? { ...prev, text: res.text, sttThorough: true, sttSecondPass: true } : prev));

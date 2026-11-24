@@ -27,7 +27,7 @@ export default function EditDictationModal({ open, item, onClose }) {
   const save = () => {
     const next = text.trim();
     if (item && next && next !== item.text && updateDictation(item.id, { text: next }) === false) {
-      push({ title: 'Правка слишком большая для истории', description: 'Текст не сохранён. Скопируйте его из открытого поля до закрытия окна.', tone: 'warn', ttl: 9000 });
+      push({ title: 'Правка превышает бюджет истории', description: 'Текст не сохранён. Скопируйте его из открытого поля до закрытия окна.', tone: 'warn', ttl: 9000 });
       return;
     }
     if (item && next !== item.text) {

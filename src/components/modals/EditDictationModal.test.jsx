@@ -36,7 +36,7 @@ describe('редактирование длинной расшифровки', (
     expect(update).toHaveBeenCalledWith('one', { text: 'тестовая правка' });
     expect(document.querySelector('.modal textarea')?.value).toBe('тестовая правка');
     expect(close).not.toHaveBeenCalled();
-    expect(push).toHaveBeenCalledWith(expect.objectContaining({ title: 'Правка слишком большая для истории', tone: 'warn' }));
+    expect(push).toHaveBeenCalledWith(expect.objectContaining({ title: 'Правка превышает бюджет истории', tone: 'warn' }));
     expect(push).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'Расшифровка обновлена' }));
   });
 });

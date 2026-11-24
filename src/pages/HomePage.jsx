@@ -600,7 +600,7 @@ export default function HomePage() {
                   onClick={() => {
                     const restored = snippet.rawText;
                     if (updateDictation(snippet.id, { text: restored, rawText: undefined }) === false) {
-                      push({ title: 'Текст слишком большой для истории', description: 'Он не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: restored, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
+                      push({ title: 'Текст превышает бюджет истории', description: 'Он не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: restored, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
                       return;
                     }
                     setSnippet({ ...snippet, text: restored, rawText: undefined });

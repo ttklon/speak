@@ -7837,6 +7837,57 @@ async function scenarioHeavyData(browser) {
   await page.close();
 }
 
+// Унаследованная история может быть больше лимита из старого профиля.
+// Короткие записи и переполнение по числу, а не гигантская textarea.
+async function scenarioLegacyHistoryLimit(browser) {
+  const many = Array.from({ length: 2001 }, (_, i) => ({
+    id: `legacy-${i}`, text: `Ранее сохранённая запись ${i}`, createdAt: Date.now() - i * 1000,
+  }));
+  const page = await openPage(browser, '#/home', {
+    settle: 600, settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': many, 'zs.mockSttText': 'Новая фраза для ручного сохранения.' },
+  });
+  takeErrors(page);
+  const before = await page.evaluate(() => ({
+    ids: (window.__e2e.read('zs.dictations') || []).map((x) => x.id),
+    warning: document.body.innerText.includes('История превышает лимит'),
+  }));
+  await clickText(page, 'Начать диктовку');
+  await sleep(1100);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[aria-label="Остановить запись"]');
+    if (stop) stop.click();
+    else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click();
+  });
+  await sleep(2300);
+  const after = await page.evaluate(() => ({
+    ids: (window.__e2e.read('zs.dictations') || []).map((x) => x.id),
+    recover: document.querySelector('.toast__recover')?.value || '',
+    text: document.body.innerText,
+  }));
+  record('сценарии', 'переполненная история: предупреждение и прежние записи сохранены',
+    before.warning && before.ids.length === 2001 && JSON.stringify(after.ids) === JSON.stringify(before.ids),
+    `${before.ids.length} → ${after.ids.length}`);
+  record('сценарии', 'переполненная история: результат диктовки доступен для ручного сохранения',
+    after.recover === 'Новая фраза для ручного сохранения.' && /не добавлена/i.test(after.text), after.recover);
+  const clicked = await page.evaluate(() => {
+    const btn = document.querySelector('.last-result [aria-label="Переспросить точно"]');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  await sleep(500);
+  const retry = await page.evaluate(() => ({
+    calls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm' && c.args?.[0]?.thorough === true).length,
+    warning: document.body.innerText.includes('Нельзя уточнить запись вне истории'),
+  }));
+  record('сценарии', 'переполненная история: точный проход не обещает сохранить отсутствующую запись',
+    clicked && retry.warning && retry.calls === 0, JSON.stringify(retry));
+  const errors = takeErrors(page);
+  record('сценарии', 'переполненная история: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 // Битые данные: профиль мог испортиться после аварийного выключения, старых
 // версий или ручной правки JSON. Приложение обязано открыться, а не умереть.
 async function scenarioBrokenData(browser) {
@@ -9387,6 +9438,7 @@ async function main() {
       ['предупреждения React', scenarioConsoleWarnings],
       ['битые данные', scenarioBrokenData],
       ['большие данные', scenarioHeavyData],
+      ['переполненная история', scenarioLegacyHistoryLimit],
       ['предролл микрофона', scenarioMicPreroll],
       ['живая расшифровка', scenarioLiveWhisper],
       ['пауза и отмена распознавания', scenarioPauseAndCancel],

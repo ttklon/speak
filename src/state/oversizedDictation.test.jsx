@@ -50,4 +50,61 @@ describe('слишком большая новая запись истории',
     expect(state.dictations.map((item) => item.id)).toEqual(['next', 'previous']);
     element.remove();
   });
+
+  it('при реальном лимите отклоняет правку сверх общего бюджета и не теряет старую запись после перезапуска', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const chars = Math.floor(DICTATION_MAX_BYTES / 4) - 100;
+    const now = Date.now();
+    const original = [
+      { id: 'new', text: 'a'.repeat(chars), createdAt: now },
+      { id: 'old', text: 'b'.repeat(chars), createdAt: now },
+    ];
+    localStorage.setItem('zs:zs.dictations', JSON.stringify(original));
+    const element = document.createElement('div');
+    document.body.appendChild(element);
+    let state;
+    function Probe() { state = useAppData(); return null; }
+    root = createRoot(element);
+    await act(async () => root.render(createElement(ToastProvider, null, createElement(AppDataProvider, null, createElement(Probe)))));
+    let accepted;
+    await act(async () => { accepted = state.updateDictation('new', { text: 'a'.repeat(chars + 50) }); });
+    expect(accepted).toBe(false);
+    expect(state.dictations.map((x) => x.text.length)).toEqual([chars, chars]);
+    await act(async () => root.unmount());
+    root = createRoot(element);
+    await act(async () => root.render(createElement(ToastProvider, null, createElement(AppDataProvider, null, createElement(Probe)))));
+    expect(state.dictations.map((x) => x.id)).toEqual(['new', 'old']);
+    expect(state.dictations.map((x) => x.text.length)).toEqual([chars, chars]);
+    element.remove();
+  });
+
+
+  it('при реальном лимите сохраняет унаследованную oversized запись и соседнюю при загрузке', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const now = Date.now();
+    const oversized = 'x'.repeat(Math.floor(DICTATION_MAX_BYTES / 2));
+    localStorage.setItem('zs:zs.dictations', JSON.stringify([
+      { id: 'large', text: oversized, createdAt: now },
+      { id: 'older', text: 'предыдущая запись', createdAt: now },
+    ]));
+    const element = document.createElement('div');
+    document.body.appendChild(element);
+    let state;
+    function Probe() { state = useAppData(); return null; }
+    root = createRoot(element);
+    await act(async () => root.render(createElement(ToastProvider, null, createElement(AppDataProvider, null, createElement(Probe)))));
+    expect(state.dictations.map((x) => x.id)).toEqual(['large', 'older']);
+    let accepted;
+    await act(async () => { accepted = state.addDictation({ id: 'new', text: 'новый текст', createdAt: now }); });
+    expect(accepted).toBe(false);
+    expect(element.querySelector('.toast__recover')?.value).toBe('новый текст');
+    expect(JSON.parse(localStorage.getItem('zs:zs.dictations')).map((x) => x.id)).toEqual(['large', 'older']);
+    await act(async () => root.unmount());
+    root = createRoot(element);
+    await act(async () => root.render(createElement(ToastProvider, null, createElement(AppDataProvider, null, createElement(Probe)))));
+    expect(state.dictations.map((x) => x.id)).toEqual(['large', 'older']);
+    expect(state.dictations[0].text).toBe(oversized);
+    element.remove();
+  });
+
 });

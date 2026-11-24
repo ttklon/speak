@@ -19,7 +19,7 @@ import { migrateSettings } from '../lib/settingsMigration.js';
 import { tuneSettings } from '../lib/autotune.js';
 import { trimByBytes } from '../lib/clipboardBudget.js';
 import { isReplaceableClipboardDuplicate } from '../lib/clipboardHistory.js';
-import { DICTATION_MAX_BYTES, dictationBytes, trimDictations } from '../lib/dictationBudget.js';
+import { DICTATION_MAX_BYTES, DICTATION_MAX_ITEMS, dictationBytes, dictationsBytes, trimDictations } from '../lib/dictationBudget.js';
 import { useToast } from './ToastProvider.jsx';
 import { BACKUP_FORMAT, prepareBackup } from '../lib/backup.js';
 import {
@@ -90,9 +90,19 @@ export function AppDataProvider({ children }) {
   // Демо-наборы остались только для тестов и скриншотов (src/lib/seed.js).
   // История ограничена и по числу записей, и по весу: длинные расшифровки
   // («встреча на час») весят как сотни коротких, а профиль пишется целиком.
-  const [dictations, setDictations] = usePersistentState(STORAGE_KEYS.dictations, () => [], {
-    sanitize: (stored, fallback) => trimDictations(sanitizeDictations(stored, fallback)),
+  const [dictations, setDictationsState] = usePersistentState(STORAGE_KEYS.dictations, () => [], {
+    // Уже существующие данные не обрезаем при запуске: старые версии могли
+    // записать сверх лимита, и обрезка здесь уничтожит их без предупреждения.
+    sanitize: sanitizeDictations,
   });
+  // Несколько операций в одном React batch должны проверять один и тот же
+  // последовательный снимок, а не устаревший снимок последнего рендера.
+  const dictationsRef = useRef(dictations);
+  const setDictations = useCallback((next) => {
+    const value = typeof next === 'function' ? next(dictationsRef.current) : next;
+    dictationsRef.current = value;
+    setDictationsState(value);
+  }, [setDictationsState]);
   const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => [], {
     sanitize: sanitizeDictionary,
   });
@@ -146,6 +156,15 @@ export function AppDataProvider({ children }) {
     setClipboard,
   ]);
 
+  const warnedOverBudget = useRef(false);
+  useEffect(() => {
+    if (warnedOverBudget.current) return;
+    if (dictationsRef.current.length > DICTATION_MAX_ITEMS || dictationsBytes(dictationsRef.current) > DICTATION_MAX_BYTES) {
+      warnedOverBudget.current = true;
+      push({ title: 'История превышает лимит', description: 'Сохраните важные записи отдельно и сократите историю. Новые записи пока нельзя добавить; отдельный результат можно сохранить вручную.', tone: 'warn', ttl: 0 });
+    }
+  }, [push]);
+
   // Слияние настроек по умолчанию (после добавления новых полей) — один раз
   useEffect(() => {
     if (merged) return;
@@ -189,12 +208,15 @@ export function AppDataProvider({ children }) {
 
   const addDictation = useCallback(
     (item) => {
-      if (dictationBytes(item) > DICTATION_MAX_BYTES) {
-        // Иначе trimDictations начнёт с записи, которая не влезает, и
-        // вернёт [] — уничтожив не только её, но и всю прежнюю историю.
+      const oversized = dictationBytes(item) > DICTATION_MAX_BYTES;
+      const historyOverBudget = dictationsRef.current.length > DICTATION_MAX_ITEMS || dictationsBytes(dictationsRef.current) > DICTATION_MAX_BYTES;
+      if (oversized || historyOverBudget) {
+        // Иначе trimDictations может уничтожить уже существующие записи.
         push({
-          title: 'Запись слишком большая для истории',
-          description: 'Она не сохранена в истории. Скопируйте текст отсюда вручную до закрытия уведомления или приложения.',
+          title: oversized ? 'Запись слишком большая для истории' : 'История превышает лимит',
+          description: oversized
+            ? 'Она не сохранена в истории. Скопируйте текст отсюда вручную до закрытия уведомления или приложения.'
+            : 'Новая запись не добавлена. Скопируйте текст отсюда вручную и сократите историю.',
           recoverText: item.text,
           recoverLabel: 'Несохранённый текст истории',
           tone: 'warn', ttl: 0,
@@ -215,8 +237,20 @@ export function AppDataProvider({ children }) {
   /** Пользователь поправил расшифровку — сохраняем исправленный текст. */
   const updateDictation = useCallback(
     (id, patch, { expectedText } = {}) => {
-      // Не записывать правку, которая при следующем запуске обнулит историю.
-      if (typeof patch?.text === 'string' && dictationBytes({ text: patch.text }) > DICTATION_MAX_BYTES) return false;
+      const current = dictationsRef.current;
+      if (typeof patch?.text === 'string') {
+        const oldBytes = dictationsBytes(current);
+        let newBytes = oldBytes;
+        // Старый профиль может содержать совпадающие ID; map ниже меняет все
+        // совпадения, поэтому бюджет тоже проверяем для всех, а не первого.
+        for (const d of current) {
+          if (d.id !== id || (expectedText !== undefined && d.text !== expectedText)) continue;
+          newBytes += dictationBytes({ ...d, ...patch }) - dictationBytes(d);
+        }
+        // Не теряем старые записи из-за расширения другой записи. Если история
+        // уже выше лимита, уменьшение разрешено, чтобы её можно было сократить.
+        if (newBytes > DICTATION_MAX_BYTES && newBytes > oldBytes) return false;
+      }
       setDictations((prev) =>
         prev.map((d) => (d.id === id && (expectedText === undefined || d.text === expectedText)
           ? { ...d, ...patch, editedAt: Date.now() } : d)),
