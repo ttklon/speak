@@ -138,4 +138,56 @@ describe('бюджет истории при загрузке и правке', 
     expect(state.getDictationSnapshot('one').text).toBe(initial.text);
   });
 
+  it('не применяет черновик к другой версии, даже если текст вернулся к прежнему', async () => {
+    seed([item('one', 10)]); await mount();
+    const snapshot = state.getDictationSnapshot('one');
+    let result;
+    await act(async () => {
+      state.updateDictation('one', { text: 'изменено' });
+      state.updateDictation('one', { text: snapshot.text });
+      result = state.saveDictationEdit(snapshot, { text: 'черновик', words: 1 });
+    });
+    expect(result).toEqual({ ok: false, reason: 'changed' });
+    await remount();
+    expect(state.dictations[0].text).toBe(snapshot.text);
+  });
+  it('не правит удалённую или неоднозначную запись и отличает превышение бюджета', async () => {
+    seed([item('one', 10)]); await mount();
+    const snapshot = state.getDictationSnapshot('one');
+    let tooBig, deleted;
+    await act(async () => {
+      tooBig = state.saveDictationEdit(snapshot, { text: 'z'.repeat(180) });
+      state.deleteDictation('one');
+      deleted = state.saveDictationEdit(snapshot, { text: 'текст' });
+    });
+    expect(tooBig).toEqual({ ok: false, reason: 'budget' });
+    expect(deleted).toEqual({ ok: false, reason: 'changed' });
+  });
+  it('сохраняет текст и счётчик, когда версия не менялась', async () => {
+    seed([item('one', 10)]); await mount();
+    let result;
+    await act(async () => { result = state.saveDictationEdit(state.getDictationSnapshot('one'), { text: '  два слова\n', words: 2 }); });
+    expect(result).toEqual({ ok: true });
+    await remount();
+    expect(state.dictations[0]).toMatchObject({ text: '  два слова\n', words: 2 });
+  });
+
+  it('не изменяет записи с неоднозначным ID даже по одной из версий', async () => {
+    seed([item('same', 10), item('same', 11)]); await mount();
+    const first = state.dictations[0]; let result;
+    await act(async () => { result = state.saveDictationEdit(first, { text: 'черновик' }); });
+    expect(result).toEqual({ ok: false, reason: 'changed' });
+    await remount(); expect(state.dictations.map((d) => d.text.length)).toEqual([10, 11]);
+  });
+  it('не заменяет удалённую и восстановленную запись', async () => {
+    seed([item('one', 10)]); await mount();
+    const snapshot = state.getDictationSnapshot('one'); let result;
+    await act(async () => {
+      state.deleteDictation('one'); state.addDictation(snapshot);
+      result = state.saveDictationEdit(snapshot, { text: 'черновик' });
+    });
+    expect(result).toEqual({ ok: false, reason: 'changed' });
+    await remount(); expect(state.dictations[0].text).toBe(snapshot.text);
+  });
+
 });

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Plus, Search, Star, Trash2 } from 'lucide-react';
+import { Pencil, Plus, Search, Star, Trash2 } from 'lucide-react';
 import { knownAliases } from '../lib/dictionary/aliases.js';
 import { dictionaryConflicts } from '../lib/dictionary/replacements.js';
 import { useAppData } from '../state/AppDataProvider.jsx';
@@ -15,6 +15,8 @@ export default function DictionaryPage() {
   const {
     dictionary,
     addDictionaryWord,
+    updateDictionaryWord,
+    restoreDictionaryWord,
     removeDictionaryWord,
     toggleDictionaryPin,
     snippets,
@@ -31,6 +33,7 @@ export default function DictionaryPage() {
   const [word, setWord] = useState('');
   const [pron, setPron] = useState('');
   const [pin, setPin] = useState(false);
+  const [editingWord, setEditingWord] = useState(null);
   // Быстрые блоки: фраза-триггер и текст, который вместо неё вставляется.
   const [snipOpen, setSnipOpen] = useState(false);
   const [snipTrigger, setSnipTrigger] = useState('');
@@ -56,21 +59,25 @@ export default function DictionaryPage() {
     return list;
   }, [dictionary, query, tab]);
 
+  const openNewWord = () => {
+    setEditingWord(null);
+    setWord(''); setPron(''); setPin(false);
+    setOpen(true);
+  };
+  const openEditWord = (entry) => {
+    setEditingWord(entry);
+    setWord(entry.word);
+    setPron(typeof entry.pronunciation === 'string' ? entry.pronunciation : '');
+    setPin(entry.pinned === true);
+    setOpen(true);
+  };
   const submit = () => {
-    // слово уже есть — добавление заменит его, поэтому и сообщение другое
-    const exists = dictionary.some((w) => w.word.toLowerCase() === word.trim().toLowerCase());
-    const entry = addDictionaryWord(word, pron, { pinned: pin });
-    if (entry) {
-      push({
-        title: exists ? 'Слово обновлено' : 'Слово добавлено',
-        description: exists ? `${entry.word} — уже было в словаре` : entry.word,
-        tone: 'success',
-      });
-      setWord('');
-      setPron('');
-      setPin(false);
-      setOpen(false);
-    }
+    const entry = editingWord
+      ? updateDictionaryWord(editingWord, { word, pronunciation: pron, pinned: pin })
+      : addDictionaryWord(word, pron, { pinned: pin });
+    if (!entry) return; // При конфликте черновик остаётся в открытой форме.
+    push({ title: editingWord ? 'Слово обновлено' : 'Слово добавлено', description: entry.word, tone: 'success' });
+    setWord(''); setPron(''); setPin(false); setEditingWord(null); setOpen(false);
   };
 
   const submitSnippet = () => {
@@ -100,7 +107,7 @@ export default function DictionaryPage() {
             состояния: две кнопки об одном. */}
         {dictionary.length ? (
           <div className="page__actions">
-            <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={() => setOpen(true)}>
+            <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={openNewWord}>
               Добавить
             </Button>
           </div>
@@ -146,7 +153,7 @@ export default function DictionaryPage() {
       {filtered.length === 0 ? (
         <div className="dict-empty">
           <p>Пока пусто. Добавьте имя или термин — это может помочь распознаванию.</p>
-          <Button variant="white" size="sm" icon={<Plus size={13} />} onClick={() => setOpen(true)}>
+          <Button variant="white" size="sm" icon={<Plus size={13} />} onClick={openNewWord}>
             Добавить слово
           </Button>
         </div>
@@ -193,6 +200,15 @@ export default function DictionaryPage() {
               <span className="dict-row__date">{dayLabel(entry.createdAt)}</span>
               <button
                 type="button"
+                className="icon-btn icon-btn--sm"
+                aria-label={`Изменить «${entry.word}»`}
+                title="Изменить слово и произношение"
+                onClick={() => openEditWord(entry)}
+              >
+                <Pencil size={12} />
+              </button>
+              <button
+                type="button"
                 className="icon-btn icon-btn--sm icon-btn--danger"
                 onClick={() => {
                   removeDictionaryWord(entry.id);
@@ -204,8 +220,7 @@ export default function DictionaryPage() {
                     ttl: 8000,
                     action: {
                       label: 'Вернуть',
-                      onClick: () =>
-                        addDictionaryWord(entry.word, entry.pronunciation, { pinned: entry.pinned }),
+                      onClick: () => restoreDictionaryWord(entry),
                     },
                   });
                 }}
@@ -350,7 +365,7 @@ export default function DictionaryPage() {
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        title="Добавить в словарь"
+        title={editingWord ? 'Изменить слово' : 'Добавить в словарь'}
         width={420}
         footer={
           <>
@@ -358,7 +373,7 @@ export default function DictionaryPage() {
               Отмена
             </Button>
             <Button variant="white" onClick={submit} disabled={!word.trim()}>
-              Добавить
+              {editingWord ? 'Сохранить' : 'Добавить'}
             </Button>
           </>
         }
@@ -366,7 +381,7 @@ export default function DictionaryPage() {
         <div className="stack-12">
           <div className="field">
             <label className="field__label" htmlFor="dict-word">
-              Новое слово
+              {editingWord ? 'Слово' : 'Новое слово'}
             </label>
             <input
               id="dict-word"

@@ -9,7 +9,7 @@ import { navigate } from '../lib/router.js';
 import { engineName, hasNativeStt, hasWebSpeech } from '../lib/recognition/engine.js';
 import { VOICE_COMMAND_TIP } from '../lib/voiceCommands.js';
 import { AUDIO_ACCEPT, progressLabel } from '../lib/recognition/audioFile.js';
-import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK } from '../lib/utils.js';
+import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK, words } from '../lib/utils.js';
 import { APP, WHY_BETTER } from '../lib/config.js';
 import { diffWords, hasRawText } from '../lib/historyRaw.js';
 import Icon from '../components/ui/Icon.jsx';
@@ -44,7 +44,7 @@ function howItRan(item) {
 }
 
 export default function HomePage() {
-  const { dictations, voiceHotkeys, settings, deleteDictation, addDictation, updateDictation } = useAppData();
+  const { dictations, voiceHotkeys, settings, deleteDictation, addDictation, saveDictationEdit, getDictationSnapshot } = useAppData();
   const {
     state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress,
     cancelProcessing, fileJob, transcribeFile, cancelFile, retryLast, retrying, agentPending,
@@ -599,11 +599,12 @@ export default function HomePage() {
                   className="link-btn"
                   onClick={() => {
                     const restored = snippet.rawText;
-                    if (updateDictation(snippet.id, { text: restored, rawText: undefined }) === false) {
-                      push({ title: 'Текст превышает бюджет истории', description: 'Он не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: restored, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
+                    const result = saveDictationEdit(snippet, { text: restored, rawText: undefined, words: words(restored) });
+                    if (!result.ok) {
+                      push({ title: result.reason === 'budget' ? 'Текст превышает бюджет истории' : 'Запись изменилась', description: 'Он не сохранён. Скопируйте его отсюда до закрытия уведомления или приложения.', recoverText: restored, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
                       return;
                     }
-                    setSnippet({ ...snippet, text: restored, rawText: undefined });
+                    setSnippet(getDictationSnapshot(snippet.id));
                     push({
                       title: 'Вернули как распозналось',
                       description: 'Дальше правьте руками — приложение этот текст больше не меняло.',

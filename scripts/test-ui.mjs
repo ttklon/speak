@@ -4147,7 +4147,7 @@ async function scenarioDictionary(browser) {
   await page.evaluate(() => document.querySelector('.dict-row .dict-row__pin')?.click());
   await sleep(350);
 
-  // повторное добавление того же слова не плодит копии и честно говорит «обновлено»
+  // повторное добавление не заменяет прежнее слово без явной правки
   await clickText(page, 'Добавить');
   await sleep(300);
   const dupInput = await page.$('.modal input');
@@ -4160,8 +4160,8 @@ async function scenarioDictionary(browser) {
   );
   record(
     'сценарии',
-    'словарь: повтор слова обновляет запись и пишет «обновлено»',
-    afterDup === afterDelete && /обновлено/i.test(dupToast),
+    'словарь: повтор слова не заменяет существующую запись',
+    afterDup === afterDelete && /уже есть/i.test(dupToast),
     `${afterDelete} → ${afterDup}, ${dupToast.slice(0, 50)}`,
   );
   await page.close();
@@ -4721,6 +4721,13 @@ async function scenarioRawText(browser) {
     restored === true && after.text === 'привет зи спикли' && !after.block && !after.stored.rawText,
     `нажата=${restored} текст=${after.text.slice(0, 24)} · сырой=${after.stored.rawText ? 'остался' : 'убран'}`,
   );
+  await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Исправить/.test(b.innerText))?.click());
+  const area = await page.$('.modal textarea');
+  await area.click({ clickCount: 3 }); await area.type('ручная правка после возврата');
+  await clickText(page, 'Сохранить', '.modal button'); await sleep(350);
+  const editedAfterRestore = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]);
+  record('сценарии', 'история: после возврата сырого текста можно сохранить ручную правку',
+    editedAfterRestore?.text === 'ручная правка после возврата' && editedAfterRestore?.words === 4, JSON.stringify(editedAfterRestore));
   const errors = takeErrors(page);
   record('сценарии', 'история: «как распозналось» без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
@@ -6368,6 +6375,60 @@ async function scenarioDecodeMode(browser) {
  * Словарь и кириллица: человек говорит «зум», движок пишет «зум», а в словаре
  * записано Zoom. Раньше такая пара не срабатывала — заменять было нечего.
  */
+async function scenarioDictionaryDataSafety(browser) {
+  const old = { id: 'w1', word: 'Термин', pronunciation: 'тер мин', pinned: true, hits: 23, lastUsedAt: 123, createdAt: 100 };
+  const make = () => openPage(browser, '#/dictionary', { storeSeed: { 'zs.dictionary': [old] } });
+  const duplicate = await make();
+  await clickText(duplicate, 'Добавить');
+  await duplicate.type('#dict-word', 'термин'); await duplicate.type('#dict-pron', 'новое');
+  await clickText(duplicate, 'Добавить', '.modal button'); await sleep(300);
+  const result = await duplicate.evaluate(() => ({ list: window.__e2e.read('zs.dictionary'),
+    draft: document.querySelector('#dict-pron')?.value, text: document.body.innerText }));
+  record('сценарии', 'словарь: повторное добавление не затирает запись и оставляет черновик',
+    JSON.stringify(result.list?.[0]) === JSON.stringify(old) && result.draft === 'новое' && /уже есть/i.test(result.text), JSON.stringify({ list: result.list, draft: result.draft }));
+  await duplicate.close();
+
+  const restore = await make();
+  await restore.click('.dict-row button[aria-label="Удалить"]'); await sleep(200);
+  await clickText(restore, 'Вернуть', '.toast__action'); await sleep(300);
+  const restored = await restore.evaluate(() => window.__e2e.read('zs.dictionary'));
+  record('сценарии', 'словарь: отмена удаления возвращает исходную статистику и идентификатор',
+    restored?.length === 1 && JSON.stringify(restored[0]) === JSON.stringify(old), JSON.stringify(restored));
+  await restore.close();
+
+  const overlap = await make();
+  await overlap.click('.dict-row button[aria-label="Удалить"]'); await sleep(200);
+  await clickText(overlap, 'Добавить слово');
+  await overlap.type('#dict-word', 'Термин'); await overlap.type('#dict-pron', 'новое');
+  await clickText(overlap, 'Добавить', '.modal button'); await sleep(250);
+  await overlap.evaluate(() => [...document.querySelectorAll('.toast')].find((t) => /Слово удалено/.test(t.innerText))?.querySelector('.toast__action')?.click());
+  await sleep(300);
+  const both = await overlap.evaluate(() => window.__e2e.read('zs.dictionary'));
+  record('сценарии', 'словарь: возврат удалённого не затирает добавленное слово',
+    both?.length === 2 && both.some((w) => w.id === old.id && w.hits === old.hits) && both.some((w) => w.id !== old.id && w.pronunciation === 'новое'), JSON.stringify(both));
+  await overlap.close();
+
+  const edit = await make();
+  await edit.click('.dict-row button[aria-label^="Изменить"]'); await sleep(250);
+  await edit.click('#dict-word', { clickCount: 3 }); await edit.type('#dict-word', 'Новое');
+  await edit.click('#dict-pron', { clickCount: 3 }); await edit.type('#dict-pron', 'новое произношение');
+  await clickText(edit, 'Сохранить', '.modal button'); await sleep(300);
+  const edited = await edit.evaluate(() => window.__e2e.read('zs.dictionary'));
+  record('сценарии', 'словарь: явная правка сохраняет ID и статистику',
+    edited?.length === 1 && edited[0].id === old.id && edited[0].hits === old.hits && edited[0].pinned && edited[0].word === 'Новое' && edited[0].pronunciation === 'новое произношение', JSON.stringify(edited));
+  await edit.close();
+
+  const conflict = await openPage(browser, '#/dictionary', { storeSeed: { 'zs.dictionary': [old, { ...old, id: 'w2', word: 'Второе' }] } });
+  await conflict.click('.dict-row button[aria-label="Изменить «Термин»"]'); await sleep(250);
+  await conflict.click('#dict-word', { clickCount: 3 }); await conflict.type('#dict-word', 'Второе');
+  await conflict.click('#dict-pron', { clickCount: 3 }); await conflict.type('#dict-pron', 'черновик');
+  await clickText(conflict, 'Сохранить', '.modal button'); await sleep(300);
+  const rejected = await conflict.evaluate(() => ({ list: window.__e2e.read('zs.dictionary'), draft: document.querySelector('#dict-pron')?.value, text: document.body.innerText }));
+  record('сценарии', 'словарь: конфликт правки оставляет обе записи и черновик',
+    rejected.list?.length === 2 && rejected.list.some((w) => w.id === old.id && w.word === old.word) && rejected.list.some((w) => w.id === 'w2' && w.word === 'Второе') && rejected.draft === 'черновик' && /уже есть/i.test(rejected.text), JSON.stringify(rejected.list));
+  await conflict.close();
+}
+
 async function scenarioDictionarySafety(browser) {
   const conflictPage = await openPage(browser, '#/dictionary', { storeSeed: { 'zs.dictionary': [
     { id: 'one', word: 'Клара', pronunciation: 'клера' }, { id: 'two', word: 'Клэр', pronunciation: 'клера' },
@@ -10250,6 +10311,7 @@ async function main() {
       ['режим распознавания', scenarioDecodeMode],
       ['словарь: кириллица', scenarioDictionaryAliases],
       ['словарь: безопасность замены', scenarioDictionarySafety],
+      ['словарь: сохранность записей', scenarioDictionaryDataSafety],
       ['разбор точности', scenarioQualityReport],
       ['совет по модели', scenarioHardwareFit],
       ['узкое окно', scenarioNarrowWindow],

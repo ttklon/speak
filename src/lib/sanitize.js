@@ -59,7 +59,11 @@ export function sanitizeDictations(stored, fallback = []) {
 }
 
 export function sanitizeDictionary(stored, fallback = []) {
-  return asList(
+  const reserved = new Set((Array.isArray(stored) ? stored : [])
+    .map((item) => typeof item?.id === 'string' ? item.id : '')
+    .filter(Boolean));
+  const used = new Set();
+  const list = asList(
     stored,
     (item) => {
       if (!item || typeof item !== 'object') return null;
@@ -73,7 +77,7 @@ export function sanitizeDictionary(stored, fallback = []) {
       const lastUsedAt = Number(item.lastUsedAt);
       return {
         ...item,
-        id: item.id || fallbackId('w'),
+        id: typeof item.id === 'string' ? item.id : '',
         word,
         pinned: item.pinned === true,
         hits: Number.isFinite(hits) && hits > 0 ? Math.floor(hits) : 0,
@@ -82,6 +86,14 @@ export function sanitizeDictionary(stored, fallback = []) {
     },
     fallback,
   );
+  return list.map((item) => {
+    let id = item.id;
+    if (!id || used.has(id)) {
+      do { id = fallbackId('w'); } while (reserved.has(id) || used.has(id));
+    }
+    used.add(id);
+    return id === item.id ? item : { ...item, id };
+  });
 }
 
 export function sanitizeClipboard(stored, fallback = []) {

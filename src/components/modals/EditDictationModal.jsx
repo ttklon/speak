@@ -5,7 +5,7 @@ import { Button } from '../ui/Controls.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { useToast } from '../../state/ToastProvider.jsx';
 import { learnFromEdit } from '../../lib/dictionary/learn.js';
-import { dayLabel, timeHM } from '../../lib/utils.js';
+import { dayLabel, timeHM, words } from '../../lib/utils.js';
 
 /**
  * Правка расшифровки. После сохранения ZSpeakly сам предлагает добавить
@@ -13,7 +13,7 @@ import { dayLabel, timeHM } from '../../lib/utils.js';
  * на «зелёнке».
  */
 export default function EditDictationModal({ open, item, onClose }) {
-  const { dictionary, addDictionaryWord, updateDictation } = useAppData();
+  const { dictionary, addDictionaryWord, saveDictationEdit } = useAppData();
   const { push } = useToast();
   const [text, setText] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -25,12 +25,18 @@ export default function EditDictationModal({ open, item, onClose }) {
   }, [open, item]);
 
   const save = () => {
-    const next = text.trim();
-    if (item && next && next !== item.text && updateDictation(item.id, { text: next }) === false) {
-      push({ title: 'Правка превышает бюджет истории', description: 'Текст не сохранён. Скопируйте его из открытого поля до закрытия окна.', tone: 'warn', ttl: 9000 });
+    const next = text;
+    if (!next.trim()) {
+      push({ title: 'Пустая расшифровка', description: 'Введите текст или отмените правку.', tone: 'warn' });
       return;
     }
     if (item && next !== item.text) {
+      const result = saveDictationEdit(item, { text: next, words: words(next) });
+      if (!result.ok) {
+        push({ title: result.reason === 'budget' ? 'Правка превышает бюджет истории' : 'Запись изменилась',
+          description: 'Текст не сохранён. Скопируйте его из открытого поля до закрытия окна.', tone: 'warn', ttl: 9000 });
+        return;
+      }
       const found = learnFromEdit(item.text, next, dictionary);
       if (found.length) {
         setSuggestions(found);
@@ -42,12 +48,13 @@ export default function EditDictationModal({ open, item, onClose }) {
   };
 
   const addAll = () => {
-    suggestions.forEach((s) => addDictionaryWord(s.word, s.pronunciation));
-    push({
-      title: 'Добавлено в словарь',
-      description: suggestions.map((s) => s.word).join(', '),
-      tone: 'success',
-    });
+    const failed = suggestions.filter((s) => !addDictionaryWord(s.word, s.pronunciation));
+    if (failed.length) {
+      setSuggestions(failed);
+      push({ title: 'Не все слова добавлены', description: `Не добавлены: ${failed.map((s) => s.word).join(', ')}. Проверьте словарь или выберите «Позже».`, tone: 'warn', ttl: 9000 });
+      return;
+    }
+    push({ title: 'Добавлено в словарь', description: suggestions.map((s) => s.word).join(', '), tone: 'success' });
     onClose?.();
   };
 
@@ -86,13 +93,14 @@ export default function EditDictationModal({ open, item, onClose }) {
           data-autofocus
           rows={7}
           value={text}
+          readOnly={suggestions.length > 0}
           onChange={(e) => setText(e.target.value)}
         />
         {suggestions.length ? (
           <div className="learn-card">
             <div className="learn-card__head">
               <GraduationCap size={14} />
-              <span>Добавить в словарь, чтобы больше не распознавалось с ошибкой?</span>
+              <span>Текст сохранён. Добавить исправленные слова в словарь?</span>
             </div>
             <ul className="learn-card__list">
               {suggestions.map((s) => (

@@ -35,6 +35,7 @@ import {
 } from '../lib/sanitize.js';
 import { SNIPPET_LIMITS, normalizePhrase, sanitizeSnippets } from '../lib/snippets.js';
 import { countDictionaryUsage, rankDictionary } from '../lib/dictionary/rank.js';
+import { dictionaryWordKey } from '../lib/dictionary/identity.js';
 import { sanitizeAppProfiles } from '../lib/appProfiles.js';
 
 const AppDataContext = createContext(null);
@@ -103,9 +104,15 @@ export function AppDataProvider({ children }) {
     dictationsRef.current = value;
     setDictationsState(value);
   }, [setDictationsState]);
-  const [dictionary, setDictionary] = usePersistentState(STORAGE_KEYS.dictionary, () => [], {
+  const [dictionary, setDictionaryState] = usePersistentState(STORAGE_KEYS.dictionary, () => [], {
     sanitize: sanitizeDictionary,
   });
+  const dictionaryRef = useRef(dictionary);
+  const setDictionary = useCallback((next) => {
+    const value = typeof next === 'function' ? next(dictionaryRef.current) : next;
+    dictionaryRef.current = value;
+    setDictionaryState(value);
+  }, [setDictionaryState]);
   // Быстрые блоки: сказал «моя подпись» — вставился текст. Хранятся рядом со
   // словарём, потому что это тоже «мои слова», но правило другое: словарь
   // правит написание, блок заменяет всю фразу.
@@ -282,6 +289,17 @@ export function AppDataProvider({ children }) {
     [setDictations],
   );
 
+  // Ручная правка применима только к единственной неизменённой версии.
+  const saveDictationEdit = useCallback((snapshot, patch) => {
+    if (!snapshot || getDictationSnapshot(snapshot.id) !== snapshot) return { ok: false, reason: 'changed' };
+    const current = dictationsRef.current;
+    const oldBytes = dictationsBytes(current);
+    const newBytes = oldBytes + dictationBytes({ ...snapshot, ...patch }) - dictationBytes(snapshot);
+    if (newBytes > DICTATION_MAX_BYTES && newBytes > oldBytes) return { ok: false, reason: 'budget' };
+    setDictations((prev) => prev.map((d) => d === snapshot ? { ...d, ...patch, editedAt: Date.now() } : d));
+    return { ok: true };
+  }, [getDictationSnapshot, setDictations]);
+
   const clearDictations = useCallback(() => setDictations([]), [setDictations]);
 
   const recordWords = useCallback(
@@ -306,23 +324,50 @@ export function AppDataProvider({ children }) {
   const addDictionaryWord = useCallback(
     (word, pronunciation, { pinned = false } = {}) => {
       const clean = String(word || '').trim();
-      if (!clean) return null;
-      const entry = {
-        id: uid('dict'),
-        word: clean,
-        pronunciation: String(pronunciation || '').trim(),
-        createdAt: Date.now(),
-        pinned: pinned === true,
-        hits: 0,
-        lastUsedAt: 0,
-      };
-      // то же слово (без учёта регистра) не дублируем, а обновляем: иначе список
-      // рос бы копиями, а whisper получал бы один и тот же термин дважды
-      setDictionary((prev) => [entry, ...prev.filter((w) => w.word.toLowerCase() !== clean.toLowerCase())]);
+      const key = dictionaryWordKey(clean);
+      if (!key) return null;
+      if (dictionaryRef.current.some((w) => dictionaryWordKey(w.word) === key)) {
+        push({ title: 'Слово уже есть в словаре', description: 'Существующее слово не изменено. Для правки откройте его в списке.', tone: 'warn', ttl: 9000 });
+        return null;
+      }
+      const entry = { id: uid('dict'), word: clean, pronunciation: String(pronunciation || '').trim(),
+        createdAt: Date.now(), pinned: pinned === true, hits: 0, lastUsedAt: 0 };
+      setDictionary((prev) => [entry, ...prev]);
       return entry;
     },
-    [setDictionary],
+    [push, setDictionary],
   );
+
+  const updateDictionaryWord = useCallback((snapshot, patch) => {
+    // Проверяем именно снимок, а не только id/текст: удаление-возврат и
+    // закрепление во время открытого окна не должны затираться старой формой.
+    const current = dictionaryRef.current.find((w) => w.id === snapshot?.id);
+    if (!snapshot || current !== snapshot) {
+      push({ title: 'Слово изменилось', description: 'Правка не сохранена. Скопируйте черновик, закройте окно и откройте слово заново.', tone: 'warn', ttl: 9000 });
+      return null;
+    }
+    const word = String(patch?.word || '').trim();
+    const key = dictionaryWordKey(word);
+    if (!key) return null;
+    if (dictionaryRef.current.some((w) => w !== current && dictionaryWordKey(w.word) === key)) {
+      push({ title: 'Слово уже есть в словаре', description: 'Правка не сохранена. Выберите другое слово.', tone: 'warn', ttl: 9000 });
+      return null;
+    }
+    const entry = { ...current, word, pronunciation: String(patch?.pronunciation || '').trim(), pinned: patch?.pinned === true };
+    setDictionary((prev) => prev.map((w) => (w === current ? entry : w)));
+    return entry;
+  }, [push, setDictionary]);
+
+  const restoreDictionaryWord = useCallback((entry) => {
+    if (dictionaryRef.current.some((w) => w.id === entry.id)) {
+      push({ title: 'Слово не восстановлено', description: 'Идентификатор уже занят. Скопируйте данные вручную до закрытия уведомления.',
+        recoverText: JSON.stringify(entry, null, 2), recoverLabel: 'Данные удалённого слова', tone: 'warn', ttl: 0 });
+      return false;
+    }
+    // Явный возврат может создать одинаковые слова, но не меняет новую запись.
+    setDictionary((prev) => [{ ...entry }, ...prev]);
+    return true;
+  }, [push, setDictionary]);
 
   const removeDictionaryWord = useCallback(
     (id) => setDictionary((prev) => prev.filter((w) => w.id !== id)),
@@ -577,9 +622,12 @@ export function AppDataProvider({ children }) {
       deleteDictation,
       updateDictation,
       getDictationSnapshot,
+      saveDictationEdit,
       clearDictations,
       dictionary,
       addDictionaryWord,
+      updateDictionaryWord,
+      restoreDictionaryWord,
       removeDictionaryWord,
       toggleDictionaryPin,
       noteDictionaryUsage,
@@ -615,9 +663,11 @@ export function AppDataProvider({ children }) {
     }),
     [
       exportBackup, importBackup,
-      settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, getDictationSnapshot, clearDictations,
+      settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, getDictationSnapshot, saveDictationEdit, clearDictations,
       dictionary,
       addDictionaryWord,
+      updateDictionaryWord,
+      restoreDictionaryWord,
       removeDictionaryWord,
       toggleDictionaryPin,
       noteDictionaryUsage,
