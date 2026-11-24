@@ -285,6 +285,7 @@ export function DictationProvider({ children }) {
       // Идентификатор создаём до асинхронной полировки: её поздний ответ
       // должен относиться к этой записи, а не к последней на момент ответа.
       const itemId = `d-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      let historySnapshot = null;
       // страховка: если вторая стадия почему-то не вернётся, диктовка не должна
       // навсегда остаться «занятой»
       const hardReset = setTimeout(() => {
@@ -560,7 +561,13 @@ export function DictationProvider({ children }) {
               if (!late || isCancelled()) return;
               const improved = formatForApp(late, where.style);
               if (!improved || improved === cleaned) return;
-              // Не переписываем ручную правку пользователя, сделанную после вставки.
+              // Сравнение только текста не распознаёт удаление с возвратом или
+              // правку с возвратом прежнего текста. Проверяем версию записи;
+              // следующий update синхронен и не может пересечься с другим событием.
+              if (!historySnapshot || getDictationSnapshot(itemId) !== historySnapshot) {
+                diag.info('stt', 'Поздняя правка пропущена: запись изменилась или отсутствует', { chars: improved.length });
+                return;
+              }
               if (updateDictation && updateDictation(itemId, { text: improved, words: words(improved) }, { expectedText: cleaned }) === false) {
                 diag.warn('stt', 'Поздняя правка превышает бюджет истории', { chars: improved.length });
                 return;
@@ -691,6 +698,7 @@ export function DictationProvider({ children }) {
       if (cleaned) {
         setLast(item);
         const savedToHistory = addDictation(item);
+        historySnapshot = savedToHistory ? getDictationSnapshot(item.id) : null;
         lastItemId.current = savedToHistory ? item.id : null;
         recordWords(item.words, durationMs);
         // словарь учится на том, что человек реально диктует: это меняет
@@ -804,7 +812,7 @@ export function DictationProvider({ children }) {
       release();
       return item;
     },
-    [addDictation, noteDictionaryUsage, recordWords],
+    [addDictation, getDictationSnapshot, noteDictionaryUsage, recordWords, updateDictation, pushToast],
   );
 
   /**

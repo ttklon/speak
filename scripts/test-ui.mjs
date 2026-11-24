@@ -2273,6 +2273,62 @@ async function scenarioLatePolishEdit(browser) {
   } finally { await page.close(); }
 }
 
+// Сравнение только текста не замечает delete → undo или edit → исходный текст.
+async function scenarioLatePolishReverted(browser) {
+  for (const kind of ['unchanged', 'deleted', 'delete-restore', 'edit-restore', 'precise-retry']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true, liveWhisper: false },
+      storeSeed: { 'zs.dictations': [] },
+      patchNative: () => {
+        window.zspeakly.native.transcribePcm = async (payload) => ({ ok: true, text: payload?.thorough ? 'Первая запись про рыбу и море.' : 'первая запись про рыбу' });
+        window.zspeakly.native.httpPost = async () => new Promise((resolve) => { window.__resolveLatePolish = resolve; });
+      },
+    });
+    takeErrors(page);
+    try {
+      await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1 && Boolean(window.__resolveLatePolish), { timeout: 10000 });
+      const original = await page.evaluate(() => (window.__e2e.read('zs.dictations') || [])[0]);
+      if (kind === 'deleted' || kind === 'delete-restore') {
+        await page.click('.recent__row'); await sleep(150);
+        await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Удалить/.test(b.innerText))?.click());
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 0, { timeout: 5000 });
+        if (kind === 'delete-restore') {
+          await page.evaluate(() => [...document.querySelectorAll('.toast__action')].find((b) => /Вернуть/.test(b.innerText))?.click());
+          await page.waitForFunction((id) => (window.__e2e.read('zs.dictations') || []).some((r) => r.id === id), { timeout: 5000 }, original.id);
+        }
+      } else if (kind === 'edit-restore') {
+        const edit = async (text) => {
+          await page.click('.recent__row'); await sleep(150);
+          await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Исправить/.test(b.innerText))?.click());
+          await page.waitForSelector('.modal textarea');
+          const area = await page.$('.modal textarea');
+          await area.click({ clickCount: 3 }); await area.type(text);
+          await page.evaluate(() => [...document.querySelectorAll('.modal button')].find((b) => /Сохранить/i.test(b.innerText))?.click());
+          await page.waitForFunction((value) => (window.__e2e.read('zs.dictations') || [])[0]?.text === value, { timeout: 5000 }, text);
+          await sleep(200);
+          if (await page.$('.modal')) { await page.keyboard.press('Escape'); await sleep(150); }
+        };
+        await edit('Временная правка человека.');
+        await edit(original.text);
+      } else if (kind === 'precise-retry') {
+        await page.click('.last-result [aria-label="Переспросить точно"]');
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || [])[0]?.text === 'Первая запись про рыбу и море.', { timeout: 5000 });
+      }
+      const beforeResponse = await page.evaluate(() => (window.__e2e.read('zs.dictations') || []).map((r) => ({ id: r.id, text: r.text })));
+      await page.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Первая запись, про рыбу.' } }));
+      await sleep(600);
+      const rows = await page.evaluate(() => (window.__e2e.read('zs.dictations') || []).map((r) => ({ id: r.id, text: r.text })));
+      const errors = takeErrors(page);
+      record('сценарии', `поздняя полировка: ${kind === 'unchanged' ? 'неизменённая запись обновляется' : `${kind} не перезаписывается`}`,
+        (kind === 'unchanged'
+          ? rows.length === 1 && rows[0].id === original.id && rows[0].text === 'Первая запись, про рыбу.'
+          : JSON.stringify(rows) === JSON.stringify(beforeResponse)) && errors.length === 0,
+        JSON.stringify({ before: beforeResponse, after: rows, errors }));
+    } finally { await page.close(); }
+  }
+}
+
 // Вставка в чужое окно не удалась (окно с правами администратора): текст
 // остаётся в буфере, и об этом сказано — иначе диктовка выглядит сломанной.
 async function scenarioInsertFailed(browser) {
@@ -9624,6 +9680,7 @@ async function main() {
       ['точность текста диктовки', scenarioDictationIntegrity],
       ['поздняя полировка', scenarioLatePolish],
       ['поздняя полировка после правки', scenarioLatePolishEdit],
+      ['поздняя полировка после возврата', scenarioLatePolishReverted],
       ['отмена полировки', scenarioCancelPolish],
       ['повтор после отмены полировки', scenarioCancelPolishRestart],
       ['стоп до открытия микрофона', scenarioDelayedMicrophone],
