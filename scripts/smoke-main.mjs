@@ -3767,6 +3767,42 @@ await check('Whisper: сохранение текста и выключенна�
   }
 });
 
+await check('Whisper: не вырезает прошлую фразу, если хвост не поместился в фактическую подсказку', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const beforeSettings = handlers.get('store:get')({}, 'zs:settings');
+  const beforeDict = handlers.get('store:get')({}, 'zs:dictionary');
+  const saved = { status: whisper.status, transcribe: whisper.transcribe };
+  let text = ['слово', 'шарик', 'книга', 'текст', 'ветер', 'почта', 'арбуз', 'волна', 'сосна', 'яблок'].join(' '); // 59 символов
+  const original = text;
+  let actualPrompt = '';
+  whisper.status = () => ({ available: true });
+  whisper.transcribe = async (_wav, opts) => { actualPrompt = opts.prompt; return { ok: true, text, mode: 'cli' }; };
+  const invoke = (contextPrompt = '') => handlers.get('stt:transcribe-pcm')({}, {
+    pcm: speechPcm(600), sampleRate: 16000, lang: 'zz-echo-budget', useDictionary: true, contextPrompt,
+  });
+  try {
+    await handlers.get('store:set')({}, 'zs:settings', { ...beforeSettings, recognitionEngine: 'whisper', keepModelLoaded: false, decodeMode: 'fast', autoOptimize: false, preserveText: false });
+    await handlers.get('store:set')({}, 'zs:dictionary', []);
+    await invoke();
+    await handlers.get('store:set')({}, 'zs:dictionary', [{ word: 'Т'.repeat(320) }]);
+    text = `${original}, продолжение`;
+    const result = await invoke('К'.repeat(120));
+    if (actualPrompt.includes(original)) throw new Error('тест не заполнил бюджет подсказки');
+    if (result.text !== text) throw new Error(`вырезано начало при отсутствии хвоста в подсказке: ${JSON.stringify(result.text)}`);
+    await handlers.get('store:set')({}, 'zs:dictionary', []);
+    text = original; await invoke(); // фиксируем новый неизменённый хвост
+    text = `${original}, продолжение`;
+    const echoed = await invoke();
+    if (!actualPrompt.includes(original) || echoed.text !== 'продолжение') {
+      throw new Error(`переданный хвост не распознан как эхо: ${JSON.stringify({ actualPrompt, result: echoed.text })}`);
+    }
+  } finally {
+    whisper.status = saved.status; whisper.transcribe = saved.transcribe;
+    await handlers.get('store:set')({}, 'zs:settings', beforeSettings);
+    await handlers.get('store:set')({}, 'zs:dictionary', beforeDict);
+  }
+});
+
 await check('очередь диктовок: отмена и несколько итоговых проходов', async () => {
   const whisper = require(path.resolve('electron/whisper.cjs'));
   const giga = require(path.resolve('electron/gigaam.cjs'));

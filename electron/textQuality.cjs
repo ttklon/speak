@@ -95,10 +95,11 @@ function tailForPrompt(text, limit = 80) {
   if (!clean) return '';
   const max = Math.max(20, Number(limit) || 80);
   let tail = clean.slice(-max);
-  if (tail.length === max) {
-    // обрезали посреди слова — начинаем со следующего
+  const start = clean.length - tail.length;
+  if (start > 0 && clean[start - 1] !== ' ' && tail[0] !== ' ') {
+    // Обрезали посреди слова: не подсказываем его фрагмент.
     const space = tail.indexOf(' ');
-    if (space >= 0) tail = tail.slice(space + 1);
+    tail = space < 0 ? '' : tail.slice(space + 1);
   }
   return tail.replace(/[.,!?;:…]+$/g, '').trim();
 }
@@ -111,19 +112,25 @@ function stripPromptEcho(text, tail) {
   const value = String(text || '');
   const hint = String(tail || '').trim();
   if (!value || !hint) return value;
-  if (value.trimStart().toLowerCase().startsWith(hint.toLowerCase())) {
-    return value.trimStart().slice(hint.length).replace(/^[\s.,!?;:—-]+/, '');
+  const hintWords = hint.split(/\s+/).filter(Boolean);
+  // Одно-два слова вполне могли быть сказаны снова человеком.
+  if (hintWords.length < 3) return value;
+  const trimmed = value.trimStart();
+  const prefix = trimmed.slice(0, hint.length);
+  const rest = trimmed.slice(hint.length);
+  // Не режем часть слова, дефисного термина, адреса или слитой пунктуации.
+  const boundary = !rest || /^\s/u.test(rest) || /^[.,!?;:…—][\s]/u.test(rest) || /^[.,!?;:…—]$/u.test(rest);
+  if (boundary && prefix.toLowerCase() === hint.toLowerCase()) {
+    return rest.replace(/^[\s.,!?;:—-]+/u, '');
   }
-  // частичное совпадение по словам: ищем самый длинный хвост подсказки,
-  // с которого начинается ответ (минимум три слова — иначе это совпадение)
-  const hintWords = hint.toLowerCase().split(/\s+/).filter(Boolean);
-  const outWords = value.trimStart().split(/\s+/).filter(Boolean);
-  const norm = (w) => w.toLowerCase().replace(/[.,!?;:…]/g, '');
+  // Сопоставляем целые слова; сохраняем исходные пробелы и переносы остатка.
+  const outWords = [...trimmed.matchAll(/\S+/gu)];
+  const norm = (w) => w.normalize('NFC').toLowerCase().replace(/^[.,!?;:…]+|[.,!?;:…]+$/gu, '');
   for (let take = Math.min(hintWords.length, outWords.length); take >= 3; take -= 1) {
-    const part = hintWords.slice(-take).map((w) => w.replace(/[.,!?;:…]/g, ''));
-    const head = outWords.slice(0, take).map(norm);
-    if (part.every((w, i) => w === head[i])) {
-      return outWords.slice(take).join(' ');
+    const part = hintWords.slice(-take).map(norm);
+    const head = outWords.slice(0, take).map((w) => norm(w[0]));
+    if (part.every((w, i) => w && w === head[i])) {
+      return take < outWords.length ? trimmed.slice(outWords[take].index) : '';
     }
   }
   return value;

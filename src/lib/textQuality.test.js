@@ -77,6 +77,22 @@ describe('tailForPrompt', () => {
     expect(tailForPrompt(null)).toBe('');
   });
 
+  it('не выбрасывает первое слово, когда строка ровно равна пределу', () => {
+    const exact = Array(10).fill('слово').join(' ') + '!'; // 60 кодовых единиц
+    expect(exact.length).toBe(60);
+    expect(tailForPrompt(exact, 60)).toBe(exact.slice(0, -1));
+  });
+
+  it('сохраняет первое целое слово, когда срез начинается сразу после пробела', () => {
+    const suffix = 'abc defghijklmnopqrs';
+    expect(suffix.length).toBe(20);
+    expect(tailForPrompt(`x ${suffix}`, 20)).toBe(suffix);
+  });
+
+  it('не отправляет в подсказку обрезок слишком длинного слова', () => {
+    expect(tailForPrompt('слово'.repeat(20), 20)).toBe('');
+  });
+
   it('не разваливает короткий текст', () => {
     expect(tailForPrompt('привет', 80)).toBe('привет');
   });
@@ -91,6 +107,18 @@ describe('stripPromptEcho', () => {
   it('срезает повтор по словам', () => {
     const tail = 'сегодня мы обсуждали Zoom и Telegram';
     expect(stripPromptEcho('обсуждали Zoom и Telegram, а завтра Docker', tail)).toBe('а завтра Docker');
+  });
+
+  it('не вырезает короткое совпадение или начало другого слова', () => {
+    for (const [text, tail] of [
+      ['который час', 'кот'],
+      ['мы не готовы к запуску', 'мы не'],
+      ['нужна новая задача-2027 сейчас', 'нужна новая задача'],
+    ]) expect(stripPromptEcho(text, tail)).toBe(text);
+  });
+  it('сохраняет переносы и пробелы в оставшейся части при частичном эхе', () => {
+    const tail = 'сегодня обсуждали Zoom и Telegram';
+    expect(stripPromptEcho('обсуждали Zoom и Telegram, а завтра\n  Docker', tail)).toBe('а завтра\n  Docker');
   });
 
   it('обычный текст не трогает', () => {

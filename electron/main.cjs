@@ -460,11 +460,13 @@ function buildSttPrompt({ context = '', dictionary = [], tail = '' } = {}) {
   // модель продолжает с конца подсказки, и ей ближе всего то, что человек уже
   // сказал. Режем наоборот: сначала хвост, потом контекст, потом словарь.
   let prompt = [ctx, dict, lastTail].filter(Boolean).join(', ');
+  let sentTail = lastTail;
   if (prompt.length > STT_PROMPT_LIMIT) {
     const parts = { ctx, dict, tail: lastTail };
     if (parts.tail) {
       prompt = [parts.ctx, parts.dict].filter(Boolean).join(', ');
       parts.tail = '';
+      sentTail = '';
     }
     if (prompt.length > STT_PROMPT_LIMIT && parts.ctx) {
       prompt = [parts.dict].filter(Boolean).join(', ');
@@ -480,7 +482,8 @@ function buildSttPrompt({ context = '', dictionary = [], tail = '' } = {}) {
     prompt,
     contextChars: ctx.length,
     dictionaryWords: words.length,
-    tailChars: lastTail.length,
+    tailChars: sentTail.length,
+    tail: sentTail,
   };
 }
 
@@ -1857,7 +1860,7 @@ function registerIpc() {
       // Повтор и начало следующей фразы могут быть намеренными. В режиме
       // сохранения текста эвристики не имеют права вырезать их из ответа.
       if (res?.ok && res.text) {
-        const processed = processWhisperText(res.text, payload?.useDictionary === false ? '' : tail, {
+        const processed = processWhisperText(res.text, seenPrompt.tail, {
           preserve: sttSettings.preserveText === true,
           partial: payload?.partial === true,
         });
