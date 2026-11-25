@@ -18,6 +18,8 @@ const recorderState = {
   level: 0,
   paused: false,
   onLevel: null,
+  onInterrupted: null,
+  interrupted: false,
   startGate: null,
 };
 
@@ -31,6 +33,7 @@ const fakeRecorder = {
   get paused() {
     return recorderState.paused;
   },
+  get interrupted() { return recorderState.interrupted; },
   snapshot: ({ fromMs = 0, toMs = 0 } = {}) => {
     const end = toMs > 0 ? Math.min(recorderState.durationMs, toMs) : recorderState.durationMs;
     const durationMs = Math.max(0, end - fromMs);
@@ -48,14 +51,15 @@ const fakeRecorder = {
   },
   stop() {
     const durationMs = recorderState.durationMs;
-    return { pcm: new Int16Array(Math.round((durationMs / 1000) * RATE)), sampleRate: RATE, durationMs };
+    return { pcm: new Int16Array(Math.round((durationMs / 1000) * RATE)), sampleRate: RATE, durationMs, interrupted: recorderState.interrupted };
   },
   abort: vi.fn(),
 };
 
 vi.mock('../audio/pcmRecorder.js', () => ({
-  startPcmRecording: async ({ onLevel }) => {
+  startPcmRecording: async ({ onLevel, onInterrupted }) => {
     recorderState.onLevel = onLevel;
+    recorderState.onInterrupted = onInterrupted;
     if (recorderState.startGate) await recorderState.startGate;
     return fakeRecorder;
   },
@@ -103,6 +107,8 @@ beforeEach(() => {
   recorderState.durationMs = 0;
   recorderState.level = 0;
   recorderState.paused = false;
+  recorderState.onInterrupted = null;
+  recorderState.interrupted = false;
   recorderState.startGate = null;
   fakeRecorder.abort.mockClear();
   native.transcribePcm.mockClear();
@@ -206,6 +212,78 @@ describe('диктовка целиком: что получает челове�
     await recognizer.start(); await speak(0, 2000);
     expect(await recognizer.stop()).toMatchObject({ text: '', code: 'incomplete' });
     expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: '', incomplete: true, partialText: '' }));
+  });
+
+  it('отключение микрофона не выдаёт успешную расшифровку захваченного звука за полную', async () => {
+    answers = [{ ok: true, text: 'Успели записать.', mode: 'server' }];
+    const end = vi.fn(), final = vi.fn(), interrupted = vi.fn(), error = vi.fn();
+    const recognizer = createRecognizer({ onEnd: end, onFinal: final, onError: error, onCaptureInterrupted: interrupted });
+    await recognizer.start(); await speak(0, 2000);
+    recorderState.interrupted = true;
+    recorderState.onInterrupted(); recorderState.onInterrupted();
+    expect(interrupted).toHaveBeenCalledTimes(1);
+    const result = await recognizer.stop();
+    expect(result).toMatchObject({ text: '', code: 'incomplete' });
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: '', incomplete: true, partialText: 'Успели записать.', incompleteReason: 'mic-interrupted' }));
+    expect(final).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ code: 'mic-interrupted' }));
+  });
+
+  it('при отключении после предварительного прохода сохраняет оба подтверждённых фрагмента только вручную', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    calls.length = 0;
+    answers = [{ ok: true, text: 'Начало фразы.', mode: 'server' }, { ok: true, text: 'Конец записи.', mode: 'server' }];
+    const end = vi.fn(), final = vi.fn();
+    const recognizer = createRecognizer({ onEnd: end, onFinal: final });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000); await speak(8000, 11000);
+    recorderState.interrupted = true; recorderState.onInterrupted();
+    expect(await recognizer.stop()).toMatchObject({ code: 'incomplete' });
+    expect(calls.some((call) => call.pre === true)).toBe(true);
+    expect(final).not.toHaveBeenCalled();
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ incomplete: true, partialText: 'Начало фразы. Конец записи.', incompleteReason: 'mic-interrupted' }));
+  });
+
+  it('для ручного восстановления при отключении не удаляет совпавшие слова на стыке', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    answers = [{ ok: true, text: 'проверка один два три', mode: 'server' }, { ok: true, text: 'один два три готово', mode: 'server' }];
+    const end = vi.fn(); const recognizer = createRecognizer({ onEnd: end });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000); await speak(8000, 11000);
+    recorderState.interrupted = true; recorderState.onInterrupted();
+    await recognizer.stop();
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ incomplete: true, partialText: 'проверка один два три один два три готово' }));
+  });
+
+  it('ошибка распознавания после отключения сохраняет доступный предварительный фрагмент', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    answers = [{ ok: true, text: 'Начало.', mode: 'server' }, { ok: false, code: 'stt-failed' }];
+    const end = vi.fn(); const recognizer = createRecognizer({ onEnd: end });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000); await speak(8000, 11000);
+    recorderState.interrupted = true; recorderState.onInterrupted();
+    expect(await recognizer.stop()).toMatchObject({ code: 'incomplete' });
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ incomplete: true, partialText: 'Начало.', incompleteReason: 'mic-interrupted' }));
+  });
+
+  it('прерывание до завершения открытия уведомляется только после получения рекордера', async () => {
+    let allow; recorderState.startGate = new Promise((resolve) => { allow = resolve; });
+    const interrupted = vi.fn(); const recognizer = createRecognizer({ onCaptureInterrupted: interrupted });
+    const opening = recognizer.start();
+    recorderState.interrupted = true; recorderState.onInterrupted();
+    expect(interrupted).not.toHaveBeenCalled();
+    allow(); await opening;
+    expect(interrupted).toHaveBeenCalledTimes(1);
+    recognizer.abort();
+  });
+
+  it('дорожка, закончившаяся перед stop без доставленного события, помечает результат неполным', async () => {
+    answers = [{ ok: true, text: 'Часть фразы.', mode: 'server' }];
+    const end = vi.fn(), final = vi.fn(); const recognizer = createRecognizer({ onEnd: end, onFinal: final });
+    await recognizer.start(); await speak(0, 2000); recorderState.interrupted = true;
+    expect(await recognizer.stop()).toMatchObject({ code: 'incomplete' });
+    expect(final).not.toHaveBeenCalled();
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ incomplete: true, partialText: 'Часть фразы.', incompleteReason: 'mic-interrupted' }));
   });
 
   it('язык берётся из активного окна один раз и не меняется посреди фразы', async () => {

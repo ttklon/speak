@@ -1271,6 +1271,9 @@ export function DictationProvider({ children }) {
         },
         // не ошибка, но человек должен знать: микрофон из настроек пропал
         onNotice: (t) => { if (isCurrentSession()) pushToast(t); },
+        onCaptureInterrupted: () => {
+          if (isCurrentSession()) Promise.resolve(stopRef.current?.()).catch(() => {});
+        },
         onError: (err) => {
           if (!isCurrentSession()) return;
           // каждая ошибка движка должна быть видна в диагностике, иначе
@@ -1307,7 +1310,7 @@ export function DictationProvider({ children }) {
             setLevel(0);
           }
         },
-        onEnd: async ({ text, ms, spoken, mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs, incomplete, partialText }) => {
+        onEnd: async ({ text, ms, spoken, mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs, incomplete, partialText, incompleteReason }) => {
           session.screenTerms = '';
           if (!isCurrentSession()) return;
           session.completed = true;
@@ -1324,7 +1327,9 @@ export function DictationProvider({ children }) {
               : (prefix || live);
             if (recoverText) pushToast({
               title: 'Распознована только часть диктовки',
-              description: 'Последний проход не дал полного результата. Текст не вставлен и не сохранён в истории; проверьте и скопируйте его до закрытия уведомления или приложения.',
+              description: incompleteReason === 'mic-interrupted'
+                ? 'Микрофон отключился: получен только захваченный звук. Текст не вставлен и не сохранён в истории; проверьте и скопируйте его до закрытия уведомления или приложения.'
+                : 'Последний проход не дал полного результата. Текст не вставлен и не сохранён в истории; проверьте и скопируйте его до закрытия уведомления или приложения.',
               recoverText, recoverLabel: 'Неполная диктовка для ручной проверки', tone: 'warn', ttl: 0,
             });
             sessionOpts.current.command = false;

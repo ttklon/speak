@@ -215,6 +215,8 @@ export function createRecognizer(opts = {}) {
     let confirmedMs = 0;
     let preBroken = false;
     let preClosed = false;
+    let captureInterrupted = false;
+    let interruptionNotified = false;
     let wakeAbort;
     const abortSignal = new Promise((resolve) => { wakeAbort = resolve; });
     // живая расшифровка: whisper не отдаёт слова по мере речи, поэтому раз в
@@ -232,6 +234,18 @@ export function createRecognizer(opts = {}) {
     let preCount = 0;
     let preMs = 0;
     let preChain = Promise.resolve();
+
+    const warnInterruption = () => {
+      if (interruptionNotified || aborted) return;
+      interruptionNotified = true;
+      onError?.({ code: 'mic-interrupted', title: 'Микрофон отключился',
+        hint: 'Запись прервана. Если удастся распознать записанное, фрагмент можно будет проверить вручную.' });
+    };
+    const notifyInterruption = () => {
+      if (!recorder || stopped || aborted || !captureInterrupted) return;
+      warnInterruption();
+      opts.onCaptureInterrupted?.();
+    };
 
     const stopStream = () => {
       streamGen += 1;
@@ -353,6 +367,11 @@ export function createRecognizer(opts = {}) {
             // сырой звук или «шумоподавление Windows» — решает настройка
             cleanupAudio: opts.micCleanup === true,
             isCancelled: () => aborted,
+            onInterrupted: () => {
+              if (stopped || aborted || captureInterrupted) return;
+              captureInterrupted = true;
+              notifyInterruption();
+            },
             onLevel: (v) => {
               onLevel?.(v);
               // Уровень микрофона — единственный сигнал, по которому видно
@@ -385,6 +404,8 @@ export function createRecognizer(opts = {}) {
             });
           }
           onStart?.();
+          if (recorder?.interrupted) captureInterrupted = true;
+          notifyInterruption();
           scheduleStream();
         } catch (err) {
           if (aborted) return;
@@ -434,7 +455,8 @@ export function createRecognizer(opts = {}) {
         // Останавливаем микрофон сразу, а не после ожидания движка. Иначе во
         // время ожидания предварительного куска или отмены в диктовку попадает
         // речь, сказанная уже после отпускания кнопки.
-        const { pcm, durationMs } = recorder.stop();
+        const { pcm, durationMs, interrupted } = recorder.stop();
+        if (interrupted) { captureInterrupted = true; warnInterruption(); }
         // Досчитываем уже отправленный кусок: если оборвать его отменой, этот
         // звук пропадёт — он не попадёт ни в хвост, ни в результат.
         let preTimer;
@@ -453,12 +475,12 @@ export function createRecognizer(opts = {}) {
         if (aborted) return { text: '', code: 'cancelled' };
         if (!pcm?.length) {
           onError?.({ code: 'no-audio', title: 'Запись пустая', hint: 'Микрофон ничего не передал. Проверьте устройство в настройках.' });
-          onEnd?.({ text: '', incomplete: true, partialText: '' });
+          onEnd?.({ text: '', incomplete: true, partialText: '', incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
           return { text: '', code: 'incomplete', reason: 'no-audio' };
         }
         if (durationMs < 350) {
           onError?.({ code: 'too-short', title: 'Слишком короткая запись', hint: 'Говорите сразу после нажатия и не останавливайте запись так быстро.' });
-          onEnd?.({ text: '', incomplete: true, partialText: '' });
+          onEnd?.({ text: '', incomplete: true, partialText: '', incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
           return { text: '', code: 'incomplete', reason: 'too-short' };
         }
         let res;
@@ -482,6 +504,10 @@ export function createRecognizer(opts = {}) {
         // Хвост короче трети секунды — там нет слов, только дыхание: отдаём
         // то, что уже распознали, и не тратим проход движка.
         if (preText && tailPcm.length < RATE * 0.3) {
+          if (captureInterrupted) {
+            onEnd?.({ text: '', incomplete: true, partialText: preText, incompleteReason: 'mic-interrupted' });
+            return { text: '', code: 'incomplete' };
+          }
           rememberRecordedAudio(pcm, durationMs, langCode());
           text = preText;
           onFinal?.({ text, last: text });
@@ -514,12 +540,17 @@ export function createRecognizer(opts = {}) {
         } catch (err) {
           if (aborted) return { text: '', code: 'cancelled' };
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });
-          onEnd?.({ text: '', incomplete: true, partialText: preText });
+          onEnd?.({ text: '', incomplete: true, partialText: preText, incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
           return { text: '', code: 'incomplete' };
         }
         if (aborted) return { text: '', code: 'cancelled' };
         if (res?.mode) lastMode = res.mode;
         if (res?.ok && String(res.text || '').trim()) {
+          if (captureInterrupted) {
+            const partialText = preText ? mergeOverlap(preText, res.text, { preserve: true }) : res.text;
+            onEnd?.({ text: '', incomplete: true, partialText, incompleteReason: 'mic-interrupted' });
+            return { text: '', code: 'incomplete' };
+          }
           rememberRecordedAudio(pcm, durationMs, langCode());
           // Полный текст — заранее распознанные куски плюс хвост. Один проход
           // по хвосту вместо всей фразы и есть выигрыш во времени.
@@ -562,7 +593,7 @@ export function createRecognizer(opts = {}) {
               hint: res?.reason || EMPTY_RESULT_MESSAGES.default.hint,
             },
           );
-          onEnd?.({ text: '', incomplete: true, partialText: preText });
+          onEnd?.({ text: '', incomplete: true, partialText: preText, incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
           return { text: '', code: 'incomplete' };
         }
         return { text };

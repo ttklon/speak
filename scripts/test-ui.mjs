@@ -3432,6 +3432,112 @@ async function scenarioDelayedMicrophone(browser) {
   } finally { await page.close(); }
 }
 
+// Устройство и STT подменены: событие ended доставляется явно, без USB/ОС.
+async function scenarioMicDisconnect(browser) {
+  for (const kind of ['success', 'command', 'paused', 'no-audio', 'failed', 'cancel', 'late']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { micPreroll: false, liveWhisper: false, aiDictationRewrite: false, aiProcessing: true },
+      storeSeed: { 'zs.dictations': [] }, patchArg: kind,
+      patchNative: (kind) => {
+        window.__micTracks = []; window.__micProcessors = []; window.__micSttCalls = [];
+        Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+          enumerateDevices: async () => [],
+          getUserMedia: async () => {
+            const track = new EventTarget(); track.kind = 'audio'; track.readyState = 'live'; track.stops = 0;
+            track.stop = () => { track.stops++; track.readyState = 'ended'; };
+            track.lose = () => { track.readyState = 'ended'; track.dispatchEvent(new Event('ended')); };
+            window.__micTracks.push(track); return { getTracks: () => [track] };
+          },
+        } });
+        window.AudioContext = class {
+          constructor() { this.sampleRate = 16000; this.destination = {}; }
+          createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+          createScriptProcessor() { const p = { connect() {}, disconnect() {} }; window.__micProcessors.push(p); return p; }
+          createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+          close() { return Promise.resolve(); }
+        };
+        window.__feedMic = async (count) => {
+          const p = window.__micProcessors.at(-1);
+          for (let i = 0; i < count; i++) {
+            p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.5) } });
+            await Promise.resolve();
+          }
+        };
+        window.zspeakly.native.transcribePcm = async (payload) => {
+          window.__micSttCalls.push({ durationMs: payload.durationMs, partial: !!payload.partial });
+          if (kind === 'failed') return { ok: false, reason: 'искусственная ошибка' };
+          if (kind === 'cancel') return new Promise((resolve) => { window.__resolveMicStt = resolve; });
+          return { ok: true, text: 'Успели записать.', mode: 'cli' };
+        };
+      },
+    });
+    takeErrors(page);
+    try {
+      await emit(page, 'hotkey', kind === 'command' ? { type: 'toggle', mode: 'toggle', command: true } : { type: 'down', mode: 'hold' });
+      await page.waitForFunction(() => window.__micProcessors.length === 1, { timeout: 10000 });
+      if (kind !== 'no-audio') await page.evaluate(() => window.__feedMic(20));
+      if (kind === 'paused') {
+        await page.waitForSelector('.hero__pause', { timeout: 8000 });
+        await page.click('.hero__pause');
+      }
+      if (kind === 'late') {
+        await emit(page, 'hotkey', { type: 'up' });
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+        await page.evaluate(() => window.__micTracks[0].lose());
+        await sleep(350);
+      } else {
+        await page.evaluate(() => { window.__micTracks[0].lose(); window.__micTracks[0].dispatchEvent(new Event('ended')); });
+        await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((node) => /Микрофон отключился/.test(node.innerText)), { timeout: 10000 });
+        if (['success', 'command', 'paused'].includes(kind)) await page.waitForSelector('textarea[aria-label="Неполная диктовка для ручной проверки"]', { timeout: 10000 });
+        if (kind === 'cancel') {
+          await page.waitForFunction(() => typeof window.__resolveMicStt === 'function', { timeout: 10000 });
+          await page.waitForSelector('.live-draft--processing button', { timeout: 10000 });
+          await page.click('.live-draft--processing button');
+          await page.evaluate(() => window.__resolveMicStt({ ok: true, text: 'Не вставлять после отмены.' }));
+        }
+        await sleep(350);
+        // Позднее отпускание не должно повторно отправить или вставить текст.
+        if (kind !== 'command') await emit(page, 'hotkey', { type: 'up' });
+        await sleep(350);
+      }
+      const result = await page.evaluate(() => ({
+        history: (window.__e2e.read('zs.dictations') || []).map((row) => row.text),
+        inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+        replaces: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:replace-selection').length,
+        requests: (window.__bridgeCalls || []).filter((c) => c.channel === 'http:post').length,
+        reads: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:read-selection').length,
+        recovery: document.querySelector('textarea[aria-label="Неполная диктовка для ручной проверки"]')?.value || '',
+        toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+        listening: /Слушаю/i.test(document.querySelector('.hero__mic')?.innerText || ''),
+        processing: !!document.querySelector('.live-draft--processing'),
+        stops: window.__micTracks[0].stops, stt: window.__micSttCalls,
+      }));
+      const errors = takeErrors(page);
+      const ok = kind === 'late'
+        ? result.history.length === 1 && result.inserts === 1 && !/Микрофон отключился/.test(result.toast) && !result.recovery
+        : result.history.length === 0 && result.inserts === 0 && result.replaces === 0 && result.requests === 0 &&
+          /Микрофон отключился/.test(result.toast) && !result.listening && !result.processing &&
+          (kind === 'no-audio' ? result.stt.length === 0 : result.stt.length === 1) &&
+          (['success', 'command', 'paused'].includes(kind) ? result.recovery === 'Успели записать.' && /только захваченный звук/i.test(result.toast) : !result.recovery) &&
+          (kind !== 'command' || result.reads > 0);
+      record('сценарии', `микрофон: отключение не выдаёт частичную запись за полную (${kind})`,
+        ok && result.stops === 1 && errors.length === 0, JSON.stringify({ ...result, error: errors[0] }));
+      if (kind === 'success' || kind === 'command') {
+        await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+        await page.waitForFunction(() => window.__micProcessors.length === 2, { timeout: 8000 });
+        await page.evaluate(() => window.__feedMic(20));
+        await emit(page, 'hotkey', { type: 'up' });
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+        const next = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text,
+          recovery: document.querySelector('textarea[aria-label="Неполная диктовка для ручной проверки"]')?.value,
+          replaces: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:replace-selection').length }));
+        record('сценарии', `микрофон: следующая диктовка работает, черновик доступен (${kind})`,
+          /Успели записать/i.test(next.text || '') && next.recovery === 'Успели записать.' && next.replaces === 0, JSON.stringify(next));
+      }
+    } finally { await page.close(); }
+  }
+}
+
 // Отказ без разрешения и отсутствующее устройство должны прекращать запись.
 async function scenarioMicrophoneFailure(browser) {
   for (const name of ['NotFoundError', 'UnknownError']) {
@@ -10775,6 +10881,7 @@ async function main() {
       ['повтор после отмены полировки', scenarioCancelPolishRestart],
       ['стоп до открытия микрофона', scenarioDelayedMicrophone],
       ['ошибки открытия микрофона', scenarioMicrophoneFailure],
+      ['отключение микрофона', scenarioMicDisconnect],
       ['пропавший микрофон', scenarioMissingMic],
       ['вставка не удалась', scenarioInsertFailed],
       ['обещания плашки', scenarioHudPromise],

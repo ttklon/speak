@@ -24,10 +24,11 @@ function toInt16(float32) {
  * @param {object} opts
  * @param {string} opts.deviceId  id микрофона ('default' — системный)
  * @param {(level:number)=>void} opts.onLevel
+ * @param {()=>void} [opts.onInterrupted] дорожка закончилась не по stop/abort
  * @param {{samples: Float32Array, sampleRate: number}} [opts.preroll]
  *   звук, записанный «горячим микрофоном» до нажатия хоткея
  */
-export async function startPcmRecording({ deviceId = 'default', onLevel, preroll = null, cleanupAudio = false, isCancelled = () => false } = {}) {
+export async function startPcmRecording({ deviceId = 'default', onLevel, onInterrupted, preroll = null, cleanupAudio = false, isCancelled = () => false } = {}) {
   const Ctx = pickAudioContext();
   if (!Ctx || !navigator.mediaDevices?.getUserMedia) {
     throw new Error('Микрофон недоступен в этом окружении');
@@ -64,9 +65,14 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
   }
   let ctx, native, source, processor, silent;
   let cleaned = false;
+  let interrupted = false;
+  const watchedTracks = [];
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    for (const track of watchedTracks) {
+      try { track.removeEventListener?.('ended', handleTrackEnded); } catch { /* продолжить освобождение */ }
+    }
     for (const node of [processor, source, silent]) {
       try {
         node?.disconnect();
@@ -82,6 +88,12 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     try {
       Promise.resolve(ctx?.close()).catch(() => {});
     } catch { /* контекст уже закрыт */ }
+  };
+  const handleTrackEnded = () => {
+    if (cleaned || interrupted) return;
+    interrupted = true;
+    cleanup();
+    onInterrupted?.();
   };
   const chunks = [];
   let frames = 0;
@@ -107,7 +119,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     }
 
     processor.onaudioprocess = (event) => {
-      if (aborted) return;
+      if (aborted || cleaned) return;
       if (paused) {
         if (smoothLevel !== 0) {
           smoothLevel = 0;
@@ -134,6 +146,14 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     source.connect(processor);
     processor.connect(silent);
     silent.connect(ctx.destination);
+    // readyState проверяем также после подписки: устройство могло завершиться
+    // до установки обработчика или до доставки события.
+    for (const track of stream.getTracks()) {
+      if (track.kind && track.kind !== 'audio') continue;
+      watchedTracks.push(track);
+      track.addEventListener?.('ended', handleTrackEnded);
+    }
+    if (watchedTracks.some((track) => track.readyState === 'ended')) handleTrackEnded();
   } catch (err) {
     cleanup();
     throw err;
@@ -198,6 +218,9 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
     get paused() {
       return paused;
     },
+    get interrupted() {
+      return interrupted;
+    },
     /** Приостановить накопление звука (микрофон не закрывается). */
     pause() {
       paused = true;
@@ -209,6 +232,8 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
       paused = false;
     },
     stop() {
+      // На этой стороне события ended может ещё не быть в очереди renderer.
+      if (!cleaned && watchedTracks.some((track) => track.readyState === 'ended')) interrupted = true;
       cleanup();
       const merged = new Float32Array(frames);
       let offset = 0;
@@ -221,6 +246,7 @@ export async function startPcmRecording({ deviceId = 'default', onLevel, preroll
         pcm,
         sampleRate: TARGET_RATE,
         durationMs: Math.round((frames / ctx.sampleRate) * 1000),
+        interrupted,
         // для диагностики: писали сразу в 16 кГц (native) или ресемплили сами
         captureRate: ctx.sampleRate,
         nativeRate: native,

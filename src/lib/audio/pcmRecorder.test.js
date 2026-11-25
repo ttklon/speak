@@ -197,6 +197,70 @@ describe('запись в PCM для whisper', () => {
     rec.abort();
   });
 
+  it('отключение дорожки останавливает захват и помечает неполный звук один раз', async () => {
+    const audio = fakeAudio({ sampleRate: 16000 });
+    const track = new EventTarget(); track.kind = 'audio'; track.stop = vi.fn();
+    window.AudioContext = audio.Ctx;
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
+    const onInterrupted = vi.fn(); const onLevel = vi.fn();
+    const rec = await startPcmRecording({ onInterrupted, onLevel });
+    audio.feed(1600, 0.5);
+    track.dispatchEvent(new Event('ended'));
+    track.dispatchEvent(new Event('ended'));
+    expect(onInterrupted).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    const atEnd = rec.frames; const levels = onLevel.mock.calls.length;
+    audio.feed(1600, 0.9);
+    expect(rec.frames).toBe(atEnd);
+    expect(onLevel).toHaveBeenCalledTimes(levels);
+    const result = rec.stop();
+    expect(result).toMatchObject({ interrupted: true, durationMs: 100 });
+    expect(result.pcm).toHaveLength(1600);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('дорожка, завершившаяся до создания графа, не начинает запись как нормальную', async () => {
+    const audio = fakeAudio({ sampleRate: 16000 }); const track = new EventTarget();
+    track.kind = 'audio'; track.readyState = 'ended'; track.stop = vi.fn();
+    window.AudioContext = audio.Ctx;
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
+    const onInterrupted = vi.fn(); const rec = await startPcmRecording({ onInterrupted });
+    expect(onInterrupted).toHaveBeenCalledTimes(1);
+    expect(rec.interrupted).toBe(true);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    audio.feed(1600);
+    expect(rec.frames).toBe(0);
+    expect(rec.stop()).toMatchObject({ interrupted: true, durationMs: 0 });
+  });
+
+  it('ended, обнаруженный до доставки события при стопе, не выдаётся за полный звук', async () => {
+    const audio = fakeAudio({ sampleRate: 16000 }); const track = new EventTarget();
+    track.kind = 'audio'; track.readyState = 'live'; track.stop = vi.fn();
+    window.AudioContext = audio.Ctx;
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
+    const onInterrupted = vi.fn(); const rec = await startPcmRecording({ onInterrupted });
+    audio.feed(1600); track.readyState = 'ended';
+    expect(rec.stop()).toMatchObject({ interrupted: true });
+    expect(onInterrupted).not.toHaveBeenCalled();
+    track.dispatchEvent(new Event('ended'));
+    expect(onInterrupted).not.toHaveBeenCalled();
+  });
+
+  it('обычный stop и abort не считаются отключением, поздний колбэк не добавляет PCM', async () => {
+    for (const method of ['stop', 'abort']) {
+      const audio = fakeAudio({ sampleRate: 16000 }); const track = new EventTarget();
+      track.kind = 'audio'; track.readyState = 'live'; track.stop = vi.fn();
+      window.AudioContext = audio.Ctx;
+      vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
+      const onInterrupted = vi.fn(); const rec = await startPcmRecording({ onInterrupted });
+      audio.feed(1600); const result = rec[method]();
+      if (method === 'stop') expect(result.interrupted).toBe(false);
+      track.dispatchEvent(new Event('ended')); audio.feed(1600);
+      expect(rec.frames).toBe(1600);
+      expect(onInterrupted).not.toHaveBeenCalled();
+    }
+  });
+
   it('после abort звук больше не копится', async () => {
     const { rec, audio } = await record();
     audio.feed(4800);
