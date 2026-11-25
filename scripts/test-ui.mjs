@@ -1048,6 +1048,75 @@ async function scenarioAudioFileBounds(browser) {
   } finally { rmSync(wav, { force: true }); }
 }
 
+// Файл реальный, декодирование и ответы модели контролируемые: воспроизводим
+// отказ посреди записи и убеждаемся, что пропуск остаётся виден после перезапуска.
+async function scenarioAudioFilePartial(browser) {
+  const wav = writeToneWav(join(tmpdir(), 'zspeakly-file-partial.wav'));
+  try {
+    for (const scenario of ['partial', 'partial-overbudget', 'silence', 'silent-code', 'all-failed', 'silent-failed']) {
+      const page = await openPage(browser, '#/home', {
+        settings: { aiDictationRewrite: false, dictionaryEnabled: false },
+        storeSeed: { 'zs.dictations': scenario === 'partial-overbudget'
+          ? Array.from({ length: 2001 }, (_, i) => ({ id: `legacy-${i}`, text: `Старая запись ${i}`, createdAt: Date.now() - i * 1000 })) : [] },
+        patchArg: scenario, settle: 500,
+        patchNative: (scenario) => {
+          window.AudioContext = class {
+            decodeAudioData() { return Promise.resolve({ length: 16000 * 80, sampleRate: 16000, duration: 80,
+              numberOfChannels: 1, getChannelData: () => new Float32Array(16000 * 80) }); }
+            close() { return Promise.resolve(); }
+          };
+          window.OfflineAudioContext = class {
+            createBufferSource() { return { connect() {}, start() {} }; }
+            startRendering() { return Promise.resolve({ sampleRate: 16000, getChannelData: () => new Float32Array(16000 * 80) }); }
+          };
+          let index = 0;
+          window.zspeakly.native.transcribePcm = async () => {
+            const i = index++;
+            if (scenario === 'all-failed' || ((scenario === 'partial' || scenario === 'partial-overbudget') && i === 1) || (scenario === 'silent-failed' && i === 1)) {
+              if (i === 1) throw new Error('test model failure');
+              return { ok: false };
+            }
+            if (scenario === 'silent-code' && i === 1) return { ok: false, code: 'silent', text: '' };
+            if (scenario === 'silent-failed' || (scenario === 'silence' && i === 1)) return { ok: true, text: '' };
+            return { ok: true, text: i === 0 ? 'важно проверить' : 'важно проверить ещё раз' };
+          };
+        },
+      });
+      try {
+        await (await page.$('input[type="file"]')).uploadFile(wav);
+        await page.waitForFunction(() => !document.querySelector('.live-draft--processing') && [...document.querySelectorAll('.toast')].some((el) => /Файл расшифрован|Не получилось расшифровать файл|В файле нет речи/.test(el.innerText)), { timeout: 12000 });
+        const result = await page.evaluate(() => ({ history: window.__e2e.read('zs.dictations') || [], body: document.body.innerText }));
+        if (scenario === 'partial') {
+          const text = result.history[0]?.text || '';
+          record('сценарии', 'файл: отказ среднего фрагмента сохраняет оба текста и помечает пропуск',
+            /^важно проверить\s*\[Не удалось распознать фрагмент 2[^\]]*\]\s*важно проверить ещё раз$/.test(text), text);
+          record('сценарии', 'файл: частичный результат сопровождается предупреждением, а не успехом',
+            /Файл расшифрован не полностью/.test(result.body) && !/Файл расшифрован\n/.test(result.body), result.body.slice(-300));
+          const reopened = await browser.newPage();
+          try {
+            await reopened.evaluateOnNewDocument(installMockBridge);
+            await reopened.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+            await reopened.waitForSelector('.app-window', { timeout: 15000 }); await sleep(600);
+            const persisted = await reopened.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text, body: document.body.innerText }));
+            record('сценарии', 'файл: отметка пропуска сохраняется в истории после перезагрузки', persisted.text === text && /Не удалось распознать фрагмент 2/.test(persisted.body || ''));
+          } finally { await reopened.close(); }
+        } else if (scenario === 'partial-overbudget') {
+          const recover = await page.evaluate(() => document.querySelector('.toast__recover')?.value || '');
+          record('сценарии', 'файл: при переполненной истории частичный текст с пропуском доступен для восстановления',
+            result.history.length === 2001 && /важно проверить\n\[Не удалось распознать фрагмент 2[^\]]*\]\nважно проверить ещё раз/.test(recover) && /не добавлен в историю/.test(result.body), `история=${result.history.length}; ${recover}`);
+        } else if (scenario === 'silence' || scenario === 'silent-code') {
+          record('сценарии', `файл: пустой фрагмент (${scenario}) не считается ошибкой`,
+            result.history.length === 1 && !/Не удалось распознать фрагмент/.test(result.history[0].text) && /Файл расшифрован/.test(result.body) && !/не полностью/.test(result.body));
+        } else {
+          record('сценарии', `файл: ошибка без текста (${scenario}) не выдаётся за отсутствие речи`,
+            result.history.length === 0 && /Не получилось расшифровать файл/.test(result.body) && !/В файле нет речи/.test(result.body));
+        }
+        const errors = takeErrors(page); record('сценарии', `файл: частичная обработка (${scenario}) без ошибок консоли`, errors.length === 0, errors[0] || '');
+      } finally { await page.close(); }
+    }
+  } finally { rmSync(wav, { force: true }); }
+}
+
 async function scenarioAudioFile(browser) {
   const wav = writeToneWav(join(tmpdir(), 'zspeakly-e2e-tone.wav'));
   const page = await openPage(browser, '#/home', {
@@ -10358,6 +10427,7 @@ async function main() {
       ['безопасность быстрых блоков', scenarioSnippetSafety],
       ['файл в текст', scenarioAudioFile],
       ['файл: границы декодирования', scenarioAudioFileBounds],
+      ['файл: частичный отказ', scenarioAudioFilePartial],
       ['файл: словарь включён или выключен', scenarioFileDictionary],
       ['команда голосом', scenarioVoiceCommand],
       ['оговорки', scenarioSelfCorrection],

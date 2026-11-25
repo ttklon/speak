@@ -52,7 +52,7 @@ import {
   FILE_LIMITS,
   fileTitle,
   formatDuration,
-  mergeFileText,
+  assembleFileParts,
   planWindows,
   slicePcm,
   validateAudioFile,
@@ -923,7 +923,7 @@ export function DictationProvider({ children }) {
       for (let i = 0; i < windows.length; i += 1) {
         if (job.cancelled) break;
         const win = windows[i];
-        setFileJob({ name, phase: 'run', done: i, total: windows.length, preview: mergeFileText(parts).slice(-240) });
+        setFileJob({ name, phase: 'run', done: i, total: windows.length, preview: assembleFileParts(parts, windows).text.slice(-240) });
         try {
           const res = await native.transcribePcm({
             pcm: slicePcm(decoded.pcm, { ...win, sampleRate: decoded.sampleRate }),
@@ -936,21 +936,24 @@ export function DictationProvider({ children }) {
           });
           if (res?.ok) {
             const text = String(res.text || '').trim();
-            if (text) parts.push(text);
-            else failed += 1;
+            parts.push(text);
             sttMs += Number(res.ms) || 0;
+          } else if (res?.code === 'silent') {
+            parts.push('');
           } else {
             failed += 1;
+            parts.push(null);
           }
         } catch {
           failed += 1;
+          parts.push(null);
         }
         setFileJob({
           name,
           phase: 'run',
           done: i + 1,
           total: windows.length,
-          preview: mergeFileText(parts).slice(-240),
+          preview: assembleFileParts(parts, windows).text.slice(-240),
         });
       }
       fileJobRef.current = null;
@@ -960,19 +963,17 @@ export function DictationProvider({ children }) {
         diag.info('stt', 'Расшифровка файла отменена', { name });
         return null;
       }
-      const merged = mergeFileText(parts);
-      const corrected =
-        useDictionary ? applyDictionary(merged, dictRef.current) : merged;
-      const text = corrected.trim();
-      if (!text) {
-        diag.warn('stt', 'Файл без речи', { name, failed, parts: windows.length });
-        pushToast({ ...(failed === windows.length ? FILE_ERRORS.failed : FILE_ERRORS.empty), tone: 'warn', ttl: 11000 });
+      const { text, speechText } = assembleFileParts(parts, windows,
+        (group) => useDictionary ? applyDictionary(group, dictRef.current) : group);
+      if (!speechText) {
+        diag.warn('stt', failed ? 'Ошибка расшифровки файла' : 'Файл без речи', { name, failed, parts: windows.length });
+        pushToast({ ...(failed ? FILE_ERRORS.failed : FILE_ERRORS.empty), tone: 'warn', ttl: 11000 });
         return null;
       }
       const item = {
         text,
         durationMs: decoded.durationMs,
-        words: words(text),
+        words: words(speechText),
         createdAt: Date.now(),
         id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         language: settingsRef.current.language,
@@ -983,11 +984,11 @@ export function DictationProvider({ children }) {
         sttParts: windows.length > 1 ? windows.length : undefined,
       };
       const savedToHistory = addDictation(item);
-      noteDictionaryUsage(text);
+      noteDictionaryUsage(speechText);
       // Слова считаем в общую статистику, секунды — нет: это не продиктованная
       // речь, и «речи продиктовано» не должно расти от чужой записи.
       recordWords(item.words, 0);
-      diag.info('stt', 'Файл расшифрован', {
+      diag.info('stt', failed ? 'Файл расшифрован не полностью' : 'Файл расшифрован', {
         name,
         parts: windows.length,
         failed,
@@ -996,10 +997,12 @@ export function DictationProvider({ children }) {
         ms: Date.now() - startedAtMs,
       });
       pushToast({
-        title: 'Файл расшифрован',
-        description: savedToHistory ? `${name} · ${formatDuration(decoded.durationMs)} · ${item.words} слов — в «Недавних»` : `${name} · результат не добавлен в историю; сохраните текст из отдельного уведомления.`,
-        tone: savedToHistory ? 'success' : 'warn',
-        ttl: 9000,
+        title: failed ? 'Файл расшифрован не полностью' : 'Файл расшифрован',
+        description: failed
+          ? `Не удалось распознать фрагментов: ${failed} из ${windows.length}. Пропуски отмечены в тексте; проверьте запись и повторите обработку.${savedToHistory ? ' Результат в «Недавних».' : ' Результат не добавлен в историю; сохраните текст из отдельного уведомления.'}`
+          : savedToHistory ? `${name} · ${formatDuration(decoded.durationMs)} · ${item.words} слов — в «Недавних»` : `${name} · результат не добавлен в историю; сохраните текст из отдельного уведомления.`,
+        tone: failed || !savedToHistory ? 'warn' : 'success',
+        ttl: failed ? 16000 : 9000,
       });
       return item;
     },

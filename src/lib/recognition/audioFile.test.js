@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUDIO_ACCEPT,
+  assembleFileParts,
   FILE_LIMITS,
   fileExt,
   fileTitle,
@@ -69,6 +70,30 @@ describe('audioFile: куски звука и склейка текста', () =
 
   it('mergeFileText пропускает пустые куски', () => {
     expect(mergeFileText(['', '  ', 'Привет', ''])).toBe('Привет');
+  });
+});
+
+describe('audioFile: неполные результаты', () => {
+  const windows = [
+    { fromMs: 0, toMs: 30000 }, { fromMs: 29200, toMs: 59200 }, { fromMs: 58400, toMs: 80000 },
+  ];
+  it('сохраняет оба текста и позицию отказа вместо склейки через пропуск', () => {
+    const result = assembleFileParts(['важно проверить', null, 'важно проверить ещё раз'], windows);
+    expect(result.text).toBe('важно проверить\n[Не удалось распознать фрагмент 2: 0:29–0:59]\nважно проверить ещё раз');
+    expect(result.speechText).toBe('важно проверить\nважно проверить ещё раз');
+  });
+  it('отмечает первый и последний отказ, не склеивает через тишину', () => {
+    expect(assembleFileParts([null, 'слова', null], windows).text).toBe('[Не удалось распознать фрагмент 1: 0:00–0:30]\nслова\n[Не удалось распознать фрагмент 3: 0:58–1:20]');
+    expect(assembleFileParts(['повтор', '', 'повтор'], windows).text).toBe('повтор\nповтор');
+  });
+  it('соседние успешные фрагменты по-прежнему склеиваются по перекрытию', () => {
+    expect(assembleFileParts(['встреча в три часа', 'в три часа дня'], windows).text).toBe('встреча в три часа дня');
+  });
+  it('преобразует соседнюю группу после склейки и не изменяет маркер отказа', () => {
+    const transform = (s) => s.replace('три часа дня', '15:00');
+    const result = assembleFileParts(['встреча в три часа', 'в три часа дня', null], windows, transform);
+    expect(result.text).toBe('встреча в 15:00\n[Не удалось распознать фрагмент 3: 0:58–1:20]');
+    expect(result.speechText).toBe('встреча в 15:00');
   });
 });
 

@@ -120,6 +120,41 @@ export function mergeFileText(parts = []) {
   return text.trim();
 }
 
+/** Сохраняем границы отказов в самом тексте: запись можно открыть позже,
+ * скопировать или выгрузить без отдельных метаданных. Только соседние
+ * успешные окна имеют право склеиваться по перекрытию. null — ошибка,
+ * пустая строка — окно без текста. Тайминги приблизительны и перекрываются.
+ */
+export function assembleFileParts(parts = [], windows = [], transform = (text) => text) {
+  const sections = [];
+  const speech = [];
+  let group = '';
+  const flush = () => {
+    if (group) {
+      const text = transform(group).trim();
+      if (text) { sections.push(text); speech.push(text); }
+      group = '';
+    }
+  };
+  const time = (ms) => {
+    const seconds = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  };
+  parts.forEach((part, i) => {
+    if (part === null) {
+      flush();
+      const win = windows[i] || {};
+      sections.push(`[Не удалось распознать фрагмент ${i + 1}: ${time(win.fromMs)}–${time(win.toMs)}]`);
+    } else {
+      const text = String(part || '').trim();
+      if (!text) flush();
+      else group = group ? mergeOverlap(group, text) : text;
+    }
+  });
+  flush();
+  return { text: sections.join('\n'), speechText: speech.join('\n') };
+}
+
 /**
  * Годится ли файл. Возвращает {ok, reason, message}: reason — для тестов и
  * журнала, message — то, что увидит человек, и оно обязано называть выход.
@@ -186,6 +221,7 @@ export default {
   planWindows,
   slicePcm,
   mergeFileText,
+  assembleFileParts,
   validateAudioFile,
   FILE_ERRORS,
   progressLabel,
