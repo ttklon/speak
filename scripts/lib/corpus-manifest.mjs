@@ -91,7 +91,7 @@ function validate(manifest, directory, selectedSplit = null) {
     if (clip.split === selectedSplit) {
       selectedBytes += Buffer.byteLength(text, 'utf8');
       if (selectedBytes > 32 * 1024 * 1024 || text.length > 200_000) fail('Selected reference size exceeds scoring limit', i);
-      selected.push({ id: clip.id, reference: text });
+      selected.push({ id: clip.id, reference: text, speaker: clip.speaker });
     }
     // Fixed field order makes the digest independent of JSON key and clip order.
     fingerprintRows.push([clip.id, clip.split, clip.speaker, clip.kind,

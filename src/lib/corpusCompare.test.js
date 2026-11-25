@@ -93,6 +93,75 @@ describe('сравнение прогонов на общей когорте', (
     candidate.results = structuredClone(baseline.results); fs.writeFileSync(path.join(dir, 'one.txt'), 'подмена');
     expect(() => compareManifestRuns(manifest, dir, baseline, candidate)).toThrow(/hash/i);
   });
+  it('опционально сравнивает дикторов на той же общей когорте и показывает исключения', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    manifest.clips.find((row) => row.id === 'two').speaker = 'Speaker1';
+    const fingerprint = validateCorpusManifest(manifest, dir).validatedContentSha256;
+    baseline.manifestFingerprint = fingerprint; candidate.manifestFingerprint = fingerprint;
+    candidate.results.find((row) => row.id === 'one').raw.text = 'другое слово';
+    candidate.results.find((row) => row.id === 'two').final = { status: 'error' };
+    baseline.results.find((row) => row.id === 'three').raw = { status: 'error' };
+    const normal = compareManifestRuns(manifest, dir, baseline, candidate);
+    expect(normal).not.toHaveProperty('speakers');
+    const report = compareManifestRuns(manifest, dir, baseline, candidate, { bySpeaker: true });
+    expect(report.speakers).toHaveLength(2);
+    expect(report.speakers[0]).toMatchObject({ speaker: 'speaker1',
+      cohort: { total: 2, common: 1, baselineOnlyFailed: 0, candidateOnlyFailed: 1, bothFailed: 0 },
+      baseline: { raw: { errors: 0, referenceWords: 2, wer: 0 } },
+      candidate: { raw: { errors: 1, referenceWords: 2, wer: 0.5 } },
+      delta: { raw: { errors: 1, wer: 0.5 }, final: { errors: 0, wer: 0 } } });
+    expect(report.speakers[1]).toMatchObject({ speaker: 'speaker3', cohort: { total: 1, common: 0, baselineOnlyFailed: 1 },
+      baseline: { raw: { wer: null } }, candidate: { raw: { wer: null } }, delta: { raw: { errors: null, wer: null } } });
+    expect(JSON.stringify(report.speakers)).not.toMatch(/первое|другое|private-record|silence|speaker4/);
+  });
+  it('срез по диктору считает сумму ошибок по эталонным словам, а не среднее WER клипов', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    manifest.clips.find((row) => row.id === 'two').speaker = 'speaker1';
+    fs.writeFileSync(path.join(dir, 'two.txt'), 'второе слово третье');
+    manifest.clips.find((row) => row.id === 'two').reference.sha256 = sha('второе слово третье');
+    const fingerprint = validateCorpusManifest(manifest, dir).validatedContentSha256;
+    baseline.manifestFingerprint = fingerprint; candidate.manifestFingerprint = fingerprint;
+    for (const run of [baseline, candidate]) run.results.find((row) => row.id === 'two').raw.text = 'второе слово третье';
+    candidate.results.find((row) => row.id === 'one').raw.text = 'другое слово';
+    const report = compareManifestRuns(manifest, dir, baseline, candidate, { bySpeaker: true });
+    expect(report.speakers[0].candidate.raw).toMatchObject({ errors: 1, referenceWords: 5, wer: 0.2 });
+    expect(report.speakers[0].delta.raw.wer).toBe(0.2);
+    const swapped = compareManifestRuns(manifest, dir, candidate, baseline, { bySpeaker: true });
+    expect(swapped.speakers[0].delta.raw.wer).toBe(-0.2);
+  });
+  it('порядок срезов устойчив к порядку клипов и результатов; при отсутствии речи список пуст', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    candidate.results.find((row) => row.id === 'two').final = { status: 'error' };
+    const options = { bySpeaker: true };
+    const first = compareManifestRuns(manifest, dir, baseline, candidate, options);
+    manifest.clips.reverse(); baseline.results.reverse(); candidate.results.reverse();
+    const second = compareManifestRuns(manifest, dir, baseline, candidate, options);
+    expect(second.speakers).toEqual(first.speakers);
+    const onlySilence = { ...manifest, clips: manifest.clips.filter((row) => row.kind === 'silence') };
+    const fingerprint = validateCorpusManifest(onlySilence, dir).validatedContentSha256;
+    for (const run of [baseline, candidate]) { run.manifestFingerprint = fingerprint; run.results = run.results.filter((row) => row.id === 'silence'); }
+    const silence = compareManifestRuns(onlySilence, dir, baseline, candidate, options);
+    expect(silence.speakers).toEqual([]);
+    expect(silence.cohorts.silence.common).toBe(1);
+  });
+  it('не разрешает неявно включить раскрывающий идентификаторы режим значением-строкой', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    expect(() => compareManifestRuns(manifest, dir, baseline, candidate, { bySpeaker: 'false' })).toThrow(/speaker option/i);
+  });
+  it('CLI срезы по дикторам включаются только явно, неизвестные флаги отклоняются', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));
+    for (const [index, obj] of [manifest, baseline, candidate].entries()) fs.writeFileSync(paths[index], JSON.stringify(obj));
+    const cli = path.resolve('scripts/compare-manifest-runs.mjs');
+    const options = { cwd: os.tmpdir(), encoding: 'utf8' };
+    const ordinary = spawnSync(process.execPath, [cli, ...paths], options);
+    expect(ordinary.status).toBe(0); expect(ordinary.stdout).not.toContain('speaker1');
+    const sliced = spawnSync(process.execPath, [cli, ...paths, '--by-speaker'], options);
+    expect(sliced.status, sliced.stderr).toBe(0); expect(JSON.parse(sliced.stdout).speakers).toHaveLength(3);
+    expect(sliced.stdout).not.toContain('первое слово');
+    const invalid = spawnSync(process.execPath, [cli, ...paths, '--bad'], options);
+    expect(invalid.status).not.toBe(0); expect(invalid.stdout).toBe('');
+  });
   it('CLI не раскрывает транскрипты и не печатает частичный отчёт при ошибке', () => {
     const { dir, manifest, baseline, candidate } = setup();
     const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));
