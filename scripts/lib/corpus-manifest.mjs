@@ -57,13 +57,16 @@ function fileData(base, entry, maxSize, readContent, index) {
 
 /** Checks declared provenance and local bytes, not the truth of permissions,
  * reviewer independence or the content of audio. The report omits clip data. */
-export function validateCorpusManifest(manifest, directory) {
+function validate(manifest, directory, selectedSplit = null) {
+  if (selectedSplit !== null && !splits.includes(selectedSplit)) fail('Invalid selected split');
   if (!manifest || manifest.version !== 1 || !identifier(manifest.corpus) || !identifier(manifest.revision) ||
       !Array.isArray(manifest.clips) || !manifest.clips.length || manifest.clips.length > MAX_CLIPS) fail('Invalid manifest');
   let base;
   try { base = fs.realpathSync(directory); if (!fs.statSync(base).isDirectory()) fail('Invalid corpus directory'); }
   catch { fail('Invalid corpus directory'); }
   const ids = new Set(), speakers = new Map(), hashes = new Set(), fingerprintRows = [];
+  const selected = [];
+  let selectedBytes = 0;
   const report = { version: 1, corpus: manifest.corpus, revision: manifest.revision, clips: manifest.clips.length,
     speech: 0, silence: 0, splits: { dev: 0, validation: 0, test: 0 }, publishResultsAllowed: true };
   manifest.clips.forEach((clip, i) => {
@@ -85,6 +88,11 @@ export function validateCorpusManifest(manifest, directory) {
     hashes.add(clip.audio.sha256);
     const text = fileData(base, ref, MAX_REFERENCE, true, i);
     if ((clip.kind === 'speech' && !words(text).length) || (clip.kind === 'silence' && text.trim() !== '')) fail('Reference does not match kind', i);
+    if (clip.split === selectedSplit) {
+      selectedBytes += Buffer.byteLength(text, 'utf8');
+      if (selectedBytes > 32 * 1024 * 1024 || text.length > 200_000) fail('Selected reference size exceeds scoring limit', i);
+      selected.push({ id: clip.id, reference: text });
+    }
     // Fixed field order makes the digest independent of JSON key and clip order.
     fingerprintRows.push([clip.id, clip.split, clip.speaker, clip.kind,
       clip.audio.path, clip.audio.sha256, ref.path, ref.sha256, ref.author, ref.reviewer, ref.status,
@@ -95,5 +103,17 @@ export function validateCorpusManifest(manifest, directory) {
   });
   fingerprintRows.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   report.validatedContentSha256 = createHash('sha256').update(JSON.stringify([manifest.version, manifest.corpus, manifest.revision, fingerprintRows])).digest('hex');
-  return report;
+  return { report, selected };
+}
+
+export function validateCorpusManifest(manifest, directory) {
+  return validate(manifest, directory).report;
+}
+
+/** References stay in memory and are returned only for the explicitly selected split. */
+export function loadCorpusForScoring(manifest, directory, split) {
+  if (!splits.includes(split)) fail('Invalid selected split');
+  const result = validate(manifest, directory, split);
+  if (!result.selected.length) fail('Selected split is empty');
+  return result;
 }
