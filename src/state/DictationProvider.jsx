@@ -918,6 +918,21 @@ export function DictationProvider({ children }) {
 
       const lang = String(langTag(settingsRef.current.language) || 'ru-RU').slice(0, 2);
       const parts = [];
+      // Не ждём медленного или зависшего IPC: к моменту нажатия доступны
+      // только уже завершённые окна. Текущий вызов может ответить позже.
+      job.onCancel = () => {
+        const { text, speechText } = assembleFileParts(parts, windows,
+          (group) => useDictionary ? applyDictionary(group, dictRef.current) : group);
+        if (!speechText) return;
+        const next = parts.length + 1;
+        pushToast({
+          title: 'Расшифровка файла отменена',
+          description: 'Получена только часть записи. Текст не добавлен в историю: скопируйте его до закрытия уведомления или приложения. Текущий вызов модели может завершиться позже.',
+          recoverText: `${text}\n[Обработка отменена: начиная с фрагмента ${next} из ${windows.length}]`,
+          recoverLabel: 'Частичная расшифровка отменённого файла',
+          tone: 'warn', ttl: 0,
+        });
+      };
       let sttMs = 0;
       let failed = 0;
       for (let i = 0; i < windows.length; i += 1) {
@@ -934,6 +949,7 @@ export function DictationProvider({ children }) {
             useDictionary,
             contextPrompt: '',
           });
+          if (job.cancelled) break;
           if (res?.ok) {
             const text = String(res.text || '').trim();
             parts.push(text);
@@ -945,6 +961,7 @@ export function DictationProvider({ children }) {
             parts.push(null);
           }
         } catch {
+          if (job.cancelled) break;
           failed += 1;
           parts.push(null);
         }
@@ -1011,8 +1028,9 @@ export function DictationProvider({ children }) {
 
   const cancelFile = useCallback(() => {
     const job = fileJobRef.current;
-    if (!job) return false;
+    if (!job || job.cancelled) return false;
     job.cancelled = true;
+    job.onCancel?.();
     return true;
   }, []);
 
