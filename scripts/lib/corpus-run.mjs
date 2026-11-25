@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { loadCorpusForScoring } from './corpus-manifest.mjs';
-import { scoreCorpus } from './corpus-score.mjs';
+import { scoreCorpus, summarizeScores } from './corpus-score.mjs';
 
 const id = (value) => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(value);
 const sha = (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
@@ -20,11 +20,11 @@ function validateStage(stage) {
     stage.status !== 'error' || !exact(stage, ['status']))) throw new Error('Invalid result stage');
 }
 
-/** Does not run a model or authenticate declared metadata/results. */
-export function scoreManifestRun(manifest, directory, run, { alignment = false } = {}) {
+function validateRun(run) {
   if (!exact(run, ['version', 'manifestFingerprint', 'split', 'config', 'results']) || run.version !== 1 || !sha(run.manifestFingerprint) || !Array.isArray(run.results)) throw new Error('Invalid run');
   validateConfig(run.config);
-  const { report, selected } = loadCorpusForScoring(manifest, directory, run.split);
+}
+function scoreLoadedRun({ report, selected }, run, { alignment = false } = {}) {
   if (run.manifestFingerprint !== report.validatedContentSha256) throw new Error('Manifest fingerprint mismatch');
   if (run.results.length !== selected.length) throw new Error('Results do not cover the selected split');
   const expected = new Set(selected.map((item) => item.id));
@@ -42,4 +42,59 @@ export function scoreManifestRun(manifest, directory, run, { alignment = false }
   const resultsFingerprint = createHash('sha256').update(JSON.stringify(fingerprintRows)).digest('hex');
   return { version: 1, manifestFingerprint: report.validatedContentSha256, resultsFingerprint, split: run.split,
     publishResultsAllowed: report.publishResultsAllowed, config: run.config, scores };
+}
+
+/** Does not run a model or authenticate declared metadata/results. */
+export function scoreManifestRun(manifest, directory, run, options = {}) {
+  validateRun(run);
+  return scoreLoadedRun(loadCorpusForScoring(manifest, directory, run.split), run, options);
+}
+
+/** Compare only clips whose raw and final stages succeeded in both runs.
+ * No winner or statistical significance is inferred from the numbers. */
+export function compareManifestRuns(manifest, directory, baseline, candidate) {
+  validateRun(baseline);
+  validateRun(candidate);
+  if (baseline.split !== candidate.split) throw new Error('Run split mismatch');
+  if (baseline.manifestFingerprint !== candidate.manifestFingerprint) throw new Error('Run fingerprint mismatch');
+  // Read and hash all manifest files once: both runs use the same verified references.
+  const corpus = loadCorpusForScoring(manifest, directory, baseline.split);
+  const before = scoreLoadedRun(corpus, baseline);
+  const after = scoreLoadedRun(corpus, candidate);
+  const cohort = () => ({ total: 0, common: 0, baselineOnlyFailed: 0, candidateOnlyFailed: 0, bothFailed: 0 });
+  const cohorts = { speech: cohort(), silence: cohort() };
+  const commonBefore = [], commonAfter = [];
+  const byId = new Map(after.scores.samples.map((sample) => [sample.id, sample]));
+  for (const a of before.scores.samples) {
+    const b = byId.get(a.id);
+    const group = cohorts[a.kind];
+    group.total++;
+    const failedA = a.raw.status !== 'ok' || a.final.status !== 'ok';
+    const failedB = b.raw.status !== 'ok' || b.final.status !== 'ok';
+    if (!failedA && !failedB) { group.common++; commonBefore.push(a); commonAfter.push(b); }
+    else if (failedA && failedB) group.bothFailed++;
+    else if (failedA) group.baselineOnlyFailed++;
+    else group.candidateOnlyFailed++;
+  }
+  const a = summarizeScores(commonBefore), b = summarizeScores(commonAfter);
+  const deltaFor = (first, second, fields, hasCommon) => Object.fromEntries(fields.map((field) =>
+    [field, hasCommon && first[field] !== null && second[field] !== null ? second[field] - first[field] : null]));
+  const wordFields = ['errors', 'substitutions', 'deletions', 'insertions', 'wer', 'characterErrors', 'cer'];
+  const silenceFields = ['rawFalsePositives', 'finalFalsePositives', 'rawWords', 'finalWords'];
+  const configFields = [
+    ['model', (c) => c.model], ['weightsSha256', (c) => c.weightsSha256], ['engineRevision', (c) => c.engineRevision],
+    ['pipelineRevision', (c) => c.pipelineRevision], ['decodeConfigSha256', (c) => c.decodeConfigSha256],
+    ['environment.platform', (c) => c.environment.platform], ['environment.hardware', (c) => c.environment.hardware],
+    ['environment.runtime', (c) => c.environment.runtime], ['randomness.seed', (c) => c.randomness.seed],
+    ['randomness.deterministic', (c) => c.randomness.deterministic],
+  ];
+  return { version: 1, manifestFingerprint: corpus.report.validatedContentSha256, split: baseline.split,
+    publishResultsAllowed: corpus.report.publishResultsAllowed,
+    complete: cohorts.speech.common === cohorts.speech.total && cohorts.silence.common === cohorts.silence.total,
+    cohorts, configDifferences: configFields.filter(([, get]) => get(baseline.config) !== get(candidate.config)).map(([name]) => name),
+    baseline: { config: before.config, resultsFingerprint: before.resultsFingerprint, metrics: a },
+    candidate: { config: after.config, resultsFingerprint: after.resultsFingerprint, metrics: b },
+    delta: { raw: deltaFor(a.raw, b.raw, wordFields, cohorts.speech.common),
+      final: deltaFor(a.final, b.final, wordFields, cohorts.speech.common),
+      silence: deltaFor(a.silence, b.silence, silenceFields, cohorts.silence.common) } };
 }

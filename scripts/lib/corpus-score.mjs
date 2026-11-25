@@ -13,7 +13,7 @@ function emptyAggregate() {
   return { errors: 0, substitutions: 0, deletions: 0, insertions: 0, referenceWords: 0, wer: null,
     characterErrors: 0, referenceCharacters: 0, cer: null };
 }
-function summarize(samples) {
+export function summarizeScores(samples) {
   const result = { speechSamples: 0, pairedSpeech: 0, excludedSpeech: 0, silenceSamples: 0, pairedSilence: 0, excludedSilence: 0,
     raw: emptyAggregate(), final: emptyAggregate(), silence: { rawFalsePositives: 0, finalFalsePositives: 0, rawWords: 0, finalWords: 0 } };
   for (const sample of samples) {
@@ -81,5 +81,5 @@ export function scoreCorpus(input, { alignment = false } = {}) {
     categories.get(tag).push(sample);
   }
   return { version: 1, normalization: 'NFC; lowercase ru; ё→е; punctuation/symbols ignored; spaces collapsed', metadata,
-    summary: summarize(samples), categories: Object.fromEntries([...categories].map(([tag, group]) => [tag, summarize(group)])), samples };
+    summary: summarizeScores(samples), categories: Object.fromEntries([...categories].map(([tag, group]) => [tag, summarizeScores(group)])), samples };
 }
