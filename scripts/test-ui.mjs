@@ -3199,6 +3199,88 @@ async function scenarioHudPromise(browser) {
   await page.close();
 }
 
+// В этих сценариях разрешения, дорожки и AudioContext — тестовые двойники.
+// Запоздалый ответ не должен открыть микрофон после выключения настройки или
+// изменить состояние более нового открытия.
+async function scenarioMicWarmLifecycle(browser) {
+  for (const staleResult of ['resolve', 'reject']) {
+    const page = await openPage(browser, '#/settings?section=app&from=home', {
+      settings: { micPreroll: false, micCleanup: false },
+      patchNative: () => {
+        window.__warmRequests = []; window.__warmTracks = []; window.__warmContexts = [];
+        Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+          enumerateDevices: async () => [],
+          getUserMedia: (constraints) => new Promise((resolve, reject) => { window.__warmRequests.push({ constraints, resolve, reject }); }),
+        } });
+        window.AudioContext = class {
+          constructor() { this.sampleRate = 16000; this.destination = {}; window.__warmContexts.push(this); }
+          createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+          createScriptProcessor() { return { connect() {}, disconnect() {} }; }
+          createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+          close() { this.closed = true; return Promise.resolve(); }
+        };
+        window.__resolveWarm = (i) => {
+          const track = { stops: 0, stop() { this.stops++; } };
+          window.__warmTracks[i] = track;
+          window.__warmRequests[i].resolve({ getTracks: () => [track] });
+        };
+        window.__rejectWarm = (i) => window.__warmRequests[i].reject(Object.assign(new Error('устройство исчезло'), { name: 'NotFoundError' }));
+        window.__toggleWarm = () => [...document.querySelectorAll('.setting-row')].find((r) => /Горячий микрофон/.test(r.innerText))?.querySelector('.toggle')?.click();
+      },
+    });
+    takeErrors(page);
+    try {
+      await page.waitForFunction(() => [...document.querySelectorAll('.setting-row')].some((r) => /Горячий микрофон/.test(r.innerText)), { timeout: 10000 });
+      await page.evaluate(() => window.__toggleWarm());
+      await page.waitForFunction(() => window.__warmRequests.length === 1, { timeout: 8000 });
+      await page.evaluate(() => window.__toggleWarm());
+      await page.waitForFunction(() => window.__e2e.read('zs.settings')?.micPreroll === false, { timeout: 8000 });
+      await page.evaluate(() => window.__resolveWarm(0));
+      await sleep(350);
+      const closed = await page.evaluate(() => ({ stops: window.__warmTracks[0].stops, contexts: window.__warmContexts.length,
+        state: (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0],
+        row: [...document.querySelectorAll('.setting-row')].find((r) => /Горячий микрофон/.test(r.innerText))?.innerText || '' }));
+      record('сценарии', `предролл: позднее разрешение после выключения закрыто (${staleResult})`,
+        closed.stops === 1 && closed.contexts === 0 && closed.state === false && /предролл выключен/i.test(closed.row) && /запрос разрешения/i.test(closed.row), JSON.stringify(closed));
+
+      await page.evaluate(() => window.__toggleWarm());
+      await page.waitForFunction(() => window.__warmRequests.length === 2, { timeout: 8000 });
+      await page.evaluate(() => window.__toggleWarm());
+      await page.waitForFunction(() => window.__e2e.read('zs.settings')?.micPreroll === false, { timeout: 8000 });
+      await page.evaluate(() => window.__toggleWarm());
+      await page.waitForFunction(() => window.__warmRequests.length === 3, { timeout: 8000 });
+      await page.evaluate(() => window.__resolveWarm(2));
+      await page.waitForFunction(() => (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0] === true, { timeout: 8000 });
+      await page.evaluate((result) => result === 'resolve' ? window.__resolveWarm(1) : window.__rejectWarm(1), staleResult);
+      await sleep(350);
+      const reopened = await page.evaluate(() => ({ oldStops: window.__warmTracks[1]?.stops,
+        newStops: window.__warmTracks[2].stops, requests: window.__warmRequests.length,
+        state: (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0],
+        row: [...document.querySelectorAll('.setting-row')].find((r) => /Горячий микрофон/.test(r.innerText))?.innerText || '' }));
+      record('сценарии', `предролл: устаревший ответ не влияет на новый поток (${staleResult})`,
+        reopened.newStops === 0 && reopened.requests === 3 && reopened.state === true && /микрофон открыт/i.test(reopened.row) &&
+        (staleResult !== 'resolve' || reopened.oldStops === 1), JSON.stringify(reopened));
+
+      // Смена обработки реально переоткрывает поток с новыми constraints.
+      await page.evaluate(() => { location.hash = '#/settings?section=features'; });
+      await page.waitForFunction(() => [...document.querySelectorAll('.setting-row')].some((r) => /Шумоподавление Windows/.test(r.innerText)), { timeout: 8000 });
+      await page.evaluate(() => [...document.querySelectorAll('.setting-row')].find((r) => /Шумоподавление Windows/.test(r.innerText))?.querySelector('.toggle')?.click());
+      await page.waitForFunction(() => window.__warmRequests.length === 4, { timeout: 8000 });
+      const switching = await page.evaluate(() => ({ stops: window.__warmTracks[2].stops, audio: window.__warmRequests[3].constraints.audio }));
+      await page.evaluate(() => window.__resolveWarm(3));
+      await page.waitForFunction(() => (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0] === true, { timeout: 8000 });
+      await page.evaluate(() => { location.hash = '#/settings?section=app'; });
+      await page.waitForFunction(() => [...document.querySelectorAll('.setting-row')].some((r) => /Горячий микрофон/.test(r.innerText)), { timeout: 8000 });
+      await page.evaluate(() => window.__toggleWarm());
+      await page.waitForFunction(() => window.__warmTracks[3].stops === 1, { timeout: 8000 });
+      const errors = takeErrors(page);
+      record('сценарии', `предролл: обновление шумоподавления и выключение освобождают потоки (${staleResult})`,
+        switching.stops === 1 && switching.audio.echoCancellation === true && switching.audio.noiseSuppression === true &&
+        switching.audio.autoGainControl === true && errors.length === 0, JSON.stringify({ ...switching, error: errors[0] }));
+    } finally { await page.close(); }
+  }
+}
+
 // «Горячий микрофон»: поток открыт заранее, поэтому в распознавание уходит и
 // звук до нажатия хоткея. Без настройки первое слово теряется — это видно по
 // длительности записи.
@@ -3267,8 +3349,8 @@ async function scenarioMicPreroll(browser) {
   record(
     'сценарии',
     'предролл: в настройках видно, открыт микрофон или нет',
-    /Сейчас: микрофон открыт/.test(onStatus.text) && /микрофон закрыт/.test(offStatus.text),
-    `${/Сейчас: микрофон открыт/.test(onStatus.text) ? 'открыт' : 'нет'} · ${/микрофон закрыт/.test(offStatus.text) ? 'закрыт' : 'нет'}`,
+    /Сейчас: микрофон открыт/.test(onStatus.text) && /предролл выключен/.test(offStatus.text),
+    `${/Сейчас: микрофон открыт/.test(onStatus.text) ? 'открыт' : 'нет'} · ${/предролл выключен/.test(offStatus.text) ? 'закрыт' : 'нет'}`,
   );
   const statusErrors = [...onStatus.errors, ...offStatus.errors];
   record('сценарии', 'предролл: статус без ошибок консоли', statusErrors.length === 0, statusErrors[0] || '');
@@ -10705,6 +10787,7 @@ async function main() {
       ['предролл микрофона', scenarioMicPreroll],
       ['живая расшифровка', scenarioLiveWhisper],
       ['пауза и отмена распознавания', scenarioPauseAndCancel],
+      ['предролл: жизненный цикл', scenarioMicWarmLifecycle],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['повторение закреплённого буфера', scenarioClipboardPinnedDedup],
       ['пароли', scenarioPasswordVault],

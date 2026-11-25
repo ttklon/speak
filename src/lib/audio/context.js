@@ -31,7 +31,7 @@ export function createAudioContext(Ctx = pickAudioContext()) {
     if (Math.round(ctx.sampleRate) === TARGET_RATE) return { ctx, native: true };
     // Частоту не дали — закрываем и открываем обычную, ресемплить будем сами
     try {
-      ctx.close?.();
+      Promise.resolve(ctx.close?.()).catch(() => {});
     } catch {
       /* ignore */
     }

@@ -23,102 +23,99 @@ const pickAudioContext = () =>
  * @param {number} opts.prerollMs  сколько последних миллисекунд отдавать
  */
 export function createMicWarm({ deviceId = 'default', prerollMs = 600, cleanupAudio = false } = {}) {
-  let stream = null;
-  let ctx = null;
-  let source = null;
-  let processor = null;
-  let silent = null;
-  let ring = null;
-  let sampleRate = 48000;
-  let started = false;
+  // Каждое открытие владеет только своими ресурсами: поздний getUserMedia
+  // не должен оживить закрытую настройку или закрыть более новый поток.
+  let generation = 0;
+  let active = null;
+  let pending = null;
+  const cancelled = () => Object.assign(new Error('Открытие микрофона отменено'), { name: 'AbortError' });
 
-  const cleanup = () => {
-    try {
-      processor?.disconnect();
-      source?.disconnect();
-      silent?.disconnect();
-    } catch {
-      /* ignore */
+  function cleanup(resource) {
+    if (!resource || resource.cleaned) return;
+    resource.cleaned = true;
+    for (const node of [resource.processor, resource.source, resource.silent]) {
+      try { node?.disconnect(); } catch { /* освободить остальные узлы */ }
     }
     try {
-      stream?.getTracks?.().forEach((t) => t.stop());
-    } catch {
-      /* ignore */
+      for (const track of resource.stream?.getTracks?.() || []) {
+        try { track.stop(); } catch { /* освободить остальные дорожки */ }
+      }
+    } catch { /* поток уже закрыт */ }
+    try { Promise.resolve(resource.ctx?.close?.()).catch(() => {}); } catch { /* контекст уже закрыт */ }
+    resource.ring = null;
+  }
+
+  function open() {
+    if (active) return Promise.resolve(true);
+    if (pending) return pending.promise;
+    const Ctx = pickAudioContext();
+    if (!Ctx || !navigator.mediaDevices?.getUserMedia) {
+      return Promise.reject(new Error('Микрофон недоступен в этом окружении'));
     }
-    try {
-      ctx?.close?.().catch(() => {});
-    } catch {
-      /* ignore */
-    }
-    stream = null;
-    ctx = null;
-    source = null;
-    processor = null;
-    silent = null;
-    started = false;
-  };
+    const op = { generation, promise: null };
+    pending = op;
+    const stale = () => op.generation !== generation;
+    op.promise = (async () => {
+      const resource = { stream: null, ctx: null, source: null, processor: null, silent: null, ring: null, cleaned: false };
+      try {
+        try {
+          resource.stream = await navigator.mediaDevices.getUserMedia(micConstraints({ deviceId, cleanup: cleanupAudio }));
+        } catch (err) {
+          if (stale()) throw cancelled();
+          const missing = deviceId && deviceId !== 'default' &&
+            ['OverconstrainedError', 'NotFoundError', 'DevicesNotFoundError'].includes(err?.name);
+          if (!missing) throw err;
+          resource.stream = await navigator.mediaDevices.getUserMedia(micConstraints({ cleanup: cleanupAudio }));
+        }
+        if (stale()) throw cancelled();
+        resource.ctx = createAudioContext(Ctx).ctx;
+        if (!resource.ctx) throw new Error('Микрофон недоступен в этом окружении');
+        resource.sampleRate = resource.ctx.sampleRate || 48000;
+        resource.ring = createRingBuffer(Math.round((resource.sampleRate * Math.max(200, prerollMs)) / 1000));
+        resource.source = resource.ctx.createMediaStreamSource(resource.stream);
+        resource.processor = resource.ctx.createScriptProcessor(1024, 1, 1);
+        resource.processor.onaudioprocess = (event) => {
+          if (active !== resource || resource.cleaned) return;
+          try { resource.ring.push(event.inputBuffer.getChannelData(0)); } catch { /* граф может закрыться */ }
+        };
+        resource.silent = resource.ctx.createGain();
+        resource.silent.gain.value = 0;
+        resource.source.connect(resource.processor);
+        resource.processor.connect(resource.silent);
+        resource.silent.connect(resource.ctx.destination);
+        active = resource;
+        return true;
+      } catch (err) {
+        cleanup(resource);
+        // Включая отказ второго getUserMedia после отмены.
+        if (stale()) throw cancelled();
+        throw err;
+      }
+    })().finally(() => {
+      if (pending === op) pending = null;
+    });
+    return op.promise;
+  }
 
   return {
-    get opened() {
-      return started;
-    },
-    /** Открыть микрофон и начать копить последние prerollMs. */
-    async open() {
-      if (started) return true;
-      const Ctx = pickAudioContext();
-      if (!Ctx || !navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Микрофон недоступен в этом окружении');
-      }
-      const constraints = micConstraints({ deviceId, cleanup: cleanupAudio });
-      let media;
-      try {
-        media = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (err) {
-        // выбранный микрофон пропал — пробуем системный, как и в самой записи
-        const missing =
-          deviceId &&
-          deviceId !== 'default' &&
-          ['OverconstrainedError', 'NotFoundError', 'DevicesNotFoundError'].includes(err?.name);
-        if (!missing) throw err;
-        media = await navigator.mediaDevices.getUserMedia(micConstraints({ cleanup: cleanupAudio }));
-      }
-      stream = media;
-      // Та же частота, что у самой записи: предролл ложится в буфер без
-      // повторного ресемплинга, и первые слова не звучат глуше остальных.
-      ctx = createAudioContext(Ctx).ctx;
-      if (!ctx) throw new Error('Микрофон недоступен в этом окружении');
-      sampleRate = ctx.sampleRate || 48000;
-      ring = createRingBuffer(Math.round((sampleRate * Math.max(200, prerollMs)) / 1000));
-      source = ctx.createMediaStreamSource(stream);
-      // то же окно, что у самой записи: предролл должен ложиться без стыка
-      processor = ctx.createScriptProcessor(1024, 1, 1);
-      processor.onaudioprocess = (event) => {
-        try {
-          ring.push(event.inputBuffer.getChannelData(0));
-        } catch {
-          /* ignore */
-        }
-      };
-      silent = ctx.createGain();
-      silent.gain.value = 0;
-      source.connect(processor);
-      processor.connect(silent);
-      silent.connect(ctx.destination);
-      started = true;
-      return true;
-    },
+    get opened() { return Boolean(active); },
+    open,
     /** Забрать накопленный предролл (один раз на запись). */
     take() {
-      if (!started || !ring) return null;
-      const count = Math.round((sampleRate * prerollMs) / 1000);
-      const samples = ring.tail(count);
-      ring.clear();
+      const resource = active;
+      if (!resource?.ring) return null;
+      const count = Math.round((resource.sampleRate * prerollMs) / 1000);
+      const samples = resource.ring.tail(count);
+      resource.ring.clear();
       if (!samples.length) return null;
-      return { samples, sampleRate };
+      return { samples, sampleRate: resource.sampleRate };
     },
     close() {
-      cleanup();
-      ring = null;
+      generation += 1;
+      pending = null;
+      const resource = active;
+      active = null;
+      cleanup(resource);
     },
   };
 }

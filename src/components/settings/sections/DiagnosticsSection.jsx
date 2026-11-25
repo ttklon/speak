@@ -513,7 +513,7 @@ export default function DiagnosticsSection() {
           <span className="kv-row__key">Горячий микрофон</span>
           <span className="kv-row__value">
             {settings.micPreroll === true
-              ? 'включён — микрофон открыт заранее, первые 0,6 с не теряются'
+              ? 'включён — микрофон может быть открыт заранее, до 0,6 с звука добавляется к записи'
               : 'выключен — запись начинается с нажатия'}
           </span>
         </div>

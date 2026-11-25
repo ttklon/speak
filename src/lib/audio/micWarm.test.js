@@ -103,6 +103,161 @@ describe('горячий микрофон', () => {
     expect(warm.take()).toBeNull();
   });
 
+  it('отключение до разрешения закрывает поздний поток и не создаёт аудиограф', async () => {
+    const track = { stop: vi.fn() };
+    let allow;
+    const audio = fakeAudio();
+    const created = vi.fn();
+    audio.Ctx = class extends audio.Ctx { constructor(...args) { super(...args); created(); } };
+    setup({ audio, getUserMedia: vi.fn(() => new Promise((resolve) => { allow = resolve; })) });
+    const warm = createMicWarm();
+    const opening = warm.open();
+    warm.close();
+    allow({ getTracks: () => [track] });
+    await expect(opening).rejects.toMatchObject({ name: 'AbortError' });
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(created).not.toHaveBeenCalled();
+    expect(warm.opened).toBe(false);
+    expect(warm.take()).toBeNull();
+  });
+
+  it('отмена при пропавшем устройстве не открывает системный микрофон', async () => {
+    let reject;
+    const gum = vi.fn(() => new Promise((_, fail) => { reject = fail; }));
+    setup({ getUserMedia: gum });
+    const warm = createMicWarm({ deviceId: 'usb-mic' });
+    const opening = warm.open();
+    warm.close();
+    reject(Object.assign(new Error('нет устройства'), { name: 'NotFoundError' }));
+    await expect(opening).rejects.toMatchObject({ name: 'AbortError' });
+    expect(gum).toHaveBeenCalledTimes(1);
+  });
+
+  it('закрытый старый запрос не заменяет новый поток и не закрывает его', async () => {
+    let allowOld, allowNew;
+    const oldTrack = { stop: vi.fn() }, newTrack = { stop: vi.fn() };
+    const gum = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { allowOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { allowNew = resolve; }));
+    setup({ getUserMedia: gum });
+    const warm = createMicWarm();
+    const old = warm.open();
+    warm.close();
+    const newer = warm.open();
+    allowNew({ getTracks: () => [newTrack] });
+    await expect(newer).resolves.toBe(true);
+    allowOld({ getTracks: () => [oldTrack] });
+    await expect(old).rejects.toMatchObject({ name: 'AbortError' });
+    expect(oldTrack.stop).toHaveBeenCalledTimes(1);
+    expect(newTrack.stop).not.toHaveBeenCalled();
+    expect(warm.opened).toBe(true);
+    warm.close();
+    expect(newTrack.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('поздний системный fallback после закрытия тоже освобождает поток', async () => {
+    let allow;
+    const track = { stop: vi.fn() };
+    const gum = vi.fn().mockRejectedValueOnce(Object.assign(new Error('нет'), { name: 'NotFoundError' }))
+      .mockImplementationOnce(() => new Promise((resolve) => { allow = resolve; }));
+    setup({ getUserMedia: gum });
+    const warm = createMicWarm({ deviceId: 'usb-mic' });
+    const opening = warm.open();
+    await vi.waitFor(() => expect(allow).toBeTypeOf('function'));
+    warm.close();
+    allow({ getTracks: () => [track] });
+    await expect(opening).rejects.toMatchObject({ name: 'AbortError' });
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(warm.opened).toBe(false);
+  });
+
+  it('поздний обработчик старого графа не записывает звук в новый предролл', async () => {
+    const audio = fakeAudio(); setup({ audio });
+    const warm = createMicWarm({ prerollMs: 250 });
+    await warm.open();
+    const old = audio.processor();
+    warm.close();
+    await warm.open();
+    old.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(100).fill(0.9) } });
+    expect(warm.take()).toBeNull();
+    audio.feed([0.2, 0.4]);
+    expect(Array.from(warm.take().samples)).toEqual(Array.from(new Float32Array([0.2, 0.4])));
+    warm.close();
+  });
+
+  it('два одновременных открытия используют один запрос', async () => {
+    let allow;
+    const gum = vi.fn(() => new Promise((resolve) => { allow = resolve; }));
+    setup({ getUserMedia: gum });
+    const warm = createMicWarm();
+    const first = warm.open(), second = warm.open();
+    expect(gum).toHaveBeenCalledTimes(1);
+    allow(fakeStream());
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    warm.close();
+  });
+
+  it.each(['constructor', 'source', 'processor', 'gain', 'source.connect', 'processor.connect', 'gain.connect'])(
+    'освобождает все доступные ресурсы при ошибке %s', async (stage) => {
+      const track = { stop: vi.fn() }, nodes = [];
+      const close = vi.fn(async () => {});
+      const node = (name) => {
+        const n = { gain: { value: 1 }, connect: vi.fn(() => { if (stage === `${name}.connect`) throw new Error(stage); }), disconnect: vi.fn() };
+        nodes.push(n); return n;
+      };
+      class Ctx {
+        constructor() { if (stage === 'constructor') throw new Error(stage); this.sampleRate = 16000; this.destination = {}; }
+        createMediaStreamSource() { if (stage === 'source') throw new Error(stage); return node('source'); }
+        createScriptProcessor() { if (stage === 'processor') throw new Error(stage); return node('processor'); }
+        createGain() { if (stage === 'gain') throw new Error(stage); return node('gain'); }
+        close = close;
+      }
+      window.AudioContext = Ctx;
+      vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
+      const warm = createMicWarm();
+      await expect(warm.open()).rejects.toThrow(stage);
+      expect(track.stop).toHaveBeenCalledTimes(1);
+      if (stage !== 'constructor') expect(close).toHaveBeenCalledTimes(1);
+      for (const n of nodes) expect(n.disconnect).toHaveBeenCalledTimes(1);
+      expect(warm.opened).toBe(false);
+      warm.close();
+      expect(track.stop).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('после ошибки создания графа повторное открытие получает новый поток', async () => {
+    const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
+    let fail = true, index = 0;
+    class Ctx {
+      constructor() { this.sampleRate = 16000; this.destination = {}; }
+      createMediaStreamSource() { if (fail) { fail = false; throw new Error('source failed'); } return { connect() {}, disconnect() {} }; }
+      createScriptProcessor() { return { connect() {}, disconnect() {} }; }
+      createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+      close() { return Promise.resolve(); }
+    }
+    window.AudioContext = Ctx;
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [tracks[index++]] })) } });
+    const warm = createMicWarm();
+    await expect(warm.open()).rejects.toThrow('source failed');
+    expect(tracks[0].stop).toHaveBeenCalledTimes(1);
+    await expect(warm.open()).resolves.toBe(true);
+    expect(warm.opened).toBe(true);
+    expect(tracks[1].stop).not.toHaveBeenCalled();
+    warm.close();
+    expect(tracks[1].stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('ошибки отключения одного узла или дорожки не мешают освободить остальные', async () => {
+    const audio = fakeAudio();
+    const tracks = [{ stop: vi.fn(() => { throw new Error('one'); }) }, { stop: vi.fn() }];
+    setup({ audio, getUserMedia: async () => ({ getTracks: () => tracks }) });
+    const warm = createMicWarm(); await warm.open();
+    audio.created[1].disconnect.mockImplementation(() => { throw new Error('disconnect'); });
+    warm.close();
+    expect(tracks[0].stop).toHaveBeenCalledTimes(1);
+    expect(tracks[1].stop).toHaveBeenCalledTimes(1);
+    for (const node of audio.created) expect(node.disconnect).toHaveBeenCalledTimes(1);
+  });
+
   it('выбранный микрофон пропал — берём системный', async () => {
     const getUserMedia = vi
       .fn()

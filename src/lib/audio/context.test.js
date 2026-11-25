@@ -80,6 +80,19 @@ describe('выбор частоты микрофона', () => {
     expect(ctx.sampleRate).toBe(48000);
   });
 
+  it('при неподдержанной частоте обрабатывает асинхронный отказ закрытия первого контекста', async () => {
+    const closed = Promise.reject(new Error('закрытие не удалось'));
+    const caught = vi.spyOn(closed, 'catch');
+    class Ctx {
+      constructor() { this.sampleRate = 48000; }
+      close() { return closed; }
+    }
+    const result = createAudioContext(Ctx);
+    expect(result.native).toBe(false);
+    expect(caught).toHaveBeenCalledTimes(1);
+    await expect(closed).rejects.toThrow('закрытие не удалось');
+  });
+
   it('без AudioContext ничего не падает', () => {
     expect(createAudioContext(null)).toEqual({ ctx: null, native: false });
   });

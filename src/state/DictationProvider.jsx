@@ -1053,18 +1053,21 @@ export function DictationProvider({ children }) {
     setMicWarmState('opening');
     warm
       .open()
-      .then(() => setMicWarmState('open'))
+      .then(() => {
+        if (micWarm.current === warm) setMicWarmState('open');
+      })
       .catch((err) => {
+        if (micWarm.current !== warm) return;
         diag.warn('mic', 'Горячий микрофон не открылся', { reason: String(err?.message || err) });
         setMicWarmState('failed');
-        if (micWarm.current === warm) micWarm.current = null;
+        micWarm.current = null;
       });
     return () => {
       warm.close();
       if (micWarm.current === warm) micWarm.current = null;
       setMicWarmState('off');
     };
-  }, [settings.micPreroll, settings.audioDeviceId]);
+  }, [settings.micPreroll, settings.audioDeviceId, settings.micCleanup]);
 
   const start = useCallback(
     (opts = {}) => {
