@@ -49,6 +49,7 @@ import {
 } from '../lib/voiceCommandMode.js';
 import {
   FILE_ERRORS,
+  FILE_LIMITS,
   fileTitle,
   formatDuration,
   mergeFileText,
@@ -847,6 +848,10 @@ export function DictationProvider({ children }) {
   const fileJobRef = useRef(null);
   const transcribeFile = useCallback(
     async (file) => {
+      if (fileJobRef.current) {
+        pushToast({ title: 'Файл уже обрабатывается', description: 'Дождитесь завершения или отмените текущую расшифровку.', tone: 'warn', ttl: 9000 });
+        return null;
+      }
       const native = typeof window !== 'undefined' ? window.zspeakly?.native : null;
       if (!native?.transcribePcm) {
         pushToast({ ...FILE_ERRORS['no-engine'], tone: 'warn', ttl: 12000 });
@@ -867,13 +872,31 @@ export function DictationProvider({ children }) {
 
       let decoded;
       try {
-        decoded = await decodeAudioFile(file);
+        decoded = await decodeAudioFile(file, { isCancelled: () => job.cancelled });
       } catch (err) {
         fileJobRef.current = null;
         setFileJob(null);
-        const key = String(err?.message || '') === 'decode' ? 'decode' : 'failed';
-        diag.warn('stt', 'Файл не разобрался', { reason: String(err?.message || err) });
+        if (job.cancelled) {
+          diag.info('stt', 'Расшифровка файла отменена', { name });
+          return null;
+        }
+        const reason = String(err?.message || '');
+        if (reason === 'too-long' || reason === 'too-big') {
+          const limit = validateAudioFile({ name: file?.name,
+            size: reason === 'too-big' ? FILE_LIMITS.bytes + 1 : 0,
+            durationMs: reason === 'too-long' ? FILE_LIMITS.durationMs + 1 : 0 });
+          pushToast({ title: reason === 'too-long' ? 'Запись слишком длинная' : 'Этот файл не подойдёт', description: limit.message, tone: 'warn', ttl: 11000 });
+          return null;
+        }
+        const key = reason === 'decode' ? 'decode' : 'failed';
+        diag.warn('stt', 'Файл не разобрался', { reason });
         pushToast({ ...FILE_ERRORS[key], tone: 'warn', ttl: 12000 });
+        return null;
+      }
+      if (job.cancelled) {
+        fileJobRef.current = null;
+        setFileJob(null);
+        diag.info('stt', 'Расшифровка файла отменена', { name });
         return null;
       }
       // Пределы проверяем ещё раз по настоящей длительности: размер файла о ней

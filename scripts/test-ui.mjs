@@ -987,6 +987,67 @@ async function scenarioFileDictionary(browser) {
   } finally { rmSync(wav, { force: true }); }
 }
 
+// Границы файла проверяются без выделения гигабайтов: AudioContext — тестовая
+// подмена, сам WAV реален, модель и мост остаются моковыми.
+async function scenarioAudioFileBounds(browser) {
+  const wav = writeToneWav(join(tmpdir(), 'zspeakly-file-bounds.wav'));
+  try {
+    for (const scenario of ['long', 'bad', 'cancel']) {
+      const page = await openPage(browser, '#/home', { storeSeed: { 'zs.dictations': [] }, patchArg: scenario,
+        patchNative: (scenario) => {
+          window.__fileDecodeCalls = 0; window.__fileClosed = 0; window.__fileOffline = 0;
+          const decoded = (seconds) => ({ length: 16000 * seconds, sampleRate: 16000, duration: seconds,
+            numberOfChannels: 1, getChannelData: () => new Float32Array(1600) });
+          window.AudioContext = class {
+            decodeAudioData() {
+              window.__fileDecodeCalls++;
+              if (scenario === 'long') return Promise.resolve(decoded(7201));
+              if (scenario === 'bad') return Promise.reject(new Error('bad codec'));
+              return new Promise((resolve) => { window.__releaseFileDecode = () => resolve(decoded(0.1)); });
+            }
+            close() { window.__fileClosed++; return Promise.resolve(); }
+          };
+          window.OfflineAudioContext = class { constructor() { window.__fileOffline++; throw new Error('unexpected offline allocation'); } };
+        }, settle: 500 });
+      try {
+        // Приложение может предварительно создавать AudioContext при открытии.
+        await page.evaluate(() => { window.__fileClosed = 0; window.__fileOffline = 0; window.__fileDecodeCalls = 0; });
+        await (await page.$('input[type="file"]')).uploadFile(wav);
+        if (scenario === 'long') {
+          await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((el) => /Запись слишком длинная/i.test(el.innerText)), { timeout: 8000 }).catch(() => {});
+          const result = await page.evaluate(() => ({ text: document.body.innerText, closed: window.__fileClosed, offline: window.__fileOffline,
+            calls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm').length,
+            history: window.__e2e.read('zs.dictations') || [] }));
+          record('сценарии', 'файл: длинная запись отклоняется до offline-буфера и без обращения к модели',
+            /Запись слишком длинная/.test(result.text) && result.closed === 1 && result.offline === 0 && result.calls === 0 && result.history.length === 0,
+            `closed=${result.closed} offline=${result.offline} stt=${result.calls}`);
+        } else if (scenario === 'bad') {
+          await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((el) => /Формат не читается/i.test(el.innerText)), { timeout: 8000 }).catch(() => {});
+          const result = await page.evaluate(() => ({ text: document.body.innerText, closed: window.__fileClosed, offline: window.__fileOffline }));
+          record('сценарии', 'файл: отказ декодера показывает форматы и закрывает контекст',
+            /Формат не читается/.test(result.text) && /Подойдут WAV, MP3/i.test(result.text) && result.closed === 1 && result.offline === 0,
+            `closed=${result.closed} offline=${result.offline}`);
+        } else {
+          await page.waitForFunction(() => typeof window.__releaseFileDecode === 'function', { timeout: 8000 });
+          // Событие второго выбора может прийти до перерисовки disabled-кнопки.
+          await (await page.$('input[type="file"]')).uploadFile(wav); await sleep(300);
+          const before = await page.evaluate(() => ({ calls: window.__fileDecodeCalls, text: document.body.innerText }));
+          record('сценарии', 'файл: повторный выбор не запускает второе декодирование', before.calls === 1 && /уже.*файл|файл.*обрабатыва/i.test(before.text), `decode=${before.calls}`);
+          await page.evaluate(() => [...document.querySelectorAll('.live-draft--processing button')].find((el) => /отменить/i.test(el.innerText))?.click());
+          await page.evaluate(() => window.__releaseFileDecode());
+          await page.waitForFunction(() => !document.querySelector('.live-draft--processing'), { timeout: 8000 }).catch(() => {});
+          const result = await page.evaluate(() => ({ text: document.body.innerText, closed: window.__fileClosed, offline: window.__fileOffline,
+            calls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm').length, history: window.__e2e.read('zs.dictations') || [] }));
+          record('сценарии', 'файл: отмена во время decode не выделяет offline-буфер и не выдаёт ошибку модели',
+            result.closed === 1 && result.offline === 0 && result.calls === 0 && result.history.length === 0 && !/Не получилось расшифровать файл/i.test(result.text),
+            `closed=${result.closed} offline=${result.offline} stt=${result.calls}`);
+        }
+        const errors = takeErrors(page); record('сценарии', `файл: границы (${scenario}) без ошибок консоли`, errors.length === 0, errors[0] || '');
+      } finally { await page.close(); }
+    }
+  } finally { rmSync(wav, { force: true }); }
+}
+
 async function scenarioAudioFile(browser) {
   const wav = writeToneWav(join(tmpdir(), 'zspeakly-e2e-tone.wav'));
   const page = await openPage(browser, '#/home', {
@@ -10296,6 +10357,7 @@ async function main() {
       ['быстрые блоки', scenarioSnippets],
       ['безопасность быстрых блоков', scenarioSnippetSafety],
       ['файл в текст', scenarioAudioFile],
+      ['файл: границы декодирования', scenarioAudioFileBounds],
       ['файл: словарь включён или выключен', scenarioFileDictionary],
       ['команда голосом', scenarioVoiceCommand],
       ['оговорки', scenarioSelfCorrection],

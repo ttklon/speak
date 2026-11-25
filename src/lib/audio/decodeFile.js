@@ -10,7 +10,7 @@
  * арифметику без AudioContext.
  */
 
-import { SAMPLE_RATE } from '../recognition/audioFile.js';
+import { FILE_LIMITS, SAMPLE_RATE } from '../recognition/audioFile.js';
 
 /** Громкость в 16-битный отсчёт, с обрезкой перегрузки. */
 export function floatToInt16(float) {
@@ -56,50 +56,66 @@ function browserOffline(channels, frames, rate) {
  */
 export async function decodeAudioFile(file, opts = {}) {
   const targetRate = Number(opts.targetRate) || SAMPLE_RATE;
+  const maxBytes = opts.maxBytes ?? FILE_LIMITS.bytes;
+  const maxDurationMs = opts.maxDurationMs ?? FILE_LIMITS.durationMs;
   const createContext = opts.createContext || browserContext;
   const createOffline = opts.createOffline || browserOffline;
-  if (!file || typeof file.arrayBuffer !== 'function') throw new Error('no-file');
-  const bytes = await file.arrayBuffer();
-  const ctx = createContext();
-  if (!ctx || typeof ctx.decodeAudioData !== 'function') throw new Error('no-decoder');
-
-  let decoded;
-  try {
-    decoded = await ctx.decodeAudioData(bytes);
-  } catch (err) {
-    try {
-      ctx.close?.();
-    } catch {
-      /* ignore */
-    }
-    throw new Error('decode');
-  }
-  const durationMs = Math.max(0, Math.round((decoded?.duration || 0) * 1000));
-  const off = createOffline(1, Math.max(1, Math.round(((decoded?.duration || 0) * targetRate) || 1)), targetRate);
-  if (!off) throw new Error('no-decoder');
-  // mono-буфер живёт в том же контексте, что и исходный, иначе Chromium
-  // отказывается связывать буферы разных контекстов
-  const mono = mixToMono(decoded, (ch, len, rate) =>
-    typeof ctx.createBuffer === 'function' ? ctx.createBuffer(ch, len, rate) : { getChannelData: () => new Float32Array(len) },
-  );
-  const source = off.createBufferSource();
-  source.buffer = mono;
-  source.connect(off.destination);
-  source.start(0);
-  const rendered = await off.startRendering();
-  try {
-    ctx.close?.();
-  } catch {
-    /* ignore */
-  }
-  const pcm = floatToInt16(rendered.getChannelData(0));
-  const rate = rendered.sampleRate || targetRate;
-  return {
-    pcm,
-    sampleRate: rate,
-    // длительность считаем по готовому звуку: у VBR-файлов заголовок врёт
-    durationMs: Math.round((pcm.length / rate) * 1000) || durationMs,
+  const isCancelled = opts.isCancelled || (() => false);
+  const checkCancelled = () => {
+    if (isCancelled()) throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
   };
+  if (!file || typeof file.arrayBuffer !== 'function') throw new Error('no-file');
+  if (!Number.isFinite(targetRate) || targetRate <= 0 || targetRate > 192000 ||
+      !Number.isFinite(maxBytes) || maxBytes <= 0 || !Number.isFinite(maxDurationMs) || maxDurationMs <= 0) throw new Error('invalid-limits');
+  checkCancelled();
+  // File.size is available without reading the compressed file into memory.
+  if (Number(file.size) > maxBytes) throw new Error('too-big');
+  const bytes = await file.arrayBuffer();
+  checkCancelled();
+  if (!bytes || !Number.isSafeInteger(bytes.byteLength) || bytes.byteLength > maxBytes) throw new Error('too-big');
+  const ctx = createContext();
+  try {
+    if (!ctx || typeof ctx.decodeAudioData !== 'function') throw new Error('no-decoder');
+    let decoded;
+    try {
+      decoded = await ctx.decodeAudioData(bytes);
+    } catch {
+      checkCancelled();
+      throw new Error('decode');
+    }
+    checkCancelled();
+    const length = decoded?.length;
+    const inputRate = decoded?.sampleRate;
+    const duration = decoded?.duration;
+    if (!Number.isSafeInteger(length) || length < 0 || !Number.isFinite(inputRate) || inputRate <= 0 ||
+        !Number.isFinite(duration) || duration < 0 || !Number.isInteger(decoded?.numberOfChannels) || decoded.numberOfChannels < 1 || decoded.numberOfChannels > 32) throw new Error('decode');
+    // decodeAudioData already allocated its AudioBuffer; reject before the next
+    // large allocations (mono, OfflineAudioContext and final Int16 PCM).
+    if (length / inputRate * 1000 > maxDurationMs || duration * 1000 > maxDurationMs) throw new Error('too-long');
+    if (!length) return { pcm: new Int16Array(0), sampleRate: targetRate, durationMs: 0 };
+    const frames = Math.max(1, Math.round((length / inputRate) * targetRate));
+    const off = createOffline(1, frames, targetRate);
+    if (!off) throw new Error('no-decoder');
+    const mono = mixToMono(decoded, (ch, len, rate) =>
+      typeof ctx.createBuffer === 'function' ? ctx.createBuffer(ch, len, rate) : { getChannelData: () => new Float32Array(len) },
+    );
+    checkCancelled();
+    const source = off.createBufferSource();
+    source.buffer = mono;
+    source.connect(off.destination);
+    source.start(0);
+    const rendered = await off.startRendering();
+    checkCancelled();
+    const samples = rendered.getChannelData(0);
+    const rate = rendered.sampleRate || targetRate;
+    if (!Number.isFinite(rate) || rate <= 0 || samples.length / rate * 1000 > maxDurationMs) throw new Error('too-long');
+    const pcm = floatToInt16(samples);
+    return { pcm, sampleRate: rate, durationMs: Math.round((pcm.length / rate) * 1000) };
+  } finally {
+    // close can throw or reject asynchronously; neither should hide the result
+    // or turn a rejected decode into an unhandled rejection.
+    try { Promise.resolve(ctx?.close?.()).catch(() => {}); } catch { /* already closed */ }
+  }
 }
 
 export default decodeAudioFile;
