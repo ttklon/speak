@@ -88,9 +88,59 @@ describe('проверка локального манифеста корпус�
   });
   it('отклоняет неизвестные версии, пустые корпуса и повторяющиеся ID', () => {
     const { dir, manifest } = setup();
-    expect(() => validateCorpusManifest({ ...manifest, version: 2 }, dir)).toThrow();
+    expect(() => validateCorpusManifest({ ...manifest, version: 3 }, dir)).toThrow();
     expect(() => validateCorpusManifest({ ...manifest, clips: [] }, dir)).toThrow();
     const row = second(dir, manifest); row.id = manifest.clips[0].id; expect(() => validateCorpusManifest(manifest, dir)).toThrow(/ID/i);
+  });
+  it('версия 1 сохраняет прежний формат отпечатка при введении версии 2', () => {
+    const { dir, manifest } = setup(); const clip = manifest.clips[0];
+    const ref = clip.reference, rights = clip.rights;
+    const rows = [[clip.id, clip.split, clip.speaker, clip.kind, clip.audio.path, clip.audio.sha256,
+      ref.path, ref.sha256, ref.author, ref.reviewer, ref.status, rights.source, rights.license,
+      rights.evidence, rights.storage, rights.evaluation, rights.publishResults]];
+    const expected = digest(JSON.stringify([1, manifest.corpus, manifest.revision, rows]));
+    expect(validateCorpusManifest(manifest, dir).validatedContentSha256).toBe(expected);
+  });
+  it('версия 2 включает нормализованные условия в отпечаток без зависимости от порядка', () => {
+    const { dir, manifest } = setup();
+    manifest.version = 2;
+    const row = manifest.clips[0]; row.conditions = ['Noise', 'Far-mic'];
+    const report = validateCorpusManifest(manifest, dir);
+    expect(report.version).toBe(2);
+    const fingerprint = report.validatedContentSha256;
+    row.conditions = ['FAR-MIC', 'noise'];
+    expect(validateCorpusManifest(manifest, dir).validatedContentSha256).toBe(fingerprint);
+    row.conditions = ['far-mic', 'quiet'];
+    expect(validateCorpusManifest(manifest, dir).validatedContentSha256).not.toBe(fingerprint);
+    expect(JSON.stringify(report)).not.toMatch(/noise|far-mic/i);
+  });
+  it('версия 2 требует ограниченные неповторяющиеся идентификаторы условий для каждого клипа', () => {
+    const { dir, manifest } = setup(); manifest.version = 2;
+    for (const conditions of [undefined, [], [''], ['noise', 'NOISE'], ['../secret'], Array(13).fill('a')]) {
+      manifest.clips[0].conditions = conditions;
+      expect(() => validateCorpusManifest(manifest, dir)).toThrow(/conditions/i);
+    }
+    manifest.clips[0].conditions = ['noise']; second(dir, manifest).conditions = [];
+    expect(() => validateCorpusManifest(manifest, dir)).toThrow(/conditions/i);
+  });
+  it('ограничивает общее число уникальных условий по всему корпусу', () => {
+    const { dir, manifest } = setup(); manifest.version = 2;
+    manifest.clips[0].conditions = Array.from({ length: 12 }, (_, n) => `tag-${n}`);
+    for (let i = 1; i < 22; i++) {
+      const row = structuredClone(manifest.clips[0]); row.id = `clip-${i + 1}`; row.speaker = `speaker-${i}`;
+      const audio = `unique fake wav ${i}`;
+      row.audio.path = `${i}.wav`; row.audio.sha256 = digest(audio); fs.writeFileSync(path.join(dir, row.audio.path), audio);
+      row.conditions = Array.from({ length: i === 21 ? 5 : 12 }, (_, n) => `tag-${i * 12 + n}`);
+      manifest.clips.push(row);
+    }
+    // 21 * 12 + 4 = 256 проходит, 257 отклоняется до построения срезов.
+    manifest.clips.at(-1).conditions.pop(); expect(validateCorpusManifest(manifest, dir).clips).toBe(22);
+    manifest.clips.at(-1).conditions.push('tag-256');
+    expect(() => validateCorpusManifest(manifest, dir)).toThrow(/conditions/i);
+  });
+  it('версия 1 не принимает неучитываемое в отпечатке зарезервированное поле conditions', () => {
+    const { dir, manifest } = setup(); manifest.clips[0].conditions = ['noise'];
+    expect(() => validateCorpusManifest(manifest, dir)).toThrow(/conditions/i);
   });
   it('CLI использует каталог манифеста, не текущий каталог; ошибка не содержит эталона', () => {
     const { dir, manifest } = setup(); const file = path.join(dir, 'corpus.json'); fs.writeFileSync(file, JSON.stringify(manifest));

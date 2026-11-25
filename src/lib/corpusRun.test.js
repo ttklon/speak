@@ -40,6 +40,16 @@ describe('оценка привязанного прогона', () => {
     for (const secret of ['отправляй', 'ложная фраза', 'контрольная фраза', 'private-evidence', 'speaker1']) expect(json).not.toContain(secret);
     expect(JSON.stringify(scoreManifestRun(manifest, dir, run, { alignment: true }))).toContain('отправляй');
   });
+  it('оценивает манифест v2 и отклоняет изменение условий с прежним отпечатком', () => {
+    const { dir, manifest, run } = setup(); manifest.version = 2;
+    for (const clip of manifest.clips) clip.conditions = ['quiet'];
+    run.manifestFingerprint = validateCorpusManifest(manifest, dir).validatedContentSha256;
+    const report = scoreManifestRun(manifest, dir, run);
+    expect(report.scores.summary.raw.errors).toBe(1);
+    expect(JSON.stringify(report)).not.toContain('quiet');
+    manifest.clips[0].conditions = ['noise'];
+    expect(() => scoreManifestRun(manifest, dir, run)).toThrow(/fingerprint/i);
+  });
   it('отпечаток результатов не зависит от порядка и меняется при смене расшифровки', () => {
     const { dir, manifest, run } = setup();
     const digest = scoreManifestRun(manifest, dir, run).resultsFingerprint;

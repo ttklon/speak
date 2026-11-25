@@ -5,6 +5,7 @@ import { TextDecoder } from 'node:util';
 import { words } from './word-error.mjs';
 
 const MAX_CLIPS = 10_000;
+const MAX_CONDITIONS = 256;
 const MAX_AUDIO = 1024 * 1024 * 1024;
 const MAX_REFERENCE = 256 * 1024;
 const splits = ['dev', 'validation', 'test'];
@@ -59,20 +60,30 @@ function fileData(base, entry, maxSize, readContent, index) {
  * reviewer independence or the content of audio. The report omits clip data. */
 function validate(manifest, directory, selectedSplit = null) {
   if (selectedSplit !== null && !splits.includes(selectedSplit)) fail('Invalid selected split');
-  if (!manifest || manifest.version !== 1 || !identifier(manifest.corpus) || !identifier(manifest.revision) ||
+  if (!manifest || ![1, 2].includes(manifest.version) || !identifier(manifest.corpus) || !identifier(manifest.revision) ||
       !Array.isArray(manifest.clips) || !manifest.clips.length || manifest.clips.length > MAX_CLIPS) fail('Invalid manifest');
   let base;
   try { base = fs.realpathSync(directory); if (!fs.statSync(base).isDirectory()) fail('Invalid corpus directory'); }
   catch { fail('Invalid corpus directory'); }
-  const ids = new Set(), speakers = new Map(), hashes = new Set(), fingerprintRows = [];
+  const ids = new Set(), speakers = new Map(), hashes = new Set(), fingerprintRows = [], conditionNames = new Set();
   const selected = [];
   let selectedBytes = 0;
-  const report = { version: 1, corpus: manifest.corpus, revision: manifest.revision, clips: manifest.clips.length,
+  const report = { version: manifest.version, corpus: manifest.corpus, revision: manifest.revision, clips: manifest.clips.length,
     speech: 0, silence: 0, splits: { dev: 0, validation: 0, test: 0 }, publishResultsAllowed: true };
   manifest.clips.forEach((clip, i) => {
     if (!clip || !identifier(clip.id) || ids.has(key(clip.id))) fail('Invalid or duplicate clip ID', i);
     ids.add(key(clip.id));
     if (!splits.includes(clip.split) || !['speech', 'silence'].includes(clip.kind)) fail('Invalid split or kind', i);
+    let conditions = [];
+    if (manifest.version === 1 && Object.hasOwn(clip, 'conditions')) fail('Conditions require manifest version 2', i);
+    if (manifest.version === 2) {
+      if (!Array.isArray(clip.conditions) || !clip.conditions.length || clip.conditions.length > 12 ||
+          !clip.conditions.every(identifier)) fail('Invalid conditions', i);
+      conditions = clip.conditions.map(key).sort();
+      if (new Set(conditions).size !== conditions.length) fail('Duplicate conditions', i);
+      for (const condition of conditions) conditionNames.add(condition);
+      if (conditionNames.size > MAX_CONDITIONS) fail('Too many conditions', i);
+    }
     if ((clip.kind === 'speech' && !identifier(clip.speaker)) || (clip.kind === 'silence' && clip.speaker !== null)) fail('Invalid speaker', i);
     if (clip.speaker !== null) {
       const speaker = key(clip.speaker);
@@ -91,12 +102,14 @@ function validate(manifest, directory, selectedSplit = null) {
     if (clip.split === selectedSplit) {
       selectedBytes += Buffer.byteLength(text, 'utf8');
       if (selectedBytes > 32 * 1024 * 1024 || text.length > 200_000) fail('Selected reference size exceeds scoring limit', i);
-      selected.push({ id: clip.id, reference: text, speaker: clip.speaker });
+      selected.push({ id: clip.id, reference: text, speaker: clip.speaker, conditions });
     }
     // Fixed field order makes the digest independent of JSON key and clip order.
-    fingerprintRows.push([clip.id, clip.split, clip.speaker, clip.kind,
+    const fingerprintRow = [clip.id, clip.split, clip.speaker, clip.kind,
       clip.audio.path, clip.audio.sha256, ref.path, ref.sha256, ref.author, ref.reviewer, ref.status,
-      rights.source, rights.license, rights.evidence, rights.storage, rights.evaluation, rights.publishResults]);
+      rights.source, rights.license, rights.evidence, rights.storage, rights.evaluation, rights.publishResults];
+    if (manifest.version === 2) fingerprintRow.push(conditions);
+    fingerprintRows.push(fingerprintRow);
     report[clip.kind]++;
     report.splits[clip.split]++;
     report.publishResultsAllowed &&= rights.publishResults;

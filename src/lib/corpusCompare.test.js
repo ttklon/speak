@@ -148,6 +148,52 @@ describe('сравнение прогонов на общей когорте', (
     const { dir, manifest, baseline, candidate } = setup();
     expect(() => compareManifestRuns(manifest, dir, baseline, candidate, { bySpeaker: 'false' })).toThrow(/speaker option/i);
   });
+  it('срезы по условиям включают речь и тишину с общей когортой и исключениями', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    manifest.version = 2;
+    const tags = { one: ['Noise', 'room'], two: ['noise'], three: ['quiet'], silence: ['noise'], held: ['room'] };
+    for (const clip of manifest.clips) clip.conditions = tags[clip.id];
+    const fingerprint = validateCorpusManifest(manifest, dir).validatedContentSha256;
+    baseline.manifestFingerprint = fingerprint; candidate.manifestFingerprint = fingerprint;
+    candidate.results.find((row) => row.id === 'one').raw.text = 'другое слово';
+    baseline.results.find((row) => row.id === 'two').final = { status: 'error' };
+    candidate.results.find((row) => row.id === 'silence').raw.text = 'ложная фраза';
+    const normal = compareManifestRuns(manifest, dir, baseline, candidate);
+    expect(normal).not.toHaveProperty('conditions');
+    const report = compareManifestRuns(manifest, dir, baseline, candidate, { byCondition: true, bySpeaker: true });
+    expect(report.conditions.map((row) => row.condition)).toEqual(['noise', 'quiet', 'room']);
+    expect(report.conditions[0]).toMatchObject({ condition: 'noise',
+      cohorts: { speech: { total: 2, common: 1, baselineOnlyFailed: 1 }, silence: { total: 1, common: 1 } },
+      baseline: { raw: { errors: 0, wer: 0 }, silence: { rawFalsePositives: 0 } },
+      candidate: { raw: { errors: 1, wer: 0.5 }, silence: { rawFalsePositives: 1, rawWords: 2 } },
+      delta: { raw: { errors: 1, wer: 0.5 }, silence: { rawFalsePositives: 1, rawWords: 2 } } });
+    expect(report.conditions[2].cohorts.speech.total).toBe(1); // условие clip из test не входит в dev
+    expect(JSON.stringify(report.conditions)).not.toMatch(/первое|другое|private-record|speaker1/);
+    const swapped = compareManifestRuns(manifest, dir, candidate, baseline, { byCondition: true });
+    expect(swapped.conditions[0].delta.raw.wer).toBe(-0.5);
+    expect(swapped.conditions[0].cohorts.speech.candidateOnlyFailed).toBe(1);
+  });
+  it('условия нельзя запросить у v1 или без явного логического флага', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    expect(() => compareManifestRuns(manifest, dir, baseline, candidate, { byCondition: true })).toThrow(/version 2/i);
+    expect(() => compareManifestRuns(manifest, dir, baseline, candidate, { byCondition: 'false' })).toThrow(/condition option/i);
+  });
+  it('CLI включает срезы условий и дикторов только явными уникальными флагами', () => {
+    const { dir, manifest, baseline, candidate } = setup(); manifest.version = 2;
+    for (const clip of manifest.clips) clip.conditions = ['synthetic'];
+    const fingerprint = validateCorpusManifest(manifest, dir).validatedContentSha256;
+    baseline.manifestFingerprint = fingerprint; candidate.manifestFingerprint = fingerprint;
+    const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));
+    for (const [index, obj] of [manifest, baseline, candidate].entries()) fs.writeFileSync(paths[index], JSON.stringify(obj));
+    const cli = path.resolve('scripts/compare-manifest-runs.mjs');
+    const run = (flags) => spawnSync(process.execPath, [cli, ...paths, ...flags], { encoding: 'utf8' });
+    const normal = run([]); expect(JSON.parse(normal.stdout)).not.toHaveProperty('conditions');
+    const both = run(['--by-condition', '--by-speaker']); expect(both.status, both.stderr).toBe(0);
+    expect(JSON.parse(both.stdout)).toMatchObject({ conditions: [{ condition: 'synthetic' }], speakers: expect.any(Array) });
+    const repeated = run(['--by-condition', '--by-condition']); expect(repeated.status).not.toBe(0); expect(repeated.stdout).toBe('');
+    manifest.clips[0].conditions = ['changed']; fs.writeFileSync(paths[0], JSON.stringify(manifest));
+    const tampered = run(['--by-condition']); expect(tampered.status).not.toBe(0); expect(tampered.stdout).toBe('');
+  });
   it('CLI срезы по дикторам включаются только явно, неизвестные флаги отклоняются', () => {
     const { dir, manifest, baseline, candidate } = setup();
     const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));

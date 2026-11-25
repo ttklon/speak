@@ -52,7 +52,8 @@ export function scoreManifestRun(manifest, directory, run, options = {}) {
 
 /** Compare only clips whose raw and final stages succeeded in both runs.
  * No winner or statistical significance is inferred from the numbers. */
-export function compareManifestRuns(manifest, directory, baseline, candidate, { bySpeaker = false } = {}) {
+export function compareManifestRuns(manifest, directory, baseline, candidate, { bySpeaker = false, byCondition = false } = {}) {
+  if (typeof byCondition !== 'boolean') throw new Error('Invalid condition option');
   if (typeof bySpeaker !== 'boolean') throw new Error('Invalid speaker option');
   validateRun(baseline);
   validateRun(candidate);
@@ -60,12 +61,15 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
   if (baseline.manifestFingerprint !== candidate.manifestFingerprint) throw new Error('Run fingerprint mismatch');
   // Read and hash all manifest files once: both runs use the same verified references.
   const corpus = loadCorpusForScoring(manifest, directory, baseline.split);
+  if (byCondition && corpus.report.version !== 2) throw new Error('Conditions require manifest version 2');
   const before = scoreLoadedRun(corpus, baseline);
   const after = scoreLoadedRun(corpus, candidate);
   const cohort = () => ({ total: 0, common: 0, baselineOnlyFailed: 0, candidateOnlyFailed: 0, bothFailed: 0 });
   const cohorts = { speech: cohort(), silence: cohort() };
   const commonBefore = [], commonAfter = [];
   const speakerGroups = new Map();
+  const conditionGroups = new Map();
+  const conditionsByClip = byCondition ? new Map(corpus.selected.map((sample) => [sample.id, sample.conditions])) : null;
   const speakerByClip = bySpeaker ? new Map(corpus.selected.map((sample) => [sample.id, sample.speaker?.toLowerCase() ?? null])) : null;
   const byId = new Map(after.scores.samples.map((sample) => [sample.id, sample]));
   for (const a of before.scores.samples) {
@@ -83,6 +87,13 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
       const slice = speakerGroups.get(speaker);
       slice.cohort.total++;
       slice.cohort[outcome]++;
+      if (outcome === 'common') { slice.before.push(a); slice.after.push(b); }
+    }
+    if (byCondition) for (const condition of conditionsByClip.get(a.id)) {
+      if (!conditionGroups.has(condition)) conditionGroups.set(condition, { cohorts: { speech: cohort(), silence: cohort() }, before: [], after: [] });
+      const slice = conditionGroups.get(condition);
+      slice.cohorts[a.kind].total++;
+      slice.cohorts[a.kind][outcome]++;
       if (outcome === 'common') { slice.before.push(a); slice.after.push(b); }
     }
   }
@@ -105,10 +116,17 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
       delta: { raw: deltaFor(first.raw, second.raw, wordFields, slice.cohort.common),
         final: deltaFor(first.final, second.final, wordFields, slice.cohort.common) } };
   }) : undefined;
+  const conditions = byCondition ? [...conditionGroups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([condition, slice]) => {
+    const first = summarizeScores(slice.before), second = summarizeScores(slice.after);
+    return { condition, cohorts: slice.cohorts, baseline: first, candidate: second,
+      delta: { raw: deltaFor(first.raw, second.raw, wordFields, slice.cohorts.speech.common),
+        final: deltaFor(first.final, second.final, wordFields, slice.cohorts.speech.common),
+        silence: deltaFor(first.silence, second.silence, silenceFields, slice.cohorts.silence.common) } };
+  }) : undefined;
   return { version: 1, manifestFingerprint: corpus.report.validatedContentSha256, split: baseline.split,
     publishResultsAllowed: corpus.report.publishResultsAllowed,
     complete: cohorts.speech.common === cohorts.speech.total && cohorts.silence.common === cohorts.silence.total,
-    cohorts, ...(bySpeaker ? { speakers } : {}), configDifferences: configFields.filter(([, get]) => get(baseline.config) !== get(candidate.config)).map(([name]) => name),
+    cohorts, ...(bySpeaker ? { speakers } : {}), ...(byCondition ? { conditions } : {}), configDifferences: configFields.filter(([, get]) => get(baseline.config) !== get(candidate.config)).map(([name]) => name),
     baseline: { config: before.config, resultsFingerprint: before.resultsFingerprint, metrics: a },
     candidate: { config: after.config, resultsFingerprint: after.resultsFingerprint, metrics: b },
     delta: { raw: deltaFor(a.raw, b.raw, wordFields, cohorts.speech.common),
