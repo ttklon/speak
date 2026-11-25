@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { loadCorpusForScoring } from './corpus-manifest.mjs';
 import { scoreCorpus, summarizeScores } from './corpus-score.mjs';
+import { pairedSpeakerBootstrap } from './corpus-bootstrap.mjs';
 
 const id = (value) => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(value);
 const sha = (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
@@ -52,7 +53,8 @@ export function scoreManifestRun(manifest, directory, run, options = {}) {
 
 /** Compare only clips whose raw and final stages succeeded in both runs.
  * No winner or statistical significance is inferred from the numbers. */
-export function compareManifestRuns(manifest, directory, baseline, candidate, { bySpeaker = false, byCondition = false } = {}) {
+export function compareManifestRuns(manifest, directory, baseline, candidate, { bySpeaker = false, byCondition = false, bootstrapSpeakers = false } = {}) {
+  if (typeof bootstrapSpeakers !== 'boolean') throw new Error('Invalid bootstrap option');
   if (typeof byCondition !== 'boolean') throw new Error('Invalid condition option');
   if (typeof bySpeaker !== 'boolean') throw new Error('Invalid speaker option');
   validateRun(baseline);
@@ -70,7 +72,7 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
   const speakerGroups = new Map();
   const conditionGroups = new Map();
   const conditionsByClip = byCondition ? new Map(corpus.selected.map((sample) => [sample.id, sample.conditions])) : null;
-  const speakerByClip = bySpeaker ? new Map(corpus.selected.map((sample) => [sample.id, sample.speaker?.toLowerCase() ?? null])) : null;
+  const speakerByClip = bySpeaker || bootstrapSpeakers ? new Map(corpus.selected.map((sample) => [sample.id, sample.speaker?.toLowerCase() ?? null])) : null;
   const byId = new Map(after.scores.samples.map((sample) => [sample.id, sample]));
   for (const a of before.scores.samples) {
     const b = byId.get(a.id);
@@ -81,7 +83,7 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
     const outcome = !failedA && !failedB ? 'common' : failedA && failedB ? 'bothFailed' : failedA ? 'baselineOnlyFailed' : 'candidateOnlyFailed';
     group[outcome]++;
     if (outcome === 'common') { commonBefore.push(a); commonAfter.push(b); }
-    if (bySpeaker && a.kind === 'speech') {
+    if ((bySpeaker || bootstrapSpeakers) && a.kind === 'speech') {
       const speaker = speakerByClip.get(a.id);
       if (!speakerGroups.has(speaker)) speakerGroups.set(speaker, { cohort: cohort(), before: [], after: [] });
       const slice = speakerGroups.get(speaker);
@@ -116,6 +118,15 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
       delta: { raw: deltaFor(first.raw, second.raw, wordFields, slice.cohort.common),
         final: deltaFor(first.final, second.final, wordFields, slice.cohort.common) } };
   }) : undefined;
+  const bootstrap = bootstrapSpeakers ? pairedSpeakerBootstrap([...speakerGroups.entries()]
+    .filter(([, slice]) => slice.cohort.common > 0)
+    .map(([speaker, slice]) => {
+      const first = summarizeScores(slice.before), second = summarizeScores(slice.after);
+      return { speaker, clips: slice.cohort.common, words: first.raw.referenceWords, characters: first.raw.referenceCharacters,
+        rawWordDelta: second.raw.errors - first.raw.errors, finalWordDelta: second.final.errors - first.final.errors,
+        rawCharDelta: second.raw.characterErrors - first.raw.characterErrors,
+        finalCharDelta: second.final.characterErrors - first.final.characterErrors };
+    })) : undefined;
   const conditions = byCondition ? [...conditionGroups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([condition, slice]) => {
     const first = summarizeScores(slice.before), second = summarizeScores(slice.after);
     return { condition, cohorts: slice.cohorts, baseline: first, candidate: second,
@@ -126,7 +137,7 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
   return { version: 1, manifestFingerprint: corpus.report.validatedContentSha256, split: baseline.split,
     publishResultsAllowed: corpus.report.publishResultsAllowed,
     complete: cohorts.speech.common === cohorts.speech.total && cohorts.silence.common === cohorts.silence.total,
-    cohorts, ...(bySpeaker ? { speakers } : {}), ...(byCondition ? { conditions } : {}), configDifferences: configFields.filter(([, get]) => get(baseline.config) !== get(candidate.config)).map(([name]) => name),
+    cohorts, ...(bySpeaker ? { speakers } : {}), ...(byCondition ? { conditions } : {}), ...(bootstrapSpeakers ? { bootstrap } : {}), configDifferences: configFields.filter(([, get]) => get(baseline.config) !== get(candidate.config)).map(([name]) => name),
     baseline: { config: before.config, resultsFingerprint: before.resultsFingerprint, metrics: a },
     candidate: { config: after.config, resultsFingerprint: after.resultsFingerprint, metrics: b },
     delta: { raw: deltaFor(a.raw, b.raw, wordFields, cohorts.speech.common),

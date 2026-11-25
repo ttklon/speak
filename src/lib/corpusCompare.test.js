@@ -194,6 +194,45 @@ describe('сравнение прогонов на общей когорте', (
     manifest.clips[0].conditions = ['changed']; fs.writeFileSync(paths[0], JSON.stringify(manifest));
     const tampered = run(['--by-condition']); expect(tampered.status).not.toBe(0); expect(tampered.stdout).toBe('');
   });
+  it('опциональная неопределённость использует только общую речь и не раскрывает ID', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    baseline.results.find((row) => row.id === 'one').raw = { status: 'error' };
+    candidate.results.find((row) => row.id === 'two').raw.text = 'ошибка слово';
+    candidate.results.find((row) => row.id === 'silence').raw.text = 'ложная фраза';
+    expect(compareManifestRuns(manifest, dir, baseline, candidate)).not.toHaveProperty('bootstrap');
+    const report = compareManifestRuns(manifest, dir, baseline, candidate, { bootstrapSpeakers: true });
+    expect(report.bootstrap).toMatchObject({ speakers: 2, speechClips: 2, replicates: 1000,
+      interval: { raw: { wer: [0, 0.5] }, final: { wer: [0, 0] } } });
+    expect(JSON.stringify(report.bootstrap)).not.toMatch(/speaker1|speaker2|ошибка слово|ложная фраза|private-record/);
+    manifest.clips.reverse(); baseline.results.reverse(); candidate.results.reverse();
+    expect(compareManifestRuns(manifest, dir, baseline, candidate, { bootstrapSpeakers: true }).bootstrap).toEqual(report.bootstrap);
+    candidate.results.find((row) => row.id === 'three').raw = { status: 'error' };
+    expect(compareManifestRuns(manifest, dir, baseline, candidate, { bootstrapSpeakers: true }).bootstrap).toMatchObject({ speakers: 1, speechClips: 1, interval: null });
+  });
+  it('ресэмплирует несколько клипов одного диктора одним блоком и не учитывает исключённого', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    manifest.clips.find((row) => row.id === 'two').speaker = 'Speaker1';
+    const fingerprint = validateCorpusManifest(manifest, dir).validatedContentSha256;
+    baseline.manifestFingerprint = fingerprint; candidate.manifestFingerprint = fingerprint;
+    candidate.results.find((row) => row.id === 'one').raw.text = 'ошибка слово';
+    candidate.results.find((row) => row.id === 'two').raw.text = 'ошибка слово';
+    const out = compareManifestRuns(manifest, dir, baseline, candidate, { bootstrapSpeakers: true }).bootstrap;
+    expect(out).toMatchObject({ speakers: 2, speechClips: 3, interval: { raw: { wer: [0, 0.5] } } });
+    candidate.results.find((row) => row.id === 'three').final = { status: 'error' };
+    const excluded = compareManifestRuns(manifest, dir, baseline, candidate, { bootstrapSpeakers: true }).bootstrap;
+    expect(excluded).toMatchObject({ speakers: 1, speechClips: 2, interval: null });
+  });
+  it('CLI разрешает бутстреп лишь явным флагом и не раскрывает ID', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));
+    for (const [index, obj] of [manifest, baseline, candidate].entries()) fs.writeFileSync(paths[index], JSON.stringify(obj));
+    const cli = path.resolve('scripts/compare-manifest-runs.mjs');
+    const run = (flags) => spawnSync(process.execPath, [cli, ...paths, ...flags], { encoding: 'utf8' });
+    const ok = run(['--bootstrap-speaker']); expect(ok.status, ok.stderr).toBe(0);
+    expect(JSON.parse(ok.stdout).bootstrap.speakers).toBe(3); expect(ok.stdout).not.toContain('speaker1');
+    const bad = run(['--bootstrap-speaker', '--bootstrap-speaker']); expect(bad.status).not.toBe(0); expect(bad.stdout).toBe('');
+    expect(() => compareManifestRuns(manifest, dir, baseline, candidate, { bootstrapSpeakers: 'false' })).toThrow(/bootstrap option/i);
+  });
   it('CLI срезы по дикторам включаются только явно, неизвестные флаги отклоняются', () => {
     const { dir, manifest, baseline, candidate } = setup();
     const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));
