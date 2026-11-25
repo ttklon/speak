@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { loadCorpusForScoring } from './corpus-manifest.mjs';
 import { scoreCorpus, summarizeScores } from './corpus-score.mjs';
 import { pairedSpeakerBootstrap } from './corpus-bootstrap.mjs';
+import { summarizeTokenDiagnostics } from './corpus-token-diagnostics.mjs';
 
 const id = (value) => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(value);
 const sha = (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
@@ -53,7 +54,8 @@ export function scoreManifestRun(manifest, directory, run, options = {}) {
 
 /** Compare only clips whose raw and final stages succeeded in both runs.
  * No winner or statistical significance is inferred from the numbers. */
-export function compareManifestRuns(manifest, directory, baseline, candidate, { bySpeaker = false, byCondition = false, bootstrapSpeakers = false } = {}) {
+export function compareManifestRuns(manifest, directory, baseline, candidate, { bySpeaker = false, byCondition = false, bootstrapSpeakers = false, tokenDiagnostics = false } = {}) {
+  if (typeof tokenDiagnostics !== 'boolean') throw new Error('Invalid token diagnostics option');
   if (typeof bootstrapSpeakers !== 'boolean') throw new Error('Invalid bootstrap option');
   if (typeof byCondition !== 'boolean') throw new Error('Invalid condition option');
   if (typeof bySpeaker !== 'boolean') throw new Error('Invalid speaker option');
@@ -127,6 +129,16 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
         rawCharDelta: second.raw.characterErrors - first.raw.characterErrors,
         finalCharDelta: second.final.characterErrors - first.final.characterErrors };
     })) : undefined;
+  const diagnostics = tokenDiagnostics ? (() => {
+    const reference = new Map(corpus.selected.map((sample) => [sample.id, sample.reference]));
+    const beforeById = new Map(baseline.results.map((row) => [row.id, row]));
+    const afterById = new Map(candidate.results.map((row) => [row.id, row]));
+    return summarizeTokenDiagnostics(commonBefore.filter((sample) => sample.kind === 'speech').map(({ id }) => ({
+      reference: reference.get(id),
+      baseline: { raw: beforeById.get(id).raw.text, final: beforeById.get(id).final.text },
+      candidate: { raw: afterById.get(id).raw.text, final: afterById.get(id).final.text },
+    })));
+  })() : undefined;
   const conditions = byCondition ? [...conditionGroups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([condition, slice]) => {
     const first = summarizeScores(slice.before), second = summarizeScores(slice.after);
     return { condition, cohorts: slice.cohorts, baseline: first, candidate: second,
@@ -137,7 +149,7 @@ export function compareManifestRuns(manifest, directory, baseline, candidate, { 
   return { version: 1, manifestFingerprint: corpus.report.validatedContentSha256, split: baseline.split,
     publishResultsAllowed: corpus.report.publishResultsAllowed,
     complete: cohorts.speech.common === cohorts.speech.total && cohorts.silence.common === cohorts.silence.total,
-    cohorts, ...(bySpeaker ? { speakers } : {}), ...(byCondition ? { conditions } : {}), ...(bootstrapSpeakers ? { bootstrap } : {}), configDifferences: configFields.filter(([, get]) => get(baseline.config) !== get(candidate.config)).map(([name]) => name),
+    cohorts, ...(bySpeaker ? { speakers } : {}), ...(byCondition ? { conditions } : {}), ...(bootstrapSpeakers ? { bootstrap } : {}), ...(tokenDiagnostics ? { tokenDiagnostics: diagnostics } : {}), configDifferences: configFields.filter(([, get]) => get(baseline.config) !== get(candidate.config)).map(([name]) => name),
     baseline: { config: before.config, resultsFingerprint: before.resultsFingerprint, metrics: a },
     candidate: { config: after.config, resultsFingerprint: after.resultsFingerprint, metrics: b },
     delta: { raw: deltaFor(a.raw, b.raw, wordFields, cohorts.speech.common),

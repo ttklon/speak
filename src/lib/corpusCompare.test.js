@@ -222,6 +222,41 @@ describe('сравнение прогонов на общей когорте', (
     const excluded = compareManifestRuns(manifest, dir, baseline, candidate, { bootstrapSpeakers: true }).bootstrap;
     expect(excluded).toMatchObject({ speakers: 1, speechClips: 2, interval: null });
   });
+  it('сравнивает буквальные токены только на общей успешной речи и раздельно по этапам', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    fs.writeFileSync(path.join(dir, 'one.txt'), 'не отправляй 15 15 раз раз');
+    manifest.clips.find((row) => row.id === 'one').reference.sha256 = sha('не отправляй 15 15 раз раз');
+    const fingerprint = validateCorpusManifest(manifest, dir).validatedContentSha256;
+    baseline.manifestFingerprint = fingerprint; candidate.manifestFingerprint = fingerprint;
+    const first = (run) => run.results.find((row) => row.id === 'one');
+    first(baseline).raw.text = 'отправляй 15 раз'; first(baseline).final.text = 'не отправляй 15 15 раз раз';
+    first(candidate).raw.text = 'не отправляй 15 15 раз раз'; first(candidate).final.text = 'отправляй 15 раз';
+    baseline.results.find((row) => row.id === 'two').raw = { status: 'error' };
+    candidate.results.find((row) => row.id === 'silence').raw.text = 'не 15';
+    const normal = compareManifestRuns(manifest, dir, baseline, candidate);
+    expect(normal).not.toHaveProperty('tokenDiagnostics');
+    const report = compareManifestRuns(manifest, dir, baseline, candidate, { tokenDiagnostics: true });
+    expect(report.tokenDiagnostics).toMatchObject({ speechClips: 2,
+      raw: { negation: { referenceOccurrences: 1, baseline: { referenceExcess: 1 }, candidate: { referenceExcess: 0 }, delta: { referenceExcess: -1 } },
+        asciiDigits: { referenceOccurrences: 2, baseline: { referenceExcess: 1 }, candidate: { referenceExcess: 0 } } },
+      final: { negation: { baseline: { referenceExcess: 0 }, candidate: { referenceExcess: 1 }, delta: { referenceExcess: 1 } } } });
+    expect(JSON.stringify(report.tokenDiagnostics)).not.toMatch(/отправляй|speaker|"15"/);
+    for (const row of baseline.results) row.raw = { status: 'error' };
+    expect(compareManifestRuns(manifest, dir, baseline, candidate, { tokenDiagnostics: true }).tokenDiagnostics)
+      .toEqual({ speechClips: 0, raw: null, final: null });
+  });
+  it('CLI не включает диагностику без флага и не принимает повторный флаг', () => {
+    const { dir, manifest, baseline, candidate } = setup();
+    const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));
+    for (const [index, obj] of [manifest, baseline, candidate].entries()) fs.writeFileSync(paths[index], JSON.stringify(obj));
+    const cli = path.resolve('scripts/compare-manifest-runs.mjs');
+    const run = (flags) => spawnSync(process.execPath, [cli, ...paths, ...flags], { encoding: 'utf8' });
+    expect(JSON.parse(run([]).stdout)).not.toHaveProperty('tokenDiagnostics');
+    const output = run(['--token-diagnostics']); expect(output.status, output.stderr).toBe(0);
+    expect(JSON.parse(output.stdout).tokenDiagnostics.speechClips).toBe(3); expect(output.stdout).not.toContain('первое слово');
+    const fail = run(['--token-diagnostics', '--token-diagnostics']); expect(fail.status).not.toBe(0); expect(fail.stdout).toBe('');
+    expect(() => compareManifestRuns(manifest, dir, baseline, candidate, { tokenDiagnostics: 'false' })).toThrow(/token.*option/i);
+  });
   it('CLI разрешает бутстреп лишь явным флагом и не раскрывает ID', () => {
     const { dir, manifest, baseline, candidate } = setup();
     const paths = ['manifest', 'baseline', 'candidate'].map((name) => path.join(dir, `${name}.json`));
