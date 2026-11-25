@@ -191,73 +191,52 @@ export function joinChunks(parts = []) {
 
 const words = (text = '') => String(text || '').split(/\s+/).filter(Boolean);
 const bare = (word = '') => String(word).toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+// Консервативные маркеры: наличие даже одного не доказывает повтор звука.
+const SENSITIVE_OVERLAP = new Set(['не', 'ни', 'нет', 'нельзя', 'без', 'никогда', 'ничего', 'никто']);
+function sensitiveOverlap(tokens) {
+  return tokens.some((token, i) => SENSITIVE_OVERLAP.has(token) || /\p{N}/u.test(token) || (i > 0 && token === tokens[i - 1]));
+}
 
 /**
- * Склейка кусков, которые шли с перекрытием.
- *
- * Перекрытие нужно, чтобы граница могла проходить где угодно: слово, разрезанное
- * пополам, целиком есть в предыдущем куске. Плата — дубль на стыке, и его надо
- * снять. Три случая:
- *
- *  1. Последние слова предыдущего куска совпадают с первыми словами нового —
- *     это тот же текст, второй раз его не пишем.
- *  2. Первое слово нового куска — обрывок последнего слова предыдущего
- *     («программу» → «му»): обрывок выбрасываем.
- *  3. Перекрытия нет — обычная склейка через `joinChunks`.
- *
- * Снимаем не больше трёх слов: если человек действительно повторил «да, да»,
- * это его слова, а не дубль распознавания.
+ * Склейка перекрывающихся кусков: звук действительно может повторяться, но
+ * текст сам по себе не доказывает, что человек не повторил слово намеренно.
+ * Сохраняем совпадения из одного-двух слов и возможные обрывки: иначе «не»
+ * после «машине» исчезало и смысл менялся. Только совпадающий стык из трёх
+ * слов или более длинное совпадающее предложение без отдельных маркеров
+ * отрицания, цифр и соседних повторов удаляется эвристически.
+ * Даже такой длинный стык может быть намеренным повтором; это компромисс,
+ * а не проверка реального перекрытия звука. preserve оставляет оба фрагмента,
+ * в том числе реальные дубли на стыке.
  */
-export function mergeOverlap(previous = '', next = '') {
+export function mergeOverlap(previous = '', next = '', { preserve = false } = {}) {
   const left = String(previous || '').trim();
   const right = String(next || '').trim();
   if (!left) return right;
   if (!right) return left;
+  if (preserve) return joinChunks([left, right]);
 
   const leftWords = words(left);
   const rightWords = words(right);
-  const max = Math.min(3, leftWords.length, rightWords.length);
 
-  // 0) Целое предложение на стыке. Бывает, что хвост распознаётся вместе с
-  // последним предложением предыдущего куска — тогда предыдущее предложение
-  // повторилось бы целиком («просто повторы» в чужом окне). Сравниваем
-  // предложения без регистра и знаков препинания.
-  const leftSentences = String(left).split(/(?<=[.!?…])\s+/).filter(Boolean);
-  const rightSentences = String(right).split(/(?<=[.!?…])\s+/).filter(Boolean);
-  if (leftSentences.length && rightSentences.length) {
-    const lastLeft = bare(leftSentences[leftSentences.length - 1].replace(/[.!?…]+$/u, ''));
+  const leftSentences = left.split(/(?<=[.!?…])\s+/).filter(Boolean);
+  const rightSentences = right.split(/(?<=[.!?…])\s+/).filter(Boolean);
+  if (leftSentences.length > 1 && rightSentences.length) {
+    const lastSentence = leftSentences[leftSentences.length - 1];
+    const lastLeft = bare(lastSentence.replace(/[.!?…]+$/u, ''));
     const firstRight = bare(rightSentences[0].replace(/[.!?…]+$/u, ''));
-    if (lastLeft && firstRight && lastLeft === firstRight && leftSentences.length > 1) {
-      // оставляем предложение в предыдущем куске, из нового его убираем
-      const rest = rightSentences.slice(1).join(' ');
-      return joinChunks([left, rest]);
+    const sentenceTokens = words(lastSentence).map(bare).filter(Boolean);
+    if (sentenceTokens.length >= 3 && !sensitiveOverlap(sentenceTokens) && lastLeft && firstRight && lastLeft === firstRight) {
+      return joinChunks([left, rightSentences.slice(1).join(' ')]);
     }
   }
 
-  // 1) точное совпадение хвоста и начала
-  for (let k = max; k >= 1; k -= 1) {
-    const tail = leftWords.slice(-k).map(bare).join(' ');
-    const head = rightWords.slice(0, k).map(bare).join(' ');
-    if (tail && tail === head) {
-      const rest = rightWords.slice(k).join(' ');
-      return joinChunks([left, rest]);
+  if (leftWords.length >= 3 && rightWords.length >= 3) {
+    const tail = leftWords.slice(-3).map(bare);
+    const head = rightWords.slice(0, 3).map(bare);
+    if (tail.every(Boolean) && !sensitiveOverlap(tail) && tail.every((word, index) => word === head[index])) {
+      return joinChunks([left, rightWords.slice(3).join(' ')]);
     }
   }
-
-  // 2) обрывок последнего слова на стыке
-  const lastLeft = bare(leftWords[leftWords.length - 1]);
-  const firstRight = bare(rightWords[0]);
-  if (
-    lastLeft &&
-    firstRight &&
-    firstRight !== lastLeft &&
-    lastLeft.length > firstRight.length &&
-    lastLeft.endsWith(firstRight)
-  ) {
-    const rest = rightWords.slice(1).join(' ');
-    return joinChunks([left, rest]);
-  }
-
   return joinChunks([left, right]);
 }
 

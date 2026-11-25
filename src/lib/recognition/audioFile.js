@@ -2,7 +2,7 @@
  * «Файл в текст»: правила для расшифровки готовой записи (не диктовки).
  *
  * Здесь нет ни микрофона, ни интерфейса — только арифметика и честные пределы.
- * Так это можно проверить тестами: окна нарезки, склейка кусков без повторов,
+ * Так это можно проверить тестами: окна нарезки, осторожная склейка кусков,
  * отказы с понятной причиной.
  *
  * Зачем вообще: диктовка и расшифровка файла — разные задачи. У MacWhisper,
@@ -109,13 +109,13 @@ export function slicePcm(pcm, { fromMs = 0, toMs = 0, sampleRate = SAMPLE_RATE }
   return pcm.subarray(from, to);
 }
 
-/** Склеить куски в один текст: стыки идут с перекрытием, повторы убираем. */
-export function mergeFileText(parts = []) {
+/** Склеить куски; повторы на перекрытиях могут остаться или быть удалены ошибочно. */
+export function mergeFileText(parts = [], { preserve = false } = {}) {
   let text = '';
   for (const raw of parts) {
     const part = String(raw || '').trim();
     if (!part) continue;
-    text = text ? mergeOverlap(text, part) : part;
+    text = text ? mergeOverlap(text, part, { preserve }) : part;
   }
   return text.trim();
 }
@@ -125,7 +125,7 @@ export function mergeFileText(parts = []) {
  * успешные окна имеют право склеиваться по перекрытию. null — ошибка,
  * пустая строка — окно без текста. Тайминги приблизительны и перекрываются.
  */
-export function assembleFileParts(parts = [], windows = [], transform = (text) => text) {
+export function assembleFileParts(parts = [], windows = [], transform = (text) => text, { preserve = false } = {}) {
   const sections = [];
   const speech = [];
   let group = '';
@@ -148,7 +148,7 @@ export function assembleFileParts(parts = [], windows = [], transform = (text) =
     } else {
       const text = String(part || '').trim();
       if (!text) flush();
-      else group = group ? mergeOverlap(group, text) : text;
+      else group = group ? mergeOverlap(group, text, { preserve }) : text;
     }
   });
   flush();

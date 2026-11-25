@@ -226,8 +226,8 @@ export function createRecognizer(opts = {}) {
     // после остановки остаётся распознать только хвост. Это и есть разница
     // между «ждать двадцать секунд» и «ждать одно предложение».
     const tracker = createSpeechTracker();
-    // Уже распознанный текст копится строкой: куски идут с перекрытием, и
-    // каждый следующий надо склеить с предыдущим без дублей.
+    // Уже распознанный текст копится строкой: куски идут с перекрытием.
+    // Склейка эвристическая, короткие и защищённые повторы могут остаться.
     let preText = '';
     let preCount = 0;
     let preMs = 0;
@@ -326,7 +326,7 @@ export function createRecognizer(opts = {}) {
           if (res?.mode) lastMode = res.mode;
           if (res?.ok && String(res.text || '').trim()) {
             confirmedMs = cut.atMs;
-            preText = mergeOverlap(preText, String(res.text).trim());
+            preText = mergeOverlap(preText, String(res.text).trim(), { preserve: opts.preserveText === true });
             preCount += 1;
             preMs += Number(res.ms) || 0;
           } else {
@@ -471,8 +471,8 @@ export function createRecognizer(opts = {}) {
         // хвост равен всей записи (поведение как раньше).
         const committedMs = Math.min(confirmedMs, durationMs);
         const RATE = 16000;
-        // Хвост тоже с перекрытием: на его стыке с последним куском может быть
-        // половина слова, и `mergeOverlap` снимет дубль.
+        // Хвост тоже с перекрытием: на стыке может остаться дубль или обрывок;
+        // текст не доказывает, повторил ли человек слова намеренно.
         const tailFrom = Math.max(0, committedMs - tracker.overlapMs);
         const tailPcm =
           committedMs > 0
@@ -523,7 +523,7 @@ export function createRecognizer(opts = {}) {
           rememberRecordedAudio(pcm, durationMs, langCode());
           // Полный текст — заранее распознанные куски плюс хвост. Один проход
           // по хвосту вместо всей фразы и есть выигрыш во времени.
-          text = preText ? mergeOverlap(preText, res.text) : res.text;
+          text = preText ? mergeOverlap(preText, res.text, { preserve: opts.preserveText === true }) : res.text;
           onFinal?.({ text, last: text });
           // ms — сколько заняло распознавание: показываем человеку, что движок
           // действительно работал, а не «проглотил» запись

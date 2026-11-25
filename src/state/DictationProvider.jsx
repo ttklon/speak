@@ -866,6 +866,7 @@ export function DictationProvider({ children }) {
       const job = { cancelled: false };
       // Один выбор словаря на весь файл, включая декодирование и склейку.
       const useDictionary = settingsRef.current.dictionaryEnabled !== false;
+      const preserveFile = settingsRef.current.preserveText === true;
       fileJobRef.current = job;
       setFileJob({ name, phase: 'decode', done: 0, total: 0, preview: '' });
       const startedAtMs = Date.now();
@@ -922,7 +923,7 @@ export function DictationProvider({ children }) {
       // только уже завершённые окна. Текущий вызов может ответить позже.
       job.onCancel = () => {
         const { text, speechText } = assembleFileParts(parts, windows,
-          (group) => useDictionary ? applyDictionary(group, dictRef.current) : group);
+          (group) => useDictionary ? applyDictionary(group, dictRef.current) : group, { preserve: preserveFile });
         if (!speechText) return;
         const next = parts.length + 1;
         pushToast({
@@ -938,7 +939,7 @@ export function DictationProvider({ children }) {
       for (let i = 0; i < windows.length; i += 1) {
         if (job.cancelled) break;
         const win = windows[i];
-        setFileJob({ name, phase: 'run', done: i, total: windows.length, preview: assembleFileParts(parts, windows).text.slice(-240) });
+        setFileJob({ name, phase: 'run', done: i, total: windows.length, preview: assembleFileParts(parts, windows, (text) => text, { preserve: preserveFile }).text.slice(-240) });
         try {
           const res = await native.transcribePcm({
             pcm: slicePcm(decoded.pcm, { ...win, sampleRate: decoded.sampleRate }),
@@ -970,7 +971,7 @@ export function DictationProvider({ children }) {
           phase: 'run',
           done: i + 1,
           total: windows.length,
-          preview: assembleFileParts(parts, windows).text.slice(-240),
+          preview: assembleFileParts(parts, windows, (text) => text, { preserve: preserveFile }).text.slice(-240),
         });
       }
       fileJobRef.current = null;
@@ -981,7 +982,7 @@ export function DictationProvider({ children }) {
         return null;
       }
       const { text, speechText } = assembleFileParts(parts, windows,
-        (group) => useDictionary ? applyDictionary(group, dictRef.current) : group);
+        (group) => useDictionary ? applyDictionary(group, dictRef.current) : group, { preserve: preserveFile });
       if (!speechText) {
         diag.warn('stt', failed ? 'Ошибка расшифровки файла' : 'Файл без речи', { name, failed, parts: windows.length });
         pushToast({ ...(failed ? FILE_ERRORS.failed : FILE_ERRORS.empty), tone: 'warn', ttl: 11000 });
@@ -1215,6 +1216,8 @@ export function DictationProvider({ children }) {
         model: settingsRef.current.whisperModel,
         // словарь идёт в whisper как подсказка только если тумблер включён
         useDictionary: settingsRef.current.dictionaryEnabled !== false,
+        // Не удаляем совпадения между кусками в режиме сохранения текста.
+        preserveText: settingsRef.current.preserveText === true,
         // контекст экрана читаем в момент остановки, а не старта: модель могла
         // ещё не ответить, когда человек уже отпустил клавишу
         getContextPrompt: () => (opts.screenAware && isCurrentSession() ? session.screenTerms : ''),

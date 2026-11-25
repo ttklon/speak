@@ -1189,6 +1189,72 @@ async function scenarioAudioFileCancelPartial(browser) {
   } finally { rmSync(wav, { force: true }); }
 }
 
+// Текстовые ответы моста и декодирование замокированы; WAV создаётся реально.
+// Сохраняем отрицания и осмысленные повторы на границе окон импорта.
+async function scenarioAudioFileOverlapSafety(browser) {
+  const wav = writeToneWav(join(tmpdir(), 'zspeakly-file-overlap-safety.wav'));
+  try {
+    for (const scenario of ['negation', 'repeat', 'long', 'critical', 'long-preserve', 'change-on', 'change-off']) {
+      const page = await openPage(browser, '#/home', {
+        settings: { aiDictationRewrite: false, dictionaryEnabled: false, preserveText: scenario === 'long-preserve' || scenario === 'change-on' }, storeSeed: { 'zs.dictations': [] }, patchArg: scenario, settle: 500,
+        patchNative: (scenario) => {
+          window.AudioContext = class {
+            decodeAudioData() { return Promise.resolve({ length: 16000 * 60, sampleRate: 16000, duration: 60,
+              numberOfChannels: 1, getChannelData: () => new Float32Array(16000 * 60) }); }
+            close() { return Promise.resolve(); }
+          };
+          window.OfflineAudioContext = class {
+            createBufferSource() { return { connect() {}, start() {} }; }
+            startRendering() { return Promise.resolve({ sampleRate: 16000, getChannelData: () => new Float32Array(16000 * 60) }); }
+          };
+          const results = {
+            negation: ['Кнопка на машине', 'не нажимайте'],
+            repeat: ['Нужно сто процентов', 'сто процентов проверить'],
+            long: ['проверка один два три', 'один два три готово'],
+            'long-preserve': ['проверка один два три', 'один два три готово'],
+            'change-on': ['проверка один два три', 'один два три готово'],
+            'change-off': ['проверка один два три', 'один два три готово'],
+            critical: ['Можно не отправлять', 'можно не отправлять письмо'],
+          };
+          let index = 0;
+          window.zspeakly.native.transcribePcm = async () => {
+            const i = index++;
+            if (i === 0 && scenario.startsWith('change-')) await new Promise((resolve) => { window.__releaseOverlap = resolve; });
+            return { ok: true, text: results[scenario][i] || '' };
+          };
+        },
+      });
+      try {
+        await (await page.$('input[type="file"]')).uploadFile(wav);
+        if (scenario.startsWith('change-')) {
+          await page.waitForFunction(() => typeof window.__releaseOverlap === 'function', { timeout: 10000 });
+          await page.evaluate(() => { location.hash = '#/settings?section=features'; });
+          await page.waitForFunction(() => [...document.querySelectorAll('.setting-row')].some((r) => /Не трогать мой текст/.test(r.innerText)), { timeout: 10000 });
+          await page.evaluate(() => [...document.querySelectorAll('.setting-row')].find((r) => /Не трогать мой текст/.test(r.innerText))?.querySelector('.toggle')?.click());
+          await page.waitForFunction((expected) => window.__e2e.read('zs.settings')?.preserveText === expected, { timeout: 10000 }, scenario === 'change-off');
+          await page.evaluate(() => window.__releaseOverlap());
+        }
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 12000 });
+        const result = await page.evaluate(() => ({ item: window.__e2e.read('zs.dictations')?.[0],
+          inserts: (window.__bridgeCalls || []).filter((call) => call.channel === 'text:insert').length }));
+        const expected = {
+          negation: 'Кнопка на машине не нажимайте',
+          repeat: 'Нужно сто процентов сто процентов проверить',
+          long: 'проверка один два три готово',
+          'long-preserve': 'проверка один два три один два три готово',
+          'change-on': 'проверка один два три один два три готово',
+          'change-off': 'проверка один два три готово',
+          critical: 'Можно не отправлять можно не отправлять письмо',
+        }[scenario];
+        record('сценарии', `файл: безопасная склейка границы (${scenario}) попадает в историю без вставки`,
+          result.item?.text === expected && result.item?.source === 'file' && result.inserts === 0, result.item?.text || 'нет текста');
+        const errors = takeErrors(page);
+        record('сценарии', `файл: безопасная склейка (${scenario}) без ошибок консоли`, errors.length === 0, errors[0] || '');
+      } finally { await page.close(); }
+    }
+  } finally { rmSync(wav, { force: true }); }
+}
+
 async function scenarioAudioFile(browser) {
   const wav = writeToneWav(join(tmpdir(), 'zspeakly-e2e-tone.wav'));
   const page = await openPage(browser, '#/home', {
@@ -10501,6 +10567,7 @@ async function main() {
       ['файл: границы декодирования', scenarioAudioFileBounds],
       ['файл: частичный отказ', scenarioAudioFilePartial],
       ['файл: отмена с частичным текстом', scenarioAudioFileCancelPartial],
+      ['файл: безопасность склейки', scenarioAudioFileOverlapSafety],
       ['файл: словарь включён или выключен', scenarioFileDictionary],
       ['команда голосом', scenarioVoiceCommand],
       ['оговорки', scenarioSelfCorrection],

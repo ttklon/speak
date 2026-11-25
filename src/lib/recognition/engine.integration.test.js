@@ -148,6 +148,30 @@ describe('диктовка целиком: что получает челове�
     expect(ends[0].spoken).toBeCloseTo(14, 0);
   });
 
+  it('граница предварительного куска не удаляет отрицание из следующего', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    calls.length = 0;
+    answers = [{ ok: true, text: 'Кнопка на машине', mode: 'server' }, { ok: true, text: 'не нажимайте', mode: 'server' }];
+    const end = vi.fn(); const recognizer = createRecognizer({ onEnd: end });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000);
+    await speak(8000, 9000); await recognizer.stop();
+    expect(calls.some((call) => call.pre === true)).toBe(true);
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: 'Кнопка на машине не нажимайте' }));
+  });
+
+  it('режим сохранения текста не вырезает длинное совпадение при склейке куска и хвоста', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    calls.length = 0;
+    answers = [{ ok: true, text: 'проверка один два три', mode: 'server' }, { ok: true, text: 'один два три готово', mode: 'server' }];
+    const end = vi.fn(); const recognizer = createRecognizer({ preserveText: true, onEnd: end });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000);
+    await speak(8000, 9000); await recognizer.stop();
+    expect(calls.some((call) => call.pre === true)).toBe(true);
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: 'проверка один два три один два три готово' }));
+  });
+
   it('язык берётся из активного окна один раз и не меняется посреди фразы', async () => {
     // Окно узнаётся через доли секунды после старта, а первый проход движка
     // бывает позже. Язык решается при первом обращении — и дальше заморожен:
