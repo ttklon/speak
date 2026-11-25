@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { installMockBridge } from './e2e/mock-bridge.mjs';
+import { runUiTask, runUiScenario } from './e2e/ui-task.mjs';
 // демо-наборы больше не подставляются приложением — тесты кладут их сами
 import { buildSeedClipboard, buildSeedDictations, SEED_DICTIONARY } from '../src/lib/seed.js';
 
@@ -365,8 +366,8 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
       // иначе прогон стирает состояние, на котором проверяются другие кнопки
       continue;
     }
-    const p = await openPage(browser, route, { settle: 180 });
     if (process.env.ZS_TRACE === '1') console.log(C.dim(`      → ${label} / ${target.label || target.tag}`));
+    const p = await openPage(browser, route, { settle: 180 });
     takeErrors(p);
     const before = await bridgeCalls(p);
     const beforeState = await health(p).catch(() => null);
@@ -432,6 +433,7 @@ async function explore(browser, { route, label, maxDepth2 = 6 }) {
         if (used >= maxDepth2) break;
         // контекст второго уровня тоже может умереть от навигации — не роняем прогон
         if (`${sub.fp}#${sub.nth}` === `${target.fp}#${target.nth}`) continue;
+        if (process.env.ZS_TRACE === '1') console.log(C.dim(`      → ${label} / ${target.label || target.tag} / ${sub.label || sub.tag}`));
         const p2 = await openPage(browser, route, { settle: 160 });
         takeErrors(p2);
         try {
@@ -10258,7 +10260,7 @@ async function main() {
     ];
     for (const screen of screens) {
       console.log(C.dim(`\n${screen.label}`));
-      await explore(browser, screen);
+      await runUiTask(`Обход: ${screen.label}`, () => explore(browser, screen), { timeoutMs: 600_000 });
     }
 
     if (process.env.ZS_SKIP_INPUTS !== '1' && runCrawl) {
@@ -10269,7 +10271,7 @@ async function main() {
         { route: '#/clipboard', label: 'Буфер обмена' },
         { route: '#/settings?section=app&from=home', label: 'Настройки' },
       ]) {
-        await exploreInputs(browser, screen);
+        await runUiTask(`Ввод: ${screen.label}`, () => exploreInputs(browser, screen), { timeoutMs: 300_000 });
       }
     }
 
@@ -10479,15 +10481,22 @@ async function main() {
         wantedIndex.has(index + 1) ||
         wantedNames.some((part) => name.includes(part));
       if (!wanted) continue;
-      try {
-        await fn(browser);
-      } catch (err) {
-        record('сценарии', name, false, String(err && err.message).slice(0, 200));
-      }
+      await runUiScenario(`Сценарий ${index + 1}/${scenarios.length}: ${name}`, () => fn(browser),
+        (err) => record('сценарии', name, false, String(err && err.message).slice(0, 200)));
     }
   } finally {
-    if (browser) await browser.close();
-    if (server) server.kill('SIGTERM');
+    try {
+      if (browser) {
+        try {
+          await runUiTask('Закрытие браузера', () => browser.close(), { timeoutMs: 15_000 });
+        } catch (err) {
+          try { browser.process()?.kill('SIGKILL'); } catch { /* process already exited */ }
+          throw err;
+        }
+      }
+    } finally {
+      if (server) server.kill('SIGTERM');
+    }
   }
 
   const failed = results.filter((r) => !r.ok);

@@ -7,8 +7,14 @@ describe('проверка настоящего движка в CI', () => {
   it('Windows запускает все unit-тесты и полный интерфейс без фильтра сценариев', () => {
     const job = workflow.split('  windows-full-ui:')[1]?.split('\n  onnx-live:')[0];
     expect(job).toContain('runs-on: windows-latest');
+    expect(job).toContain('ZS_TRACE: "1"');
     expect(job).toContain('npm test > windows-all-tests.log');
-    expect(job).toContain('node scripts/test-ui.mjs > windows-full-ui.log');
+    expect(job).toContain('node scripts/test-ui.mjs 2>&1 | tee windows-full-ui.log');
+    expect(job).toContain('codes=("${PIPESTATUS[@]}")');
+    expect(job).toContain('code=${codes[0]}');
+    expect(job).toContain('tee_code=${codes[1]}');
+    expect(job).toContain('if [ "$tee_code" -ne 0 ]');
+    expect(job).toContain('exit "$tee_code"');
     expect(job).toContain('node scripts/smoke-main.mjs --test-clipboard-disabled > windows-clipboard-smoke.log');
     expect(job).toContain('::error title=Windows clipboard smoke');
     // Unit failure must not prevent the independent UI suite from running.

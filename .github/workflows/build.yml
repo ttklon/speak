@@ -163,6 +163,7 @@ jobs:
     timeout-minutes: 60
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      ZS_TRACE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -203,13 +204,18 @@ jobs:
           export CHROME_PATH="$(cygpath -m "$chrome")"
           export ZS_BASE_URL='http://127.0.0.1:5187'
           set +e
-          node scripts/test-ui.mjs > windows-full-ui.log 2>&1
-          code=$?
-          cat windows-full-ui.log
+          # Stream progress to Actions while retaining a copy for the artifact.
+          # Preserve both exit codes: neither a failing test nor a failing tee
+          # may turn this job green.
+          node scripts/test-ui.mjs 2>&1 | tee windows-full-ui.log
+          codes=("${PIPESTATUS[@]}")
+          code=${codes[0]}
+          tee_code=${codes[1]}
           # Annotations have a size limit. Keep the *end* (including the
           # fatal error/summary), not the beginning of an oversized message.
           message=$(tail -c 1400 windows-full-ui.log | tr '\r\n' '  ' | sed 's/%/%25/g')
           if [ "$code" -ne 0 ]; then echo "::error title=Windows full UI::$message"; exit "$code"; fi
+          if [ "$tee_code" -ne 0 ]; then echo "::error title=Windows full UI::Could not save UI log"; exit "$tee_code"; fi
           echo "::notice title=Windows full UI::$message"
       - name: Upload Windows full test logs
         if: always()
