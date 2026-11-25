@@ -1304,11 +1304,35 @@ export function DictationProvider({ children }) {
             setLevel(0);
           }
         },
-        onEnd: async ({ text, ms, spoken, mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs }) => {
+        onEnd: async ({ text, ms, spoken, mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs, incomplete, partialText }) => {
           session.screenTerms = '';
           if (!isCurrentSession()) return;
           session.completed = true;
           recRef.current = null;
+          if (incomplete === true) {
+            // Ни начало, ни живой черновик нельзя выдавать за полный итог или
+            // выполнять как голосовую команду. Отдаём только для ручной проверки.
+            const prefix = String(partialText || '').trim();
+            const live = String(draftRef.current || '').trim();
+            // Это альтернативные результаты, не готовая склейка: черновик
+            // может повторять начало или содержать только хвост записи.
+            const recoverText = prefix && live && prefix !== live
+              ? `Предварительный фрагмент:\n${prefix}\n\nЖивой черновик (может повторять фрагмент):\n${live}`
+              : (prefix || live);
+            if (recoverText) pushToast({
+              title: 'Распознована только часть диктовки',
+              description: 'Последний проход не дал полного результата. Текст не вставлен и не сохранён в истории; проверьте и скопируйте его до закрытия уведомления или приложения.',
+              recoverText, recoverLabel: 'Неполная диктовка для ручной проверки', tone: 'warn', ttl: 0,
+            });
+            sessionOpts.current.command = false;
+            commandRef.current = '';
+            finalRef.current = '';
+            draftRef.current = '';
+            setDraft('');
+            setLevel(0);
+            setState('idle');
+            return;
+          }
           setState('processing');
           setLevel(0);
           // Текст вставляем сразу: искусственная пауза «как в видео» только
@@ -1398,7 +1422,7 @@ export function DictationProvider({ children }) {
       if (processingRecRef.current === processing) processingRecRef.current = null;
     }
     if (processing.cancelled || processing.session?.cancelled || result?.code === 'cancelled') return;
-    if (result?.code === 'mic-not-ready') {
+    if (result?.code === 'mic-not-ready' || result?.code === 'incomplete') {
       if (processing.session) {
         processing.session.completed = true;
         processing.session.screenTerms = '';

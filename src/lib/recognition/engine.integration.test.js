@@ -172,6 +172,42 @@ describe('диктовка целиком: что получает челове�
     expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: 'проверка один два три один два три готово' }));
   });
 
+  it.each(['failure', 'exception', 'empty', 'whitespace', 'cancelled'])(
+    'при отказе или пустом результате хвоста (%s) не выдаёт начало за полную диктовку', async (kind) => {
+      answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+      const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+      calls.length = 0;
+      native.transcribePcm.mockImplementationOnce(async (payload) => {
+        calls.push(payload); return { ok: true, text: 'Готовое начало.', mode: 'server' };
+      }).mockImplementationOnce(async (payload) => {
+        calls.push(payload);
+        if (kind === 'exception') throw new Error('IPC failed');
+        if (kind === 'empty') return { ok: true, text: '' };
+        if (kind === 'whitespace') return { ok: true, text: '  \n ' };
+        if (kind === 'cancelled') return { ok: false, code: 'cancelled' };
+        return { ok: false, code: 'stt-failed', reason: 'engine failed' };
+      });
+      const end = vi.fn(), final = vi.fn(), error = vi.fn();
+      const recognizer = createRecognizer({ onEnd: end, onFinal: final, onError: error });
+      await recognizer.start(); await speak(0, 7000); await silence(7000, 8000); await speak(8000, 11000);
+      const result = await recognizer.stop();
+      expect(calls.some((call) => call.pre === true)).toBe(true);
+      expect(final).not.toHaveBeenCalled();
+      expect(end).toHaveBeenCalledTimes(1);
+      expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: '', incomplete: true, partialText: 'Готовое начало.' }));
+      expect(result).toMatchObject({ text: '', code: 'incomplete' });
+      expect(error).toHaveBeenCalled();
+    },
+  );
+
+  it('отказ полного прохода без предварительных кусков тоже запрещает выдачу черновика за итог', async () => {
+    answers = [{ ok: false, code: 'stt-failed', reason: 'engine failed' }];
+    const end = vi.fn(); const recognizer = createRecognizer({ onEnd: end });
+    await recognizer.start(); await speak(0, 2000);
+    expect(await recognizer.stop()).toMatchObject({ text: '', code: 'incomplete' });
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: '', incomplete: true, partialText: '' }));
+  });
+
   it('язык берётся из активного окна один раз и не меняется посреди фразы', async () => {
     // Окно узнаётся через доли секунды после старта, а первый проход движка
     // бывает позже. Язык решается при первом обращении — и дальше заморожен:
@@ -407,6 +443,14 @@ describe('диктовка целиком: что получает челове�
     await Promise.resolve();
     expect(final).not.toHaveBeenCalled(); expect(end).not.toHaveBeenCalled(); expect(error).not.toHaveBeenCalled();
     expect(lastRecordedAudio()).toBe(previousAudio);
+  });
+
+  it.each([0, 200])('при %i мс не позволяет подменить итог черновиком', async (duration) => {
+    const end = vi.fn(); const recognizer = createRecognizer({ onEnd: end });
+    await recognizer.start(); await speak(0, duration);
+    expect(await recognizer.stop()).toMatchObject({ text: '', code: 'incomplete' });
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: '', incomplete: true, partialText: '' }));
+    expect(native.transcribePcm).not.toHaveBeenCalled();
   });
 
   it('очень короткая запись не уходит в движок вовсе', async () => {

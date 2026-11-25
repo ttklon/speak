@@ -453,13 +453,13 @@ export function createRecognizer(opts = {}) {
         if (aborted) return { text: '', code: 'cancelled' };
         if (!pcm?.length) {
           onError?.({ code: 'no-audio', title: 'Запись пустая', hint: 'Микрофон ничего не передал. Проверьте устройство в настройках.' });
-          onEnd?.({ text: '' });
-          return { text: '', reason: 'no-audio' };
+          onEnd?.({ text: '', incomplete: true, partialText: '' });
+          return { text: '', code: 'incomplete', reason: 'no-audio' };
         }
         if (durationMs < 350) {
           onError?.({ code: 'too-short', title: 'Слишком короткая запись', hint: 'Говорите сразу после нажатия и не останавливайте запись так быстро.' });
-          onEnd?.({ text: '' });
-          return { text: '', reason: 'too-short' };
+          onEnd?.({ text: '', incomplete: true, partialText: '' });
+          return { text: '', code: 'incomplete', reason: 'too-short' };
         }
         let res;
         // подсказка с экрана берётся в последний момент: локальная модель могла
@@ -514,12 +514,12 @@ export function createRecognizer(opts = {}) {
         } catch (err) {
           if (aborted) return { text: '', code: 'cancelled' };
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });
-          onEnd?.({ text: '' });
-          return { text: '', reason: String(err?.message || err) };
+          onEnd?.({ text: '', incomplete: true, partialText: preText });
+          return { text: '', code: 'incomplete' };
         }
-        if (aborted || res?.code === 'cancelled') return { text: '', code: 'cancelled' };
+        if (aborted) return { text: '', code: 'cancelled' };
         if (res?.mode) lastMode = res.mode;
-        if (res?.ok && res.text) {
+        if (res?.ok && String(res.text || '').trim()) {
           rememberRecordedAudio(pcm, durationMs, langCode());
           // Полный текст — заранее распознанные куски плюс хвост. Один проход
           // по хвосту вместо всей фразы и есть выигрыш во времени.
@@ -551,22 +551,9 @@ export function createRecognizer(opts = {}) {
             gainDb: Number(res.audio?.gainDb) || 0,
             pausesMs: Number(res.audio?.pausesMs) || 0,
           });
-        } else if (preText) {
-          rememberRecordedAudio(pcm, durationMs, langCode());
-          // Хвост не распознался (шум, обрывок), но заранее посчитанное уже
-          // есть: отдавать пустоту и «ничего не распознано» было бы потерей.
-          text = preText;
-          onFinal?.({ text, last: text });
-          onEnd?.({
-            text,
-            ms: preMs,
-            spoken: Math.round(durationMs / 100) / 10,
-            mode: 'pre',
-            parts: 1,
-            timeline: { preMs, preParts: preCount, tailMs: Math.round(tailMs) },
-            model: opts.model || '',
-          });
         } else {
+          // Даже пустой успешный ответ не доказывает, что в хвосте не было
+          // речи. Не выдаём полученное начало или черновик за полную диктовку.
           const code = res?.code || 'stt-empty';
           onError?.(
             EMPTY_RESULT_MESSAGES[code] || {
@@ -575,7 +562,8 @@ export function createRecognizer(opts = {}) {
               hint: res?.reason || EMPTY_RESULT_MESSAGES.default.hint,
             },
           );
-          onEnd?.({ text: '' });
+          onEnd?.({ text: '', incomplete: true, partialText: preText });
+          return { text: '', code: 'incomplete' };
         }
         return { text };
       },

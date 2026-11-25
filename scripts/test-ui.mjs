@@ -1847,6 +1847,114 @@ async function scenarioWebSpeechFinalization(browser) {
   } finally { await failed.close(); }
 }
 
+// Синтетический PCM и STT-мост: проверяем, что частичный результат никогда
+// не превращается во вставку, запись истории или голосовую инструкцию.
+async function scenarioDictationIncompleteTail(browser) {
+  for (const kind of ['failure', 'exception', 'empty', 'cancelled', 'live', 'both', 'command']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false, liveWhisper: kind === 'live' || kind === 'both', micPreroll: false },
+      storeSeed: { 'zs.dictations': [] }, patchArg: kind,
+      patchNative: (kind) => {
+        const tracks = [{ stop() {} }];
+        Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => tracks }) } });
+        window.__processors = [];
+        window.AudioContext = class {
+          constructor() { this.sampleRate = 16000; this.destination = {}; }
+          createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+          createScriptProcessor() {
+            const node = { connect() {}, disconnect() {}, onaudioprocess: null };
+            window.__processors.push(node); return node;
+          }
+          createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+          close() { return Promise.resolve(); }
+        };
+        window.__feedPcm = async (count, value) => {
+          const p = window.__processors.at(-1);
+          for (let i = 0; i < count; i++) {
+            p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(value) } });
+            await Promise.resolve();
+          }
+        };
+        let warm = true;
+        let failed = false;
+        window.__callsIncomplete = [];
+        window.zspeakly.native.transcribePcm = async (payload) => {
+          window.__callsIncomplete.push({ pre: !!payload.pre, partial: !!payload.partial });
+          if (payload.partial) return { ok: true, text: 'Живой непроверенный черновик', mode: 'server' };
+          if (warm) { warm = false; return { ok: true, text: 'Прогрев.', mode: 'server' }; }
+          if (failed) return { ok: true, text: 'Диктовка после сбоя.', mode: 'server' };
+          if (payload.pre) return { ok: true, text: 'Готовое начало.', mode: 'server' };
+          failed = true;
+          if (kind === 'exception') throw new Error('искусственный отказ IPC');
+          if (kind === 'empty') return { ok: true, text: '  ' };
+          if (kind === 'cancelled') return { ok: false, code: 'cancelled' };
+          return { ok: false, code: 'stt-failed', reason: 'искусственный отказ' };
+        };
+      },
+    });
+    takeErrors(page);
+    try {
+      await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+      await page.waitForFunction(() => window.__processors.length >= 1, { timeout: 8000 });
+      await page.evaluate(() => window.__feedPcm(20, 0.5));
+      await emit(page, 'hotkey', { type: 'up' });
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+      await sleep(1000);
+      const before = await page.evaluate(() => ({
+        inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+        history: (window.__e2e.read('zs.dictations') || []).length,
+        replaces: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:replace-selection').length,
+        requests: (window.__bridgeCalls || []).filter((c) => c.channel === 'http:post').length,
+        clipboardWrites: (window.__bridgeCalls || []).filter((c) => c.channel === 'clipboard:write').length,
+      }));
+      await emit(page, 'hotkey', kind === 'command' ? { type: 'toggle', mode: 'toggle', command: true } : { type: 'down', mode: 'hold' });
+      await page.waitForFunction(() => window.__processors.length >= 2, { timeout: 8000 });
+      await page.evaluate((isLive) => window.__feedPcm(isLive ? 20 : 80, 0.5), kind === 'live');
+      if (kind === 'live' || kind === 'both') await page.waitForFunction(() => window.__callsIncomplete.some((c) => c.partial), { timeout: 8000 });
+      if (kind !== 'live') await page.waitForFunction(() => window.__callsIncomplete.some((c) => c.pre), { timeout: 8000 });
+      await emit(page, 'hotkey', kind === 'command' ? { type: 'toggle', mode: 'toggle', command: true } : { type: 'up' });
+      await page.waitForSelector('textarea[aria-label="Неполная диктовка для ручной проверки"]', { timeout: 10000 });
+      await sleep(500);
+      const result = await page.evaluate(() => ({
+        text: document.querySelector('textarea[aria-label="Неполная диктовка для ручной проверки"]')?.value,
+        toast: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+        history: (window.__e2e.read('zs.dictations') || []).length,
+        inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+        processing: !!document.querySelector('.live-draft--processing'),
+        replaces: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:replace-selection').length,
+        requests: (window.__bridgeCalls || []).filter((c) => c.channel === 'http:post').length,
+        reads: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:read-selection').length,
+        clipboardWrites: (window.__bridgeCalls || []).filter((c) => c.channel === 'clipboard:write').length,
+        calls: window.__callsIncomplete,
+      }));
+      const expected = kind === 'live' ? 'Живой непроверенный черновик' : kind === 'both'
+        ? 'Предварительный фрагмент:\nГотовое начало.\n\nЖивой черновик (может повторять фрагмент):\nЖивой непроверенный черновик'
+        : 'Готовое начало.';
+      const errors = takeErrors(page);
+      record('сценарии', `диктовка: неполный результат доступен только вручную (${kind})`,
+        result.text === expected && /не вставлен и не сохранён/i.test(result.toast) &&
+        result.history === before.history && result.inserts === before.inserts && result.replaces === before.replaces &&
+        result.requests === before.requests && result.clipboardWrites === before.clipboardWrites && (kind !== 'command' || result.reads > 0) && !result.processing && errors.length === 0,
+        JSON.stringify({ ...result, before, error: errors[0] }));
+      if (kind === 'failure' || kind === 'command') {
+        await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+        await page.waitForFunction(() => window.__processors.length >= 3, { timeout: 8000 });
+        await page.evaluate(() => window.__feedPcm(20, 0.5));
+        await emit(page, 'hotkey', { type: 'up' });
+        await page.waitForFunction((count) => (window.__e2e.read('zs.dictations') || []).length === count + 1, { timeout: 10000 }, before.history);
+        const next = await page.evaluate(() => ({
+          history: window.__e2e.read('zs.dictations')?.[0]?.text,
+          recovery: document.querySelector('textarea[aria-label="Неполная диктовка для ручной проверки"]')?.value,
+          replaces: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:replace-selection').length,
+        }));
+        record('сценарии', `диктовка: новая запись после сбоя не теряет ручное восстановление (${kind})`,
+          /Диктовка после сбоя/i.test(next.history || '') && next.recovery === expected && next.replaces === before.replaces,
+          JSON.stringify(next));
+      }
+    } finally { await page.close(); }
+  }
+}
+
 // Повторный сигнал стопа во время STT не должен прятать обработку и отмену.
 async function scenarioDoubleStopWhileProcessing(browser) {
   const page = await openPage(browser, '#/home', {
@@ -10552,6 +10660,7 @@ async function main() {
       ['оформление под окно', scenarioAppFormat],
       ['язык под окно', scenarioAppLanguage],
       ['web speech завершение', scenarioWebSpeechFinalization],
+      ['диктовка: отказ хвоста', scenarioDictationIncompleteTail],
       ['повторный стоп при обработке', scenarioDoubleStopWhileProcessing],
       ['таймаут обработки', scenarioProcessingTimeout],
       ['старт во время обработки', scenarioPendingSessionStart],
