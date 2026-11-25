@@ -33,8 +33,23 @@ export function asList(stored, normalize, fallback = []) {
   return out;
 }
 
+// Сохраняем все корректные записи: новые ID не должны совпасть даже с ID,
+// которые встретятся позднее в исходном списке.
+function ensureUniqueIds(list, reserved, prefix) {
+  const used = new Set();
+  return list.map((item) => {
+    let id = item.id;
+    if (!id || used.has(id)) {
+      do { id = fallbackId(prefix); } while (reserved.has(id) || used.has(id));
+    }
+    used.add(id);
+    return id === item.id ? item : { ...item, id };
+  });
+}
+
 export function sanitizeDictations(stored, fallback = []) {
-  return asList(
+  const reserved = new Set((Array.isArray(stored) ? stored : []).map((item) => typeof item?.id === 'string' ? item.id : '').filter(Boolean));
+  const list = asList(
     stored,
     (item) => {
       if (!item || typeof item !== 'object') return null;
@@ -46,7 +61,7 @@ export function sanitizeDictations(stored, fallback = []) {
       const keepRaw = Boolean(raw) && raw !== text.trim();
       return {
         ...item,
-        id: item.id || fallbackId('d'),
+        id: typeof item.id === 'string' ? item.id : '',
         text,
         rawText: keepRaw ? raw : undefined,
         createdAt: Number(item.createdAt) || Date.now(),
@@ -56,13 +71,13 @@ export function sanitizeDictations(stored, fallback = []) {
     },
     fallback,
   );
+  return ensureUniqueIds(list, reserved, 'd');
 }
 
 export function sanitizeDictionary(stored, fallback = []) {
   const reserved = new Set((Array.isArray(stored) ? stored : [])
     .map((item) => typeof item?.id === 'string' ? item.id : '')
     .filter(Boolean));
-  const used = new Set();
   const list = asList(
     stored,
     (item) => {
@@ -86,14 +101,7 @@ export function sanitizeDictionary(stored, fallback = []) {
     },
     fallback,
   );
-  return list.map((item) => {
-    let id = item.id;
-    if (!id || used.has(id)) {
-      do { id = fallbackId('w'); } while (reserved.has(id) || used.has(id));
-    }
-    used.add(id);
-    return id === item.id ? item : { ...item, id };
-  });
+  return ensureUniqueIds(list, reserved, 'w');
 }
 
 export function sanitizeClipboard(stored, fallback = []) {

@@ -28,6 +28,10 @@ describe('подготовка резервной копии', () => {
     ]) expect(() => prepareBackup(payload)).toThrow();
   });
 
+  it('не импортирует историю с повторным ID', () => {
+    expect(() => prepareBackup({ dictations: [{ id: 'same', text: 'первая' }, { id: 'same', text: 'вторая' }] })).toThrow(/идентификаторы диктовок/);
+  });
+
   it('не допускает повреждённые идентификаторы и скрытую обрезку правил приложений', () => {
     for (const profile of [
       { id: { unsafe: true }, match: 'Code', language: 'ru' },

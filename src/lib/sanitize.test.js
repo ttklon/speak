@@ -54,6 +54,15 @@ describe('очистка сохранённых данных', () => {
     expect(clean[0].id).toMatch(/^w-/);
   });
 
+  it('история: дубли и пропущенные ID исправляются без утраты записей', () => {
+    const input = [{ id: 'd1', text: 'первый', extra: 'сохранить' }, { id: 'd1', text: 'второй' }, { text: 'третий' }, { id: 'd2', text: 'четвёртый' }];
+    const result = sanitizeDictations(input);
+    expect(result.map((item) => item.text)).toEqual(input.map((item) => item.text));
+    expect(result[0]).toMatchObject({ id: 'd1', extra: 'сохранить' });
+    expect(result[3].id).toBe('d2');
+    expect(new Set(result.map((item) => item.id)).size).toBe(4);
+  });
+
   it('словарь: старые записи получают закрепление и частоту по умолчанию', () => {
     // Закрепление и счётчик появились позже первых профилей. Старое слово —
     // не «сломанное»: оно просто незакреплённое и ни разу не встретилось.

@@ -6052,6 +6052,63 @@ async function scenarioDictationUndo(browser) {
   await page.close();
 }
 
+// Удаление не должно стирать другие записи или более позднюю версию.
+async function scenarioDictationRemovalSafety(browser) {
+  const duplicate = await openPage(browser, '#/home', { storeSeed: { 'zs.dictations': [
+    { id: 'same', text: 'первая запись', createdAt: Date.now() },
+    { id: 'same', text: 'вторая запись', createdAt: Date.now() - 1000 },
+  ] } });
+  try {
+    await duplicate.click('.recent__row');
+    await clickText(duplicate, 'Удалить', '.snippet button'); await sleep(300);
+    const rows = await duplicate.evaluate(() => window.__e2e.read('zs.dictations') || []);
+    record('сценарии', 'история: удаление при дублирующихся ID не стирает соседнюю запись', rows.length === 1 && rows[0].text === 'вторая запись', JSON.stringify(rows));
+  } finally { await duplicate.close(); }
+
+  const stale = await openPage(browser, '#/home', {
+    settings: { aiProcessing: true, aiEndpoint: 'http://localhost:11434', aiDictationRewrite: true, liveWhisper: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.zspeakly.native.transcribePcm = async () => ({ ok: true, text: 'первая запись про рыбу' });
+      window.zspeakly.native.httpPost = async () => new Promise((resolve) => { window.__resolveLatePolish = resolve; });
+    },
+  });
+  try {
+    await stale.click('.hero__mic'); await sleep(900); await stale.click('.hero__mic');
+    await stale.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1 && Boolean(window.__resolveLatePolish), { timeout: 10000 });
+    await stale.click('.recent__row'); await sleep(150);
+    await stale.evaluate(() => window.__resolveLatePolish({ ok: true, data: { response: 'Первая запись, про рыбу.' } }));
+    await stale.waitForFunction(() => (window.__e2e.read('zs.dictations') || [])[0]?.text === 'Первая запись, про рыбу.', { timeout: 10000 });
+    await clickText(stale, 'Удалить', '.snippet button'); await sleep(300);
+    const result = await stale.evaluate(() => ({ rows: window.__e2e.read('zs.dictations') || [], overlay: Boolean(document.querySelector('.snippet')), body: document.body.innerText }));
+    record('сценарии', 'история: устаревшее окно не удаляет изменённую запись', result.rows.length === 1 && result.rows[0].text === 'Первая запись, про рыбу.' && result.overlay && /Запись изменилась/.test(result.body), JSON.stringify({ rows: result.rows, overlay: result.overlay }));
+  } finally { await stale.close(); }
+}
+
+async function scenarioDictationUndoCapacity(browser) {
+  const records = Array.from({ length: 2000 }, (_, i) => ({ id: `hist-${i}`, text: `старая запись ${i}`, createdAt: Date.now() - i * 1000 }));
+  const page = await openPage(browser, '#/home', { settings: { aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': records, 'zs.mockSttText': 'новая запись для проверки' } });
+  try {
+    await page.click('.recent__row'); await clickText(page, 'Удалить', '.snippet button');
+    await page.click('.hero__mic'); await sleep(900); await page.click('.hero__mic');
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 2000 && (window.__e2e.read('zs.dictations') || [])[0]?.text?.includes('Новая запись'), { timeout: 10000 });
+    await page.evaluate(() => [...document.querySelectorAll('.toast')].find((t) => /Запись удалена/.test(t.innerText))?.querySelector('.toast__action')?.click());
+    await sleep(250);
+    const result = await page.evaluate(() => ({ rows: window.__e2e.read('zs.dictations') || [], recover: document.querySelector('.toast__recover')?.value, body: document.body.innerText }));
+    let recovered; try { recovered = JSON.parse(result.recover); } catch { /* диагностируем ниже */ }
+    record('сценарии', 'история: возврат при полном лимите не вытесняет другие записи',
+      result.rows.length === 2000 && result.rows.some((r) => r.id === 'hist-1999') && result.rows.some((r) => /Новая запись/.test(r.text)) && recovered?.id === 'hist-0' && /не восстановлена/.test(result.body),
+      JSON.stringify({ count: result.rows.length, last: result.rows.some((r) => r.id === 'hist-1999'), restored: recovered?.id }));
+    await page.click('.recent__row'); await clickText(page, 'Удалить', '.snippet button');
+    await page.evaluate(() => [...document.querySelectorAll('.toast')].find((t) => /Запись не восстановлена/.test(t.innerText))?.querySelector('.toast__action')?.click());
+    await sleep(250);
+    const retried = await page.evaluate(() => window.__e2e.read('zs.dictations') || []);
+    record('сценарии', 'история: возврат можно повторить после освобождения места',
+      retried.length === 2000 && retried.some((r) => r.id === 'hist-0') && retried.some((r) => r.id === 'hist-1999') && !retried.some((r) => /Новая запись/.test(r.text)));
+  } finally { await page.close(); }
+}
+
 // Очистка истории диктовок — только после подтверждения, пустая история молчит делом.
 /**
  * «Переспросить точно»: человек видит ошибку сразу после вставки, а запись ещё
@@ -10346,6 +10403,8 @@ async function main() {
       ['превью без движка', scenarioBrowserPreviewNotice],
       ['действия в сетке буфера', scenarioClipboardGridActions],
       ['возврат удаления', scenarioDictationUndo],
+      ['история: безопасное удаление', scenarioDictationRemovalSafety],
+      ['история: возврат при лимите', scenarioDictationUndoCapacity],
       ['очистка истории', scenarioClearDictations],
       ['заметка со снимком', scenarioNote],
       ['пустая установка без модели', scenarioNoModel],

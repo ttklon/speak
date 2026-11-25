@@ -44,7 +44,7 @@ function howItRan(item) {
 }
 
 export default function HomePage() {
-  const { dictations, voiceHotkeys, settings, deleteDictation, addDictation, saveDictationEdit, getDictationSnapshot } = useAppData();
+  const { dictations, voiceHotkeys, settings, deleteDictation, restoreDictation, saveDictationEdit, getDictationSnapshot } = useAppData();
   const {
     state, draft, start, stop, last, elapsed, paused, pause, resume, processingMs, sttProgress,
     cancelProcessing, fileJob, transcribeFile, cancelFile, retryLast, retrying, agentPending,
@@ -640,14 +640,14 @@ export default function HomePage() {
                   // Промах мыши не должен стирать расшифровку навсегда:
                   // в тосте есть «Вернуть» на несколько секунд.
                   const removed = snippet;
-                  deleteDictation(removed.id);
+                  if (!deleteDictation(removed)) return;
                   setSnippet(null);
                   push({
                     title: 'Запись удалена',
                     description: 'Можно вернуть — кнопка в этом сообщении.',
                     tone: 'warn',
                     ttl: 8000,
-                    action: { label: 'Вернуть', onClick: () => addDictation(removed) },
+                    action: { label: 'Вернуть', onClick: () => restoreDictation(removed) },
                   });
                 }}
               >

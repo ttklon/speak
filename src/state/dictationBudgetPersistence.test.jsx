@@ -71,7 +71,7 @@ describe('бюджет истории при загрузке и правке', 
     expect(accepted).toBe(true); // уменьшение, хотя история ещё выше лимита
     expect(state.dictations[0].text.length).toBe(100);
     await act(async () => {
-      state.deleteDictation('old');
+      state.deleteDictation(state.getDictationSnapshot('old'));
       state.updateDictation('large', { text: 'z'.repeat(70) });
       accepted = state.addDictation(item('new', 2));
     });
@@ -94,18 +94,17 @@ describe('бюджет истории при загрузке и правке', 
     expect(state.dictations.map((x) => x.text.length)).toEqual([50, 40]);
   });
 
-  it('учитывает все записи с одинаковым ID и не применяет позднюю правку к изменённому тексту', async () => {
-    seed([item('same', 40), item('same', 40)]);
-    await mount();
-    let accepted;
-    await act(async () => { accepted = state.updateDictation('same', { text: 'y'.repeat(45) }); });
-    expect(accepted).toBe(true); // 250 + 250 ровно 500
-    await act(async () => { accepted = state.updateDictation('same', { text: 'z'.repeat(46) }); });
-    expect(accepted).toBe(false);
-    await act(async () => { accepted = state.updateDictation('same', { text: 'q'.repeat(100) }, { expectedText: 'устарело' }); });
-    expect(accepted).toBe(true); // запрос принят, но совпадений нет
-    expect(state.dictations.map((x) => x.text)).toEqual(['y'.repeat(45), 'y'.repeat(45)]);
-    expect(state.getDictationSnapshot('same')).toBeNull(); // неоднозначный ID
+  it('уникальные ID старого профиля позволяют учитывать бюджет каждой записи', async () => {
+    seed([item('same', 40), item('same', 40)]); await mount();
+    const ids = state.dictations.map((d) => d.id);
+    expect(new Set(ids).size).toBe(2);
+    let first, second;
+    await act(async () => {
+      first = state.updateDictation(ids[0], { text: 'y'.repeat(45) });
+      second = state.updateDictation(ids[1], { text: 'z'.repeat(46) });
+    });
+    expect([first, second]).toEqual([true, false]);
+    await remount(); expect(state.dictations.map((d) => d.text.length)).toEqual([45, 40]);
   });
 
   it('не обрезает унаследованную историю, превышающую число записей', async () => {
@@ -130,7 +129,7 @@ describe('бюджет истории при загрузке и правке', 
     expect(restoredText).not.toBe(initial);
     expect(restoredText.text).toBe(initial.text);
     await act(async () => {
-      state.deleteDictation('one');
+      state.deleteDictation(state.getDictationSnapshot('one'));
       expect(state.getDictationSnapshot('one')).toBeNull();
       state.addDictation(restoredText);
     });
@@ -157,7 +156,7 @@ describe('бюджет истории при загрузке и правке', 
     let tooBig, deleted;
     await act(async () => {
       tooBig = state.saveDictationEdit(snapshot, { text: 'z'.repeat(180) });
-      state.deleteDictation('one');
+      state.deleteDictation(state.getDictationSnapshot('one'));
       deleted = state.saveDictationEdit(snapshot, { text: 'текст' });
     });
     expect(tooBig).toEqual({ ok: false, reason: 'budget' });
@@ -172,18 +171,11 @@ describe('бюджет истории при загрузке и правке', 
     expect(state.dictations[0]).toMatchObject({ text: '  два слова\n', words: 2 });
   });
 
-  it('не изменяет записи с неоднозначным ID даже по одной из версий', async () => {
-    seed([item('same', 10), item('same', 11)]); await mount();
-    const first = state.dictations[0]; let result;
-    await act(async () => { result = state.saveDictationEdit(first, { text: 'черновик' }); });
-    expect(result).toEqual({ ok: false, reason: 'changed' });
-    await remount(); expect(state.dictations.map((d) => d.text.length)).toEqual([10, 11]);
-  });
   it('не заменяет удалённую и восстановленную запись', async () => {
     seed([item('one', 10)]); await mount();
     const snapshot = state.getDictationSnapshot('one'); let result;
     await act(async () => {
-      state.deleteDictation('one'); state.addDictation(snapshot);
+      state.deleteDictation(state.getDictationSnapshot('one')); state.addDictation(snapshot);
       result = state.saveDictationEdit(snapshot, { text: 'черновик' });
     });
     expect(result).toEqual({ ok: false, reason: 'changed' });

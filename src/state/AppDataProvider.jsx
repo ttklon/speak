@@ -221,6 +221,11 @@ export function AppDataProvider({ children }) {
 
   const addDictation = useCallback(
     (item) => {
+      if (item?.id && dictationsRef.current.some((d) => d.id === item.id)) {
+        push({ title: 'Запись не добавлена', description: 'Идентификатор уже занят. Скопируйте новый текст вручную.',
+          recoverText: item.text, recoverLabel: 'Несохранённый текст истории', tone: 'warn', ttl: 0 });
+        return false;
+      }
       const oversized = dictationBytes(item) > DICTATION_MAX_BYTES;
       const historyOverBudget = dictationsRef.current.length > DICTATION_MAX_ITEMS || dictationsBytes(dictationsRef.current) > DICTATION_MAX_BYTES;
       if (oversized || historyOverBudget) {
@@ -257,10 +262,30 @@ export function AppDataProvider({ children }) {
     return found;
   }, []);
 
-  const deleteDictation = useCallback(
-    (id) => setDictations((prev) => prev.filter((d) => d.id !== id)),
-    [setDictations],
-  );
+  const deleteDictation = useCallback((snapshot) => {
+    if (!snapshot || getDictationSnapshot(snapshot.id) !== snapshot) {
+      push({ title: 'Запись изменилась', description: 'Она не удалена. Закройте просмотр и откройте запись заново.', tone: 'warn', ttl: 9000 });
+      return false;
+    }
+    setDictations((prev) => prev.filter((d) => d !== snapshot));
+    return true;
+  }, [getDictationSnapshot, push, setDictations]);
+
+  const restoreDictation = useCallback(function restore(snapshot) {
+    const current = dictationsRef.current;
+    const conflict = current.some((d) => d.id === snapshot?.id);
+    const exceedsBudget = current.length + 1 > DICTATION_MAX_ITEMS || dictationsBytes(current) + dictationBytes(snapshot) > DICTATION_MAX_BYTES;
+    if (!snapshot || conflict || exceedsBudget) {
+      if (snapshot) push({ title: 'Запись не восстановлена',
+        description: conflict ? 'Идентификатор уже занят. Скопируйте данные вручную.' : 'История заполнена. Скопируйте данные вручную или освободите место.',
+        recoverText: JSON.stringify(snapshot, null, 2), recoverLabel: 'Данные удалённой записи',
+        action: { label: 'Повторить возврат', onClick: () => restore(snapshot) }, tone: 'warn', ttl: 0 });
+      return false;
+    }
+    // Возврат не должен вытеснять другие записи или сохранять старую версию объекта.
+    setDictations((prev) => [{ ...snapshot }, ...prev]);
+    return true;
+  }, [push, setDictations]);
 
   /** Пользователь поправил расшифровку — сохраняем исправленный текст. */
   const updateDictation = useCallback(
@@ -620,6 +645,7 @@ export function AppDataProvider({ children }) {
       dictations,
       addDictation,
       deleteDictation,
+      restoreDictation,
       updateDictation,
       getDictationSnapshot,
       saveDictationEdit,
@@ -663,7 +689,7 @@ export function AppDataProvider({ children }) {
     }),
     [
       exportBackup, importBackup,
-      settings, updateSettings, dictations, addDictation, deleteDictation, updateDictation, getDictationSnapshot, saveDictationEdit, clearDictations,
+      settings, updateSettings, dictations, addDictation, deleteDictation, restoreDictation, updateDictation, getDictationSnapshot, saveDictationEdit, clearDictations,
       dictionary,
       addDictionaryWord,
       updateDictionaryWord,
