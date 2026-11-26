@@ -21,6 +21,8 @@ const recorderState = {
   onInterrupted: null,
   interrupted: false,
   startGate: null,
+  snapshotCalls: 0,
+  failSnapshotAt: 0,
 };
 
 const fakeRecorder = {
@@ -35,6 +37,8 @@ const fakeRecorder = {
   },
   get interrupted() { return recorderState.interrupted; },
   snapshot: ({ fromMs = 0, toMs = 0 } = {}) => {
+    recorderState.snapshotCalls += 1;
+    if (recorderState.snapshotCalls === recorderState.failSnapshotAt) throw new Error('snapshot failed');
     const end = toMs > 0 ? Math.min(recorderState.durationMs, toMs) : recorderState.durationMs;
     const durationMs = Math.max(0, end - fromMs);
     return {
@@ -110,6 +114,8 @@ beforeEach(() => {
   recorderState.onInterrupted = null;
   recorderState.interrupted = false;
   recorderState.startGate = null;
+  recorderState.snapshotCalls = 0;
+  recorderState.failSnapshotAt = 0;
   fakeRecorder.abort.mockClear();
   native.transcribePcm.mockClear();
   native.cancelTranscribe.mockClear();
@@ -356,6 +362,53 @@ describe('диктовка целиком: что получает челове�
     expect(calls[1].pre).toBeUndefined();
     expect(calls[1].pcm.length).toBe(16000 * 16);
     expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: 'Вся исходная запись.' }));
+  });
+
+  it.each([1, 2])('ошибка подготовки предварительного снимка %s не теряет неподтверждённый звук', async (failureAt) => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    calls.length = 0; recorderState.snapshotCalls = 0; recorderState.failSnapshotAt = failureAt;
+    answers = failureAt === 1
+      ? [{ ok: true, text: 'Итог целиком.', mode: 'server' }]
+      : [{ ok: true, text: 'Подтверждённое начало.', mode: 'server' }, { ok: true, text: 'Неподтверждённый хвост.', mode: 'server' }];
+    const end = vi.fn(), final = vi.fn();
+    const recognizer = createRecognizer({ onEnd: end, onFinal: final });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000);
+    await speak(8000, 15000); await silence(15000, 16000); await speak(16000, 17000);
+    const result = await recognizer.stop();
+    expect(recorderState.snapshotCalls).toBe(failureAt);
+    expect(calls).toHaveLength(failureAt);
+    const expectedMs = failureAt === 1 ? 17000 : 17000 - Math.max(0, calls[0].durationMs - 400);
+    expect(calls.at(-1).pcm.length).toBe(Math.round(expectedMs * 16));
+    expect(result.text).toBe(failureAt === 1 ? 'Итог целиком.' : 'Подтверждённое начало. Неподтверждённый хвост.');
+    expect(end).toHaveBeenCalledTimes(1); expect(final).toHaveBeenCalledTimes(1);
+  });
+
+  it('после отказа снимка и финального STT отдаёт лишь подтверждённое начало для ручной проверки', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    calls.length = 0; recorderState.snapshotCalls = 0; recorderState.failSnapshotAt = 2;
+    answers = [{ ok: true, text: 'Подтверждённое начало.', mode: 'server' }, { ok: false, code: 'stt-failed' }];
+    const end = vi.fn(), final = vi.fn(); const recognizer = createRecognizer({ onEnd: end, onFinal: final });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000);
+    await speak(8000, 15000); await silence(15000, 16000); await speak(16000, 17000);
+    expect(await recognizer.stop()).toMatchObject({ text: '', code: 'incomplete' });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].pcm.length).toBe(Math.round((17000 - Math.max(0, calls[0].durationMs - 400)) * 16));
+    expect(final).not.toHaveBeenCalled();
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: '', incomplete: true, partialText: 'Подтверждённое начало.' }));
+  });
+
+  it('отмена после отказа снимка не запускает финальное распознавание', async () => {
+    answers = [{ ok: true, text: 'Прогрев.', mode: 'server' }];
+    const warm = createRecognizer(); await warm.start(); await speak(0, 2000); await warm.stop();
+    calls.length = 0; recorderState.snapshotCalls = 0; recorderState.failSnapshotAt = 1;
+    const end = vi.fn(); const recognizer = createRecognizer({ onEnd: end });
+    await recognizer.start(); await speak(0, 7000); await silence(7000, 8000);
+    expect(recorderState.snapshotCalls).toBe(1);
+    recognizer.abort();
+    expect(calls).toHaveLength(0); expect(end).not.toHaveBeenCalled();
+    expect(fakeRecorder.abort).toHaveBeenCalled();
   });
 
   it('таймаут предварительного куска отправляет весь неподтверждённый звук в финал', async () => {

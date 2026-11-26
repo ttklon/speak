@@ -1849,6 +1849,74 @@ async function scenarioWebSpeechFinalization(browser) {
 
 // Синтетический PCM и STT-мост: проверяем, что частичный результат никогда
 // не превращается во вставку, запись истории или голосовую инструкцию.
+// Искусственно отказывает одно выделение буфера предварительного снимка;
+// микрофон, аудиограф, STT и внешняя вставка подменены.
+async function scenarioPreSnapshotFailure(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false, micPreroll: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      const OriginalFloat32Array = window.Float32Array;
+      window.__failPreSnapshot = false; window.__snapshotFailures = 0;
+      window.Float32Array = class extends OriginalFloat32Array {
+        constructor(...args) {
+          if (window.__failPreSnapshot && typeof args[0] === 'number' && args[0] >= 50000) {
+            window.__failPreSnapshot = false; window.__snapshotFailures++; throw new Error('искусственный отказ снимка');
+          }
+          super(...args);
+        }
+      };
+      Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+        getUserMedia: async () => ({ getTracks: () => [{ kind: 'audio', stop() {} }] }),
+      } });
+      window.__snapshotProcessors = []; window.__snapshotStt = [];
+      window.AudioContext = class {
+        constructor() { this.sampleRate = 16000; this.destination = {}; }
+        createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+        createScriptProcessor() { const p = { connect() {}, disconnect() {} }; window.__snapshotProcessors.push(p); return p; }
+        createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+        close() { return Promise.resolve(); }
+      };
+      window.__snapshotFeed = async (count) => {
+        const p = window.__snapshotProcessors.at(-1);
+        for (let i = 0; i < count; i++) {
+          p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.5) } });
+          await Promise.resolve();
+        }
+      };
+      window.zspeakly.native.transcribePcm = async (payload) => {
+        window.__snapshotStt.push({ pre: !!payload.pre, durationMs: payload.durationMs, samples: payload.pcm.length });
+        return { ok: true, text: window.__snapshotStt.length === 1 ? 'Прогрев.' : 'Весь записанный текст.', mode: 'server' };
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await page.waitForFunction(() => window.__snapshotProcessors.length === 1, { timeout: 8000 });
+    await page.evaluate(() => window.__snapshotFeed(20));
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    const before = await page.evaluate(() => (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length);
+    await sleep(1200);
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await page.waitForFunction(() => window.__snapshotProcessors.length === 2, { timeout: 8000 });
+    await page.evaluate(async () => { window.__failPreSnapshot = true; await window.__snapshotFeed(80); });
+    await page.waitForFunction(() => window.__snapshotFailures === 1, { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 2, { timeout: 10000 });
+    const result = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text,
+      calls: window.__snapshotStt, failures: window.__snapshotFailures,
+      inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length,
+      processing: !!document.querySelector('.live-draft--processing') }));
+    const errors = takeErrors(page);
+    record('сценарии', 'диктовка: отказ предварительного снимка оставляет весь звук для финала',
+      result.failures === 1 && result.calls.length === 2 && !result.calls[1].pre && result.calls[1].samples === 128000 &&
+      result.calls[1].durationMs === 8000 && /Весь записанный текст/i.test(result.text || '') &&
+      result.inserts === before + 1 && !result.processing && errors.length === 0, JSON.stringify({ ...result, before, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
 async function scenarioDictationIncompleteTail(browser) {
   for (const kind of ['failure', 'exception', 'empty', 'cancelled', 'live', 'both', 'command']) {
     const page = await openPage(browser, '#/home', {
@@ -10926,6 +10994,7 @@ async function main() {
       ['язык под окно', scenarioAppLanguage],
       ['web speech завершение', scenarioWebSpeechFinalization],
       ['диктовка: отказ хвоста', scenarioDictationIncompleteTail],
+      ['диктовка: отказ снимка', scenarioPreSnapshotFailure],
       ['повторный стоп при обработке', scenarioDoubleStopWhileProcessing],
       ['таймаут обработки', scenarioProcessingTimeout],
       ['старт во время обработки', scenarioPendingSessionStart],

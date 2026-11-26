@@ -317,13 +317,15 @@ export function createRecognizer(opts = {}) {
         // Отдаём чуть больше, чем «новый» звук: слово, разрезанное границей,
         // должно целиком попасть хотя бы в один кусок.
         const fromMs = Math.max(0, cut.fromMs - tracker.overlapMs);
-        const snap = recorder.snapshot?.({ fromMs, toMs: cut.atMs, maxSeconds: 0 });
-        if (!snap?.pcm?.length || snap.durationMs < 800) {
-          preBroken = true;
-          tracker.rollback(cut.fromMs);
-          return;
-        }
         try {
+          // Снимок тоже может не создаться (например, отказ выделения памяти).
+          // Тогда неподтверждённый звук должен остаться в финальном проходе.
+          const snap = recorder.snapshot?.({ fromMs, toMs: cut.atMs, maxSeconds: 0 });
+          if (!snap?.pcm?.length || snap.durationMs < 800) {
+            preBroken = true;
+            tracker.rollback(cut.fromMs);
+            return;
+          }
           const res = await native.transcribePcm?.({
             pcm: snap.pcm,
             durationMs: snap.durationMs,
