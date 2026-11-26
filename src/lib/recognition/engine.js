@@ -39,11 +39,13 @@ export const hasNativeStt = () =>
 const LAST_AUDIO_LIMIT_MS = 40000;
 let lastAudio = null;
 
-export function lastRecordedAudio() {
+export function lastRecordedAudio(owner) {
+  // Запись для конкретной карточки можно переспросить только её звуком.
+  if (!owner || lastAudio?.owner !== owner) return null;
   return lastAudio;
 }
 
-function rememberRecordedAudio(pcm, durationMs, lang) {
+function rememberRecordedAudio(pcm, durationMs, lang, owner) {
   if (!pcm?.length || !(durationMs >= 350) || durationMs > LAST_AUDIO_LIMIT_MS) {
     lastAudio = null;
     return;
@@ -55,7 +57,7 @@ function rememberRecordedAudio(pcm, durationMs, lang) {
   // «Переспросить точно» — даже если выделить новую копию не удалось.
   lastAudio = null;
   try {
-    lastAudio = { pcm: Int16Array.from(pcm), durationMs: Math.round(durationMs), lang: lang || 'ru' };
+    lastAudio = { pcm: Int16Array.from(pcm), durationMs: Math.round(durationMs), lang: lang || 'ru', owner };
   } catch {
     // Повтор будет недоступен; результат распознавания остаётся доступен.
   }
@@ -518,7 +520,7 @@ export function createRecognizer(opts = {}) {
             onEnd?.({ text: '', incomplete: true, partialText: preText, incompleteReason: 'mic-interrupted' });
             return { text: '', code: 'incomplete' };
           }
-          rememberRecordedAudio(pcm, durationMs, langCode());
+          rememberRecordedAudio(pcm, durationMs, langCode(), opts.audioOwner);
           text = preText;
           onFinal?.({ text, last: text });
           onEnd?.({
@@ -561,7 +563,7 @@ export function createRecognizer(opts = {}) {
             onEnd?.({ text: '', incomplete: true, partialText, incompleteReason: 'mic-interrupted' });
             return { text: '', code: 'incomplete' };
           }
-          rememberRecordedAudio(pcm, durationMs, langCode());
+          rememberRecordedAudio(pcm, durationMs, langCode(), opts.audioOwner);
           // Полный текст — заранее распознанные куски плюс хвост. Один проход
           // по хвосту вместо всей фразы и есть выигрыш во времени.
           text = preText ? mergeOverlap(preText, res.text, { preserve: opts.preserveText === true }) : res.text;

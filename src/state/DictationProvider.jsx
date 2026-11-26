@@ -258,6 +258,8 @@ export function DictationProvider({ children }) {
   // id последней записи в истории: нужен, чтобы поздний ответ модели
   // (после бюджета полировки) обновил именно эту запись, а не чужую
   const lastItemId = useRef('');
+  // Идентификатор сессии, которая создала карточку; не хранит звук.
+  const lastAudioOwner = useRef(null);
   // «горячий микрофон»: поток открыт заранее, последние 600 мс лежат в буфере
   const micWarm = useRef(null);
   // достаточный ли статус, чтобы интерфейс не врал про открытый микрофон
@@ -276,7 +278,7 @@ export function DictationProvider({ children }) {
   const finish = useCallback(
     async (
       text,
-      { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0, sttMeta = null, isCancelled = () => false, allowDraftFallback = true } = {},
+      { insert = true, sttMs = 0, spoken = true, spokenSeconds = 0, sttMeta = null, isCancelled = () => false, allowDraftFallback = true, audioOwner = null } = {},
     ) => {
       // защита от двойного завершения (web-движок + фолбэк); держим до конца
       // второй стадии, иначе модель успевала запуститься дважды
@@ -715,6 +717,7 @@ export function DictationProvider({ children }) {
       }
       if (cleaned) {
         setLast(item);
+        lastAudioOwner.current = audioOwner;
         const savedToHistory = addDictation(item);
         historySnapshot = savedToHistory ? getDictationSnapshot(item.id) : null;
         lastItemId.current = savedToHistory ? item.id : null;
@@ -1097,7 +1100,7 @@ export function DictationProvider({ children }) {
         return;
       }
       commandRequestRef.current = null;
-      const session = { cancelled: false, completed: false, screenTerms: '' };
+      const session = { cancelled: false, completed: false, screenTerms: '', audioOwner: Symbol('dictation') };
       sessionRef.current = session;
       const isCurrentSession = () => sessionRef.current === session && !session.cancelled && !session.completed;
       sessionOpts.current = opts;
@@ -1225,6 +1228,7 @@ export function DictationProvider({ children }) {
         // по умолчанию звук сырой, громкость выравнивает main-процесс
         micCleanup: settingsRef.current.micCleanup === true,
         preroll,
+        audioOwner: session.audioOwner,
         model: settingsRef.current.whisperModel,
         // словарь идёт в whisper как подсказка только если тумблер включён
         useDictionary: settingsRef.current.dictionaryEnabled !== false,
@@ -1360,6 +1364,7 @@ export function DictationProvider({ children }) {
             spokenSeconds: spoken || 0,
             sttMeta: { mode, parts, timeline, model, thorough, secondPass, gainDb, pausesMs },
             allowDraftFallback: recognizer.kind !== 'web-fallback',
+            audioOwner: session.audioOwner,
             isCancelled: () => session.cancelled,
           });
           if (!session.cancelled && opts.onResult) opts.onResult(item);
@@ -1451,6 +1456,7 @@ export function DictationProvider({ children }) {
     const text = rec.kind === 'web-fallback' ? (result?.text || '') : ((result && result.text) || fallbackText || '');
     const item = await finish(text, {
       allowDraftFallback: rec.kind !== 'web-fallback',
+      audioOwner: processing.session?.audioOwner || null,
       isCancelled: () => Boolean(processing.session?.cancelled),
     });
     if (processing.session?.cancelled) return;
@@ -1686,7 +1692,7 @@ export function DictationProvider({ children }) {
   const retryInFlight = useRef(false);
   const retryLast = useCallback(async () => {
     const native = typeof window !== 'undefined' ? window.zspeakly?.native : null;
-    const audio = lastRecordedAudio();
+    const audio = lastRecordedAudio(lastAudioOwner.current);
     const check = retryAvailability({ audio, native });
     if (!check.ok) {
       pushToast({ title: 'Переспросить нечем', description: check.reason, tone: 'warn' });

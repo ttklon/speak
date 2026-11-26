@@ -6826,6 +6826,75 @@ async function scenarioDictationUndoCapacity(browser) {
  * в памяти — значит второй текст можно получить без повтора вслух. Проверяем
  * и главное правило: текст меняется, только когда точный проход услышал больше.
  */
+// После голосового «отмени» или команды предыдущая карточка остаётся,
+// но последнее аудио уже другой сессии. Устройство, STT и ввод подменены.
+async function scenarioRetryWrongSession(browser) {
+  for (const kind of ['undo', 'command', 'cancel']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false, aiProcessing: false, liveWhisper: false, micPreroll: false },
+      storeSeed: { 'zs.dictations': [] }, patchArg: kind,
+      patchNative: (kind) => {
+        Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+          getUserMedia: async () => ({ getTracks: () => [{ kind: 'audio', stop() {} }] }),
+        } });
+        window.__ownerProcessors = []; window.__ownerCalls = [];
+        window.AudioContext = class {
+          constructor() { this.sampleRate = 16000; this.destination = {}; }
+          createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+          createScriptProcessor() { const p = { connect() {}, disconnect() {} }; window.__ownerProcessors.push(p); return p; }
+          createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+          close() { return Promise.resolve(); }
+        };
+        window.__ownerFeed = async (count) => {
+          const p = window.__ownerProcessors.at(-1);
+          for (let i = 0; i < count; i++) {
+            p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.5) } });
+            await Promise.resolve();
+          }
+        };
+        let count = 0;
+        window.zspeakly.native.transcribePcm = async (payload) => {
+          window.__ownerCalls.push({ thorough: !!payload.thorough, samples: payload.pcm.length });
+          if (payload.thorough) return { ok: true, text: 'Подробная первая диктовка целиком.', mode: 'cli' };
+          count++; return { ok: true, text: ['Первая диктовка.', kind === 'undo' ? 'Отмени.' : 'Сократи.', 'Следующая диктовка.'][count - 1], mode: 'cli' };
+        };
+        window.zspeakly.native.readSelection = async () => 'Ну, тестовый выбранный текст.';
+        window.zspeakly.native.undoLastInsert = async () => ({ ok: false, reason: 'caret-unverified' });
+      },
+    });
+    takeErrors(page);
+    try {
+      for (const [i, count] of [20, 30].entries()) {
+        const event = kind === 'command' && i === 1 ? { type: 'toggle', mode: 'toggle', command: true } : { type: 'down', mode: 'hold' };
+        await emit(page, 'hotkey', event);
+        await page.waitForFunction((n) => window.__ownerProcessors.length === n, { timeout: 10000 }, i + 1);
+        await page.evaluate((n) => window.__ownerFeed(n), count);
+        await emit(page, 'hotkey', kind === 'cancel' && i === 1 ? { type: 'cancel' } : kind === 'command' && i === 1 ? event : { type: 'up' });
+        if (i === 0) await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+        else if (kind === 'cancel') await page.waitForFunction(() => !/Слушаю/.test(document.querySelector('.hero__mic')?.innerText || ''), { timeout: 10000 });
+        else if (kind === 'undo') await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((n) => /Убирать не стал/.test(n.innerText)), { timeout: 10000 });
+        else await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).some((r) => r.source === 'command'), { timeout: 10000 });
+        await sleep(1200);
+      }
+      const clicked = await page.evaluate(() => { const b = document.querySelector('.last-result [aria-label="Переспросить точно"]'); if (!b) return false; b.click(); return true; });
+      await sleep(1000);
+      const result = await page.evaluate(() => ({ rows: window.__e2e.read('zs.dictations'), calls: window.__ownerCalls,
+        toasts: [...document.querySelectorAll('.toast')].map((n) => n.innerText).join(' ') }));
+      const errors = takeErrors(page);
+      if (kind === 'cancel') {
+        record('сценарии', 'точный проход: отменённая сессия не мешает повтору предыдущей диктовки',
+          clicked && result.calls.length === 2 && result.calls[1].thorough && result.calls[1].samples === 32000 &&
+          /Подробная первая диктовка/.test(result.rows.find((r) => r.source === 'dictation')?.text || '') && errors.length === 0,
+          JSON.stringify({ ...result, error: errors[0] }));
+      } else {
+        record('сценарии', `точный проход: чужая сессия не может заменить последнюю диктовку (${kind})`,
+          clicked && result.rows.find((r) => r.source === 'dictation')?.text === 'Первая диктовка.' && !result.calls.some((c) => c.thorough) &&
+          /Переспросить нечем/.test(result.toasts) && errors.length === 0, JSON.stringify({ ...result, error: errors[0] }));
+      }
+    } finally { await page.close(); }
+  }
+}
+
 // Ошибка только при копировании последнего PCM; микрофон, STT и вставка — моки.
 async function scenarioRetryAudioCopyFailure(browser) {
   const page = await openPage(browser, '#/home', {
@@ -11178,6 +11247,7 @@ async function main() {
       ['самопроверка диктовки', scenarioSelfTest],
       ['сравнение моделей', scenarioModelCompare],
       ['переспросить точно', scenarioRetryLast],
+      ['точный проход: чужая аудиосессия', scenarioRetryWrongSession],
       ['точный проход: отказ копии аудио', scenarioRetryAudioCopyFailure],
       ['точный проход: конфликты', scenarioRetryConflict],
       ['точный проход: двойное нажатие', scenarioRetryDoubleClick],

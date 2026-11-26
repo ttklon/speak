@@ -555,13 +555,30 @@ describe('диктовка целиком: что получает челове�
     expect(calls).toHaveLength(1); expect(final).not.toHaveBeenCalled(); expect(end).not.toHaveBeenCalled();
   });
 
+  it('аудиокопия доступна только владельцу соответствующей сессии', async () => {
+    const firstOwner = Symbol('first'); const secondOwner = Symbol('second');
+    answers = [{ ok: true, text: 'Первая запись.', mode: 'cli' }];
+    const first = createRecognizer({ audioOwner: firstOwner });
+    await first.start(); await speak(0, 2000); await first.stop();
+    expect(lastRecordedAudio(firstOwner)?.pcm?.length).toBe(32000);
+    expect(lastRecordedAudio(secondOwner)).toBeNull();
+    expect(lastRecordedAudio(null)).toBeNull();
+    expect(lastRecordedAudio()).toBeNull();
+    answers = [{ ok: true, text: 'Другая сессия.', mode: 'cli' }];
+    const second = createRecognizer({ audioOwner: secondOwner });
+    await second.start(); await speak(0, 3000); await second.stop();
+    expect(lastRecordedAudio(firstOwner)).toBeNull();
+    expect(lastRecordedAudio(secondOwner)?.pcm?.length).toBe(48000);
+  });
+
   it('отказ копирования звука для повтора не теряет успешный текст и не оставляет чужой аудиобуфер', async () => {
+    const oldOwner = Symbol('old'), nextOwner = Symbol('next'), againOwner = Symbol('again');
     answers = [{ ok: true, text: 'Старая запись.', mode: 'cli' }];
-    const old = createRecognizer(); await old.start(); await speak(0, 2000); await old.stop();
-    const oldAudio = lastRecordedAudio(); expect(oldAudio?.pcm?.length).toBe(32000);
+    const old = createRecognizer({ audioOwner: oldOwner }); await old.start(); await speak(0, 2000); await old.stop();
+    const oldAudio = lastRecordedAudio(oldOwner); expect(oldAudio?.pcm?.length).toBe(32000);
     answers = [{ ok: true, text: 'Новый успешный текст.', mode: 'cli' }];
     const end = vi.fn(), final = vi.fn(), error = vi.fn();
-    const next = createRecognizer({ onEnd: end, onFinal: final, onError: error });
+    const next = createRecognizer({ onEnd: end, onFinal: final, onError: error, audioOwner: nextOwner });
     await next.start(); await speak(0, 2000);
     const from = vi.spyOn(Int16Array, 'from').mockImplementationOnce(() => { throw new RangeError('copy failed'); });
     try {
@@ -569,16 +586,22 @@ describe('диктовка целиком: что получает челове�
       expect(end).toHaveBeenCalledTimes(1);
       expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: 'Новый успешный текст.' }));
       expect(final).toHaveBeenCalledTimes(1); expect(error).not.toHaveBeenCalled();
-      expect(lastRecordedAudio()).toBeNull();
+      expect(lastRecordedAudio(oldOwner)).toBeNull();
+      expect(lastRecordedAudio(nextOwner)).toBeNull();
     } finally { from.mockRestore(); }
     answers = [{ ok: true, text: 'Следующая запись.', mode: 'cli' }];
-    const again = createRecognizer(); await again.start(); await speak(0, 2000); await again.stop();
-    expect(lastRecordedAudio()?.pcm?.length).toBe(32000);
-    expect(lastRecordedAudio()).not.toBe(oldAudio);
+    const again = createRecognizer({ audioOwner: againOwner }); await again.start(); await speak(0, 2000); await again.stop();
+    expect(lastRecordedAudio(againOwner)?.pcm?.length).toBe(32000);
+    expect(lastRecordedAudio(againOwner)).not.toBe(oldAudio);
   });
 
   it('после отмены ожидающий итоговый ответ не вызывает onFinal и onEnd', async () => {
-    const previousAudio = lastRecordedAudio();
+    const owner = Symbol('previous');
+    answers = [{ ok: true, text: 'Предыдущая запись.', mode: 'cli' }];
+    const previous = createRecognizer({ audioOwner: owner });
+    await previous.start(); await speak(0, 2000); await previous.stop();
+    const previousAudio = lastRecordedAudio(owner); expect(previousAudio?.pcm?.length).toBe(32000);
+    calls.length = 0;
     let resolveFinal;
     native.transcribePcm.mockImplementationOnce((payload) => { calls.push(payload); return new Promise((resolve) => { resolveFinal = resolve; }); });
     const end = vi.fn(), final = vi.fn(), error = vi.fn();
@@ -595,7 +618,7 @@ describe('диктовка целиком: что получает челове�
     resolveFinal({ ok: true, text: 'не вставлять', mode: 'server' });
     await Promise.resolve();
     expect(final).not.toHaveBeenCalled(); expect(end).not.toHaveBeenCalled(); expect(error).not.toHaveBeenCalled();
-    expect(lastRecordedAudio()).toBe(previousAudio);
+    expect(lastRecordedAudio(owner)).toBe(previousAudio);
   });
 
   it.each([0, 200])('при %i мс не позволяет подменить итог черновиком', async (duration) => {
