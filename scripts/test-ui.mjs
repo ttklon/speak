@@ -8538,6 +8538,108 @@ async function scenarioBackupRoundTrip(browser) {
   } finally { rmSync(backupPath, { force: true }); await page.close(); }
 }
 
+// Выборочный импорт — только отмеченные разделы заменяются; буфер не входит в копию.
+async function scenarioBackupSelection(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', {
+    settle: 500, settings: { dictationRetentionDays: 3650, clipboardRetentionDays: 3650 },
+    storeSeed: {
+      'zs.dictations': [{ id: 'current-history', text: 'Текущая история', createdAt: Date.now() }],
+      'zs.dictionary': [{ id: 'current-word', word: 'Текущее слово' }],
+      'zs.clipboard': [{ id: 'current-clip', text: 'Текущий буфер', createdAt: Date.now() }],
+    },
+  });
+  takeErrors(page);
+  const path = join(tmpdir(), `zs-selection-${Date.now()}.json`);
+  try {
+    const beforeSettings = await page.evaluate(() => localStorage.getItem('mockstore:zs.settings'));
+    writeFileSync(path, JSON.stringify({ app: 'ZSpeakly', format: 1,
+      settings: { dictationRetentionDays: 0, clipboardRetentionDays: 0 },
+      dictations: [{ id: 'backup-history', text: 'Чужая история', createdAt: Date.now() }],
+      dictionary: [{ id: 'backup-word', word: 'Слово из копии' }, { id: 'backup-word2', word: 'Второе слово' }],
+    }), 'utf8');
+    const input = await page.$('.settings-main input[type=file]');
+    await input.uploadFile(path);
+    await page.waitForSelector('.backup-sections input');
+    const initial = await page.evaluate(() => ({ text: document.querySelector('.backup-sections').innerText,
+      labels: [...document.querySelectorAll('.backup-sections input')].map((el) => ({ label: el.closest('label').innerText, checked: el.checked })),
+      warning: document.querySelector('.confirm__text')?.innerText }));
+    record('сценарии', 'данные: выбор разделов показывает количество и риск срока хранения',
+      initial.labels.length === 3 && initial.labels.every((v) => v.checked) &&
+      /Сейчас: 1 · в копии: 2/.test(initial.text) && /Общих ID: 0 · прежних ID нет в копии: 1/.test(initial.text) &&
+      /Совпадение ID не означает/.test(initial.text) && !/Текущее слово|Слово из копии/.test(initial.text) && /буфер обмена/i.test(initial.warning), JSON.stringify(initial));
+    await clickIn(page, '.backup-sections', 'Скачать текущую копию');
+    await sleep(200);
+    const exported = await page.evaluate(() => ({ saved: (window.__bridgeCalls || []).some((call) => call.channel === 'data:save-backup'),
+      open: Boolean(document.querySelector('.backup-sections')), text: document.querySelector('.backup-sections')?.innerText }));
+    record('сценарии', 'данные: текущую копию можно сохранить прямо из предпросмотра',
+      exported.saved && exported.open, JSON.stringify(exported));
+    // Проверяем общие переключатели и запрет пустого выбора.
+    await clickIn(page, '.backup-sections', 'Снять все');
+    await clickIn(page, '.backup-sections', 'Выбрать все');
+    const allAgain = await page.evaluate(() => [...document.querySelectorAll('.backup-sections input')].every((item) => item.checked));
+    record('сценарии', 'данные: можно снова выбрать все разделы', allAgain, String(allAgain));
+    await clickIn(page, '.backup-sections', 'Снять все');
+    const none = await page.evaluate(() => ({ disabled: [...document.querySelectorAll('[role=dialog] button')].find((b) => b.innerText.trim() === 'Восстановить')?.disabled,
+      text: document.querySelector('.confirm__text')?.innerText }));
+    record('сценарии', 'данные: пустой выбор нельзя восстановить', none.disabled === true && /ничего не выбрано/i.test(none.text), JSON.stringify(none));
+    const dictionary = await page.$$('.backup-sections input');
+    await dictionary[2].click();
+    const preview = await page.evaluate(() => document.querySelector('.confirm__text')?.innerText || '');
+    record('сценарии', 'данные: невыбранные настройки не создают предупреждение о сроке из копии',
+      !/срок хранения может удалить его/i.test(preview) && /словарь/i.test(preview), preview);
+    await clickIn(page, '', 'Восстановить');
+    await sleep(800);
+    const result = await page.evaluate(() => ({
+      history: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+      dictionary: JSON.parse(localStorage.getItem('mockstore:zs.dictionary') || '[]'),
+      clipboard: JSON.parse(localStorage.getItem('mockstore:zs.clipboard') || '[]'),
+      settings: JSON.parse(localStorage.getItem('mockstore:zs.settings') || '{}'),
+      toast: [...document.querySelectorAll('.toast')].map((el) => el.innerText).join(' '),
+    }));
+    record('сценарии', 'данные: восстановлен только словарь, остальные разделы не заменены',
+      result.history[0]?.id === 'current-history' && result.dictionary.map((x) => x.id).join(',') === 'backup-word,backup-word2' &&
+      result.clipboard[0]?.id === 'current-clip' && JSON.stringify(result.settings) === beforeSettings &&
+      /Данные применены в приложении/i.test(result.toast), JSON.stringify(result));
+    const reopened = await browser.newPage();
+    try {
+      await reopened.evaluateOnNewDocument(installMockBridge);
+      await reopened.goto(`${BASE}/#/settings?section=data&from=home`, { waitUntil: 'domcontentloaded' });
+      await reopened.waitForSelector('.app-window'); await sleep(700);
+      const stored = await reopened.evaluate(() => ({ history: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+        dictionary: JSON.parse(localStorage.getItem('mockstore:zs.dictionary') || '[]'),
+        clipboard: JSON.parse(localStorage.getItem('mockstore:zs.clipboard') || '[]') }));
+      record('сценарии', 'данные: выборочный импорт сохраняется после перезапуска приложения',
+        stored.history[0]?.id === 'current-history' && stored.dictionary.length === 2 && stored.dictionary[0]?.id === 'backup-word' &&
+        stored.clipboard[0]?.id === 'current-clip', JSON.stringify(stored));
+    } finally { await reopened.close(); }
+    const beforeCancel = await page.evaluate(() => localStorage.getItem('mockstore:zs.dictionary'));
+    await input.uploadFile(path);
+    await page.waitForSelector('.backup-sections input');
+    await sleep(100);
+    const focused = await page.evaluate(() => document.activeElement?.innerText || '');
+    const historyCheckbox = (await page.$$('.backup-sections input'))[1];
+    await historyCheckbox.focus();
+    await page.keyboard.press('Space');
+    const keyboard = await page.evaluate(() => [...document.querySelectorAll('.backup-sections input')].map((el) => el.checked));
+    await page.keyboard.press('Escape'); await sleep(200);
+    const cancel = await page.evaluate(() => ({ dialog: Boolean(document.querySelector('.backup-sections')),
+      dictionary: localStorage.getItem('mockstore:zs.dictionary') }));
+    record('сценарии', 'данные: клавиатура меняет выбор, Escape отменяет без изменений',
+      /Отмена/i.test(focused) && keyboard.join(',') === 'true,false,true' && !cancel.dialog && cancel.dictionary === beforeCancel,
+      JSON.stringify({ focused, keyboard, closed: !cancel.dialog }));
+    writeFileSync(path, JSON.stringify({ dictionary: [] }), 'utf8');
+    await input.uploadFile(path);
+    await page.waitForSelector('.backup-sections');
+    const emptyPreview = await page.evaluate(() => document.querySelector('.backup-sections')?.innerText || '');
+    await page.keyboard.press('Escape'); await sleep(200);
+    const afterEmptyCancel = await page.evaluate(() => localStorage.getItem('mockstore:zs.dictionary'));
+    record('сценарии', 'данные: пустой раздел явно предупреждает об очистке',
+      /Сейчас: 2 · в копии: 0 · раздел будет очищен/i.test(emptyPreview) && afterEmptyCancel === beforeCancel, emptyPreview);
+    const errors = takeErrors(page);
+    record('сценарии', 'данные: выборочный импорт без ошибок консоли', errors.length === 0, errors[0] || '');
+  } finally { rmSync(path, { force: true }); await page.close(); }
+}
+
 // Неподходящая копия не должна частично заменить настройки или историю.
 async function scenarioInvalidBackup(browser) {
   const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 500 });
@@ -8931,7 +9033,7 @@ async function scenarioProtectedBackup(browser) {
         }));
         const errors = takeErrors(page);
         record('сценарии', `данные: известный сбой записи останавливает импорт (${mode})`,
-          /Будут заменены: история, словарь/i.test(preview) && /не.*атомар/i.test(preview) && /сохраните.*копи/i.test(preview) &&
+          /Будут заменены: история диктовок, словарь/i.test(preview) && /не.*атомар/i.test(preview) && /сохраните.*копи/i.test(preview) &&
           /Не удалось восстановить/i.test(result.toast) && /не изменены/i.test(result.toast) &&
           result.history === before.history && result.dictionary === before.dictionary &&
           !result.toast.includes('секретный путь') && errors.length === 0,
@@ -11316,6 +11418,7 @@ async function main() {
       ['данные: резервная копия', scenarioBackup],
       ['данные: совместимость копии', scenarioBackupCompatibility],
       ['данные: полный круг копии', scenarioBackupRoundTrip],
+      ['данные: выбор разделов копии', scenarioBackupSelection],
       ['данные: повреждённая копия', scenarioInvalidBackup],
       ['данные: срок хранения буфера', scenarioBackupClipboardRetention],
       ['данные: срок хранения после перезапуска', scenarioBackupRetentionOnRestart],

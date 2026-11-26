@@ -617,6 +617,22 @@
   color: var(--text-3);
 }
 
+.backup-sections {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+}
+.backup-sections legend { padding: 0 5px; font-size: 12px; color: var(--text-2); }
+.backup-sections__actions { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 4px 0 8px; }
+.backup-sections__actions button { border: 0; padding: 2px 0; background: none; color: var(--text-2); text-decoration: underline; cursor: pointer; font: inherit; font-size: 12px; }
+.backup-sections__hint { margin: 0 0 4px; color: var(--text-3); font-size: 11px; line-height: 1.5; }
+.backup-sections__item { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; cursor: pointer; }
+.backup-sections__item input { margin: 3px 0 0; }
+.backup-sections__item span { display: flex; flex-direction: column; gap: 2px; }
+.backup-sections__item strong { font-size: 13px; }
+.backup-sections__item small { color: var(--text-3); font-size: 11px; }
+
 .modal {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

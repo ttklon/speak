@@ -5,7 +5,7 @@ import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { formatBytes, isElectron } from '../../../lib/storage.js';
 import { BACKUP_MAX_BYTES, describeBackupCompatibility, prepareBackup, readBackupJsonFile } from '../../../lib/backup.js';
-import { backupRetentionImpact } from '../../../lib/backupPreview.js';
+import { BACKUP_SECTIONS, backupIdentitySummary, backupRetentionImpact, backupSectionSummary, selectBackupSections } from '../../../lib/backupPreview.js';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 
@@ -125,13 +125,8 @@ export default function DataSection({ onOpenSection }) {
       if (readId !== backupReadRef.current) return;
       const prepared = prepareBackup(payload);
       const compatibility = describeBackupCompatibility(payload);
-      const labels = {
-        settings: 'настройки', dictations: 'история', dictionary: 'словарь', snippets: 'быстрые блоки',
-        voiceHotkeys: 'голосовые сочетания', presets: 'AI-инструкции', instructions: 'свои инструкции',
-        stats: 'счётчики', profile: 'профиль',
-      };
-      const sections = Object.keys(labels).filter((key) => Object.prototype.hasOwnProperty.call(prepared, key)).map((key) => labels[key]);
-      setPendingBackup({ payload, prepared, compatibility, name: file.name, sections });
+      const sections = Object.keys(BACKUP_SECTIONS).filter((key) => Object.hasOwn(prepared, key));
+      setPendingBackup({ payload, prepared, compatibility, name: file.name, sections, selected: sections });
     } catch (err) {
       if (readId === backupReadRef.current) push({ title: 'Файл не подошёл', description: String(err?.message || err), tone: 'warn' });
     } finally {
@@ -141,17 +136,22 @@ export default function DataSection({ onOpenSection }) {
 
   // Считаем по текущим данным при каждом рендере, не показывая содержание буфера.
   // Пока диалог открыт, записи и время могут измениться: числа ориентировочные.
-  const retentionImpact = pendingBackup
-    ? backupRetentionImpact({ prepared: pendingBackup.prepared, settings, dictations, clipboard })
+  const selectedPrepared = pendingBackup
+    ? Object.fromEntries(pendingBackup.selected.map((key) => [key, pendingBackup.prepared[key]]))
     : null;
-  const retentionWarning = retentionImpact
+  const retentionImpact = pendingBackup && pendingBackup.selected.length
+    ? backupRetentionImpact({ prepared: selectedPrepared, settings, dictations, clipboard })
+    : null;
+  const retentionWarning = retentionImpact && (selectedPrepared.settings || selectedPrepared.dictations || retentionImpact.dictations || retentionImpact.clipboard)
     ? ` Старые записи могут удалиться по сроку хранения сразу после восстановления или при следующем запуске.` +
       (retentionImpact.dictations ? ` Сейчас под срок хранения попадают записи ${retentionImpact.importedHistory ? 'истории из копии' : 'текущей истории'}: ${retentionImpact.dictations}.` : '') +
-      (pendingBackup.prepared.settings || retentionImpact.clipboard
+      (selectedPrepared.settings || retentionImpact.clipboard
         ? ` Буфер обмена не входит в копию; срок хранения может удалить его текущие незакреплённые записи${retentionImpact.clipboard ? ` (сейчас под срок попадает: ${retentionImpact.clipboard})` : ''}.`
         : '') +
       ((retentionImpact.dictations || retentionImpact.clipboard) ? ' Количество может измениться.' : '')
     : '';
+
+  const currentBackup = pendingBackup ? exportBackup() : null;
 
   // Реальный размер именно диктовок. Раньше здесь было storageSize * 0.42 —
   // придуманное число, которое ничего не измеряло.
@@ -323,7 +323,8 @@ export default function DataSection({ onOpenSection }) {
             Восстановить из файла
             <div className="setting-row__desc">
               Заменит выбранные разделы данными из файла. Перед восстановлением спросим
-              подтверждение и покажем, что внутри. Автоматический импорт ограничен 32 МиБ.
+              подтверждение, покажем состав и дадим выбрать разделы. Каждый выбранный
+              раздел заменяется целиком, не объединяется. Автоматический импорт ограничен 32 МиБ.
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
@@ -353,7 +354,8 @@ export default function DataSection({ onOpenSection }) {
           setPendingBackup(null);
           if (!current) return;
           try {
-            const applied = importBackup(current.payload);
+            const selected = selectBackupSections(current.payload, current.selected);
+            const applied = importBackup(selected);
             let status;
             try { status = window.zspeakly?.store?.statusSync?.(); } catch { status = { ok: false }; }
             push({
@@ -371,11 +373,41 @@ export default function DataSection({ onOpenSection }) {
         title="Восстановить данные из копии?"
         description={
           pendingBackup
-            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.sections.join(', ')}.${pendingBackup.compatibility.legacy ? ' Копия без полной метки приложения или версии: совместимость не гарантирована.' : ''}${pendingBackup.compatibility.ignoredFields ? ` Нераспознанные поля верхнего уровня будут пропущены: ${pendingBackup.compatibility.ignoredFields}.` : ''}${retentionWarning} Восстановление не атомарно: при сбое часть прежних данных может быть заменена, а часть — нет. Сначала сохраните отдельную копию текущих данных; при повреждённом профиле она может быть неполной.`
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.selected.map((key) => BACKUP_SECTIONS[key].toLowerCase()).join(', ') || 'ничего не выбрано'}.${pendingBackup.compatibility.legacy ? ' Копия без полной метки приложения или версии: совместимость не гарантирована.' : ''}${pendingBackup.compatibility.ignoredFields ? ` Нераспознанные поля верхнего уровня будут пропущены: ${pendingBackup.compatibility.ignoredFields}.` : ''}${retentionWarning} Восстановление не атомарно: при сбое часть прежних данных может быть заменена, а часть — нет. Сначала сохраните отдельную копию текущих данных; при повреждённом профиле она может быть неполной.`
             : ''
         }
         confirmLabel="Восстановить"
-      />
+        confirmDisabled={!pendingBackup?.selected.length}
+        width={540}
+      >
+        {pendingBackup ? (
+          <fieldset className="backup-sections">
+            <legend>Выберите разделы для замены</legend>
+            <div className="backup-sections__actions">
+              <button type="button" onClick={() => setPendingBackup((prev) => prev ? { ...prev, selected: prev.sections } : prev)}>Выбрать все</button>
+              <button type="button" onClick={() => setPendingBackup((prev) => prev ? { ...prev, selected: [] } : prev)}>Снять все</button>
+              <button type="button" onClick={downloadBackup}>Скачать текущую копию</button>
+            </div>
+            <p className="backup-sections__hint">Разделы заменяются целиком. Совпадение ID не означает совпадение текста или других данных.</p>
+            {pendingBackup.sections.map((key) => {
+              const identity = backupIdentitySummary(key, pendingBackup.prepared, currentBackup);
+              return (
+                <label className="backup-sections__item" key={key}>
+                  <input type="checkbox" checked={pendingBackup.selected.includes(key)}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setPendingBackup((prev) => prev ? { ...prev, selected: checked
+                        ? prev.sections.filter((section) => section === key || prev.selected.includes(section))
+                        : prev.selected.filter((section) => section !== key) } : prev);
+                    }} />
+                  <span><strong>{BACKUP_SECTIONS[key]}</strong><small>{backupSectionSummary(key, pendingBackup.prepared, currentBackup)}</small>
+                    {identity ? <small>{identity}</small> : null}</span>
+                </label>
+              );
+            })}
+          </fieldset>
+        ) : null}
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={confirmDictations}

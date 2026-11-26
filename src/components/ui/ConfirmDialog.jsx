@@ -16,13 +16,16 @@ export default function ConfirmDialog({
   description = '',
   confirmLabel = 'Удалить',
   cancelLabel = 'Отмена',
+  children,
+  confirmDisabled = false,
+  width = 420,
 }) {
   return (
     <Modal
       open={open}
       onClose={onClose}
       title={title}
-      width={420}
+      width={width}
       footer={
         <>
           {/* data-autofocus: фокус сразу на «Отмене» — случайный Enter не удалит */}
@@ -31,6 +34,7 @@ export default function ConfirmDialog({
           </Button>
           <Button
             variant="danger"
+            disabled={confirmDisabled}
             onClick={() => {
               onConfirm?.();
               onClose?.();
@@ -42,6 +46,7 @@ export default function ConfirmDialog({
       }
     >
       <p className="confirm__text">{description}</p>
+      {children}
     </Modal>
   );
 }
