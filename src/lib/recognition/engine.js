@@ -50,7 +50,15 @@ function rememberRecordedAudio(pcm, durationMs, lang) {
   }
   // Копия: исходный буфер переиспользуется рекордером и после остановки
   // превратился бы в мусор.
-  lastAudio = { pcm: Int16Array.from(pcm), durationMs: Math.round(durationMs), lang: lang || 'ru' };
+  // Ошибка необязательной копии не должна скрывать уже распознанный текст.
+  // При этом прежняя запись не относится к новому результату и опасна для
+  // «Переспросить точно» — даже если выделить новую копию не удалось.
+  lastAudio = null;
+  try {
+    lastAudio = { pcm: Int16Array.from(pcm), durationMs: Math.round(durationMs), lang: lang || 'ru' };
+  } catch {
+    // Повтор будет недоступен; результат распознавания остаётся доступен.
+  }
 }
 
 /**

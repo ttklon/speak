@@ -6826,6 +6826,77 @@ async function scenarioDictationUndoCapacity(browser) {
  * в памяти — значит второй текст можно получить без повтора вслух. Проверяем
  * и главное правило: текст меняется, только когда точный проход услышал больше.
  */
+// Ошибка только при копировании последнего PCM; микрофон, STT и вставка — моки.
+async function scenarioRetryAudioCopyFailure(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false, micPreroll: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      const from = Int16Array.from;
+      window.__failAudioCopy = false; window.__audioCopyFailures = 0;
+      Int16Array.from = function (...args) {
+        if (window.__failAudioCopy) { window.__failAudioCopy = false; window.__audioCopyFailures++; throw new RangeError('искусственный отказ копирования PCM'); }
+        return from.apply(this, args);
+      };
+      Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+        getUserMedia: async () => ({ getTracks: () => [{ kind: 'audio', stop() {} }] }),
+      } });
+      window.__retryCopyProcessors = []; window.__retryCopyCalls = [];
+      window.AudioContext = class {
+        constructor() { this.sampleRate = 16000; this.destination = {}; }
+        createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+        createScriptProcessor() { const p = { connect() {}, disconnect() {} }; window.__retryCopyProcessors.push(p); return p; }
+        createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+        close() { return Promise.resolve(); }
+      };
+      window.__retryCopyFeed = async (count) => {
+        const p = window.__retryCopyProcessors.at(-1);
+        for (let i = 0; i < count; i++) {
+          p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.5) } });
+          await Promise.resolve();
+        }
+      };
+      window.zspeakly.native.transcribePcm = async (payload) => {
+        window.__retryCopyCalls.push({ thorough: !!payload.thorough, durationMs: payload.durationMs, samples: payload.pcm.length });
+        if (payload.thorough) return { ok: true, text: 'Третья новая запись и больше слов.', mode: 'cli' };
+        const n = window.__retryCopyCalls.length;
+        if (n === 2) window.__failAudioCopy = true;
+        return { ok: true, text: ['Первая запись.', 'Вторая запись.', 'Третья запись.'][n - 1], mode: 'cli' };
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    for (const [i, count] of [20, 30, 25].entries()) {
+      await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+      await page.waitForFunction((n) => window.__retryCopyProcessors.length === n, { timeout: 10000 }, i + 1);
+      await page.evaluate((n) => window.__retryCopyFeed(n), count);
+      await emit(page, 'hotkey', { type: 'up' });
+      await page.waitForFunction((n) => (window.__e2e.read('zs.dictations') || []).length === n, { timeout: 10000 }, i + 1);
+      await sleep(1200);
+      if (i === 1) {
+        const retryClicked = await page.evaluate(() => { const b = document.querySelector('.last-result [aria-label="Переспросить точно"]'); if (!b) return false; b.click(); return true; });
+        await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((n) => /Переспросить нечем/.test(n.innerText)), { timeout: 8000 });
+        const result = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text,
+          calls: window.__retryCopyCalls, failures: window.__audioCopyFailures,
+          toasts: [...document.querySelectorAll('.toast')].map((n) => n.innerText).join(' '),
+          inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length }));
+        record('сценарии', 'точный проход: отказ копии не теряет текст и не использует предыдущий звук',
+          retryClicked && result.failures === 1 && /Вторая запись/i.test(result.text || '') && result.calls.length === 2 &&
+          !result.calls.some((c) => c.thorough) && result.inserts === 2 && /Последняя запись уже отпущена/.test(result.toasts), JSON.stringify(result));
+      }
+    }
+    const clicked = await page.evaluate(() => { const b = document.querySelector('.last-result [aria-label="Переспросить точно"]'); if (!b) return false; b.click(); return true; });
+    await page.waitForFunction(() => window.__retryCopyCalls.some((c) => c.thorough), { timeout: 10000 });
+    await page.waitForFunction(() => /Третья новая запись и больше слов/i.test(window.__e2e.read('zs.dictations')?.[0]?.text || ''), { timeout: 10000 });
+    const result = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text, calls: window.__retryCopyCalls }));
+    const errors = takeErrors(page); const retry = result.calls.find((c) => c.thorough);
+    record('сценарии', 'точный проход: следующая запись снова доступна для повтора',
+      clicked && retry?.samples === 40000 && retry?.durationMs === 2500 && /больше слов/i.test(result.text || '') && errors.length === 0,
+      JSON.stringify({ ...result, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
 async function scenarioRetryLast(browser) {
   const page = await openPage(browser, '#/home', {
     settings: { aiDictationRewrite: false },
@@ -11107,6 +11178,7 @@ async function main() {
       ['самопроверка диктовки', scenarioSelfTest],
       ['сравнение моделей', scenarioModelCompare],
       ['переспросить точно', scenarioRetryLast],
+      ['точный проход: отказ копии аудио', scenarioRetryAudioCopyFailure],
       ['точный проход: конфликты', scenarioRetryConflict],
       ['точный проход: двойное нажатие', scenarioRetryDoubleClick],
       ['точный проход: ошибка моста', scenarioRetryFailure],

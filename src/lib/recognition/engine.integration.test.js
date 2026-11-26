@@ -555,6 +555,28 @@ describe('диктовка целиком: что получает челове�
     expect(calls).toHaveLength(1); expect(final).not.toHaveBeenCalled(); expect(end).not.toHaveBeenCalled();
   });
 
+  it('отказ копирования звука для повтора не теряет успешный текст и не оставляет чужой аудиобуфер', async () => {
+    answers = [{ ok: true, text: 'Старая запись.', mode: 'cli' }];
+    const old = createRecognizer(); await old.start(); await speak(0, 2000); await old.stop();
+    const oldAudio = lastRecordedAudio(); expect(oldAudio?.pcm?.length).toBe(32000);
+    answers = [{ ok: true, text: 'Новый успешный текст.', mode: 'cli' }];
+    const end = vi.fn(), final = vi.fn(), error = vi.fn();
+    const next = createRecognizer({ onEnd: end, onFinal: final, onError: error });
+    await next.start(); await speak(0, 2000);
+    const from = vi.spyOn(Int16Array, 'from').mockImplementationOnce(() => { throw new RangeError('copy failed'); });
+    try {
+      expect(await next.stop()).toMatchObject({ text: 'Новый успешный текст.' });
+      expect(end).toHaveBeenCalledTimes(1);
+      expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: 'Новый успешный текст.' }));
+      expect(final).toHaveBeenCalledTimes(1); expect(error).not.toHaveBeenCalled();
+      expect(lastRecordedAudio()).toBeNull();
+    } finally { from.mockRestore(); }
+    answers = [{ ok: true, text: 'Следующая запись.', mode: 'cli' }];
+    const again = createRecognizer(); await again.start(); await speak(0, 2000); await again.stop();
+    expect(lastRecordedAudio()?.pcm?.length).toBe(32000);
+    expect(lastRecordedAudio()).not.toBe(oldAudio);
+  });
+
   it('после отмены ожидающий итоговый ответ не вызывает onFinal и onEnd', async () => {
     const previousAudio = lastRecordedAudio();
     let resolveFinal;
