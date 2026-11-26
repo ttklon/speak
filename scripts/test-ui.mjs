@@ -6820,14 +6820,69 @@ async function scenarioDictationUndoCapacity(browser) {
   } finally { await page.close(); }
 }
 
-// Очистка истории диктовок — только после подтверждения, пустая история молчит делом.
-/**
- * «Переспросить точно»: человек видит ошибку сразу после вставки, а запись ещё
- * в памяти — значит второй текст можно получить без повтора вслух. Проверяем
- * и главное правило: текст меняется, только когда точный проход услышал больше.
- */
-// После голосового «отмени» или команды предыдущая карточка остаётся,
-// но последнее аудио уже другой сессии. Устройство, STT и ввод подменены.
+// Быстрый блок — сохранённый шаблон, а в записи звучит только его триггер.
+// Микрофон, STT и внешняя вставка подменены.
+async function scenarioRetrySnippet(browser) {
+  const body = 'Подпись';
+  const page = await openPage(browser, '#/home', {
+    settings: { aiDictationRewrite: false, liveWhisper: false, micPreroll: false },
+    storeSeed: { 'zs.dictations': [], 'zs.snippets': [{ id: 's1', trigger: 'моя подпись', body, createdAt: Date.now() }] },
+    patchNative: () => {
+      Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+        getUserMedia: async () => ({ getTracks: () => [{ kind: 'audio', stop() {} }] }),
+      } });
+      window.__snippetRetryProcessors = []; window.__snippetRetryCalls = [];
+      window.AudioContext = class {
+        constructor() { this.sampleRate = 16000; this.destination = {}; }
+        createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+        createScriptProcessor() { const p = { connect() {}, disconnect() {} }; window.__snippetRetryProcessors.push(p); return p; }
+        createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+        close() { return Promise.resolve(); }
+      };
+      window.__snippetRetryFeed = async () => {
+        const p = window.__snippetRetryProcessors.at(-1);
+        for (let i = 0; i < 20; i++) {
+          p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.5) } });
+          await Promise.resolve();
+        }
+      };
+      let ordinary = 0;
+      window.zspeakly.native.transcribePcm = async (payload) => {
+        window.__snippetRetryCalls.push({ thorough: !!payload.thorough, samples: payload.pcm.length });
+        if (payload.thorough) return { ok: true, text: 'Подробная новая расшифровка со словами.', mode: 'cli' };
+        ordinary++; return { ok: true, text: ordinary === 1 ? 'Моя подпись.' : 'Обычная запись.', mode: 'cli' };
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    for (let i = 0; i < 2; i++) {
+      await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+      await page.waitForFunction((n) => window.__snippetRetryProcessors.length === n, { timeout: 10000 }, i + 1);
+      await page.evaluate(() => window.__snippetRetryFeed());
+      await emit(page, 'hotkey', { type: 'up' });
+      await page.waitForFunction((n) => (window.__e2e.read('zs.dictations') || []).length === n, { timeout: 10000 }, i + 1);
+      await sleep(1200);
+      const clicked = await page.evaluate(() => { const b = document.querySelector('.last-result [aria-label="Переспросить точно"]'); if (!b) return false; b.click(); return true; });
+      await sleep(800);
+      const result = await page.evaluate(() => ({ rows: window.__e2e.read('zs.dictations'), calls: window.__snippetRetryCalls,
+        toasts: [...document.querySelectorAll('.toast')].map((n) => n.innerText).join(' '),
+        inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').map((c) => c.args?.[0]) }));
+      if (i === 0) {
+        record('сценарии', 'точный проход: быстрый блок не заменяется расшифровкой триггера',
+          clicked && result.rows[0]?.text === body && result.inserts[0] === body && !result.calls.some((c) => c.thorough) &&
+          /быстрый блок/i.test(result.toasts), JSON.stringify(result));
+      } else {
+        const errors = takeErrors(page);
+        record('сценарии', 'точный проход: следующую обычную диктовку можно переспросить',
+          clicked && /Подробная новая расшифровка/i.test(result.rows[0]?.text || '') &&
+          result.calls.filter((c) => c.thorough).length === 1 && errors.length === 0, JSON.stringify({ ...result, error: errors[0] }));
+      }
+    }
+  } finally { await page.close(); }
+}
+
+// После голосовой команды предыдущая карточка остаётся, а звук — другой сессии.
 async function scenarioRetryWrongSession(browser) {
   for (const kind of ['undo', 'command', 'cancel']) {
     const page = await openPage(browser, '#/home', {
@@ -6966,6 +7021,7 @@ async function scenarioRetryAudioCopyFailure(browser) {
   } finally { await page.close(); }
 }
 
+// Обычную диктовку можно переспросить, пока её аудио остаётся в памяти.
 async function scenarioRetryLast(browser) {
   const page = await openPage(browser, '#/home', {
     settings: { aiDictationRewrite: false },
@@ -11247,6 +11303,7 @@ async function main() {
       ['самопроверка диктовки', scenarioSelfTest],
       ['сравнение моделей', scenarioModelCompare],
       ['переспросить точно', scenarioRetryLast],
+      ['точный проход: быстрый блок', scenarioRetrySnippet],
       ['точный проход: чужая аудиосессия', scenarioRetryWrongSession],
       ['точный проход: отказ копии аудио', scenarioRetryAudioCopyFailure],
       ['точный проход: конфликты', scenarioRetryConflict],

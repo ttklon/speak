@@ -47,7 +47,10 @@ export function shouldReplaceText(prev = '', next = '') {
  * Можно ли вообще переспросить: нужны и запись, и распознавание в приложении.
  * В браузерном превью записи не остаётся — об этом честнее сказать словами.
  */
-export function retryAvailability({ audio, native }) {
+export function retryAvailability({ audio, native, isSnippet = false }) {
+  if (isSnippet) {
+    return { ok: false, reason: 'Это быстрый блок: в записи звучит только триггер, а не текст блока. Запись можно исправить вручную в истории, а сам блок — в словаре.' };
+  }
   if (!native?.transcribePcm) {
     return { ok: false, reason: 'Переспросить можно в приложении: в браузере распознавания нет.' };
   }

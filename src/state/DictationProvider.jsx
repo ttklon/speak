@@ -260,6 +260,8 @@ export function DictationProvider({ children }) {
   const lastItemId = useRef('');
   // Идентификатор сессии, которая создала карточку; не хранит звук.
   const lastAudioOwner = useRef(null);
+  // У карточки с быстрым блоком звук содержит только голосовой триггер.
+  const lastSnippetItemId = useRef(null);
   // «горячий микрофон»: поток открыт заранее, последние 600 мс лежат в буфере
   const micWarm = useRef(null);
   // достаточный ли статус, чтобы интерфейс не врал про открытый микрофон
@@ -718,6 +720,7 @@ export function DictationProvider({ children }) {
       if (cleaned) {
         setLast(item);
         lastAudioOwner.current = audioOwner;
+        lastSnippetItemId.current = snippetHit ? item.id : null;
         const savedToHistory = addDictation(item);
         historySnapshot = savedToHistory ? getDictationSnapshot(item.id) : null;
         lastItemId.current = savedToHistory ? item.id : null;
@@ -1693,7 +1696,7 @@ export function DictationProvider({ children }) {
   const retryLast = useCallback(async () => {
     const native = typeof window !== 'undefined' ? window.zspeakly?.native : null;
     const audio = lastRecordedAudio(lastAudioOwner.current);
-    const check = retryAvailability({ audio, native });
+    const check = retryAvailability({ audio, native, isSnippet: Boolean(last && lastSnippetItemId.current === last.id) });
     if (!check.ok) {
       pushToast({ title: 'Переспросить нечем', description: check.reason, tone: 'warn' });
       return { ok: false, reason: check.reason };

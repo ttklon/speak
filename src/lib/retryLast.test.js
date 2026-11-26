@@ -39,6 +39,13 @@ describe('shouldReplaceText', () => {
 });
 
 describe('retryAvailability', () => {
+  it.each([null, { pcm: [1, 2] }])('быстрый блок нельзя заменить повторной расшифровкой триггера (%s)', (audio) => {
+    const res = retryAvailability({ audio, native: { transcribePcm: () => {} }, isSnippet: true });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toMatch(/быстрый блок/i);
+    expect(res.reason).toMatch(/триггер/i);
+  });
+
   it('без распознавания в приложении объясняет это словами', () => {
     const res = retryAvailability({ audio: { pcm: [1, 2] }, native: null });
     expect(res.ok).toBe(false);
