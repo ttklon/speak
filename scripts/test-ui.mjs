@@ -3281,6 +3281,83 @@ async function scenarioMicWarmLifecycle(browser) {
   }
 }
 
+// Устройство и STT подменены. Завершение отдельной дорожки предролла не
+// означает, что следующая дорожка записи тоже недоступна.
+async function scenarioMicWarmEnded(browser) {
+  const page = await openPage(browser, '#/settings?section=app&from=home', {
+    settings: { micPreroll: true, liveWhisper: false, aiDictationRewrite: false },
+    storeSeed: { 'zs.dictations': [] },
+    patchNative: () => {
+      window.__warmEndedTracks = []; window.__warmEndedProcessors = []; window.__warmEndedStt = [];
+      Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+        enumerateDevices: async () => [],
+        getUserMedia: async () => {
+          const track = new EventTarget(); track.kind = 'audio'; track.readyState = 'live'; track.stops = 0;
+          track.stop = () => { track.stops++; track.readyState = 'ended'; };
+          track.lose = () => { track.readyState = 'ended'; track.dispatchEvent(new Event('ended')); };
+          window.__warmEndedTracks.push(track); return { getTracks: () => [track] };
+        },
+      } });
+      window.AudioContext = class {
+        constructor() { this.sampleRate = 16000; this.destination = {}; }
+        createMediaStreamSource(stream) { this.track = stream.getTracks()[0]; return { connect() {}, disconnect() {} }; }
+        createScriptProcessor() { const p = { track: this.track, connect() {}, disconnect() {} }; window.__warmEndedProcessors.push(p); return p; }
+        createGain() { return { gain: { value: 0 }, connect() {}, disconnect() {} }; }
+        close() { return Promise.resolve(); }
+      };
+      window.__warmFeed = (index, count) => {
+        const p = window.__warmEndedProcessors[index];
+        for (let i = 0; i < count; i++) p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.5) } });
+      };
+      window.zspeakly.native.transcribePcm = async (payload) => {
+        window.__warmEndedStt.push({ durationMs: payload.durationMs });
+        return { ok: true, text: 'Новая запись.', mode: 'cli' };
+      };
+    },
+  });
+  takeErrors(page);
+  try {
+    await page.waitForFunction(() => window.__warmEndedProcessors.length === 1 &&
+      (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0] === true, { timeout: 10000 });
+    await page.evaluate(() => { window.__warmBaseTracks = window.__warmEndedTracks.length; window.__warmFeed(0, 6); window.__warmEndedProcessors[0].track.lose(); window.__warmEndedProcessors[0].track.dispatchEvent(new Event('ended')); });
+    await page.waitForFunction(() => /Сейчас: предролл прерван/.test(document.body.innerText) &&
+      (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0] === false, { timeout: 10000 });
+    const interrupted = await page.evaluate(() => ({
+      row: [...document.querySelectorAll('.setting-row')].find((r) => /Горячий микрофон/.test(r.innerText))?.innerText,
+      toasts: [...document.querySelectorAll('.toast')].filter((n) => /Предролл микрофона прерван/.test(n.innerText)).length,
+      stops: window.__warmEndedProcessors[0].track.stops, tracks: window.__warmEndedTracks.length - window.__warmBaseTracks,
+      state: (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0],
+    }));
+    record('сценарии', 'предролл: завершение дорожки очищает состояние трея и предупреждает один раз',
+      interrupted.toasts === 1 && interrupted.stops === 1 && interrupted.tracks === 0 && interrupted.state === false && /включите предролл заново/i.test(interrupted.row), JSON.stringify(interrupted));
+    await page.evaluate(() => { location.hash = '#/home'; });
+    await page.waitForSelector('.hero__mic', { timeout: 8000 });
+    await emit(page, 'hotkey', { type: 'down', mode: 'hold' });
+    await page.waitForFunction(() => window.__warmEndedProcessors.length === 2, { timeout: 10000 });
+    await page.evaluate(() => window.__warmFeed(1, 20));
+    await emit(page, 'hotkey', { type: 'up' });
+    await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+    const next = await page.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text,
+      stt: window.__warmEndedStt, tracks: window.__warmEndedTracks.length - window.__warmBaseTracks }));
+    record('сценарии', 'предролл: следующая запись без устаревшего буфера',
+      /Новая запись/i.test(next.text || '') && next.tracks === 1 && next.stt.length === 1 && next.stt[0].durationMs >= 1900 && next.stt[0].durationMs <= 2100,
+      JSON.stringify(next));
+    await page.evaluate(() => { location.hash = '#/settings?section=app'; });
+    await page.waitForFunction(() => [...document.querySelectorAll('.setting-row')].some((r) => /Горячий микрофон/.test(r.innerText)), { timeout: 8000 });
+    await page.evaluate(() => [...document.querySelectorAll('.setting-row')].find((r) => /Горячий микрофон/.test(r.innerText)).querySelector('.toggle').click());
+    await page.waitForFunction(() => window.__e2e.read('zs.settings')?.micPreroll === false, { timeout: 8000 });
+    await page.evaluate(() => [...document.querySelectorAll('.setting-row')].find((r) => /Горячий микрофон/.test(r.innerText)).querySelector('.toggle').click());
+    await page.waitForFunction(() => window.__warmEndedProcessors.length === 3 && (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0] === true, { timeout: 10000 });
+    await page.evaluate(() => window.__warmEndedProcessors[0].track.dispatchEvent(new Event('ended')));
+    await sleep(300);
+    const reopened = await page.evaluate(() => ({ state: (window.__bridgeCalls || []).filter((c) => c.channel === 'mic:warm').at(-1)?.args?.[0],
+      newStops: window.__warmEndedProcessors[2].track.stops, toasts: [...document.querySelectorAll('.toast')].filter((n) => /Предролл микрофона прерван/.test(n.innerText)).length }));
+    const errors = takeErrors(page);
+    record('сценарии', 'предролл: повторное включение и старое событие не закрывают новый поток',
+      reopened.state === true && reopened.newStops === 0 && reopened.toasts === 1 && errors.length === 0, JSON.stringify({ ...reopened, error: errors[0] }));
+  } finally { await page.close(); }
+}
+
 // «Горячий микрофон»: поток открыт заранее, поэтому в распознавание уходит и
 // звук до нажатия хоткея. Без настройки первое слово теряется — это видно по
 // длительности записи.
@@ -10895,6 +10972,7 @@ async function main() {
       ['живая расшифровка', scenarioLiveWhisper],
       ['пауза и отмена распознавания', scenarioPauseAndCancel],
       ['предролл: жизненный цикл', scenarioMicWarmLifecycle],
+      ['предролл: завершение дорожки', scenarioMicWarmEnded],
       ['лимит буфера и закреплённое', scenarioPinnedLimit],
       ['повторение закреплённого буфера', scenarioClipboardPinnedDedup],
       ['пароли', scenarioPasswordVault],

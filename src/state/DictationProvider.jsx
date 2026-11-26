@@ -261,7 +261,7 @@ export function DictationProvider({ children }) {
   // «горячий микрофон»: поток открыт заранее, последние 600 мс лежат в буфере
   const micWarm = useRef(null);
   // достаточный ли статус, чтобы интерфейс не врал про открытый микрофон
-  const [micWarmState, setMicWarmState] = useState('off'); // off | opening | open | failed
+  const [micWarmState, setMicWarmState] = useState('off'); // off | opening | open | failed | interrupted
 
   // ошибка не должна висеть на экране навсегда: 12 секунд — и убираем
   useEffect(() => {
@@ -1048,13 +1048,22 @@ export function DictationProvider({ children }) {
       prerollMs: 600,
       deviceId: settingsRef.current?.audioDeviceId || 'default',
       cleanupAudio: settingsRef.current?.micCleanup === true,
+      onInterrupted: () => {
+        if (micWarm.current !== warm) return;
+        micWarm.current = null;
+        setMicWarmState('interrupted');
+        diag.warn('mic', 'Предролл микрофона прерван');
+        pushToast({ title: 'Предролл микрофона прерван',
+          description: 'Предварительный захват остановлен. Проверьте микрофон; чтобы открыть его снова, выключите и включите предролл.',
+          tone: 'warn', ttl: 10000 });
+      },
     });
     micWarm.current = warm;
     setMicWarmState('opening');
     warm
       .open()
       .then(() => {
-        if (micWarm.current === warm) setMicWarmState('open');
+        if (micWarm.current === warm && warm.opened) setMicWarmState('open');
       })
       .catch((err) => {
         if (micWarm.current !== warm) return;
@@ -1067,7 +1076,7 @@ export function DictationProvider({ children }) {
       if (micWarm.current === warm) micWarm.current = null;
       setMicWarmState('off');
     };
-  }, [settings.micPreroll, settings.audioDeviceId, settings.micCleanup]);
+  }, [settings.micPreroll, settings.audioDeviceId, settings.micCleanup, pushToast]);
 
   const start = useCallback(
     (opts = {}) => {

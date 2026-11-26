@@ -103,6 +103,82 @@ describe('горячий микрофон', () => {
     expect(warm.take()).toBeNull();
   });
 
+  it('при завершении дорожки закрывает предролл, убирает старый звук и уведомляет один раз', async () => {
+    const audio = fakeAudio(); const track = new EventTarget();
+    track.kind = 'audio'; track.readyState = 'live'; track.stop = vi.fn();
+    const gum = vi.fn(async () => ({ getTracks: () => [track] }));
+    setup({ audio, getUserMedia: gum });
+    const interrupted = vi.fn(); const warm = createMicWarm({ onInterrupted: interrupted });
+    await warm.open(); audio.feed([0.2, 0.4]);
+    track.readyState = 'ended'; track.dispatchEvent(new Event('ended')); track.dispatchEvent(new Event('ended'));
+    expect(warm.opened).toBe(false);
+    expect(warm.take()).toBeNull();
+    expect(interrupted).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(gum).toHaveBeenCalledTimes(1); // без автоматического перезапроса
+    for (const n of audio.created) expect(n.disconnect).toHaveBeenCalledTimes(1);
+    warm.close(); expect(interrupted).toHaveBeenCalledTimes(1);
+  });
+
+  it('не отдаёт старый предролл, если readyState уже ended, но событие ещё не пришло', async () => {
+    const audio = fakeAudio(); const track = new EventTarget();
+    track.kind = 'audio'; track.readyState = 'live'; track.stop = vi.fn();
+    setup({ audio, getUserMedia: async () => ({ getTracks: () => [track] }) });
+    const interrupted = vi.fn(); const warm = createMicWarm({ onInterrupted: interrupted });
+    await warm.open(); audio.feed([0.2, 0.4]); track.readyState = 'ended';
+    expect(warm.take()).toBeNull();
+    expect(warm.opened).toBe(false);
+    expect(interrupted).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    track.dispatchEvent(new Event('ended')); expect(interrupted).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['ended', 'empty', 'video'])('не объявляет поток %s рабочим предроллом', async (kind) => {
+    const audio = fakeAudio(); const track = new EventTarget();
+    track.kind = kind === 'video' ? 'video' : 'audio'; track.readyState = kind === 'ended' ? 'ended' : 'live'; track.stop = vi.fn();
+    setup({ audio, getUserMedia: async () => ({ getTracks: () => kind === 'empty' ? [] : [track] }) });
+    const warm = createMicWarm();
+    await expect(warm.open()).rejects.toThrow(/микрофон|дорожк/i);
+    expect(warm.opened).toBe(false);
+    expect(warm.take()).toBeNull();
+    if (kind !== 'empty') expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('замечает завершение между проверкой дорожки и подпиской', async () => {
+    const audio = fakeAudio(); const track = new EventTarget();
+    track.kind = 'audio'; track.readyState = 'live'; track.stop = vi.fn();
+    const add = track.addEventListener.bind(track);
+    track.addEventListener = (...args) => { track.readyState = 'ended'; add(...args); };
+    setup({ audio, getUserMedia: async () => ({ getTracks: () => [track] }) });
+    const interrupted = vi.fn(); const warm = createMicWarm({ onInterrupted: interrupted });
+    await expect(warm.open()).rejects.toThrow(/завершилась/);
+    expect(interrupted).toHaveBeenCalledTimes(1);
+    expect(warm.opened).toBe(false); expect(track.stop).toHaveBeenCalledTimes(1);
+    track.dispatchEvent(new Event('ended')); expect(interrupted).toHaveBeenCalledTimes(1);
+  });
+
+  it('позднее ended закрытой дорожки не выключает новый предролл и не предупреждает', async () => {
+    const audio = fakeAudio();
+    const tracks = [new EventTarget(), new EventTarget()];
+    tracks.forEach((track) => { track.kind = 'audio'; track.readyState = 'live'; track.stop = vi.fn(); });
+    let index = 0; setup({ audio, getUserMedia: async () => { const track = tracks[index++]; return { getTracks: () => [track] }; } });
+    const interrupted = vi.fn(); const warm = createMicWarm({ onInterrupted: interrupted });
+    await warm.open(); warm.close(); await warm.open();
+    tracks[0].readyState = 'ended'; tracks[0].dispatchEvent(new Event('ended'));
+    expect(warm.opened).toBe(true); expect(interrupted).not.toHaveBeenCalled();
+    expect(tracks[1].stop).not.toHaveBeenCalled();
+    warm.close(); expect(interrupted).not.toHaveBeenCalled();
+  });
+
+  it('при обычном закрытии синхронное ended от stop не создаёт предупреждение', async () => {
+    const audio = fakeAudio(); const track = new EventTarget(); track.kind = 'audio'; track.readyState = 'live';
+    track.stop = vi.fn(() => { track.readyState = 'ended'; track.dispatchEvent(new Event('ended')); });
+    setup({ audio, getUserMedia: async () => ({ getTracks: () => [track] }) });
+    const interrupted = vi.fn(); const warm = createMicWarm({ onInterrupted: interrupted });
+    await warm.open(); warm.close();
+    expect(interrupted).not.toHaveBeenCalled(); expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
   it('отключение до разрешения закрывает поздний поток и не создаёт аудиограф', async () => {
     const track = { stop: vi.fn() };
     let allow;
@@ -235,7 +311,7 @@ describe('горячий микрофон', () => {
       close() { return Promise.resolve(); }
     }
     window.AudioContext = Ctx;
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [tracks[index++]] })) } });
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => { const track = tracks[index++]; return { getTracks: () => [track] }; }) } });
     const warm = createMicWarm();
     await expect(warm.open()).rejects.toThrow('source failed');
     expect(tracks[0].stop).toHaveBeenCalledTimes(1);
