@@ -1754,6 +1754,14 @@ export function DictationProvider({ children }) {
       }
       const verdict = shouldReplaceText(last.text, res.text);
       if (!verdict.replace) {
+        if (verdict.manualReview) {
+          pushToast({
+            title: 'Точный проход требует проверки',
+            description: 'Текст в истории не заменён: варианты различаются. Проверьте оба и скопируйте этот до закрытия уведомления или приложения.',
+            recoverText: res.text, recoverLabel: 'Результат точного прохода для ручной проверки', tone: 'warn', ttl: 0,
+          });
+          return { ok: true, replaced: false, text: last.text, note: verdict.note };
+        }
         pushToast({
           title: 'Оставили как было',
           description: `${verdict.note}. Скажите ближе к микрофону — услышит точнее.`,

@@ -6820,8 +6820,50 @@ async function scenarioDictationUndoCapacity(browser) {
   } finally { await page.close(); }
 }
 
-// Быстрый блок — сохранённый шаблон, а в записи звучит только его триггер.
 // Микрофон, STT и внешняя вставка подменены.
+// Синтетические ответы STT: текст нового прохода надо показывать отдельно,
+// если автообновление могло бы убрать отрицание или заменить число.
+async function scenarioRetryMeaning(browser) {
+  for (const [kind, before, after] of [
+    ['negation', 'Не отправляйте отчёт.', 'Отправляйте отчёт завтра утром.'],
+    ['number', 'Цена 100 рублей.', 'Цена 10 рублей и доставка.'],
+    ['same-length', 'Не включайте двигатель.', 'Можно включить двигатель.'],
+    ['punctuation', 'Казнить, нельзя помиловать.', 'Казнить нельзя, помиловать сегодня.'],
+  ]) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false, liveWhisper: false, micPreroll: false, preserveText: true },
+      storeSeed: { 'zs.dictations': [] }, patchArg: { before, after },
+      patchNative: ({ before, after }) => {
+        window.__meaningRetryCalls = [];
+        window.zspeakly.native.transcribePcm = async (payload) => {
+          window.__meaningRetryCalls.push({ thorough: !!payload.thorough });
+          return { ok: true, text: payload.thorough ? after : before, mode: 'cli' };
+        };
+      },
+    });
+    takeErrors(page);
+    try {
+      await page.click('.hero__mic'); await sleep(1100);
+      await page.evaluate(() => { const stop = document.querySelector('[aria-label="Остановить запись"]'); if (stop) stop.click(); else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click(); });
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+      await sleep(900);
+      const beforeInserts = await page.evaluate(() => (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length);
+      await page.click('.last-result [aria-label="Переспросить точно"]');
+      await sleep(1000);
+      const selected = await page.evaluate(() => { const field = document.querySelector('textarea[aria-label="Результат точного прохода для ручной проверки"]'); if (!field) return ''; field.focus(); field.select(); return field.value.slice(field.selectionStart, field.selectionEnd); });
+      const result = await page.evaluate(() => ({ rows: window.__e2e.read('zs.dictations'), calls: window.__meaningRetryCalls,
+        recovery: document.querySelector('textarea[aria-label="Результат точного прохода для ручной проверки"]')?.value,
+        toasts: [...document.querySelectorAll('.toast')].map((n) => n.innerText).join(' '),
+        inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert').length }));
+      const errors = takeErrors(page);
+      record('сценарии', `точный проход: опасное изменение доступно только для проверки (${kind})`,
+        result.rows[0]?.text === before && result.recovery === after && selected === after && result.calls.filter((c) => c.thorough).length === 1 &&
+        result.inserts === beforeInserts && /требует проверки/i.test(result.toasts) && errors.length === 0, JSON.stringify({ ...result, error: errors[0] }));
+    } finally { await page.close(); }
+  }
+}
+
+// Быстрый блок — сохранённый шаблон, а в записи звучит только его триггер.
 async function scenarioRetrySnippet(browser) {
   const body = 'Подпись';
   const page = await openPage(browser, '#/home', {
@@ -6849,7 +6891,7 @@ async function scenarioRetrySnippet(browser) {
       let ordinary = 0;
       window.zspeakly.native.transcribePcm = async (payload) => {
         window.__snippetRetryCalls.push({ thorough: !!payload.thorough, samples: payload.pcm.length });
-        if (payload.thorough) return { ok: true, text: 'Подробная новая расшифровка со словами.', mode: 'cli' };
+        if (payload.thorough) return { ok: true, text: 'Обычная запись с дополнительными словами.', mode: 'cli' };
         ordinary++; return { ok: true, text: ordinary === 1 ? 'Моя подпись.' : 'Обычная запись.', mode: 'cli' };
       };
     },
@@ -6875,7 +6917,7 @@ async function scenarioRetrySnippet(browser) {
       } else {
         const errors = takeErrors(page);
         record('сценарии', 'точный проход: следующую обычную диктовку можно переспросить',
-          clicked && /Подробная новая расшифровка/i.test(result.rows[0]?.text || '') &&
+          clicked && /Обычная запись с дополнительными словами/i.test(result.rows[0]?.text || '') &&
           result.calls.filter((c) => c.thorough).length === 1 && errors.length === 0, JSON.stringify({ ...result, error: errors[0] }));
       }
     }
@@ -11303,6 +11345,7 @@ async function main() {
       ['самопроверка диктовки', scenarioSelfTest],
       ['сравнение моделей', scenarioModelCompare],
       ['переспросить точно', scenarioRetryLast],
+      ['точный проход: смысловые маркеры', scenarioRetryMeaning],
       ['точный проход: быстрый блок', scenarioRetrySnippet],
       ['точный проход: чужая аудиосессия', scenarioRetryWrongSession],
       ['точный проход: отказ копии аудио', scenarioRetryAudioCopyFailure],
