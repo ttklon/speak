@@ -4,16 +4,36 @@
  * кроме "платных" ограничений: ZSpeakly — бесплатный офлайн-клон, лимитов нет.
  */
 
+import { MODEL_TIERS } from './modelTiers.js';
+
 export const APP = {
   name: 'ZSpeakly',
   tagline: 'Не печатай, просто ZSpeakly.',
-  version: '1.4.4',
-  build: '2026.11.09',
+  version: '1.39.0',
+  build: '2026.11.11',
   repo: 'https://github.com/ttklon/speak',
   site: 'https://github.com/ttklon/speak#readme',
   freeNote: 'Всё локально: без облака, подписки и лимитов слов.',
   description:
-    'Удерживайте клавишу для диктовки. Дважды нажмите клавишу, чтобы включить режим агента.',
+    'Нажмите клавишу — запись начнётся, нажмите ещё раз — текст вставится. Двойное нажатие открывает режим агента.',
+};
+
+/**
+ * Одна строка правды на первом экране: чем мы отличаемся от встроенной
+ * диктовки Windows. У Handy, SweetWhisper и OpenWhispr это написано прямо в
+ * README, а у нас человек должен был догадаться сам.
+ *
+ * Коротко и проверяемо: бесплатность, офлайн и разница с Win+H. Формулировки
+ * про Win+H совпадают с docs/13-LIMITATIONS.md — одно утверждение в одном виде.
+ */
+export const WHY_BETTER = {
+  items: [
+    'Бесплатно, без подписки и аккаунта',
+    'Русский распознаётся на этом компьютере: звук не уходит в облако',
+    'Встроенная диктовка Windows (Win+H) отправляет звук в Microsoft — для русского ей нужен интернет',
+  ],
+  /** Подробнее — в «О программе», но и здесь хватает одной строки. */
+  more: 'История, словарь и быстрые блоки тоже лежат на диске, а не в чужом сервисе.',
 };
 
 export const NAV = [
@@ -27,8 +47,10 @@ export const CLIPBOARD_TABS = [
   { id: 'text', label: 'Текст' },
   { id: 'format', label: 'Формат' },
   { id: 'image', label: 'Изображение' },
-  { id: 'file', label: 'Файл' },
-  { id: 'password', label: 'Зашифрованные' },
+  // здесь только записи экрана: копирование файлов из проводника Windows
+  // пока не перехватываем, поэтому и подпись честная
+  { id: 'file', label: 'Видео' },
+  { id: 'password', label: 'Пароли' },
 ];
 
 export const LANGUAGES = [
@@ -45,11 +67,14 @@ export const LANGUAGES = [
 ];
 
 /** Значения из видео: раздел «Голосовые сочетания клавиш». */
+export const SCREEN_CONTEXT_PRIVACY_DESCRIPTION =
+  'Кадр может отправляться модели на компьютере или в локальной сети. Сервер может хранить и пересылать снимок.';
+
 export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'dictation',
     title: 'Диктовка',
-    description: 'Удерживайте для речи, отпустите для транскрипции',
+    description: 'Нажмите — запись начнётся, нажмите ещё раз — текст вставится в активное поле',
     keys: ['Ctrl', 'Alt', 'Space'],
     mode: 'hold',
     enabled: true,
@@ -60,7 +85,7 @@ export const DEFAULT_VOICE_HOTKEYS = [
     id: 'agent',
     title: 'Режим агента',
     description:
-      'Двойное нажатие — короткий вопрос локальной модели (Ollama): ответ по выделенному тексту. Без облака; без модели честно скажет, что её нет.',
+      'Двойное нажатие — вопрос локальной модели по выделенному тексту. Нужна Ollama; без неё приложение честно скажет, что модели нет.',
     keys: ['Ctrl', 'Alt', 'Space'],
     double: true,
     enabled: false,
@@ -80,12 +105,28 @@ export const DEFAULT_VOICE_HOTKEYS = [
   {
     id: 'screen-aware',
     title: 'Диктовка с учётом экрана',
-    description:
-      'Удерживайте, чтобы говорить. ZSpeakly использует содержимое экрана, чтобы отвечать на вопросы или писать ответы за вас.',
+    // Снимок идёт в память (на диск не пишется) и подсказывает распознаванию
+    // имена и термины с экрана; локальная модель с картинками может ещё и
+    // ответить по нему.
+    description: SCREEN_CONTEXT_PRIVACY_DESCRIPTION,
     keys: ['Ctrl', 'Alt', 'S'],
     mode: 'hold',
     enabled: true,
     icon: 'monitor',
+    tone: 'blue',
+    isNew: true,
+  },
+  {
+    id: 'voice-command',
+    title: 'Команда голосом',
+    // Не диктовка: сказанное — указание к уже написанному тексту. Выделение
+    // читается на нажатии (пока оно ещё цело), а сказанное применяется к нему.
+    description:
+      'Выделите текст в любом приложении, нажмите и скажите, что с ним сделать: «сократи», «переведи на английский», «исправь ошибки». Готовый текст заменит выделение.',
+    keys: ['Ctrl', 'Alt', 'C'],
+    mode: 'toggle',
+    enabled: true,
+    icon: 'sparkles',
     tone: 'blue',
     isNew: true,
   },
@@ -141,7 +182,7 @@ export const DEFAULT_CUSTOM_INSTRUCTIONS = [];
 export const CLIPBOARD_HOTKEYS = [
   { id: 'screenshot', title: 'Скриншот', keys: ['Shift', 'Ctrl', 'A'] },
   { id: 'record', title: 'Запись экрана', keys: ['Shift', 'Ctrl', 'R'] },
-  { id: 'shot-note', title: 'Скриншот с придумкой', keys: ['Shift', 'Ctrl', 'S'] },
+  { id: 'shot-note', title: 'Скриншот-заметка', keys: ['Shift', 'Ctrl', 'S'] },
   { id: 'panel', title: 'Открыть панель', keys: ['Shift', 'Ctrl', 'V'] },
 ];
 
@@ -156,23 +197,85 @@ export const DEFAULT_SETTINGS = {
   dictationKey: 'Control+Alt+Space',
   translateTarget: 'en',
   aiProcessing: true,
+  // «Не трогать мой текст»: приложение не чистит, не оформляет под окно и не
+  // переписывает моделью. Словарь, голосовые команды и быстрые блоки остаются:
+  // это прямые указания человека, а не догадки приложения.
+  preserveText: false,
+  // Правила «в этом приложении диктуем на этом языке»: [{ id, match, language }].
+  // Пусто — один общий язык, как раньше.
+  appProfiles: [],
+  // Шумоподавление Windows (эхоподавление + AGC браузера). Выключено: для
+  // диктовки обработка «для звонков» срезает окончания слов, а громкость
+  // приложение выравнивает само. Включают, когда вокруг шумно.
+  micCleanup: false,
+  // «Отмени» распознаётся, но слепое стирание пока отключено.
+  // Выключатель нужен, если человек диктует слово «отмени» как текст.
+  undoCommand: true,
   aiEndpoint: 'http://localhost:11434', // Ollama, опционально
+  // вторая стадия чистки диктовки моделью: 1.6.0 — включена по умолчанию
+  // (ждём её не дольше aiPolishBudgetMs, дальше текст вставляется без неё)
+  aiDictationRewrite: true,
+  // сколько ждать полировку моделью, прежде чем вставить текст после
+  // офлайн-правил: диктовка не должна ждать локальную модель секундами
+  aiPolishBudgetMs: 1500,
   aiModel: 'qwen2.5:0.5b',
   clipboardMonitor: true,
   clipboardMaxItems: 10000,
   clipboardRetentionDays: 30,
   dictationRetentionDays: 30,
-  whisperModel: 'small',
+  // Сбалансированный режим: small-q5_1 — качество small при скорости base.
+  // Приложение ставит его само и переключается на более лёгкий, если замеры
+  // показывают, что этот не успевает (см. main.cjs → maybeAutoTune).
+  whisperModel: 'small-q5_1',
+  // Авто выбирает языковые ONNX-модели; можно явно использовать Whisper.
+  recognitionEngine: 'auto',
+  // Держать модель в памяти (whisper-server): модель грузится один раз, а не
+  // на каждый фрагмент и не на каждый живой проход. Иначе каждая диктовка
+  // заново читала с диска сотни мегабайт.
+  keepModelLoaded: true,
+  // VAD (Silero): тишина и паузы не отправляются в whisper. Включает «--vad»
+  // и заметно ускоряет ответ на обычной диктовке с паузами.
+  vadEnabled: true,
+  // Автоподбор модели: если проход по короткой записи оказался долгим
+  // (например, small на слабом CPU — 12 секунд на две фразы), приложение само
+  // переключается на быструю модель и говорит об этом. Человеку не нужно
+  // разбираться в каталоге моделей, чтобы диктовка перестала тормозить.
+  autoOptimize: true,
+  // Скорость против точности: 'auto' — решают замеры (electron/adaptiveDecode.cjs),
+  // 'fast' — только быстрый проход, 'accurate' — честный проход всегда.
+  // Явный выбор человека сильнее замеров: иначе кнопка «Точно» на медленной
+  // машине молча превращалась бы в «Быстро».
+  decodeMode: 'auto',
   audioDeviceId: 'default',
+  // «горячий микрофон»: поток открыт заранее, чтобы не терять первое слово.
+  // 1.6.0: включён по умолчанию — скорость важнее, тумблер остался в «Функциях →
+  // Микрофон» для тех, кому мешает горящий индикатор микрофона.
+  micPreroll: true,
+  // Живая расшифровка: 'auto' — решает приложение (lib/liveDraftPolicy.js).
+  // Черновик по ходу речи — это дополнительный проход движка каждые 2,5 с: на
+  // «Быстро» он почти бесплатен, на «Сбалансированно» и «Максимуме» отбирает
+  // процессор у готового текста. true/false — ручной выбор из старых версий,
+  // он уважается.
+  liveWhisper: 'auto',
+  // способ вставки: 'clipboard' — буфер + Ctrl+V, 'sendinput' — без буфера
+  insertMethod: 'clipboard',
   autoLaunch: false,
   theme: 'dark',
   soundFeedback: true,
   typingEffect: false,
   showFloatingIndicator: true,
+  seenClipboard: false, // плашка «НОВОЕ» гаснет после первого захода в буфер
   notifications: true,
   // отправка ошибок и служебных логов (без текста диктовки); по умолчанию включена
   diagnostics: true,
   hidePasswords: true,
+  // закрытие окна сворачивает в трей, а не выходит из приложения
+  closeToTray: true,
+  // проверять обновления при запуске (наружу уходит только номер версии)
+  checkUpdates: true,
+  updateChannel: 'stable', // stable | beta
+  // применять словарь при диктовке: и подсказкой whisper, и заменой в тексте
+  dictionaryEnabled: true,
 };
 
 /**
@@ -182,11 +285,27 @@ export const DEFAULT_SETTINGS = {
  */
 export const LOG_ENDPOINT = '';
 
-export const MODELS = [
-  { id: 'tiny', label: 'Whisper tiny', size: '75 МБ', ram: '300 МБ', speed: '0.4×', quality: '85% ru' },
-  { id: 'small', label: 'Whisper small', size: '466 МБ', ram: '600 МБ', speed: '0.8×', quality: '93% ru' },
-  { id: 'medium', label: 'Whisper medium', size: '1.5 ГБ', ram: '1.5 ГБ', speed: '1.5×', quality: '96% ru' },
-];
+/**
+ * Модели распознавания — ровно три режима (см. lib/modelTiers.js).
+ *
+ * Раньше здесь лежал каталог из десяти моделей: tiny/base/small/medium/turbo
+ * в трёх квантованиях. Человеку этот выбор ничего не давал — он не знает, чем
+ * q5_1 отличается от q8_0, и не может сравнить скорость, не скачав всё.
+ * Теперь три варианта по расходам на железо: «Быстро», «Сбалансированно»
+ * (ставится само) и «Максимум качества».
+ */
+export const MODELS = MODEL_TIERS.map((tier) => ({
+  id: tier.model,
+  tier: tier.id,
+  label: `Whisper ${tier.label.toLowerCase()}`,
+  size: tier.size,
+  ram: tier.ram,
+  speed: tier.speed,
+  speedText: tier.speedText,
+  quality: tier.quality,
+  desc: tier.desc,
+  recommended: tier.recommended === true,
+}));
 
 export const STORAGE_KEYS = {
   dictations: 'zs.dictations',
@@ -196,6 +315,7 @@ export const STORAGE_KEYS = {
   hotkeys: 'zs.hotkeys',
   presets: 'zs.presets',
   instructions: 'zs.instructions',
+  snippets: 'zs.snippets',
   stats: 'zs.stats',
   profile: 'zs.profile',
 };
@@ -206,6 +326,7 @@ export default {
   CLIPBOARD_TABS,
   LANGUAGES,
   LOG_ENDPOINT,
+  WHY_BETTER,
   DEFAULT_VOICE_HOTKEYS,
   DEFAULT_AI_PRESETS,
   CLIPBOARD_HOTKEYS,

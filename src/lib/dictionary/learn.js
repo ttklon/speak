@@ -1,3 +1,5 @@
+import { dictionaryWordKey } from './identity.js';
+
 /**
  * Обучение словаря по правкам пользователя.
  *
@@ -15,15 +17,27 @@ const STOP = new Set([
 /** Нормализация для сравнения: регистр, ё→е, лишние пробелы. */
 export function normalize(text = '') {
   return String(text)
+    .normalize('NFC')
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+    .replace(/[^\p{L}\p{N}\p{M}\s-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
+// Точные фрагменты исходной строки нужны для предлагаемых слов, а не только
+// нормализованная форма. Технические блоки не учим как отдельные слова.
 function tokens(text) {
-  return normalize(text).split(' ').filter(Boolean);
+  const out = [];
+  for (const part of String(text).matchAll(/\S+/gu)) {
+    const chunk = part[0];
+    const technical = /[\\/@_]/u.test(chunk) || /[\p{L}\p{N}_-]+\.[\p{L}\p{N}_-]+/u.test(chunk);
+    for (const token of chunk.matchAll(/[\p{L}\p{M}\p{N}]+(?:-[\p{L}\p{M}\p{N}]+)*/gu)) {
+      out.push({ value: token[0], technical });
+      if (out.length > 2000) return null;
+    }
+  }
+  return out;
 }
 
 /** Расстояние Левенштейна — чтобы ловить «зелёнка» → «зеленка». */
@@ -55,34 +69,39 @@ export function distance(a = '', b = '') {
  * @returns {Array<{word: string, pronunciation: string}>}
  */
 export function learnFromEdit(before = '', after = '', known = []) {
+  // Не позволяем одному длинному слову заморозить UI квадратичным алгоритмом.
+  if (typeof before !== 'string' || typeof after !== 'string' || before.length > 200000 || after.length > 200000) return [];
   const src = tokens(before);
   const dst = tokens(after);
-  if (!src.length || !dst.length) return [];
-  const knownWords = new Set(known.map((k) => normalize(k.word || '')).filter(Boolean));
+  // При вставке или удалении позиционное сопоставление неоднозначно.
+  if (!src?.length || !dst?.length || src.length !== dst.length) return [];
+  const knownWords = new Set((Array.isArray(known) ? known : []).map((k) => dictionaryWordKey(k?.word)).filter(Boolean));
   const out = [];
   const used = new Set();
+  const mappings = new Map();
+  for (let i = 0; i < src.length; i += 1) {
+    if (src[i].technical || dst[i].technical || src[i].value.length > 96 || dst[i].value.length > 96) continue;
+    const source = dictionaryWordKey(src[i].value);
+    if (!mappings.has(source)) mappings.set(source, new Set());
+    mappings.get(source).add(dictionaryWordKey(dst[i].value));
+  }
 
-  // Жадное сопоставление: одинаковые слова пропускаем, изменённые — кандидаты
-  const limit = Math.min(src.length, dst.length);
-  for (let i = 0; i < limit; i += 1) {
-    const a = src[i];
-    const b = dst[i];
-    if (a === b) continue;
-    if (STOP.has(a) || STOP.has(b)) continue;
+  for (let i = 0; i < src.length; i += 1) {
+    const source = src[i];
+    const target = dst[i];
+    if (source.technical || target.technical || source.value.length > 96 || target.value.length > 96) continue;
+    const a = dictionaryWordKey(source.value);
+    const b = dictionaryWordKey(target.value);
+    if (a === b || mappings.get(a)?.size !== 1) continue;
+    if (STOP.has(normalize(a)) || STOP.has(normalize(b))) continue;
     if (b.length < 3 || used.has(b) || knownWords.has(b)) continue;
-    // Имеет смысл учить только близкие замены (опечатка/распознавание), не новый смысл
     const d = distance(a, b);
     if (d > Math.max(2, Math.round(b.length * 0.4))) continue;
     used.add(b);
-    out.push({ word: b, pronunciation: a });
+    out.push({ word: target.value, pronunciation: source.value });
     if (out.length >= 5) break;
   }
   return out;
-}
-
-/** Учёт уже добавленного слова: увеличивает счётчик «сколько раз пригодилось». */
-export function bumpUsage(entries = [], id) {
-  return entries.map((e) => (e.id === id ? { ...e, hits: (e.hits || 0) + 1 } : e));
 }
 
 export default learnFromEdit;

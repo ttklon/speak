@@ -7,8 +7,9 @@
  * а здесь проверяются повторно — на всякий случай.
  *
  * Хранилище — собственное, внутри воркера (Durable Object + SQLite).
- * Отдельный репозиторий, база и аккаунт НЕ нужны: `npx wrangler deploy`
- * и всё. Читать журналы можно двумя способами:
+ * Для развёртывания нужен аккаунт Cloudflare. Без LOGS_SECRET чтение и
+ * запись открыты; с секретом desktop-клиент пока не умеет отправлять POST.
+ * Ключ в URL может попасть в историю браузера и журналы. Читать можно так:
  *   • GET /admin?key=<LOGS_SECRET> — страница со списком событий;
  *   • GET /v1/events?key=<LOGS_SECRET> — те же данные как JSON.
  *
@@ -67,6 +68,7 @@ function scrub(value, depth = 0) {
 }
 
 export function normaliseEvent(raw = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) raw = {};
   const level = ['debug', 'info', 'warn', 'error'].includes(raw.level) ? raw.level : 'info';
   return {
     at: typeof raw.at === 'number' ? raw.at : Date.now(),
@@ -304,6 +306,34 @@ ${
 </body></html>`;
 }
 
+// Ограничение относится к байтам, а не символам JS. Поток обрываем, как
+// только бюджет превышен, не загружая остаток в память воркера.
+async function readLimitedBody(request) {
+  const length = request.headers.get('content-length');
+  if (length && /^\d+$/.test(length) && Number(length) > MAX_BYTES) return null;
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_BYTES) {
+        // Не ждём закрытия источника: поток может быть бесконечным.
+        reader.cancel().catch(() => {});
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 /* ───────────────────────────── маршруты ───────────────────────────── */
 
 export default {
@@ -362,8 +392,13 @@ export default {
         return json({ ok: false, error: 'нет доступа' }, 401);
       }
 
-      const raw = await request.text();
-      if (raw.length > MAX_BYTES) return json({ ok: false, error: 'слишком большой пакет' }, 413);
+      let raw;
+      try {
+        raw = await readLimitedBody(request);
+      } catch {
+        return json({ ok: false, error: 'не удалось прочитать пакет' }, 400);
+      }
+      if (raw === null) return json({ ok: false, error: 'слишком большой пакет' }, 413);
 
       let payload;
       try {

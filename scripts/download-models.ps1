@@ -7,7 +7,7 @@
 #
 # Запуск — в обычном PowerShell (не от админа):
 #   powershell -ExecutionPolicy Bypass -File .\scripts\download-models.ps1
-# Лёгкий комплект ~250 МБ, с medium ~1.6 ГБ.
+# Лёгкий комплект ~160 МБ (tiny), рабочий ~620 МБ (tiny + turbo q5_0), полный ~2,1 ГБ.
 
 $ErrorActionPreference = 'Continue'
 $root    = Join-Path $env:APPDATA 'ZSpeakly'
@@ -51,35 +51,36 @@ try {
   Write-Host "Скачай whisper-bin-x64.zip вручную и распакуй .exe/.dll в $binDir" -ForegroundColor Yellow
 }
 
-Write-Host "`n=== 2/4 Whisper tiny (75 МБ) — для слабых ноутов ===" -ForegroundColor Cyan
+Write-Host "`n=== 2/4 Whisper tiny (75 МБ) — быстрая проверка, что всё работает ===" -ForegroundColor Cyan
 $tiny = Join-Path $models 'ggml-tiny.bin'
 if (-not (Test-Path $tiny)) {
   Invoke-WebRequest -Uri 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin' -OutFile $tiny -UseBasicParsing
 }
 
-Write-Host "`n=== 3/4 Whisper small (466 МБ) — рекомендуем ===" -ForegroundColor Cyan
-$small = Join-Path $models 'ggml-small.bin'
-if (-not (Test-Path $small)) {
-  Invoke-WebRequest -Uri 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin' -OutFile $small -UseBasicParsing
+Write-Host "`n=== 3/4 Whisper large-v3-turbo q5_0 (547 МБ) — рекомендуем для диктовки ===" -ForegroundColor Cyan
+Write-Host "Тот же large-v3-turbo, но квантованный: почти как large-v3 и вдвое меньше памяти."
+$turbo = Join-Path $models 'ggml-large-v3-turbo-q5_0.bin'
+if (-not (Test-Path $turbo)) {
+  Invoke-WebRequest -Uri 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin' -OutFile $turbo -UseBasicParsing
 }
 
-Write-Host "`n=== 4/4 Whisper medium (1.5 ГБ) — лучшее качество ===" -ForegroundColor Yellow
-Write-Host "Качаю medium — это долго, не прерывай. Не нужен? Закомментируй блок ниже."
-$medium = Join-Path $models 'ggml-medium.bin'
-if (-not (Test-Path $medium)) {
-  Invoke-WebRequest -Uri 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin' -OutFile $medium -UseBasicParsing
-}
+Write-Host "`n=== 4/4 Whisper large-v3-turbo (1.5 ГБ) — максимум качества ===" -ForegroundColor Yellow
+Write-Host "Не нужен? Закомментируй блок ниже — q5_0 из шага 3 уже достаточно."
+# $full = Join-Path $models 'ggml-large-v3-turbo.bin'
+# if (-not (Test-Path $full)) {
+#   Invoke-WebRequest -Uri 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin' -OutFile $full -UseBasicParsing
+# }
 
 Write-Host "`n=== Проверка ===" -ForegroundColor Cyan
 Get-ChildItem $binDir -Filter *.exe -ErrorAction SilentlyContinue | Select-Object Name, @{N = 'МБ'; E = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table
 Get-ChildItem $models -Filter *.bin -ErrorAction SilentlyContinue | Select-Object Name, @{N = 'МБ'; E = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table
 
 $cli = Get-ChildItem $binDir -Filter 'whisper-cli.exe' -ErrorAction SilentlyContinue
-if ($cli -and (Test-Path $small)) {
+if ($cli -and ((Test-Path $turbo) -or (Test-Path $tiny))) {
   Write-Host "Всё на месте — запускай ZSpeakly, движок будет 'whisper.cpp (офлайн)'." -ForegroundColor Green
   Write-Host "Проверка версии: & '$($cli.FullName)' --help" -ForegroundColor DarkGray
 } else {
-  Write-Host "Чего-то не хватает: нужен whisper-cli.exe в $binDir и ggml-small.bin в $models." -ForegroundColor Yellow
+  Write-Host "Чего-то не хватает: нужен whisper-cli.exe в $binDir и ggml-*.bin в $models." -ForegroundColor Yellow
 }
 Write-Host "`nПапки:" -ForegroundColor DarkGray
 Write-Host "  $binDir"

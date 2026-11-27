@@ -27,34 +27,56 @@ export function readRaw(key) {
   }
 }
 
+/** Не начинать разрушительное восстановление, если main уже знает о сбое.
+ * ok не подтверждает запись будущих изменений и не делает импорт транзакцией. */
+export function assertBackupImportAllowed() {
+  if (!isElectron()) return; // У localStorage нет статуса будущих записей.
+  let ok = false;
+  try { ok = bridge()?.statusSync?.()?.ok === true; } catch { /* безопасный отказ */ }
+  if (!ok) throw new Error('Профиль защищён, не сохранён или его статус недоступен. Исправьте проблему записи перед восстановлением. Текущие данные не изменены.');
+}
+
+/** В Electron применяем подготовленные разделы одной записью профиля до setState.
+ * false означает браузерный режим, где пакетной записи localStorage нет. */
+export function commitBackupSections(sections) {
+  if (!isElectron()) return false;
+  assertBackupImportAllowed();
+  let committed = false;
+  try { committed = bridge()?.commitBackupSync?.(sections) === true; } catch { /* исход операции может быть неизвестен */ }
+  if (!committed) throw new Error('Не удалось подтвердить сохранение копии. Состояние на диске может быть неизвестно. Не продолжайте работу: закройте приложение и проверьте профиль и временный файл перед повтором.');
+  return true;
+}
+
 /** Синхронное чтение (мост использует sendSync — данные уже в памяти main). */
 export function read(key) {
   return readRaw(key);
 }
 
-/** Асинхронный вариант — если понадобится неблокирующий доступ. */
-export async function readAsync(key) {
+function reportStorageError(key, err, source) {
   try {
-    const b = bridge();
-    if (b?.get) return await b.get(key);
-    return readRaw(key);
-  } catch (err) {
-    console.warn('[storage] read failed', key, err);
-    return null;
-  }
+    window.dispatchEvent(new CustomEvent('zs:storage-error', {
+      detail: { key, reason: String(err?.message || err || 'ошибка записи'), source },
+    }));
+  } catch { /* событие не обязательно */ }
 }
 
+/** true означает принятие запроса, а не гарантию записи на диск. */
 export function write(key, value) {
   try {
     const b = bridge();
     if (b) {
-      b.set(key, value);
+      const pending = b.set(key, value);
+      if (pending === false) throw new Error('мост отклонил запись');
+      if (pending?.then) Promise.resolve(pending).then((ok) => {
+        if (ok === false) reportStorageError(key, 'мост отклонил запись', 'electron');
+      }, (err) => reportStorageError(key, err, 'electron'));
       return true;
     }
     localStorage.setItem(PREFIX + key, JSON.stringify(value));
     return true;
   } catch (err) {
     console.warn('[storage] write failed', key, err);
+    reportStorageError(key, err, isElectron() ? 'electron' : 'browser');
     return false;
   }
 }
@@ -63,12 +85,17 @@ export function remove(key) {
   try {
     const b = bridge();
     if (b) {
-      b.remove(key);
+      const pending = b.remove(key);
+      if (pending === false) throw new Error('мост отклонил удаление');
+      if (pending?.then) Promise.resolve(pending).then((ok) => {
+        if (ok === false) reportStorageError(key, 'мост отклонил удаление', 'electron');
+      }, (err) => reportStorageError(key, err, 'electron'));
       return true;
     }
     localStorage.removeItem(PREFIX + key);
     return true;
-  } catch {
+  } catch (err) {
+    reportStorageError(key, err, isElectron() ? 'electron' : 'browser');
     return false;
   }
 }
@@ -91,9 +118,12 @@ export function storageBytes() {
 }
 
 export function formatBytes(bytes = 0) {
-  if (!bytes) return '0 Б';
-  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const value = bytes / 1024 ** i;
+  // Отрицательное или нечисловое значение (битый размер от моста) раньше
+  // превращалось в «NaN undefined» прямо в настройках.
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) return '0 Б';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(size) / Math.log(1024)));
+  const value = size / 1024 ** i;
   return `${value >= 10 || i === 0 ? Math.round(value) : value.toFixed(1).replace('.0', '')} ${units[i]}`;
 }

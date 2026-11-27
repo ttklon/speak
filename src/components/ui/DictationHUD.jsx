@@ -6,7 +6,7 @@ import { useDictation } from '../../state/DictationProvider.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 
 export default function DictationHUD() {
-  const { state, draft, level, elapsed, stop, setHudOpen, error } = useDictation();
+  const { state, draft, level, elapsed, stop, cancelProcessing, setHudOpen, error, nativeHud, sttProgress, micQuiet, agentPending } = useDictation();
   const { settings } = useAppData();
   // настройка «Плавающий индикатор записи»: выключили — плашки нет,
   // но ошибки показываем всегда, иначе человек не поймёт, почему тишина
@@ -24,11 +24,29 @@ export default function DictationHUD() {
   }, [level]);
 
   if (!open) return null;
+  // В Electron индикатор живёт отдельным окном поверх всех приложений —
+  // вторую плашку внутри окна не рисуем, чтобы не было двух «Слушаю…».
+  if (nativeHud) return null;
   const seconds = (elapsed / 1000).toFixed(1);
-  const idle = state !== 'listening' && state !== 'processing';
+  // «Готово» — отдельное состояние: после команды голосом запись уже кончилась,
+  // и «Запись остановлена» звучит как отказ, а не как «всё сделано».
+  const done = state === 'done';
+  const idle = state !== 'listening' && state !== 'processing' && !done;
+  // «Микрофон молчит» — не ошибка и не отказ: запись идёт, просто в неё не
+  // попадает звук. Об этом говорим сразу, пока человек ещё говорит.
+  const quiet = state === 'listening' && micQuiet;
+  const title = done
+    ? 'Готово'
+    : idle
+      ? 'Запись остановлена'
+      : state === 'processing'
+        ? agentPending ? 'Агент отвечает…' : 'Распознаю…'
+        : quiet
+          ? 'Микрофон молчит'
+          : 'Слушаю…';
 
   return (
-    <div className="hud" role="status" aria-live="polite">
+    <div className="hud" role="status" aria-live="polite" data-quiet={quiet ? '1' : '0'}>
       <div className="hud__pulse" ref={meterRef}>
         <span className="hud__ring" />
         <span className="hud__ring hud__ring--2" />
@@ -36,15 +54,30 @@ export default function DictationHUD() {
       </div>
       <div className="hud__body">
         <div className="hud__title">
-          {idle ? 'Запись остановлена' : state === 'processing' ? 'Транскрибирую…' : 'Слушаю…'}
-          {idle ? null : <span className="hud__time">{seconds} с</span>}
+          {title}
+          {idle || done ? null : (
+            <span className="hud__time">
+              {/* долгая запись считается кусками — видно, что работа идёт */}
+              {state === 'processing' && sttProgress && sttProgress.total > 1
+                ? `фрагмент ${sttProgress.done} из ${sttProgress.total}`
+                : `${seconds} с`}
+            </span>
+          )}
         </div>
         <div className="hud__text">
-          {draft ? (
+          {agentPending ? (
+            <span className="hud__hint">Ответ появится в истории</span>
+          ) : draft ? (
             <span className="hud__draft">{draft}</span>
           ) : (
             <span className="hud__hint">
-              {idle ? 'Причина — ниже. Запись не идёт.' : 'Говорите — текст появится здесь'}
+              {done
+                ? 'Текст готов и уже вставлен'
+                : idle
+                  ? 'Причина — ниже. Запись не идёт.'
+                  : quiet
+                    ? 'Проверьте устройство в «Настройки → Приложение»'
+                    : 'Говорите — текст появится здесь'}
             </span>
           )}
         </div>
@@ -53,6 +86,10 @@ export default function DictationHUD() {
         {state === 'listening' ? (
           <button type="button" className="hud__btn" onClick={stop} aria-label="Остановить запись">
             <Square size={11} fill="currentColor" />
+          </button>
+        ) : state === 'processing' ? (
+          <button type="button" className="hud__btn" onClick={cancelProcessing} aria-label={agentPending ? 'Отменить запрос агента' : 'Отменить распознавание'}>
+            <X size={12} />
           </button>
         ) : (
           <span className="hud__btn hud__btn--ghost" aria-hidden="true">

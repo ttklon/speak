@@ -1,0 +1,128 @@
+import { describe, expect, it } from 'vitest';
+import {
+  COMPARE_LIMIT,
+  describeComparison,
+  pickCompareModels,
+  scoreTerms,
+} from './modelCompare.js';
+
+describe('pickCompareModels', () => {
+  it('текущая модель идёт первой, дальше по порядку режимов', () => {
+    expect(
+      pickCompareModels({
+        downloaded: ['large-v3-turbo-q5_0', 'base-q5_1', 'small-q5_1'],
+        current: 'small-q5_1',
+        order: ['base-q5_1', 'small-q5_1', 'large-v3-turbo-q5_0'],
+      }),
+    ).toEqual(['small-q5_1', 'base-q5_1', 'large-v3-turbo-q5_0']);
+  });
+
+  it('не предлагает не скачанные модели', () => {
+    expect(
+      pickCompareModels({ downloaded: ['base-q5_1'], current: 'small-q5_1', order: ['base-q5_1', 'small-q5_1'] }),
+    ).toEqual(['base-q5_1']);
+  });
+
+  it('не больше трёх: сравнение не должно занимать минуты', () => {
+    const list = pickCompareModels({
+      downloaded: ['a', 'b', 'c', 'd'],
+      current: 'a',
+      order: ['a', 'b', 'c', 'd'],
+    });
+    expect(list.length).toBe(COMPARE_LIMIT);
+  });
+
+  it('без скачанных моделей — пусто', () => {
+    expect(pickCompareModels({ downloaded: [], current: 'small-q5_1' })).toEqual([]);
+  });
+
+  it('дубликаты не удваивают список', () => {
+    expect(pickCompareModels({ downloaded: ['a', 'a', 'b'], current: 'a', order: ['a'] })).toEqual(['a', 'b']);
+  });
+});
+
+describe('scoreTerms', () => {
+  it('считает попадания без учёта регистра, ё и знаков', () => {
+    const res = scoreTerms('Я сказал Зум и Telegram, а ещё Docker.', ['Зум', 'telegram', 'Docker', 'ёлка']);
+    expect(res.matched).toEqual(['зум', 'telegram', 'docker']);
+    expect(res.total).toBe(4);
+    expect(res.ratio).toBeCloseTo(0.75, 2);
+  });
+
+  it('не считает частью слова', () => {
+    // «зуммер» — не «зум»
+    expect(scoreTerms('включи зуммер', ['зум']).matched).toEqual([]);
+  });
+
+  it('принимает объекты словаря', () => {
+    expect(scoreTerms('открой Docker', [{ word: 'Docker' }]).matched).toEqual(['docker']);
+  });
+
+  it('без словаря ничего не выдумывает', () => {
+    expect(scoreTerms('любой текст', []).total).toBe(0);
+  });
+});
+
+describe('describeComparison', () => {
+  const rows = (a, b) => [
+    { model: 'base', ok: true, text: a, ms: 900 },
+    { model: 'small', ok: true, text: b, ms: 1600 },
+  ];
+
+  it('победителя по терминам называет, только если есть слова словаря', () => {
+    const res = describeComparison(rows('включи зум', 'включи Zoom и Telegram'));
+    // без words в строках слов нет — значит «смотрите глазами»
+    expect(res.winner).toBe('');
+    const withWords = describeComparison([
+      { model: 'base', ok: true, text: 'включи зум', words: ['Zoom', 'Telegram'] },
+      { model: 'small', ok: true, text: 'включи Zoom и Telegram', words: ['Zoom', 'Telegram'] },
+    ]);
+    expect(withWords.winner).toBe('');
+    expect(withWords.rows[1].score.matched).toHaveLength(2);
+    expect(withWords.summary).toMatch(/не оценка точности/);
+  });
+
+  it('при равенстве терминов победителя не объявляет', () => {
+    const res = describeComparison([
+      { model: 'base', ok: true, text: 'включи Zoom', words: ['Zoom'] },
+      { model: 'small', ok: true, text: 'включи Zoom', words: ['Zoom'] },
+    ]);
+    expect(res.winner).toBe('');
+    expect(res.summary).toMatch(/совпаден/);
+  });
+
+  it('если текст дала одна модель — сравнивать нечего', () => {
+    const res = describeComparison([{ model: 'base', ok: true, text: 'привет' }, { model: 'small', ok: false }]);
+    expect(res.summary).toMatch(/нечего/);
+  });
+  it('попаданием считается и известное русское произношение термина', () => {
+    // Модель написала «зум» и «телеграм» — это те же слова из словаря.
+    const res = scoreTerms('открой зум и телеграм', [{ word: 'Zoom' }, { word: 'Telegram' }, { word: 'Docker' }]);
+    expect(res.matched).toEqual(['zoom', 'telegram']);
+    expect(res.total).toBe(3);
+  });
+});
+
+describe('сравнение не знает, что говорили', () => {
+  it('совпадения не доказывают точность и не объявляют победителя', () => {
+    const res = describeComparison([
+      { model: 'a', ok: true, text: 'не надо', words: ['Zoom'] },
+      { model: 'b', ok: true, text: 'Zoom надо', words: ['Zoom'] },
+    ]);
+    expect(res.winner).toBe('');
+    expect(res.summary).toMatch(/совпаден/i);
+    expect(res.summary).toMatch(/не оценка точности/i);
+  });
+  it('равные совпадения не означают одинакового текста', () => {
+    const res = describeComparison([
+      { model: 'a', ok: true, text: 'не отправляй Zoom', words: ['Zoom'] },
+      { model: 'b', ok: true, text: 'отправляй Zoom', words: ['Zoom'] },
+    ]);
+    expect(res.summary).not.toMatch(/услышали одинаково/i);
+    expect(res.summary).toMatch(/совпаден/i);
+  });
+  it('пустой словарь не говорит о том, что произнесено', () => {
+    const res = describeComparison([{ model: 'a', ok: true, text: 'zoom' }, { model: 'b', ok: true, text: 'zoom' }]);
+    expect(res.summary).not.toMatch(/слов из словаря в этой фразе нет/i);
+  });
+});

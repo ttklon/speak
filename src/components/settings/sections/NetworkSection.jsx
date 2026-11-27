@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Button, Select } from '../../ui/Controls.jsx';
-import { Toggle } from '../../ui/Toggle.jsx';
+import { Button } from '../../ui/Controls.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
 import { engineName } from '../../../lib/recognition/engine.js';
+import { llmIsDown, resetLlmBackoff } from '../../../lib/ai/textops.js';
 
 export default function NetworkSection() {
-  const { settings, updateSettings } = useAppData();
+  const { settings } = useAppData();
   const { push } = useToast();
   const [status, setStatus] = useState('idle');
+  // какие модели реально отдаёт локальный сервер — чтобы не вписывать имя вслепую
+  const [models, setModels] = useState([]);
   const [online, setOnline] = useState(navigator.onLine);
 
   useEffect(() => {
@@ -40,9 +42,14 @@ export default function NetworkSection() {
       if (!res.ok) throw new Error('bad status');
       const data = res.data || {};
       setStatus('ok');
+      const names = Array.isArray(data.models) ? data.models.map((m) => m.name || m.model).filter(Boolean) : [];
+      setModels(names);
+      // модель ответила — снимаем «паузу недоступности», инструкции снова
+      // попробуют её, а не сразу пойдут по офлайн-правилам
+      resetLlmBackoff();
       push({
         title: 'Локальная модель доступна',
-        description: `${data.models?.length || 0} моделей в Ollama`,
+        description: `Ollama отвечает, моделей: ${names.length || 0}`,
         tone: 'success',
       });
     } catch {
@@ -57,12 +64,6 @@ export default function NetworkSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">Сеть</h2>
-      <p className="settings-section__desc">
-        ZSpeakly работает офлайн. Сеть нужна только для необязательной локальной модели и проверки
-        обновлений на GitHub.
-      </p>
-
       <div className="settings-group">
         <div className="settings-group__title">Состояние</div>
         <div className="kv-row">
@@ -74,75 +75,37 @@ export default function NetworkSection() {
           <span className="kv-row__value">{engineName()}</span>
         </div>
         <div className="kv-row">
+          <span className="kv-row__key">Адрес сервера</span>
+          <span className="kv-row__value">{settings.aiEndpoint}</span>
+        </div>
+        <div className="kv-row">
           <span className="kv-row__key">Локальный сервер ИИ</span>
           <span className="kv-row__value">
             {status === 'ok' ? 'доступен' : status === 'fail' ? 'недоступен' : 'не проверялся'}
+            {llmIsDown() ? ' · пауза после сбоя: инструкции работают офлайн' : ''}
           </span>
         </div>
       </div>
 
       <div className="settings-group">
-        <div className="settings-group__title">Локальная модель</div>
+        <div className="settings-group__title">Модель для инструкций</div>
+        {/* Адрес и имя модели приложение ищет само на этом компьютере: раньше
+            человек должен был знать, что такое Ollama и какой там порт. */}
         <div className="setting-row">
-          <div className="setting-row__label">Адрес сервера</div>
-          <input
-            className="input settings-inline-input"
-            value={settings.aiEndpoint}
-            onChange={(e) => updateSettings({ aiEndpoint: e.target.value })}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Модель</div>
-          <input
-            className="input settings-inline-input"
-            value={settings.aiModel}
-            onChange={(e) => updateSettings({ aiModel: e.target.value })}
-          />
-        </div>
-        <div className="row-8">
+          <div className="setting-row__label">
+            Найдена на этом компьютере
+            <div className="setting-row__desc">
+              {models.length
+                ? `Используется ${settings.aiModel}. Другие модели выбираются сами, если эта перестанет отвечать.`
+                : 'Если модели нет, инструкции по выделенному тексту работают офлайн-правилами.'}
+            </div>
+          </div>
           <Button variant="ghost" size="sm" onClick={check} loading={status === 'checking'}>
             Проверить соединение
           </Button>
         </div>
       </div>
 
-      <div className="settings-group">
-        <div className="settings-group__title">Обновления</div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Проверять обновления на GitHub
-            <div className="setting-row__desc">Раз в сутки при наличии сети, без отправки телеметрии.</div>
-          </div>
-          <Toggle
-            checked={settings.checkUpdates !== false}
-            onChange={(v) => updateSettings({ checkUpdates: v })}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-row__label">Канал</div>
-          <Select
-            value={settings.updateChannel || 'stable'}
-            onChange={(v) => {
-              updateSettings({ updateChannel: v });
-              // сообщаем апдейтеру: бета-канал включается сразу
-              window.zspeakly?.native?.setUpdateChannel?.(v);
-              push({
-                title: v === 'beta' ? 'Бета-канал включён' : 'Стабильный канал',
-                description:
-                  v === 'beta'
-                    ? 'Приложение будет видеть и предрелизные версии.'
-                    : 'Только проверенные релизы.',
-                tone: 'success',
-              });
-            }}
-            options={[
-              { value: 'stable', label: 'Стабильный' },
-              { value: 'beta', label: 'Бета' },
-            ]}
-            width={160}
-          />
-        </div>
-      </div>
     </div>
   );
 }

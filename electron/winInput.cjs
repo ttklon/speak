@@ -1,0 +1,479 @@
+/**
+ * Вставка текста в активное окно на Windows — без PowerShell.
+ *
+ * Почему это переписано. Раньше единственным путём ввода были PowerShell-скрипты:
+ * `Add-Type -AssemblyName System.Windows.Forms; [SendKeys]::SendWait('^v')` и
+ * `SendInput` через `Add-Type`. Это работало не у всех: политика PowerShell
+ * (ExecutionPolicy, ConstrainedLanguage, AppLocker), антивирус, который
+ * проверяет каждый новый powershell.exe, или отсутствие Windows Forms в
+ * урезанной сборке — и вставка молча не происходила. Человек при этом видел
+ * уведомление «Готово», потому что распознавание сработало, а вставлять было
+ * нечем.
+ *
+ * Здесь тот же SendInput, но собранный в отдельный маленький exe:
+ *   1. при первом использовании C# компилируется `csc.exe` — он есть в составе
+ *      .NET Framework, то есть в любой Windows 10/11, ставить ничего не нужно;
+ *   2. дальше каждое нажатие — запуск своего exe (~20–40 мс) без PowerShell,
+ *      без `Add-Type`, без политик.
+ *
+ * Что важно по существу SendInput:
+ *   - текст отправляется с KEYEVENTF_UNICODE по одному символу в отдельном
+ *     вызове: часть приложений (в том числе Блокнот в Windows 11) портит
+ *     символы, если отправить их пачкой;
+ *   - Ctrl+V отправляется скан-кодами, поэтому работает независимо от раскладки;
+ *   - в приложения, запущенные от администратора, ввод не пройдёт (UIPI) — это
+ *     ограничение Windows, и интерфейс должен сказать об этом прямо, а не
+ *     делать вид, что всё вставилось.
+ *
+ * Модуль отдаёт честный результат: `{ok, typed, total, reason}`. Никаких
+ * «наверное, сработало».
+ */
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn, execFile } = require('node:child_process');
+
+/** Версия помощника: меняем текст программы — меняем версию. */
+const HELPER_VERSION = '5';
+
+// C# под .NET Framework 4 (csc.exe — это C# 5): без интерполяции строк и
+// прочих новых возможностей, иначе старый компилятор не поймёт.
+const CS_SOURCE = String.raw`
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+public static class ZsInput
+{
+  [StructLayout(LayoutKind.Sequential)]
+  public struct KEYBDINPUT
+  {
+    public ushort wVk;
+    public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+  }
+
+  // MOUSEINPUT задаёт размер всего объединения INPUT даже при вводе клавиш.
+  [StructLayout(LayoutKind.Sequential)]
+  public struct MOUSEINPUT
+  {
+    public int dx;
+    public int dy;
+    public uint mouseData;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+  }
+
+  [StructLayout(LayoutKind.Explicit)]
+  public struct INPUTUNION
+  {
+    [FieldOffset(0)] public KEYBDINPUT ki;
+    [FieldOffset(0)] public MOUSEINPUT mi;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct INPUT
+  {
+    public uint type;
+    public INPUTUNION u;
+  }
+
+  [DllImport("user32.dll", SetLastError = true)]
+  static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+  [DllImport("user32.dll")]
+  static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+  const uint INPUT_KEYBOARD = 1;
+  const uint KEYEVENTF_KEYUP = 0x0002;
+  const uint KEYEVENTF_UNICODE = 0x0004;
+  const ushort VK_CONTROL = 0x11;
+  const ushort VK_RETURN = 0x0D;
+  const ushort VK_TAB = 0x09;
+  const ushort VK_V = 0x56;
+  const ushort VK_BACK = 0x08;
+
+  static INPUT Unicode(ushort scan, bool up)
+  {
+    INPUT one = new INPUT();
+    one.type = INPUT_KEYBOARD;
+    one.u.ki.wScan = scan;
+    one.u.ki.dwFlags = KEYEVENTF_UNICODE | (up ? KEYEVENTF_KEYUP : 0);
+    return one;
+  }
+
+  static INPUT Virtual(ushort vk, bool up)
+  {
+    INPUT one = new INPUT();
+    one.type = INPUT_KEYBOARD;
+    one.u.ki.wVk = vk;
+    one.u.ki.wScan = 0;
+    one.u.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+    return one;
+  }
+
+  static bool Send(INPUT[] batch)
+  {
+    uint sent = SendInput((uint)batch.Length, batch, Marshal.SizeOf(typeof(INPUT)));
+    return sent == batch.Length;
+  }
+
+  // Один символ — один вызов SendInput. Пачка портит текст в части приложений.
+  static int TypeText(string text)
+  {
+    int typed = 0;
+    for (int i = 0; i < text.Length; i++)
+    {
+      char ch = text[i];
+      bool ok;
+      if (ch == '\n')
+      {
+        ok = Send(new INPUT[] { Virtual(VK_RETURN, false), Virtual(VK_RETURN, true) });
+      }
+      else if (ch == '\t')
+      {
+        ok = Send(new INPUT[] { Virtual(VK_TAB, false), Virtual(VK_TAB, true) });
+      }
+      else if (ch == '\r')
+      {
+        continue;
+      }
+      else
+      {
+        // Суррогатная пара: оба символа уходят по отдельности, как и требует
+        // KEYEVENTF_UNICODE.
+        ushort scan = (ushort)ch;
+        ok = Send(new INPUT[] { Unicode(scan, false), Unicode(scan, true) });
+      }
+      if (!ok) break;
+      typed++;
+      Thread.Sleep(1);
+    }
+    return typed;
+  }
+
+  static bool Paste()
+  {
+    INPUT[] combo = new INPUT[]
+    {
+      Virtual(VK_CONTROL, false),
+      Virtual(VK_V, false),
+      Virtual(VK_V, true),
+      Virtual(VK_CONTROL, true)
+    };
+    return Send(combo);
+  }
+
+  // «Отмени»: стереть ровно столько символов, сколько вставили.
+  // Backspace, а не Ctrl+Z: при наборе по одному символу отмена в чужом
+  // приложении снимает по символу, а Backspace убирает вставленный хвост целиком.
+  static int Erase(int count)
+  {
+    int erased = 0;
+    for (int i = 0; i < count; i++)
+    {
+      bool ok = Send(new INPUT[] { Virtual(VK_BACK, false), Virtual(VK_BACK, true) });
+      if (!ok) break;
+      erased++;
+      Thread.Sleep(2);
+    }
+    return erased;
+  }
+
+  static string Title()
+  {
+    StringBuilder buffer = new StringBuilder(512);
+    GetWindowText(GetForegroundWindow(), buffer, 512);
+    return buffer.ToString();
+  }
+
+  static string J(string value)
+  {
+    if (value == null) return "null";
+    StringBuilder sb = new StringBuilder("\"");
+    for (int i = 0; i < value.Length; i++)
+    {
+      char c = value[i];
+      if (c == '\\' || c == '"') { sb.Append('\\'); sb.Append(c); }
+      else if (c == '\n') sb.Append("\\n");
+      else if (c == '\r') sb.Append("\\r");
+      else if (c == '\t') sb.Append("\\t");
+      else if (c < ' ') sb.Append(' ');
+      else sb.Append(c);
+    }
+    sb.Append("\"");
+    return sb.ToString();
+  }
+
+  public static int Main(string[] args)
+  {
+    try
+    {
+      string command = args.Length > 0 ? args[0] : "";
+      if (command == "ping" || command == "target")
+      {
+        Console.OutputEncoding = Encoding.UTF8;
+        Console.WriteLine("{\"ok\":true,\"target\":" + J(Title()) + "}");
+        return 0;
+      }
+      if (command == "paste")
+      {
+        bool ok = Paste();
+        Console.WriteLine(ok ? "{\"ok\":true}" : "{\"ok\":false,\"reason\":\"sendinput-failed\"}");
+        return ok ? 0 : 1;
+      }
+      if (command == "erase")
+      {
+        int count = 0;
+        if (args.Length > 1) int.TryParse(args[1], out count);
+        if (count <= 0)
+        {
+          Console.WriteLine("{\"ok\":false,\"reason\":\"nothing-to-erase\"}");
+          return 1;
+        }
+        int erased = Erase(count);
+        Console.WriteLine("{\"ok\":" + (erased == count ? "true" : "false") + ",\"erased\":" + erased + ",\"total\":" + count + "}");
+        return erased == count ? 0 : 1;
+      }
+      if (command == "type")
+      {
+        string base64 = args.Length > 1 ? args[1] : "";
+        string text = Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+        int typed = TypeText(text);
+        // CR пропускаем при отправке CRLF, поэтому он не входит в total.
+        int total = text.Replace("\r", "").Length;
+        bool complete = typed == total;
+        Console.WriteLine("{\"ok\":" + (complete ? "true" : "false") + ",\"typed\":" + typed + ",\"total\":" + total + "}");
+        return complete ? 0 : 1;
+      }
+      Console.WriteLine("{\"ok\":false,\"reason\":\"unknown-command\"}");
+      return 2;
+    }
+    catch (Exception error)
+    {
+      Console.WriteLine("{\"ok\":false,\"reason\":" + J(error.Message) + "}");
+      return 3;
+    }
+  }
+}
+`;
+
+/** Где Windows держит компилятор C# из состава .NET Framework. */
+function candidateCompilers() {
+  const roots = [process.env.WINDIR || 'C:\\Windows', 'C:\\Windows'];
+  const versions = ['v4.0.30319', 'v3.5'];
+  const list = [];
+  for (const root of roots) {
+    for (const bitness of ['Framework64', 'Framework']) {
+      for (const version of versions) {
+        list.push(path.join(root, 'Microsoft.NET', bitness, version, 'csc.exe'));
+      }
+    }
+  }
+  return list;
+}
+
+function findCompiler(exists = fs.existsSync) {
+  for (const candidate of candidateCompilers()) {
+    try {
+      if (exists(candidate)) return candidate;
+    } catch {
+      /* путь может быть недоступен — проверяем следующий */
+    }
+  }
+  return '';
+}
+
+/** Каталог, где лежит собранный помощник. */
+function helperDir(baseDir) {
+  return path.join(baseDir || path.join(os.homedir(), 'AppData', 'Local', 'ZSpeakly'), 'bin');
+}
+
+function helperPaths(baseDir) {
+  const dir = helperDir(baseDir);
+  const exe = path.join(dir, 'zs-input.exe');
+  return { dir, exe, stamp: path.join(dir, 'zs-input.version'), source: path.join(dir, 'zs-input.cs') };
+}
+
+function parseHelperOutput(stdout = '') {
+  const text = String(stdout || '').trim();
+  if (!text) return { ok: false, reason: 'нет ответа от помощника' };
+  // Берём последнюю строку: csc или сам exe могли что-то напечатать раньше.
+  const line = text.split(/\r?\n/).filter(Boolean).pop() || '';
+  try {
+    const parsed = JSON.parse(line);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch {
+    /* не JSON — ниже вернём причину */
+  }
+  return { ok: false, reason: `непонятный ответ: ${line.slice(0, 120)}` };
+}
+
+function createWinInput({ baseDir, platform = process.platform, exists = fs.existsSync, timeoutMs = 6000, spawnProcess = spawn } = {}) {
+  const paths = helperPaths(baseDir);
+  let state = { ready: false, reason: 'не проверяли', compiler: '', path: paths.exe };
+
+  const isWindows = platform === 'win32';
+
+  function compile(compiler) {
+    return new Promise((resolve) => {
+      try {
+        fs.mkdirSync(paths.dir, { recursive: true });
+        fs.writeFileSync(paths.source, CS_SOURCE, 'utf8');
+      } catch (error) {
+        resolve({ ok: false, reason: `нет доступа к папке помощника: ${error.message}` });
+        return;
+      }
+      execFile(
+        compiler,
+        [
+          '/nologo',
+          '/target:exe',
+          '/optimize+',
+          '/platform:anycpu',
+          `/out:${paths.exe}`,
+          paths.source,
+        ],
+        { windowsHide: true, timeout: 60000 },
+        (error, _stdout, stderr) => {
+          if (error || !exists(paths.exe)) {
+            resolve({
+              ok: false,
+              reason: `не удалось собрать помощник: ${String(stderr || error?.message || '').slice(0, 200)}`,
+            });
+            return;
+          }
+          try {
+            fs.writeFileSync(paths.stamp, HELPER_VERSION, 'utf8');
+          } catch {
+            /* штамп не критичен */
+          }
+          resolve({ ok: true });
+        },
+      );
+    });
+  }
+
+  async function ensure() {
+    if (!isWindows) {
+      state = { ...state, ready: false, reason: 'вставка через SendInput есть только в Windows' };
+      return state;
+    }
+    let stamp = '';
+    try {
+      stamp = fs.readFileSync(paths.stamp, 'utf8').trim();
+    } catch {
+      stamp = '';
+    }
+    if (exists(paths.exe) && stamp === HELPER_VERSION) {
+      state = { ...state, ready: true, reason: '' };
+      return state;
+    }
+    const compiler = findCompiler(exists);
+    if (!compiler) {
+      state = {
+        ...state,
+        ready: false,
+        reason: 'не нашёлся csc.exe (.NET Framework) — останется вставка через буфер',
+      };
+      return state;
+    }
+    const built = await compile(compiler);
+    state = built.ok
+      ? { ready: true, reason: '', compiler, path: paths.exe }
+      : { ready: false, reason: built.reason, compiler, path: paths.exe };
+    return state;
+  }
+
+  function run(args) {
+    const isPaste = args[0] === 'paste';
+    const result = (payload, uncertain) => isPaste && payload.ok !== true ? { ...payload, ok: false, uncertain } : payload;
+    return new Promise((resolve) => {
+      if (!isWindows) {
+        resolve(result({ ok: false, reason: 'только Windows' }, false));
+        return;
+      }
+      if (!exists(paths.exe)) {
+        resolve(result({ ok: false, reason: 'помощник ввода не собран' }, false));
+        return;
+      }
+      let child;
+      try {
+        child = spawnProcess(paths.exe, args, { windowsHide: true });
+      } catch (error) {
+        resolve(result({ ok: false, reason: String(error?.message || error) }, false));
+        return;
+      }
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          /* уже завершился */
+        }
+        resolve(result({ ok: false, reason: 'помощник не ответил вовремя' }, true));
+      }, timeoutMs);
+      child.stdout?.on('data', (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr?.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        resolve(result({ ok: false, reason: String(error?.message || error) }, true));
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        const parsed = parseHelperOutput(stdout);
+        if (isPaste && parsed.ok === true && code !== 0) { parsed.ok = false; parsed.reason = 'помощник завершился с ошибкой'; }
+        if (!parsed.ok && !parsed.reason && stderr) parsed.reason = String(stderr).slice(0, 200);
+        resolve(result(parsed, true));
+      });
+    });
+  }
+
+  return {
+    paths,
+    status: () => ({ ...state, platform }),
+    ensure,
+    /** Напечатать текст в активное окно. */
+    type(text) {
+      const value = String(text || '');
+      if (!value) return Promise.resolve({ ok: true, typed: 0, total: 0 });
+      return run(['type', Buffer.from(value, 'utf8').toString('base64')]);
+    },
+    /** Нажать Ctrl+V в активном окне (текст уже должен быть в буфере). */
+    paste: () => run(['paste']),
+    /** Стереть последние count символов в активном окне («Отмени»). */
+    erase(count) {
+      const value = Math.max(0, Math.min(4000, Math.round(Number(count) || 0)));
+      if (!value) return Promise.resolve({ ok: false, reason: 'nothing-to-erase' });
+      return run(['erase', String(value)]);
+    },
+    /** Заголовок активного окна — чтобы показать, куда попадёт текст. */
+    target: () => run(['target']),
+    ping: () => run(['ping']),
+  };
+}
+
+module.exports = {
+  createWinInput,
+  findCompiler,
+  candidateCompilers,
+  helperPaths,
+  parseHelperOutput,
+  HELPER_VERSION,
+  // исходник отдаём наружу, чтобы тест проверял его структуру: собрать C# в
+  // Linux нельзя, а ошибку в нём лучше поймать до выпуска
+  HELPER_SOURCE: CS_SOURCE,
+};

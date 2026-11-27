@@ -11,6 +11,13 @@ export function parseHash(hash = typeof location !== 'undefined' ? location.hash
   const raw = String(hash || '').replace(/^#\/?/, '');
   const [path, query = ''] = raw.split('?');
   const params = Object.fromEntries(new URLSearchParams(query).entries());
+  // Старые прямые ссылки: #/instructions открывало пустой экран (страницы с
+  // таким именем нет) — на деле это «Рекомендуемые» инструкции в «Горячих
+  // клавишах». Ведём туда, а не молча на главную.
+  if (path === 'instructions') {
+    if (!params.tab) params.tab = 'recommended';
+    return { page: 'hotkeys', params, raw };
+  }
   const page = PAGES.includes(path) ? path : path === 'settings' ? 'settings' : 'home';
   return { page, params, raw };
 }

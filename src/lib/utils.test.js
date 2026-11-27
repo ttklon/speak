@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   applyDictionary,
   captureCombo,
-  formatMinutes,
+  dayLabel,
   keysLabel,
   plural,
   postProcess,
-  searchScore,
   timeHM,
   toAccelerator,
   truncate,
@@ -64,6 +63,26 @@ describe('applyDictionary', () => {
   it('пустой текст остаётся пустым', () => {
     expect(applyDictionary('', entries)).toBe('');
   });
+
+  // Раньше словарь работал только на бумаге: человек говорит «зум», движок
+  // пишет «зум», а в словаре записано Zoom — замена не срабатывала.
+  it('узнаёт известное русское произношение латинского слова', () => {
+    expect(applyDictionary('открой зум и телеграм', [{ word: 'Zoom' }, { word: 'Telegram' }])).toBe(
+      'открой Zoom и Telegram',
+    );
+  });
+
+  it('работает и в обратную сторону: в словаре кириллица', () => {
+    expect(applyDictionary('созвонились в Zoom', [{ word: 'зум' }])).toBe('созвонились в зум');
+  });
+
+  it('не выдумывает произношение для незнакомых слов', () => {
+    expect(applyDictionary('открой зспикли', [{ word: 'ZSpeakly' }])).toBe('открой зспикли');
+  });
+
+  it('не подменяет слово, в котором произношение лишь часть', () => {
+    expect(applyDictionary('зуммер включился', [{ word: 'Zoom' }])).toBe('зуммер включился');
+  });
 });
 
 describe('клавиши', () => {
@@ -86,25 +105,83 @@ describe('форматирование', () => {
     d.setHours(9, 5, 0, 0);
     expect(timeHM(d)).toBe('09:05');
   });
-  it('минуты и часы', () => {
-    expect(formatMinutes(40)).toBe('40 мин');
-    expect(formatMinutes(90)).toBe('1 ч 30 мин');
-    expect(formatMinutes(120)).toBe('2 ч');
-  });
   it('обрезка по длине', () => {
     expect(truncate('абвгдеёжз', 5)).toBe('абвг…');
     expect(truncate('коротко', 20)).toBe('коротко');
   });
 });
 
-describe('поиск', () => {
-  it('находит подстроку', () => {
-    expect(searchScore('Привет, как дела?', 'как дела')).toBeGreaterThan(50);
+describe('dayLabel', () => {
+  const now = new Date(2026, 10, 11, 12, 0, 0);
+
+  it('сегодня и вчера — словами', () => {
+    expect(dayLabel(new Date(2026, 10, 11, 8, 0), now)).toBe('Сегодня');
+    expect(dayLabel(new Date(2026, 10, 10, 23, 0), now)).toBe('Вчера');
   });
-  it('не находит несуществующее', () => {
-    expect(searchScore('Привет', 'абракадабра')).toBe(0);
+
+  it('называет число дней, а не только «дня назад»', () => {
+    expect(dayLabel(new Date(2026, 10, 9, 12, 0), now)).toBe('2 дня назад');
+    expect(dayLabel(new Date(2026, 10, 6, 12, 0), now)).toBe('5 дней назад');
   });
-  it('пустой запрос — ноль', () => {
-    expect(searchScore('что угодно', '')).toBe(0);
+
+  it('старше недели — дата', () => {
+    expect(dayLabel(new Date(2026, 9, 1, 12, 0), now)).toMatch(/^0?1 /);
+  });
+});
+
+describe('словарь: безопасность замены', () => {
+  it('не выбирает произвольно разные термины с одним произношением, независимо от порядка', () => {
+    const entries = [{ word: 'Клара', pronunciation: 'клера' }, { word: 'Клэр', pronunciation: 'клера' }];
+    expect(applyDictionary('звони клера', entries)).toBe('звони клера');
+    expect(applyDictionary('звони клера', [...entries].reverse())).toBe('звони клера');
+  });
+  it('не выполняет цепочку замен и не зависит от порядка словаря', () => {
+    const entries = [{ word: 'курс', pronunciation: 'доллар' }, { word: 'рубль', pronunciation: 'курс' }];
+    expect(applyDictionary('доллар', entries)).toBe('курс');
+    expect(applyDictionary('доллар', [...entries].reverse())).toBe('курс');
+  });
+  it('сначала сопоставляет самое длинное выражение', () => {
+    const entries = [{ word: 'А', pronunciation: 'старый' }, { word: 'Б', pronunciation: 'старый термин' }];
+    expect(applyDictionary('старый термин', entries)).toBe('Б');
+    expect(applyDictionary('старый термин', [...entries].reverse())).toBe('Б');
+  });
+  it('не подменяет часть URL, электронной почты, путей и идентификаторов', () => {
+    const entries = [{ word: 'Зум', pronunciation: 'zoom' }];
+    const source = 'Пиши zoom@example.com https://zoom.com/zoom /home/zoom C:\\zoom\\file zoom_id и zoom';
+    expect(applyDictionary(source, entries)).toBe('Пиши zoom@example.com https://zoom.com/zoom /home/zoom C:\\zoom\\file zoom_id и Зум');
+  });
+  it('не считает диакритические знаки и дефисы границей слова', () => {
+    expect(applyDictionary('cafe\u0301 зум-конференция', [{ word: 'CAFÉ', pronunciation: 'cafe' }, { word: 'Zoom' }])).toBe('cafe\u0301 зум-конференция');
+  });
+  it('не заменяет совпавшую часть более длинной конфликтующей фразы', () => {
+    const entries = [
+      { word: 'короткая', pronunciation: 'тест' },
+      { word: 'вариант А', pronunciation: 'тест один' },
+      { word: 'вариант Б', pronunciation: 'тест один' },
+    ];
+    expect(applyDictionary('тест один тест', entries)).toBe('тест один короткая');
+  });
+});
+
+describe('словарь: разные формы и конфликты', () => {
+  it('учитывает ё/е, пробелы и регистр в неоднозначных произношениях', () => {
+    const entries = [{ word: 'Один', pronunciation: 'клёра  тест' }, { word: 'Два', pronunciation: 'КЛЕРА тест' }];
+    expect(applyDictionary('клёра тест и клера   тест', entries)).toBe('клёра тест и клера   тест');
+    expect(applyDictionary('ёлка', [{ word: 'Ёлка' }])).toBe('Ёлка');
+    expect(applyDictionary('елка', [{ word: 'Ёлка' }])).toBe('Ёлка');
+  });
+  it('не выбирает цель при одинаковых диапазонах Unicode case folding', () => {
+    const entries = [{ word: 'Один', pronunciation: 'k' }, { word: 'Два', pronunciation: 'K' }];
+    expect(applyDictionary('k', entries)).toBe('k');
+    expect(applyDictionary('s', [{ word: 'Один', pronunciation: 's' }, { word: 'Два', pronunciation: 'ſ' }])).toBe('s');
+  });
+  it('не заменяет на следующей строке и не повреждает переносы', () => {
+    const entry = [{ word: 'слитно', pronunciation: 'два слова' }];
+    expect(applyDictionary('два\nслова', entry)).toBe('два\nслова');
+    expect(applyDictionary('два   слова', entry)).toBe('слитно');
+  });
+  it('не принимает повторно уже заменённый текст, даже если цели пересекаются', () => {
+    const entries = [{ word: 'Бета', pronunciation: 'альфа' }, { word: 'Гамма', pronunciation: 'бета' }];
+    expect(applyDictionary('альфа альфа', entries)).toBe('Бета Бета');
   });
 });

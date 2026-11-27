@@ -4,7 +4,7 @@
  *
  * Тесты держат именно поведение, а не наличие тумблера в разметке.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { typeOut, playCue } from './lib/feedback.js';
 import { isForever, pruneByAge } from './lib/retention.js';
 
@@ -28,7 +28,23 @@ describe('эффект печати', () => {
     expect(onTick).not.toHaveBeenCalled();
   });
 
-  it('отмена возвращает полный текст', async () => {
+  it('отмена на середине прекращает печать, но отдаёт весь текст', async () => {
+    const controller = new AbortController();
+    const seen = [];
+    const text = 'раз два три четыре пять';
+    const promise = typeOut(
+      text,
+      (part) => {
+        seen.push(part);
+        controller.abort();
+      },
+      { stepMs: 0, signal: controller.signal },
+    );
+    await expect(promise).resolves.toBe(text);
+    expect(seen.length).toBe(1);
+  });
+
+  it('отмена до старта возвращает полный текст', async () => {
     const controller = { aborted: true };
     const onTick = vi.fn();
     await expect(typeOut('раз два три', onTick, { signal: controller, stepMs: 0 })).resolves.toBe(
@@ -39,9 +55,46 @@ describe('эффект печати', () => {
 });
 
 describe('звуковой отклик', () => {
+  afterEach(() => {
+    delete window.AudioContext;
+    vi.resetModules();
+  });
+
   it('не падает без WebAudio (тестовая среда)', () => {
     expect(() => playCue('start')).not.toThrow();
     expect(() => playCue('stop')).not.toThrow();
+  });
+
+  it('старт, стоп и ошибка звучат на разных частотах', async () => {
+    const played = [];
+    window.AudioContext = function FakeAudioContext() {
+      return {
+        state: 'running',
+        currentTime: 0,
+        destination: {},
+        resume: () => Promise.resolve(),
+        createOscillator: () => {
+          const osc = {
+            type: 'sine',
+            frequency: { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
+            connect: () => ({ connect: () => {} }),
+            start: () => played.push(osc.frequency.setValueAtTime.mock.calls[0][0]),
+            stop: () => {},
+          };
+          return osc;
+        },
+        createGain: () => ({
+          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+          connect: () => ({ connect: () => {} }),
+        }),
+      };
+    };
+    vi.resetModules();
+    const { playCue: cue } = await import('./lib/feedback.js');
+    cue('start');
+    cue('stop');
+    cue('error');
+    expect(played).toEqual([660, 440, 220]);
   });
 });
 

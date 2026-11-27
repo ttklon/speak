@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "metadata": { "corpus": "synthetic-fixture-not-audio", "model": "no-model", "revision": "1" },
+  "samples": [
+    { "id": "negative", "reference": "не отправляй письмо", "raw": { "status": "ok", "text": "отправляй письмо" }, "final": { "status": "ok", "text": "не отправляй письмо" }, "tags": ["negation"] },
+    { "id": "number", "reference": "сумма сто рублей", "raw": { "status": "ok", "text": "сумма сто рублей" }, "final": { "status": "ok", "text": "сумма двести рублей" }, "tags": ["number"] },
+    { "id": "silence", "reference": "", "raw": { "status": "ok", "text": "спасибо за просмотр" }, "final": { "status": "ok", "text": "" }, "tags": ["silence"] }
+  ]
+}

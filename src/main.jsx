@@ -12,6 +12,7 @@ import './styles/components.css';
 import './styles/pages.css';
 import './styles/extra.css';
 import App from './App.jsx';
+import ErrorBoundary from './components/layout/ErrorBoundary.jsx';
 import { AppDataProvider } from './state/AppDataProvider.jsx';
 import { DictationProvider } from './state/DictationProvider.jsx';
 import { ToastProvider } from './state/ToastProvider.jsx';
@@ -26,12 +27,16 @@ installErrorHooks();
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <ToastProvider>
-      <AppDataProvider>
-        <DictationProvider>
-          <App />
-        </DictationProvider>
-      </AppDataProvider>
-    </ToastProvider>
+    {/* Страховка снаружи всех провайдеров: если упадёт любой экран, человек
+        увидит объяснение и кнопку «перезагрузить», а не белое окно. */}
+    <ErrorBoundary>
+      <ToastProvider>
+        <AppDataProvider>
+          <DictationProvider>
+            <App />
+          </DictationProvider>
+        </AppDataProvider>
+      </ToastProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 );

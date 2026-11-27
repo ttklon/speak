@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('zspeakly', {
     set: (key, value) => ipcRenderer.invoke('store:set', key, value),
     remove: (key) => ipcRenderer.invoke('store:remove', key),
     sizeSync: () => ipcRenderer.sendSync('store:size'),
+    statusSync: () => ipcRenderer.sendSync('store:status'),
+    commitBackupSync: (sections) => ipcRenderer.sendSync('store:commit-backup', sections),
+    onError: (cb) => on('store:error', cb),
   },
 
   window: {
@@ -31,19 +34,37 @@ contextBridge.exposeInMainWorld('zspeakly', {
     toggleMaximize: () => ipcRenderer.invoke('win:toggle-maximize'),
     close: () => ipcRenderer.invoke('win:close'),
     setBadge: (value) => ipcRenderer.invoke('win:badge', value),
+    // окно развернули или восстановили — от этого зависит иконка в заголовке
+    onMaximized: (cb) => on('window:maximized', cb),
+    state: () => ipcRenderer.invoke('win:state'),
   },
 
   native: {
     available: true,
     platform: process.platform,
     sttStatus: (model) => ipcRenderer.invoke('stt:status', model),
-    transcribe: (payload) => ipcRenderer.invoke('stt:transcribe', payload),
+    sttReadiness: (request) => ipcRenderer.invoke('stt:readiness', request),
     transcribePcm: (payload) => ipcRenderer.invoke('stt:transcribe-pcm', payload),
+    // отменить долгий проход (кнопка «Отменить» в плашке распознавания)
+    cancelTranscribe: () => ipcRenderer.invoke('stt:cancel'),
+    // прогресс по фрагментам длинной диктовки: {done, total}
+    onSttProgress: (cb) => on('stt:progress', cb),
+    onAutoTune: (cb) => on('stt:auto-tune', cb),
     insertText: (text) => ipcRenderer.invoke('text:insert', text),
+    // «Отмени»: убрать последнюю вставку из активного окна
+    undoLastInsert: () => ipcRenderer.invoke('text:undo-last'),
+    // куда попадёт текст: { own, app, title } — видно человеку до вставки
+    insertTarget: () => ipcRenderer.invoke('text:target'),
+    inputStatus: () => ipcRenderer.invoke('input:status'),
     pasteToActive: () => ipcRenderer.invoke('text:paste'),
+    pasteClipboardItem: (payload) => ipcRenderer.invoke('text:paste-item', payload),
     readSelection: () => ipcRenderer.invoke('text:read-selection'),
     replaceSelection: (text) => ipcRenderer.invoke('text:replace-selection', text),
     readClipboard: () => ipcRenderer.invoke('clipboard:read'),
+    // Расшифровка записей, которые удалось зашифровать через safeStorage.
+    // Нераспознанные значения и отказ шифрования могут оставаться текстом.
+    secretAvailable: () => ipcRenderer.invoke('secret:available'),
+    revealSecret: (cipher) => ipcRenderer.invoke('secret:reveal', cipher),
     screenshot: () => ipcRenderer.invoke('clipboard:screenshot'),
     writeClipboard: (payload) => ipcRenderer.invoke('clipboard:write', payload),
     openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
@@ -65,16 +86,44 @@ contextBridge.exposeInMainWorld('zspeakly', {
     notify: (payload) => ipcRenderer.invoke('app:notify', payload),
     saveFile: (payload) => ipcRenderer.invoke('app:save-file', payload),
     modelsStatus: () => ipcRenderer.invoke('models:status'),
+    // сравнить модели на одной записи: { pcm, sampleRate, lang, models }
+    compareModels: (payload) => ipcRenderer.invoke('models:compare', payload),
+    // замеры скорости машины и выбранный режим — для карточки «Скорость и точность»
+    decodeStats: () => ipcRenderer.invoke('stt:decode-stats'),
+    modelsCancel: () => ipcRenderer.invoke('models:cancel'),
+    // русская модель (GigaAM v3): скачивается отдельно от whisper-моделей
+    downloadRussianModel: () => ipcRenderer.invoke('models:download-russian'),
+    cancelRussianModel: () => ipcRenderer.invoke('models:cancel-russian'),
+    // модель европейских языков (Parakeet TDT v3): отдельная загрузка и отмена
+    downloadEuropeanModel: () => ipcRenderer.invoke('models:download-european'),
+    cancelEuropeanModel: () => ipcRenderer.invoke('models:cancel-european'),
+    modelsWarm: (model) => ipcRenderer.invoke('models:warm', model),
     downloadModel: (id) => ipcRenderer.invoke('models:download', id),
+    saveBackup: (json) => ipcRenderer.invoke('data:save-backup', json),
     downloadEngine: () => ipcRenderer.invoke('models:download-engine'),
+    // «подготовь распознавание»: докачать движок и модель (повтор после сбоя)
+    prepareModels: () => ipcRenderer.invoke('models:prepare'),
     importModel: (filePath) => ipcRenderer.invoke('models:import', filePath),
+    deleteModel: (id) => ipcRenderer.invoke('models:delete', id),
     onModelProgress: (cb) => on('model:progress', cb),
+    // плавающий индикатор диктовки (отдельное окно поверх всех приложений)
+    hudShow: () => ipcRenderer.invoke('hud:show'),
+    hudHide: () => ipcRenderer.invoke('hud:hide'),
+    hudUpdate: (state) => ipcRenderer.invoke('hud:update', state),
+    hudStatus: () => ipcRenderer.invoke('hud:status'),
+    onDictationStop: (cb) => on('dictation:stop', cb),
+    // пауза/продолжить и отмена распознавания из плавающей плашки
+    onDictationPause: (cb) => on('dictation:pause', cb),
+    onDictationCancel: (cb) => on('dictation:cancel', cb),
+    onHudClosed: (cb) => on('hud:closed', cb),
+    dictationState: (state) => ipcRenderer.send('dictation:state', state),
+    // трей показывает, что микрофон держится открытым заранее
+    micWarm: (open) => ipcRenderer.send('mic:warm', !!open),
     checkUpdates: () => ipcRenderer.invoke('update:check'),
     setUpdateChannel: (channel) => ipcRenderer.invoke('update:channel', channel),
     downloadUpdate: () => ipcRenderer.invoke('update:download'),
     installUpdate: () => ipcRenderer.invoke('update:install'),
     onUpdateStatus: (cb) => on('update:status', cb),
-    getSystemAudio: () => ipcRenderer.invoke('app:noop'),
     onHotkeyConflict: (cb) => {
       const handler = (_e, payload) => cb(payload);
       ipcRenderer.on('hotkey:conflict', handler);
@@ -95,7 +144,8 @@ contextBridge.exposeInMainWorld('zspeakly', {
   // Синхронное чтение буфера — удобно для страницы буфера обмена
   clipboard: {
     readText: () => clipboard.readText(),
-    writeText: (text) => clipboard.writeText(String(text ?? '')),
+    // Запись тоже должна проходить через общую проверку занятого буфера.
+    writeText: (text) => ipcRenderer.invoke('clipboard:write', { text: String(text ?? '') }),
   },
 
   onNavigate: (cb) => on('navigate', cb),

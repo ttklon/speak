@@ -3,14 +3,16 @@
  *
  * Приоритет:
  *  1) whisper.cpp через main-процесс Electron (полностью офлайн, лучший вариант);
- *  2) Web Speech API (быстрый черновик);
- *  3) в браузерном превью — демо-движок, если Web Speech недоступен (офлайн,
- *     headless). В Electron демо НЕТ: там отсутствие движка — это честная
- *     ошибка с подсказкой, а не выдуманный текст в чужом окне.
+ *  2) Web Speech API (браузер, нужен интернет и разрешение на микрофон);
+ *  3) если распознавать нечем — честная ошибка с подсказкой. Выдуманного
+ *     текста нет нигде: раньше браузерное превью «работало» на демо-движке
+ *     и печатало заготовленные фразы, из-за чего легко было принять заглушку
+ *     за настоящее распознавание.
  */
 
 import { describeRecognitionError } from './errors.js';
 import { startPcmRecording } from '../audio/pcmRecorder.js';
+import { createSpeechTracker, mergeOverlap, shouldPreChunk } from './chunks.js';
 
 const SpeechRecognitionImpl =
   typeof window !== 'undefined'
@@ -21,94 +23,103 @@ export const hasWebSpeech = Boolean(SpeechRecognitionImpl);
 // В Electron моста достаточно, чтобы отличить настоящую сборку от превью.
 const isElectronShell = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.isElectron);
-// нужен именно PCM-канал: старый transcribe(wav) без записи звука бесполезен
+// нужен именно PCM-канал: канал transcribe(wav) удалён из main, у рендерера
+// нет записи звука в файл, и вызов был мёртвым
 export const hasNativeStt = () =>
   typeof window !== 'undefined' && Boolean(window.zspeakly?.native?.transcribePcm);
 
-export function engineName() {
-  if (hasNativeStt()) return 'whisper.cpp (офлайн)';
-  if (hasWebSpeech && !isElectronShell()) return 'Web Speech (локально)';
-  if (isElectronShell()) return 'движок не установлен';
-  return 'демо-движок (превью)';
+/**
+ * Последняя запись — чтобы её можно было переспросить точным проходом.
+ *
+ * Ошибку видно сразу после вставки, но второй текст раньше можно было получить
+ * только повторив фразу голосом. Держим ровно одну запись (до 40 секунд — это
+ * меньше 1,3 МБ) и отпускаем предыдущую: хранить историю звука на устройстве
+ * человек не просил.
+ */
+const LAST_AUDIO_LIMIT_MS = 40000;
+let lastAudio = null;
+
+export function lastRecordedAudio(owner) {
+  // Запись для конкретной карточки можно переспросить только её звуком.
+  if (!owner || lastAudio?.owner !== owner) return null;
+  return lastAudio;
 }
 
-const DEMO_LINES = {
-  ru: [
-    'Привет, как дела?',
-    'Записываю голосом, и текст сам появляется в активном поле',
-    'ZSpeakly работает офлайн: без облака и без лимитов',
-  ],
-  en: [
-    'Hey, how are you?',
-    'I am dictating with my voice and the text appears instantly',
-    'ZSpeakly works offline, without cloud and without limits',
-  ],
-  kk: ['Сәлеметсіз бе, қалайсыз?', 'Дауыспен жазып отырмын, мәтін өзі шығады'],
+function rememberRecordedAudio(pcm, durationMs, lang, owner) {
+  if (!pcm?.length || !(durationMs >= 350) || durationMs > LAST_AUDIO_LIMIT_MS) {
+    lastAudio = null;
+    return;
+  }
+  // Копия: исходный буфер переиспользуется рекордером и после остановки
+  // превратился бы в мусор.
+  // Ошибка необязательной копии не должна скрывать уже распознанный текст.
+  // При этом прежняя запись не относится к новому результату и опасна для
+  // «Переспросить точно» — даже если выделить новую копию не удалось.
+  lastAudio = null;
+  try {
+    lastAudio = { pcm: Int16Array.from(pcm), durationMs: Math.round(durationMs), lang: lang || 'ru', owner };
+  } catch {
+    // Повтор будет недоступен; результат распознавания остаётся доступен.
+  }
+}
+
+/**
+ * Чем считала прошлая диктовка: 'server' (прогретый whisper.cpp в памяти),
+ * 'cli' (холодный запуск) или '' (ещё не знаем). От этого зависит, стоит ли
+ * резать запись заранее: на холодном движке каждый кусок — это снова загрузка
+ * весов, и нарезка сделала бы диктовку медленнее.
+ */
+let lastMode = '';
+
+/**
+ * Почему запись не дала текста — и что с этим делать.
+ *
+ * Вынесено из кода движка, чтобы тест мог проверить каждую подсказку: она
+ * обязана называть раздел, который в настройках действительно есть.
+ */
+export const EMPTY_RESULT_MESSAGES = {
+  silent: {
+    title: 'В записи нет речи',
+    hint: 'Микрофон не слышит голос: выберите устройство в «Настройки → Приложение → Устройство микрофона», а уровень проверьте там же — «Тест микрофона».',
+  },
+  phantom: {
+    title: 'В записи не было речи',
+    hint: 'Похоже, микрофон записал тишину или шум. Попробуйте ещё раз ближе к микрофону.',
+  },
+  'too-short': {
+    title: 'Слишком короткая запись',
+    hint: 'Говорите сразу после нажатия сочетания клавиш.',
+  },
+  'output-cleanup-failed': {
+    title: 'Движок не смог запуститься',
+    hint: 'Имя временного вывода уже занято. Попробуйте ещё раз или проверьте доступ к временной папке.',
+  },
+  'incomplete-chunks': {
+    title: 'Распознована только часть записи',
+    hint: 'Один или несколько фрагментов не распознаны. Проверьте доступный текст вручную или повторите запись.',
+  },
+  'cli-output-truncated': {
+    title: 'Вывод движка обрезан',
+    hint: 'Начало вывода потеряно. Проверьте неполный текст вручную или повторите запись.',
+  },
+  'cli-failed': {
+    title: 'Движок завершился с ошибкой',
+    hint: 'Попробуйте ещё раз. Если ошибка повторяется, проверьте модель в «Настройки → Диктовка → Модель распознавания».',
+  },
+  default: {
+    title: 'Движок не распознал речь',
+    // «проверьте в настройках» человек выполнить не может: называем точные разделы
+    hint: 'Скажите ещё раз ближе к микрофону. Если повторяется — проверьте модель в «Настройки → Диктовка → Модель распознавания», а устройство — в «Настройки → Приложение → Устройство микрофона».',
+  },
 };
 
-/** Демо-движок: «печатает» заготовленные фразы, чтобы UI был проверяем без микрофона. */
-function createDemoRecognizer({ lang = 'ru', onPartial, onFinal, onError, onEnd, onStart, onLevel }) {
-  let stopped = true;
-  let text = '';
-  let timer = null;
-  let levelTimer = null;
-
-  const pool = DEMO_LINES[String(lang).slice(0, 2)] || DEMO_LINES.ru;
-
-  return {
-    kind: 'demo',
-    start() {
-      stopped = false;
-      text = '';
-      onStart?.();
-      let index = 0;
-      let charIndex = 0;
-      let pauseUntil = 0;
-
-      timer = setInterval(() => {
-        if (stopped) return;
-        if (Date.now() < pauseUntil) return;
-        const current = pool[index];
-        if (!current) return;
-        charIndex = Math.min(current.length, charIndex + 2);
-        onPartial?.({ text, interim: current.slice(0, charIndex) });
-        if (charIndex >= current.length) {
-          text = [text, current].filter(Boolean).join(' ');
-          onFinal?.({ text: current, last: current });
-          index += 1;
-          charIndex = 0;
-          pauseUntil = Date.now() + 520;
-          if (index >= pool.length) {
-            clearInterval(timer);
-            timer = null;
-            setTimeout(() => {
-              if (!stopped) onEnd?.({ text });
-            }, 520);
-          }
-        }
-      }, 55);
-
-      levelTimer = setInterval(() => {
-        if (!stopped) onLevel?.(0.3 + Math.random() * 0.65);
-      }, 110);
-    },
-    stop() {
-      stopped = true;
-      clearInterval(timer);
-      clearInterval(levelTimer);
-      if (!text) onError?.({ code: 'no-speech', ...describeRecognitionError('no-speech') });
-      onEnd?.({ text });
-      return { text };
-    },
-    abort() {
-      stopped = true;
-      clearInterval(timer);
-      clearInterval(levelTimer);
-    },
-    get text() {
-      return text;
-    },
-  };
+export function engineName() {
+  if (hasNativeStt()) return 'whisper.cpp (офлайн)';
+  // Web Speech в Chrome отправляет звук на серверы Google — это не офлайн,
+  // поэтому в названии движка честно написано про интернет.
+  if (hasWebSpeech && !isElectronShell()) return 'Web Speech (нужен интернет)';
+  if (isElectronShell()) return 'движок не установлен';
+  return 'распознавание недоступно';
 }
 
 function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFinal, onError, onEnd, onStart }) {
@@ -120,10 +131,12 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
 
   let finalText = '';
   let stopped = false;
+  let closed = false;
 
-  rec.onstart = () => onStart?.();
-  rec.onerror = (e) => onError?.({ code: e.error, ...describeRecognitionError(e.error) });
+  rec.onstart = () => { if (!closed) onStart?.(); };
+  rec.onerror = (e) => { if (!closed) onError?.({ code: e.error, ...describeRecognitionError(e.error) }); };
   rec.onend = () => {
+    if (closed) return;
     if (!stopped) {
       try {
         rec.start();
@@ -132,9 +145,11 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
         /* ignore */
       }
     }
+    closed = true;
     onEnd?.({ text: finalText });
   };
   rec.onresult = (event) => {
+    if (closed) return;
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const res = event.results[i];
@@ -152,6 +167,7 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
     kind: 'web',
     start() {
       stopped = false;
+      closed = false;
       finalText = '';
       rec.start();
     },
@@ -159,12 +175,14 @@ function createWebRecognizer({ lang, continuous, interimResults, onPartial, onFi
       stopped = true;
       try {
         rec.stop();
+        return true;
       } catch {
-        /* ignore */
+        return false;
       }
     },
     abort() {
       stopped = true;
+      closed = true;
       try {
         rec.abort();
       } catch {
@@ -192,7 +210,26 @@ export function createRecognizer(opts = {}) {
     onEnd,
     onStart,
     onLevel,
+    onNotice,
   } = opts;
+
+  // Язык может зависеть от активного окна («в редакторе — английский»). Окно
+  // узнаётся через доли секунды после старта записи, а первый проход движка
+  // случается позже — на паузе или на остановке. Поэтому язык решаем один раз
+  // при первом обращении: иначе куски одной фразы распознали бы разными
+  // языками, и склейка превратилась бы в кашу.
+  let resolvedLang = '';
+  const langCode = () => {
+    if (resolvedLang) return resolvedLang;
+    let picked = '';
+    try {
+      picked = typeof opts.getLang === 'function' ? opts.getLang() : lang;
+    } catch {
+      picked = lang;
+    }
+    resolvedLang = String(picked || lang || 'ru').slice(0, 2);
+    return resolvedLang;
+  };
 
   // 1) Нативный whisper.cpp: пишем PCM в рендерере → main → whisper-cli.exe
   if (hasNativeStt()) {
@@ -200,6 +237,154 @@ export function createRecognizer(opts = {}) {
     let recorder = null;
     let text = '';
     let stopped = false;
+    let aborted = false;
+    let confirmedMs = 0;
+    let preBroken = false;
+    let preClosed = false;
+    let captureInterrupted = false;
+    let interruptionNotified = false;
+    let wakeAbort;
+    const abortSignal = new Promise((resolve) => { wakeAbort = resolve; });
+    // живая расшифровка: whisper не отдаёт слова по мере речи, поэтому раз в
+    // intervalMs отправляем накопленный звук заново и показываем, что вышло
+    const streamInterval = Number(opts.streamIntervalMs) || 0;
+    let streamTimer = null;
+    let streamGen = 0;
+    // «Считать, пока говорите»: на паузах уже сказанное уходит в движок, и
+    // после остановки остаётся распознать только хвост. Это и есть разница
+    // между «ждать двадцать секунд» и «ждать одно предложение».
+    const tracker = createSpeechTracker();
+    // Уже распознанный текст копится строкой: куски идут с перекрытием.
+    // Склейка эвристическая, короткие и защищённые повторы могут остаться.
+    let preText = '';
+    let preCount = 0;
+    let preMs = 0;
+    let preChain = Promise.resolve();
+
+    const warnInterruption = () => {
+      if (interruptionNotified || aborted) return;
+      interruptionNotified = true;
+      onError?.({ code: 'mic-interrupted', title: 'Микрофон отключился',
+        hint: 'Запись прервана. Если удастся распознать записанное, фрагмент можно будет проверить вручную.' });
+    };
+    const notifyInterruption = () => {
+      if (!recorder || stopped || aborted || !captureInterrupted) return;
+      warnInterruption();
+      opts.onCaptureInterrupted?.();
+    };
+
+    const stopStream = () => {
+      streamGen += 1;
+      if (streamTimer) clearTimeout(streamTimer);
+      streamTimer = null;
+    };
+
+    const scheduleStream = () => {
+      if (stopped || !streamInterval || !recorder) return;
+      streamTimer = setTimeout(runStreamTick, streamInterval);
+    };
+
+    const runStreamTick = async () => {
+      streamTimer = null;
+      if (stopped || !recorder) return;
+      // на паузе не тратим процессор: живой текст всё равно не изменится
+      if (recorder.paused) {
+        scheduleStream();
+        return;
+      }
+      const gen = streamGen;
+      let snap = null;
+      try {
+        snap = recorder.snapshot?.({ maxSeconds: 30 });
+      } catch {
+        snap = null;
+      }
+      // меньше секунды речи whisper почти всегда возвращает пустоту — зря греем CPU
+      if (!snap?.pcm?.length || snap.durationMs < 900) {
+        scheduleStream();
+        return;
+      }
+      try {
+        const res = await native.transcribePcm?.({
+          pcm: snap.pcm,
+          durationMs: snap.durationMs,
+          lang: langCode(),
+          model: opts.model || 'small',
+          // словарь и экранный контекст — только для итогового прохода:
+          // иначе промежуточный текст будет «умнее» финального
+          useDictionary: false,
+          contextPrompt: '',
+          partial: true,
+        });
+        if (stopped || gen !== streamGen) return;
+        if (res?.ok && String(res.text || '').trim()) {
+          // truncated — распознан только хвост записи: интерфейс обязан
+          // показать это, а не выдавать хвост за весь текст
+          onPartial?.({
+            text: String(res.text).trim(),
+            interim: '',
+            live: true,
+            truncated: snap.truncated === true,
+          });
+        }
+      } catch {
+        /* промежуточный сбой не должен ломать диктовку */
+      }
+      scheduleStream();
+    };
+
+    /**
+     * Кусок уже сказанного — в движок, не останавливая микрофон. Проходы идут
+     * по очереди: два whisper на слабом ноутбуке делят ядра и оба медленнее.
+     */
+    const queuePreChunk = (cut) => {
+      preChain = preChain.then(async () => {
+        if (stopped || preBroken || preClosed || !recorder) return;
+        // Отдаём чуть больше, чем «новый» звук: слово, разрезанное границей,
+        // должно целиком попасть хотя бы в один кусок.
+        const fromMs = Math.max(0, cut.fromMs - tracker.overlapMs);
+        try {
+          // Снимок тоже может не создаться (например, отказ выделения памяти).
+          // Тогда неподтверждённый звук должен остаться в финальном проходе.
+          const snap = recorder.snapshot?.({ fromMs, toMs: cut.atMs, maxSeconds: 0 });
+          if (!snap?.pcm?.length || snap.durationMs < 800) {
+            preBroken = true;
+            tracker.rollback(cut.fromMs);
+            return;
+          }
+          const res = await native.transcribePcm?.({
+            pcm: snap.pcm,
+            durationMs: snap.durationMs,
+            lang: langCode(),
+            model: opts.model || 'small',
+            // Словарь и экранный контекст — только для хвоста: на куске они
+            // подсказывают движку то, чего в этом куске ещё не сказано.
+            useDictionary: false,
+            contextPrompt: '',
+            pre: true,
+          });
+          // После таймаута/отмены ответ больше не относится к итоговой записи.
+          if (preClosed || aborted) return;
+          if (res?.mode) lastMode = res.mode;
+          if (res?.ok && String(res.text || '').trim()) {
+            confirmedMs = cut.atMs;
+            preText = mergeOverlap(preText, String(res.text).trim(), { preserve: opts.preserveText === true });
+            preCount += 1;
+            preMs += Number(res.ms) || 0;
+          } else {
+            // Пусто — значит кусок не распознан. Возвращаем границу, иначе
+            // этот звук не попадёт ни в кусок, ни в хвост.
+            preBroken = true;
+            tracker.rollback(cut.fromMs);
+          }
+        } catch {
+          if (!preClosed && !aborted) {
+            preBroken = true;
+            tracker.rollback(cut.fromMs);
+          }
+        }
+      });
+    };
 
     return {
       kind: 'native',
@@ -207,15 +392,59 @@ export function createRecognizer(opts = {}) {
         try {
           recorder = await startPcmRecording({
             deviceId: opts.deviceId || 'default',
-            onLevel: (v) => onLevel?.(v),
+            // сырой звук или «шумоподавление Windows» — решает настройка
+            cleanupAudio: opts.micCleanup === true,
+            isCancelled: () => aborted,
+            onInterrupted: () => {
+              if (stopped || aborted || captureInterrupted) return;
+              captureInterrupted = true;
+              notifyInterruption();
+            },
+            onLevel: (v) => {
+              onLevel?.(v);
+              // Уровень микрофона — единственный сигнал, по которому видно
+              // паузу. Дальше решает чистый модуль chunks.js: он скажет,
+              // можно ли уже отдать кусок движку.
+              if (preBroken || preClosed || aborted || !shouldPreChunk(lastMode)) return;
+              const atMs = recorder
+                ? Math.round((recorder.frames / (recorder.sampleRate || 16000)) * 1000)
+                : 0;
+              const cut = tracker.feed({ level: v, atMs });
+              if (cut) queuePreChunk(cut);
+            },
+            // предролл «горячего микрофона»: звук до нажатия хоткея
+            preroll: opts.preroll || null,
           });
+          // Пользователь мог отменить, пока браузер спрашивал разрешение.
+          if (aborted) {
+            recorder?.abort?.();
+            recorder = null;
+            return;
+          }
+          // выбранный микрофон пропал — пишем с системного, но не молчим
+          if (recorder?.fellBack) {
+            onNotice?.({
+              title: 'Микрофон из настроек не найден',
+              description:
+                'Записываю с системного. Выберите микрофон в «Настройки → Приложение → Устройство микрофона».',
+              tone: 'warn',
+              ttl: 9000,
+            });
+          }
           onStart?.();
+          if (recorder?.interrupted) captureInterrupted = true;
+          notifyInterruption();
+          scheduleStream();
         } catch (err) {
+          if (aborted) return;
           // нет микрофона или отказали в доступе — сообщаем честно
           // Причина от браузера (NotAllowedError, NotFoundError) важнее
           // технического «Permission denied» — человеку нужен следующий шаг.
           const named = err?.name === 'NotAllowedError' ? 'not-allowed' : err?.name === 'NotFoundError' ? 'audio-capture' : '';
-          const described = named ? describeRecognitionError(named) : describeRecognitionError('audio-capture');
+          const described = named ? describeRecognitionError(named) : {
+            title: 'Не удалось открыть микрофон',
+            hint: 'Проверьте доступ к микрофону и устройство в «Настройки → Приложение → Устройство микрофона», затем попробуйте снова.',
+          };
           onError?.({
             ...described,
             code: named || 'mic-failed',
@@ -228,52 +457,214 @@ export function createRecognizer(opts = {}) {
         }
       },
       async stop() {
-        if (!recorder || stopped) return { text };
+        if (stopped) return { text };
+        if (!recorder) {
+          // Отпустили кнопку, пока система ещё открывает микрофон. Не ждём
+          // неопределённое время разрешения: поздно полученный поток закроет
+          // проверка aborted в start(), а новая запись сможет начаться сразу.
+          aborted = true;
+          stopped = true;
+          preClosed = true;
+          wakeAbort();
+          stopStream();
+          onError?.({
+            code: 'mic-not-ready',
+            title: 'Микрофон ещё не открылся',
+            hint: 'Дождитесь разрешения на микрофон и попробуйте записать ещё раз.',
+          });
+          return { text: '', code: 'mic-not-ready' };
+        }
         stopped = true;
-        const { pcm, durationMs } = recorder.stop();
+        // недоработанный промежуточный запрос больше не нужен: финальный
+        // проход по всей записи всё равно точнее. Раньше он не отменялся и
+        // работал параллельно с итоговым — два whisper-процесса, двойная
+        // память и вдвое дольше ожидание.
+        stopStream();
+        // Останавливаем микрофон сразу, а не после ожидания движка. Иначе во
+        // время ожидания предварительного куска или отмены в диктовку попадает
+        // речь, сказанная уже после отпускания кнопки.
+        const { pcm, durationMs, interrupted } = recorder.stop();
+        if (interrupted) { captureInterrupted = true; warnInterruption(); }
+        // Досчитываем уже отправленный кусок: если оборвать его отменой, этот
+        // звук пропадёт — он не попадёт ни в хвост, ни в результат.
+        let preTimer;
+        await Promise.race([preChain, abortSignal, new Promise((resolve) => { preTimer = setTimeout(resolve, 6000); })]);
+        clearTimeout(preTimer);
+        // Отправленная граница может ещё не быть подтверждена результатом.
+        // С этого момента поздний ответ куска игнорируется, а хвост начинается
+        // с последней подтверждённой границы, не с очереди отправки.
+        preClosed = true;
+        if (aborted) return { text: '', code: 'cancelled' };
+        try {
+          await Promise.race([native.cancelTranscribe?.(), abortSignal]);
+        } catch {
+          /* отмена — не ошибка */
+        }
+        if (aborted) return { text: '', code: 'cancelled' };
         if (!pcm?.length) {
           onError?.({ code: 'no-audio', title: 'Запись пустая', hint: 'Микрофон ничего не передал. Проверьте устройство в настройках.' });
-          onEnd?.({ text: '' });
-          return { text: '', reason: 'no-audio' };
+          onEnd?.({ text: '', incomplete: true, partialText: '', incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
+          return { text: '', code: 'incomplete', reason: 'no-audio' };
         }
         if (durationMs < 350) {
-          onError?.({ code: 'too-short', title: 'Слишком короткая запись', hint: 'Удерживайте клавишу чуть дольше и говорите сразу.' });
-          onEnd?.({ text: '' });
-          return { text: '', reason: 'too-short' };
+          onError?.({ code: 'too-short', title: 'Слишком короткая запись', hint: 'Говорите сразу после нажатия и не останавливайте запись так быстро.' });
+          onEnd?.({ text: '', incomplete: true, partialText: '', incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
+          return { text: '', code: 'incomplete', reason: 'too-short' };
         }
         let res;
+        // подсказка с экрана берётся в последний момент: локальная модель могла
+        // ответить уже после старта записи
+        const contextPrompt =
+          typeof opts.getContextPrompt === 'function' ? String(opts.getContextPrompt() || '') : '';
+        // Что уже распознано заранее — то второй раз не считаем. После паузы
+        // сюда попадает только хвост; без пауз предварительных кусков нет, и
+        // хвост равен всей записи (поведение как раньше).
+        const committedMs = Math.min(confirmedMs, durationMs);
+        const RATE = 16000;
+        // Хвост тоже с перекрытием: на стыке может остаться дубль или обрывок;
+        // текст не доказывает, повторил ли человек слова намеренно.
+        const tailFrom = Math.max(0, committedMs - tracker.overlapMs);
+        const tailPcm =
+          committedMs > 0
+            ? pcm.subarray(Math.min(pcm.length, Math.round((tailFrom / 1000) * RATE)))
+            : pcm;
+        const tailMs = Math.max(0, durationMs - committedMs);
+        // Хвост короче трети секунды — там нет слов, только дыхание: отдаём
+        // то, что уже распознали, и не тратим проход движка.
+        if (preText && tailPcm.length < RATE * 0.3) {
+          if (captureInterrupted) {
+            onEnd?.({ text: '', incomplete: true, partialText: preText, incompleteReason: 'mic-interrupted' });
+            return { text: '', code: 'incomplete' };
+          }
+          rememberRecordedAudio(pcm, durationMs, langCode(), opts.audioOwner);
+          text = preText;
+          onFinal?.({ text, last: text });
+          onEnd?.({
+            text,
+            ms: preMs,
+            spoken: Math.round(durationMs / 100) / 10,
+            mode: 'pre',
+            parts: preCount,
+            timeline: { preMs, preParts: preCount, tailMs: 0 },
+            model: opts.model || '',
+          });
+          return { text };
+        }
         try {
           // pcm уходит как Int16Array: main превращает его в сырые байты сам,
           // иначе whisper получает мусор вместо звука (был именно такой баг)
-          res = await native.transcribePcm?.({
-            pcm,
-            durationMs,
-            lang: String(lang || 'ru').slice(0, 2),
+          res = await Promise.race([native.transcribePcm?.({
+            pcm: tailPcm,
+            durationMs: tailMs || durationMs,
+            lang: langCode(),
             model: opts.model || 'small',
-          });
+            // тумблер «Применять словарь при диктовке» управляет и подсказкой
+            // whisper'у, и заменой слов в готовом тексте
+            useDictionary: opts.useDictionary !== false,
+            // Продолжение, а не новая фраза: хвост должен подхватить стиль и
+            // термины уже распознанного куска.
+            contextPrompt: preText ? `${preText} ${contextPrompt}`.trim() : contextPrompt,
+          }), abortSignal.then(() => ({ ok: false, code: 'cancelled' }))]);
         } catch (err) {
+          if (aborted) return { text: '', code: 'cancelled' };
           onError?.({ code: 'stt-failed', title: 'Распознавание не удалось', hint: String(err?.message || err) });
-          onEnd?.({ text: '' });
-          return { text: '', reason: String(err?.message || err) };
+          onEnd?.({ text: '', incomplete: true, partialText: preText, incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
+          return { text: '', code: 'incomplete' };
         }
-        if (res?.ok && res.text) {
-          text = res.text;
-          onFinal?.({ text: res.text, last: res.text });
-          onEnd?.({ text: res.text });
-        } else {
-          onError?.({
-            code: 'stt-empty',
-            title: 'whisper.cpp не распознал',
-            hint: res?.reason || 'Проверьте модель и микрофон в настройках',
+        if (aborted) return { text: '', code: 'cancelled' };
+        if (res?.mode) lastMode = res.mode;
+        if (res?.ok && String(res.text || '').trim()) {
+          if (captureInterrupted) {
+            const partialText = preText ? mergeOverlap(preText, res.text, { preserve: true }) : res.text;
+            onEnd?.({ text: '', incomplete: true, partialText, incompleteReason: 'mic-interrupted' });
+            return { text: '', code: 'incomplete' };
+          }
+          rememberRecordedAudio(pcm, durationMs, langCode(), opts.audioOwner);
+          // Полный текст — заранее распознанные куски плюс хвост. Один проход
+          // по хвосту вместо всей фразы и есть выигрыш во времени.
+          text = preText ? mergeOverlap(preText, res.text, { preserve: opts.preserveText === true }) : res.text;
+          onFinal?.({ text, last: text });
+          // ms — сколько заняло распознавание: показываем человеку, что движок
+          // действительно работал, а не «проглотил» запись
+          // spoken — сколько секунд человек реально говорил: по нему видно
+          // «20 секунд речи за 3 секунды счёта», а не «обработка…»
+          onEnd?.({
+            text,
+            ms: (Number(res.ms) || 0) + preMs,
+            // «Сколько человек говорил» — это вся запись, а не только хвост:
+            // иначе после паузы в отчёте появилось бы «1 с речи → 5 с ожидания».
+            spoken: Math.round(durationMs / 100) / 10,
+            // режим и разложение по этапам: по ним видно, платил ли человек за
+            // холодную загрузку модели и сколько стоила подготовка звука
+            mode: res.mode || '',
+            parts: Number(res.chunks) || Number(res.timeline?.parts) || 1,
+            timeline: {
+              ...(res.timeline || {}),
+              preMs,
+              preParts: preCount,
+              tailMs: Math.round(tailMs),
+            },
+            model: res.model || '',
+            thorough: res.thorough === true,
+            secondPass: res.secondPass === true,
+            gainDb: Number(res.audio?.gainDb) || 0,
+            pausesMs: Number(res.audio?.pausesMs) || 0,
           });
-          onEnd?.({ text: '' });
+        } else {
+          // Даже пустой успешный ответ не доказывает, что в хвосте не было
+          // речи. Не выдаём полученное начало или черновик за полную диктовку.
+          const code = res?.code || 'stt-empty';
+          onError?.(
+            EMPTY_RESULT_MESSAGES[code] || {
+              code: 'stt-empty',
+              ...EMPTY_RESULT_MESSAGES.default,
+              hint: res?.reason || EMPTY_RESULT_MESSAGES.default.hint,
+            },
+          );
+          // Частичный вывод ошибочного CLI — не итог и не команда: он может
+          // содержать логи и пропуски. Сохраняем отдельно от предыдущего окна.
+          const failedOutput = (res?.code === 'cli-failed' || res?.code === 'incomplete-chunks' || res?.code === 'cli-output-truncated' || res?.code === 'output-cleanup-failed') && typeof res.partialText === 'string' ? res.partialText.trim() : '';
+          const recover = failedOutput
+            ? [preText ? `Ранее распознанный фрагмент:\n${preText}` : '', `Частичный вывод после ошибки (может содержать служебные строки):\n${failedOutput}`].filter(Boolean).join('\n\n')
+            : preText;
+          onEnd?.({ text: '', incomplete: true, partialText: recover, incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
+          return { text: '', code: 'incomplete' };
         }
         return { text };
       },
+      /** Пауза посреди диктовки: микрофон открыт, звук не копится. */
+      pause() {
+        try {
+          recorder?.pause?.();
+        } catch {
+          /* ignore */
+        }
+      },
+      /** Продолжить запись после паузы. */
+      resume() {
+        try {
+          recorder?.resume?.();
+        } catch {
+          /* ignore */
+        }
+      },
+      get paused() {
+        return Boolean(recorder?.paused);
+      },
       abort() {
+        aborted = true;
+        preClosed = true;
+        wakeAbort();
         stopped = true;
+        stopStream();
         recorder?.abort?.();
         recorder = null;
+        // отменяем и незавершённый проход распознавания
+        try {
+          native.cancelTranscribe?.();
+        } catch {
+          /* ignore */
+        }
       },
       get text() {
         return text;
@@ -281,99 +672,96 @@ export function createRecognizer(opts = {}) {
     };
   }
 
-  // 2) Web Speech. Демо-движок подключаем ТОЛЬКО в браузерном превью:
-  // в Electron он вставлял выдуманный текст в чужое окно — это была заглушка,
-  // из-за которой «диктовка работает», хотя распознавания не происходило.
+  // 2) Web Speech: системный движок браузера (может отправлять звук в сеть).
   if (hasWebSpeech) {
     let active = null;
     let emitted = false;
-    let demo = null;
     let ended = false;
+    let aborted = false;
     let userStopped = false;
-
-    const emitEnd = (payload) => {
-      if (ended) return;
-      ended = true;
-      onEnd?.(payload);
-    };
-
-    let switched = false;
-
-    const switchToDemo = (reason) => {
-      if (switched) return;
-      switched = true;
-      clearTimeout(watchdog);
-      watchdog = null;
-      try {
-        active?.abort?.();
-      } catch {
-        /* ignore */
-      }
-      if (isElectronShell()) {
-        // нечего слушать: без сети Web Speech бесполезен, а whisper.cpp не найден
-        onError?.({
-          code: 'web-unavailable',
-          title: 'Распознавание недоступно',
-          hint: 'Web Speech не работает без интернета, а whisper.cpp не установлен. Откройте «Настройки → Функции → Модель распознавания» и скачайте движок с моделью.',
-        });
-        emitEnd({ text: '' });
-        return;
-      }
-      demo = createDemoRecognizer({
-        lang: lang.slice(0, 2),
-        onStart,
-        onPartial: (p) => {
-          emitted = true;
-          onPartial?.(p);
-        },
-        onFinal: (p) => {
-          emitted = true;
-          onFinal?.(p);
-        },
-        onError,
-        onEnd: emitEnd,
-        onLevel,
-      });
-      active = demo;
-      demo.start();
-      if (reason) {
-        onError?.({
-          code: 'fallback',
-          title: 'Работает демо-движок',
-          hint: 'Web Speech недоступен без сети. Подключите whisper.cpp для офлайн-распознавания.',
-        });
-      }
-    };
-
     let watchdog = null;
+    let stopTimer = null;
+    let stopPromise = null;
+    let resolveStop = null;
+    let endPayload = null;
+
+    const clearTimers = () => {
+      clearTimeout(watchdog);
+      clearTimeout(stopTimer);
+      watchdog = null;
+      stopTimer = null;
+    };
+    const settle = (payload, { reportEmpty = true } = {}) => {
+      if (ended || aborted) return;
+      ended = true;
+      clearTimers();
+      endPayload = { text: String(payload?.text || '') };
+      if (reportEmpty && !endPayload.text.trim()) {
+        onError?.({ code: 'no-speech', ...describeRecognitionError('no-speech') });
+      }
+      onEnd?.(endPayload);
+      resolveStop?.(endPayload);
+      resolveStop = null;
+    };
+    const stopWithoutEnd = (code) => {
+      if (aborted || ended) return;
+      const text = active?.text || '';
+      active?.abort?.();
+      if (text.trim()) {
+        onNotice?.({ title: 'Браузер не завершил распознавание', description: 'Сохранены только подтверждённые слова; конец фразы мог потеряться.', tone: 'warn', ttl: 9000 });
+      } else {
+        onError?.({ code, title: 'Браузер не завершил распознавание', hint: 'Попробуйте записать фразу ещё раз.' });
+      }
+      settle({ text }, { reportEmpty: false });
+    };
+    const giveUp = (reason) => {
+      if (ended || aborted) return;
+      clearTimers();
+      active?.abort?.();
+      onError?.({
+        code: 'web-unavailable',
+        title: 'Распознавание недоступно',
+        hint: isElectronShell()
+          ? 'Офлайн-диктовке нужен движок распознавания, а его нет. Откройте «Настройки → Диктовка → Модель распознавания» и скачайте движок с моделью.'
+          : 'Браузер не дал распознавание: системный движок выключен или нет сети. Полностью офлайн диктовка работает в приложении для Windows.',
+      });
+      if (reason) console.warn('[stt] Web Speech недоступен:', reason);
+      settle({ text: '' }, { reportEmpty: false });
+    };
+
     active = createWebRecognizer({
       lang,
       continuous,
       interimResults,
       onStart: () => {
-        // Движок действительно запустился — сторож больше не нужен.
+        if (aborted || ended || userStopped) return;
         clearTimeout(watchdog);
         watchdog = null;
         onStart?.();
       },
       onPartial: (p) => {
+        if (aborted || ended) return;
         emitted = true;
         onPartial?.(p);
       },
       onFinal: (p) => {
+        if (aborted || ended) return;
         emitted = true;
         onFinal?.(p);
       },
-      // Если Web Speech завершился без результата и пользователь не останавливал
-      // запись — ждём сторож, который переключит на демо-движок.
       onEnd: (payload) => {
-        if (!emitted && !userStopped) return;
-        emitEnd(payload);
+        if (aborted || ended) return;
+        if (!emitted && !userStopped) {
+          giveUp('браузер остановил распознавание и не перезапустился');
+          return;
+        }
+        settle(payload);
       },
       onError: (err) => {
+        if (aborted || ended) return;
         const unavailable = ['network', 'service-not-allowed', 'language-not-supported'].includes(err.code);
         if (unavailable && !emitted) {
-          switchToDemo(true);
+          giveUp(err.code);
           return;
         }
         onError?.(err);
@@ -383,22 +771,33 @@ export function createRecognizer(opts = {}) {
     return {
       kind: 'web-fallback',
       start() {
-        active?.start?.();
-        // Если браузер объявил Web Speech, но движок не поднялся за 2 с
-        // (нет сети / сервис отключён), переключаемся на демо-движок.
-        clearTimeout(watchdog);
+        // Назначаем до старта: onstart в некоторых реализациях может прийти сразу.
         watchdog = setTimeout(() => {
-          if (!emitted) switchToDemo(true);
+          if (!emitted && !ended && !aborted && !userStopped) giveUp('движок не поднялся за 2 с');
         }, 2000);
+        try { active?.start?.(); } catch (err) { clearTimers(); throw err; }
       },
       stop() {
+        if (stopPromise) return stopPromise;
+        if (aborted) return Promise.resolve({ text: '', code: 'cancelled' });
+        if (ended) return Promise.resolve(endPayload || { text: '' });
         userStopped = true;
         clearTimeout(watchdog);
-        const res = active?.stop?.();
-        return res && typeof res.text === 'string' ? res : { text: active?.text || '' };
+        watchdog = null;
+        stopPromise = new Promise((resolve) => { resolveStop = resolve; });
+        // stop лишь просит браузер закончить. Финальное событие может прийти
+        // после него; промежуточный текст нельзя сохранять как окончательный.
+        stopTimer = setTimeout(() => stopWithoutEnd('web-stop-timeout'), 5000);
+        if (active?.stop?.() === false) stopWithoutEnd('web-stop-failed');
+        return stopPromise;
       },
       abort() {
+        if (aborted || ended) return;
+        aborted = true;
+        clearTimers();
         active?.abort?.();
+        resolveStop?.({ text: '', code: 'cancelled' });
+        resolveStop = null;
       },
       get text() {
         return active?.text || '';
@@ -407,14 +806,16 @@ export function createRecognizer(opts = {}) {
   }
 
   // 3) Совсем нечем распознавать
-  if (isElectronShell()) {
+  {
     const dead = {
       kind: 'unavailable',
       start() {
         const err = {
           code: 'engine-missing',
-          title: 'Движок распознавания не установлен',
-          hint: 'Настройки → Функции → Модель распознавания: скачайте whisper.cpp и модель. Без них диктовка не работает.',
+          title: 'Распознавание недоступно',
+          hint: isElectronShell()
+            ? 'Настройки → Диктовка → Модель распознавания: скачайте движок и модель. Без них диктовка не работает.'
+            : 'В этом браузере нет системного распознавания (нужен Chrome и интернет). Полностью офлайн диктовка работает в приложении для Windows.',
         };
         onError?.(err);
         setTimeout(() => onEnd?.({ text: '' }), 300);
@@ -430,9 +831,6 @@ export function createRecognizer(opts = {}) {
     };
     return dead;
   }
-
-  // 4) Демо — только браузерное превью, где это осознанная демонстрация
-  return createDemoRecognizer({ lang: lang.slice(0, 2), onPartial, onFinal, onError, onEnd, onStart, onLevel });
 }
 
 /** BCP-47 тег для Web Speech API. */

@@ -6,12 +6,24 @@ import DictionaryPage from './pages/DictionaryPage.jsx';
 import HotkeysPage from './pages/HotkeysPage.jsx';
 import ClipboardPage from './pages/ClipboardPage.jsx';
 import SettingsModal from './components/settings/SettingsModal.jsx';
-import ProfileModal from './components/modals/ProfileModal.jsx';
+import CommandPalette from './components/layout/CommandPalette.jsx';
 import DictationHUD from './components/ui/DictationHUD.jsx';
 import OnboardingModal from './components/modals/OnboardingModal.jsx';
 import { useRoute, navigate, replace } from './lib/router.js';
+import { keysLabel } from './lib/utils.js';
+import { NAV } from './lib/config.js';
+import { resolveSection } from './lib/settingsSections.js';
 import { useAppData } from './state/AppDataProvider.jsx';
 import { useToast } from './state/ToastProvider.jsx';
+
+const PROTECTED_PROFILE_CODES = ['BACKUP_FAILED', 'PROFILE_UNREADABLE', 'RECOVERY_PENDING', 'RECOVERY_UNCHECKED'];
+
+function initialStorageProtection() {
+  try {
+    const status = window.zspeakly?.store?.statusSync?.();
+    return status?.ok === false && PROTECTED_PROFILE_CODES.includes(status.code) ? status.code : null;
+  } catch { return null; }
+}
 
 const PAGES = {
   home: HomePage,
@@ -25,8 +37,16 @@ export default function App() {
   const { settings, updateSettings, presets, instructions, voiceHotkeys } = useAppData();
   const { push } = useToast();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState('account');
-  const [profileOpen, setProfileOpen] = useState(false);
+  const [storageProtection, setStorageProtection] = useState(initialStorageProtection);
+  const [recoveryFolderState, setRecoveryFolderState] = useState('idle');
+  const [settingsSection, setSettingsSection] = useState('dictation');
+  // Палитра команд: одна строка на всё приложение (Ctrl+K).
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // «НОВОЕ» у буфера — не вечная наклейка: после первого захода гаснет
+  useEffect(() => {
+    if (route.page === 'clipboard' && !settings.seenClipboard) updateSettings({ seenClipboard: true });
+  }, [route.page, settings.seenClipboard, updateSettings]);
 
   const prevPage = useRef(route.page);
   const openedFromHash = useRef(false);
@@ -36,7 +56,7 @@ export default function App() {
     // пока не спросили имя — не перекрываем приветствие настройками
     if (route.page === 'settings' && settings.onboarded) {
       openedFromHash.current = true;
-      setSettingsSection(route.params.section || 'account');
+      setSettingsSection(resolveSection(route.params.section || 'dictation'));
       setSettingsOpen(true);
       // replace, а не navigate: иначе hashchange закроет только что открытые настройки
       replace(route.params.from || 'home');
@@ -51,11 +71,12 @@ export default function App() {
       openedFromHash.current = false;
       return;
     }
-    setProfileOpen(false);
     setSettingsOpen(false);
   }, [route.page]);
 
-  // Ctrl+, — настройки, Ctrl+K — поиск по буферу
+  // Ctrl+, — настройки, Ctrl+K — поиск и команды (палитра).
+  // Раньше Ctrl+K открывал поиск только по буферу: сочетание обещало «поиск по
+  // всему», а вело в один раздел. Поиск по буферу остался внутри страницы.
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
@@ -64,11 +85,25 @@ export default function App() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        navigate('clipboard');
-        setTimeout(() => {
-          const input = document.querySelector('.clip-toolbar .search-input input');
-          input?.focus();
-        }, 90);
+        setPaletteOpen((open) => !open);
+      }
+      // Ctrl+/ — та же палитра: привычка из редакторов, где так ищут команды
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+      // Ctrl+1…4 — страницы по порядку в боковой панели. Не срабатывает,
+      // когда человек печатает: иначе цифра не попала бы в поле.
+      if ((e.ctrlKey || e.metaKey) && /^[1-4]$/.test(e.key)) {
+        const target = document.activeElement;
+        const typing =
+          target &&
+          (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        if (typing) return;
+        const page = NAV[Number(e.key) - 1];
+        if (!page) return;
+        e.preventDefault();
+        navigate(page.id);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -76,12 +111,13 @@ export default function App() {
   }, []);
 
   // Команды из трея / меню Electron
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
+  // Тема: тёмная / светлая / как в системе. Значение уходит в data-theme,
+  // палитра живёт в base.css (светлая там уже была, но выбрать её было нельзя).
   useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
+    const theme = ['light', 'system', 'dark'].includes(settings.theme) ? settings.theme : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
+    document.documentElement.style.colorScheme =
+      theme === 'system' ? 'light dark' : theme === 'light' ? 'light' : 'dark';
   }, [settings.theme]);
 
   // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
@@ -93,22 +129,46 @@ export default function App() {
     bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
   }, [settings.autoLaunch]);
 
-  // Тема: раньше выбор «Тёмная / Как в системе» только сохранялся в настройках.
-  // Теперь реально переключается через data-theme на <html>.
+  // Сохраняем ограничение частоты и между повторными запусками эффекта в StrictMode.
+  const lastStorageWarning = useRef({ at: -Infinity, code: null });
+  // Ошибки localStorage, IPC и отложенной записи профиля нельзя замалчивать.
+  // Событие из main не содержит содержимое профиля и путь к нему.
   useEffect(() => {
-    const theme = settings.theme === 'system' ? 'system' : 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme === 'system' ? 'light dark' : 'dark';
-  }, [settings.theme]);
-
-  // Автозапуск: настройка живёт в localStorage, а системе о ней нужно сказать
-  // отдельно. Раньше это происходило только при ручном щелчке тумблера —
-  // после переезда профиля или переустановки автозапуск молча терялся.
-  useEffect(() => {
-    const bridge = window.zspeakly?.native;
-    if (!bridge?.setAutoLaunch) return;
-    bridge.setAutoLaunch(Boolean(settings.autoLaunch)).catch?.(() => {});
-  }, [settings.autoLaunch]);
+    const warn = (source, code) => {
+      const now = Date.now();
+      const last = lastStorageWarning.current;
+      // Защита профиля важнее обычной ошибки и не должна ею скрываться.
+      const protectedProfile = PROTECTED_PROFILE_CODES.includes(code);
+      if (protectedProfile) setStorageProtection(code);
+      if (now - last.at < 30_000 && !(protectedProfile && code !== last.code)) return;
+      lastStorageWarning.current = { at: now, code };
+      const description = code === 'BACKUP_FAILED'
+        ? 'Профиль не удалось прочитать и сохранить его копию. Исходный файл не перезаписывается; изменения будут потеряны при закрытии. Проверьте доступ и место на диске.'
+        : code === 'PROFILE_UNREADABLE'
+          ? 'Профиль не удалось прочитать. Создана резервная копия; исходный файл не перезаписывается. Новые изменения будут потеряны при закрытии. Проверьте и восстановите профиль.'
+          : code === 'RECOVERY_PENDING'
+            ? 'Найден незавершённый файл profile.json.tmp. Профиль и временный файл не перезаписываются; новые изменения будут потеряны при закрытии. Сохраните оба файла отдельно и проверьте их перед восстановлением.'
+            : code === 'RECOVERY_UNCHECKED'
+              ? 'Не удалось проверить временный файл профиля. Запись заблокирована; новые изменения будут потеряны при закрытии. Проверьте доступ к папке профиля и сохраните файлы отдельно.'
+              : source === 'electron'
+                ? 'Изменения могут остаться только в памяти и потеряться при закрытии. Проверьте место на диске и права доступа.'
+                : 'Не удалось записать данные в браузере. Проверьте доступное место и настройки хранилища.';
+      push({ title: 'Не удалось сохранить данные', description, tone: 'warn', ttl: 12_000 });
+    };
+    const onStorageError = (event) => warn(event.detail?.source);
+    window.addEventListener('zs:storage-error', onStorageError);
+    let off;
+    try {
+      const store = window.zspeakly?.store;
+      off = store?.onError?.((status) => warn('electron', status?.code));
+      const status = store?.statusSync?.();
+      if (status?.ok === false) warn('electron', status.code);
+    } catch { warn('electron'); }
+    return () => {
+      window.removeEventListener('zs:storage-error', onStorageError);
+      off?.();
+    };
+  }, [push]);
 
   // AI-инструкции должны срабатывать в любом приложении и на любой странице,
   // а не только когда открыт раздел «Горячие клавиши». Регистрируем их здесь,
@@ -148,25 +208,30 @@ export default function App() {
       }
       if (command === 'clipboard') navigate('clipboard');
       if (command === 'home') navigate('home');
-      if (command === 'mobile') {
-        setSettingsSection('account');
-        setSettingsOpen(true);
-      }
       if (command === 'about') {
-        setSettingsSection('about');
+        setSettingsSection('app');
         setSettingsOpen(true);
       }
     });
   }, []);
 
-  // Сочетание занято другой программой — сказать вслух, а не молчать
+  // Сочетание занято — сказать вслух, а не молчать. Слушаем на уровне
+  // приложения: конфликт может всплыть при запуске, когда раздел «Горячие
+  // клавиши» ещё не открывали, и раньше сообщение просто терялось.
   useEffect(() => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.onHotkeyConflict) return undefined;
     return bridge.onHotkeyConflict((payload) => {
+      const keys = keysLabel(payload?.keys || []);
+      push({
+        title: payload?.id === 'dictation' ? 'Сочетание диктовки занято' : 'Сочетание занято',
+        description: `${keys || 'Сочетание'} — ${payload?.reason || 'уже используется другой программой'}. Выберите другое в «Горячих клавишах».`,
+        tone: 'warn',
+        ttl: 10000,
+      });
       window.dispatchEvent(new CustomEvent('zs:hotkey-conflict', { detail: payload }));
     });
-  }, []);
+  }, [push]);
 
   // Новые элементы буфера из main-процесса
   useEffect(() => {
@@ -209,24 +274,29 @@ export default function App() {
     });
   }, [push]);
 
-  const openPresets = useCallback(() => {
-    navigate('hotkeys');
-    setTimeout(() => {
-      const tab = Array.from(document.querySelectorAll('.hk-toolbar .tabs__tab')).find((b) =>
-        /Рекомендуемые/i.test(b.textContent || ''),
-      );
-      tab?.click();
-    }, 120);
-  }, []);
-  const openProfile = useCallback(() => setProfileOpen(true), []);
-  const openSettings = useCallback((section = 'account') => {
+  // Раньше вкладку «Рекомендуемые» искали в DOM через setTimeout: не успела
+  // отрисоваться — человек оказывался на «Голосовых сочетаниях» и решал, что
+  // кнопка не работает. Теперь вкладка едет в адресе страницы.
+  const openPresets = useCallback(() => navigate('hotkeys', { tab: 'recommended' }), []);
+  const openSettings = useCallback((section = 'dictation') => {
     setSettingsSection(section);
     setSettingsOpen(true);
   }, []);
+  // Раньше здесь писалась «дата последнего захода в настройки», которую никто
+  // не читал: каждая правка настроек сохраняла профиль на диск без пользы.
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    updateSettings({ lastSettingsVisit: Date.now() });
-  }, [updateSettings]);
+  }, []);
+
+  const openRecoveryFolder = async () => {
+    setRecoveryFolderState('opening');
+    try {
+      const result = await window.zspeakly?.native?.openDataFolder?.();
+      setRecoveryFolderState(result?.ok ? 'opened' : 'failed');
+    } catch {
+      setRecoveryFolderState('failed');
+    }
+  };
 
   const content = useMemo(() => {
     if (page(route) === 'home') return <HomePage onOpenSettings={openSettings} />;
@@ -238,12 +308,40 @@ export default function App() {
     <div className="app-shell">
       <div className="app-window">
         <TitleBar />
+        {storageProtection ? (
+          <div className="profile-warning" role="alert">
+            <strong>Профиль защищён от записи.</strong>{' '}
+            {storageProtection === 'RECOVERY_PENDING'
+              ? 'Найден незавершённый profile.json.tmp. Сохраните профиль и временный файл отдельно и проверьте их перед восстановлением.'
+              : storageProtection === 'RECOVERY_UNCHECKED'
+                ? 'Не удалось проверить временный файл. Проверьте доступ к папке профиля и сохраните файлы отдельно.'
+                : 'Исходный профиль не перезаписывается. Сохраните важные данные отдельно и проверьте файлы профиля.'}{' '}
+            Новые изменения не сохранятся при закрытии.
+            <details className="profile-warning__recovery">
+              <summary>Как сохранить файлы и восстановить профиль</summary>
+              <ol>
+                <li>Сохраните важный новый текст вне приложения: изменения этой сессии могут исчезнуть.</li>
+                <li>Откройте папку данных, затем полностью закройте приложение, в том числе в трее. При предупреждении о несохранённых изменениях сначала сохраните их отдельно.</li>
+                <li>При закрытом приложении скопируйте в безопасное место profile.json, profile.json.tmp и profile.json.broken-* — если они существуют. Эти файлы могут содержать личные данные.</li>
+                <li>Проверьте копии вручную. Копия broken может содержать ту же ошибку, а временный файл — неполные или старые данные. Корректный JSON не гарантирует целостность профиля.</li>
+                <li>Если есть надёжная копия именно файла profile.json, замените им профиль только после сохранения оригиналов. При наличии profile.json.tmp переместите его в безопасное место вне папки профиля. Не заменяйте профиль непроверенными данными.</li>
+                <li>Если исправного profile.json нет, но есть экспортированная через настройки копия, после сохранения оригиналов можно переместить нечитаемый profile.json вне папки профиля и перезапустить приложение. Создастся пустой профиль: импортируйте копию через настройки и проверьте результат. Экспорт — другой формат, не переименовывайте его в profile.json.</li>
+                <li>Запустите приложение снова и проверьте данные. Защита не снимается в текущей сессии. Если доступа к папке или надёжной копии нет, обратитесь за помощью, не удаляя файлы.</li>
+              </ol>
+              <button type="button" onClick={openRecoveryFolder} disabled={recoveryFolderState === 'opening'}>Открыть папку данных</button>
+              <span className="profile-warning__folder-status" role="status">
+                {recoveryFolderState === 'failed' ? 'Не удалось открыть папку данных. Проверьте доступ к ней или обратитесь за помощью.' : ''}
+                {recoveryFolderState === 'opened' ? 'Папка открыта. Перед изменением файлов полностью закройте приложение.' : ''}
+              </span>
+            </details>
+          </div>
+        ) : null}
         <div className="app-body">
           <Sidebar
             page={page(route)}
-            onOpenSettings={() => openSettings('account')}
-            onOpenProfile={openProfile}
+            onOpenSettings={() => openSettings('app')}
             onOpenPresets={openPresets}
+            onOpenCommands={() => setPaletteOpen(true)}
           />
           <main className="content">{content}</main>
         </div>
@@ -251,15 +349,9 @@ export default function App() {
 
       <DictationHUD />
 
-      <ProfileModal
-        open={profileOpen}
-        onClose={() => setProfileOpen(false)}
-        onOpenSettings={() => {
-          setProfileOpen(false);
-          openSettings('account');
-        }}
-      />
-      <OnboardingModal />
+      {!storageProtection && <OnboardingModal />}
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 
       <SettingsModal
         open={settingsOpen}

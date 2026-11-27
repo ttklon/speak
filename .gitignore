@@ -9,6 +9,7 @@ models/*
 !models/README.md
 bin/*
 !bin/README.md
+!build/bin/README.md
 obj/
 .vs/
 *.user
@@ -26,3 +27,6 @@ Thumbs.db
 *.deb
 *.AppImage
 *.snap
+
+# исходное видео разбора — не храним в репозитории (22 МБ)
+vsdc-sr*.mp4

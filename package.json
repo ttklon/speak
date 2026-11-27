@@ -1,7 +1,7 @@
 {
   "name": "zspeakly",
   "productName": "ZSpeakly",
-  "version": "1.4.4",
+  "version": "1.39.0",
   "private": true,
   "description": "ZSpeakly — офлайн голосовой ввод для Windows 11: диктовка в любое поле, словарь, AI-инструкции и буфер обмена.",
   "author": {
@@ -21,16 +21,23 @@
     "dist:dir": "npm run build && electron-builder --dir",
     "test": "vitest run",
     "icons": "node scripts/make-icons.mjs",
+    "screenshots": "node scripts/capture-screenshots.mjs",
+    "test:ui": "node scripts/test-ui.mjs",
     "test:main": "node scripts/smoke-main.mjs",
     "settings:index": "node scripts/build-settings-index.mjs",
     "settings:index:check": "node scripts/build-settings-index.mjs --check",
     "check:ipc": "node scripts/check-ipc.mjs",
-    "test:updater": "node scripts/smoke-updater.mjs"
+    "check:wininput": "node scripts/check-wininput.cjs",
+    "test:updater": "node scripts/smoke-updater.mjs",
+    "check:settings": "node scripts/check-settings.mjs",
+    "test:whisper": "node scripts/test-whisper-live.mjs",
+    "audit:ui": "node scripts/audit-ui.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
-    "electron-updater": "^6.8.11"
+    "electron-updater": "^6.8.11",
+    "onnxruntime-node": "^1.31.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -38,6 +45,7 @@
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
     "lucide-react": "^0.469.0",
+    "puppeteer-core": "^23.11.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^5.4.11",
@@ -47,6 +55,7 @@
     "appId": "app.zspeakly.desktop",
     "productName": "ZSpeakly",
     "asar": true,
+    "afterPack": "scripts/nsis/patch-builder.cjs",
     "directories": {
       "output": "release",
       "buildResources": "icons"
@@ -55,7 +64,15 @@
       "dist/**/*",
       "electron/**/*",
       "icons/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/onnxruntime-node/bin/napi-*/{darwin,linux}/**",
+      "!**/node_modules/onnxruntime-web/**",
+      "!**/node_modules/onnxruntime-node/bin/**/*cuda*",
+      "!**/node_modules/onnxruntime-node/bin/**/*tensorrt*",
+      "!**/node_modules/onnxruntime-node/bin/**/*dml*"
+    ],
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**"
     ],
     "win": {
       "target": [
@@ -76,6 +93,7 @@
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
+      "include": "scripts/nsis/installer.nsh",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
@@ -86,6 +104,41 @@
     },
     "portable": {
       "artifactName": "ZSpeakly-${version}-portable.exe"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ttklon",
+        "repo": "speak",
+        "releaseType": "release"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "build/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "models",
+        "to": "models",
+        "filter": [
+          "**/*.bin"
+        ]
+      },
+      {
+        "from": "electron/assets/gigaam",
+        "to": "gigaam",
+        "filter": [
+          "**/*.onnx"
+        ]
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ttklon/speak"
   }
 }

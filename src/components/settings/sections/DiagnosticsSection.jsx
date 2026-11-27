@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Zap } from 'lucide-react';
 import { Button } from '../../ui/Controls.jsx';
 import { Toggle } from '../../ui/Toggle.jsx';
 import { useAppData } from '../../../state/AppDataProvider.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
-import { localEvents } from '../../../lib/diagnostics.js';
+import { diag, localEvents } from '../../../lib/diagnostics.js';
 import { isElectron } from '../../../lib/storage.js';
-import { writeClipboard } from '../../../lib/clipboard.js';
+import { clipboardCopyError, writeClipboard } from '../../../lib/clipboard.js';
+import { analyseQuality, qualityReportText } from '../../../lib/qualityReport.js';
+import { APP } from '../../../lib/config.js';
+import { engineName, hasNativeStt } from '../../../lib/recognition/engine.js';
+import { resolveLiveDraft } from '../../../lib/liveDraftPolicy.js';
+import { describeTarget } from '../../../lib/appFormat.js';
+import { runDictationSelfTest, describeSelfTest } from '../../../lib/selftest.js';
+import { analyseSpeed, engineWord } from '../../../lib/speedReport.js';
+import { lighterModel, tierForModel } from '../../../lib/modelTiers.js';
 
 const LEVEL_LABEL = { debug: 'отладка', info: 'инфо', warn: 'внимание', error: 'ошибка' };
 
@@ -21,15 +30,118 @@ function timeOf(at) {
  * «Данные → Диагностика». Честно показывает, что собирается, что уходит на
  * сервер и что происходит в последних событиях. Отправку можно выключить.
  */
+/** Пробный текст: короткий, узнаваемый, без латиницы на всякий случай. */
+const INSERT_PROBE = 'Проверка вставки ZSpeakly — этот текст должен появиться здесь.';
+
 export default function DiagnosticsSection() {
-  const { settings, updateSettings } = useAppData();
+  const { settings, updateSettings, dictations } = useAppData();
   const { push } = useToast();
   const [status, setStatus] = useState(null);
+  // «Система и железо» — то, что main реально проверил на этой машине
+  const system = status?.system || null;
   const [events, setEvents] = useState([]);
   const [busy, setBusy] = useState('');
   // черновик адреса приёмника: применяется по кнопке, чтобы не дёргать
   // сеть на каждом нажатии клавиши
   const [endpointDraft, setEndpointDraft] = useState('');
+  // «Проверить диктовку»: запись с микрофона и настоящий проход движка
+  const [selfTest, setSelfTest] = useState(null);
+  const [selfBusy, setSelfBusy] = useState(false);
+  // Отчёт о скорости: считается из истории диктовок, ничего дополнительно не
+  // измеряет и никуда не ходит. Человеку нужен ответ «успевает или нет», а не
+  // ещё одна таблица настроек.
+  const speed = analyseSpeed(dictations);
+  // «Где теряется точность»: тот же принцип, что у скорости — только история,
+  // никаких новых замеров и никакой сети.
+  const quality = analyseQuality(dictations);
+  // Переключение на режим легче прямо из отчёта: человек видит «долго» и не
+  // должен идти искать, где это меняется. Если режим ещё не скачан — качаем
+  // и говорим об этом, а не переключаем на отсутствующий файл.
+  const [switching, setSwitching] = useState(false);
+  // Состояние вставки: чем вставляем и что было в прошлый раз. Без этого
+  // «текст не вставляется» невозможно разобрать — только догадываться.
+  const [inputStatus, setInputStatus] = useState(null);
+  // Состояние русской модели: включится ли она на следующей диктовке. Без этой
+  // строки «на русском распознаёт хуже» объяснить нечем — человек не знает,
+  // скачана ли модель и видит ли её приложение.
+  // В браузере моста нет: без этого флага обе строки навсегда показывали
+  // «проверяю…», хотя проверять некому — обещание, которое не выполнится.
+  const nativeBridge = typeof window !== 'undefined' ? window.zspeakly?.native : null;
+  const [russian, setRussian] = useState(null);
+  // Состояние модели европейских языков: та же причина, что и у русской —
+  // «почему на английском считает прежний движок» должно быть видно.
+  const [european, setEuropean] = useState(null);
+  // Куда попадёт текст и как он будет оформлен: одно и то же место, где человек
+  // ищет ответ на «почему тут без точки».
+  const [target, setTarget] = useState(null);
+  const [probe, setProbe] = useState(null);
+  const [probeBusy, setProbeBusy] = useState(false);
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.insertTarget) return undefined;
+    let alive = true;
+    bridge
+      .insertTarget()
+      .then((info) => {
+        if (alive && info && typeof info === 'object') setTarget(info);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.modelsStatus) return undefined;
+    let alive = true;
+    bridge
+      .modelsStatus()
+      .then((status) => {
+        if (alive && status?.russian) setRussian(status.russian);
+        if (alive && status?.european) setEuropean(status.european);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [settings.language]);
+
+  const currentTier = tierForModel(settings.whisperModel);
+  const lighterTier = currentTier ? lighterModel(currentTier.model) : '';
+  const lighter = lighterTier ? tierForModel(lighterTier) : null;
+  const goLighter = useCallback(async () => {
+    if (!lighter || switching) return;
+    const bridge = window.zspeakly?.native;
+    setSwitching(true);
+    try {
+      const st = bridge?.modelsStatus ? await bridge.modelsStatus().catch(() => null) : null;
+      // Ключ в статусе — имя модели (`base-q5_1`), а не id режима (`fast`).
+      const downloaded = st?.models?.[lighter.model]?.downloaded === true;
+      if (downloaded) {
+        updateSettings({ whisperModel: lighter.model });
+        await bridge?.modelsWarm?.({ model: lighter.model }).catch(() => {});
+        push({
+          title: `Режим «${lighter.label.toLowerCase()}» включён`,
+          description: `${lighter.size} · продиктуйте ту же фразу и посмотрите на секунды выше`,
+          tone: 'success',
+          ttl: 9000,
+        });
+      } else {
+        // Скачивание идёт в фоне и само переключит режим по готовности —
+        // обещать «включено» до файла нельзя.
+        Promise.resolve(bridge?.downloadModel?.(lighter.model)).catch(() => {});
+        push({
+          title: `Скачиваю «${lighter.label.toLowerCase()}» — ${lighter.size}`,
+          description: 'Режим включится, как только файл будет готов. Это один раз.',
+          tone: 'info',
+          ttl: 9000,
+        });
+      }
+    } finally {
+      setSwitching(false);
+    }
+  }, [lighter, push, switching, updateSettings]);
 
   const refresh = useCallback(async () => {
     const bridge = window.zspeakly?.native;
@@ -50,6 +162,72 @@ export default function DiagnosticsSection() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Статус вставки спрашиваем один раз при открытии: он показывает, собран ли
+  // помощник ввода и чем закончилась прошлая вставка.
+  useEffect(() => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.inputStatus) return;
+    bridge
+      .inputStatus()
+      .then((st) => setInputStatus(st || null))
+      .catch(() => setInputStatus(null));
+  }, []);
+
+  /**
+   * Проверка вставки «как в жизни»: три секунды на то, чтобы переключиться в
+   * нужное окно, потом настоящая вставка пробного текста. Приложение умеет
+   * только вставлять — проверить результат за человека оно не может, поэтому
+   * спрашиваем прямо «появился ли текст» и пишем ответ в журнал.
+   */
+  const checkInsert = useCallback(async () => {
+    const bridge = window.zspeakly?.native;
+    if (!bridge?.insertText) {
+      push({ title: 'Только в приложении', description: 'В браузере вставка в другие окна недоступна.', tone: 'warn' });
+      return;
+    }
+    setProbeBusy(true);
+    setProbe(null);
+    push({
+      title: 'Переключитесь в нужное окно',
+      description: 'Через три секунды вставлю пробный текст — поставьте курсор туда, где хотите его увидеть.',
+      tone: 'info',
+      ttl: 3200,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    let res = null;
+    try {
+      res = await bridge.insertText(INSERT_PROBE);
+    } catch (error) {
+      res = { ok: false, uncertain: true, reason: 'ответ не получен' };
+    }
+    setProbeBusy(false);
+    setProbe(res || { ok: false, uncertain: true, reason: 'нет ответа' });
+    const status = bridge.inputStatus ? await bridge.inputStatus().catch(() => null) : null;
+    if (status) setInputStatus(status);
+    diag.info('insert', res?.ok ? 'Проверка вставки: текст доставлен' : 'Проверка вставки: отказ', {
+      method: res?.method || '',
+      reason: res?.reason || '',
+    });
+  }, [push]);
+
+  const confirmProbe = useCallback(
+    (appeared) => {
+      diag.info('insert', appeared ? 'Человек подтвердил: текст появился' : 'Человек сообщил: текст не появился', {
+        method: probe?.method || '',
+      });
+      push({
+        title: appeared ? 'Вставка работает' : 'Вставка не дошла до окна',
+        description: appeared
+          ? 'Дальше диктовка будет вставляться так же.'
+          : 'Причина и способ записаны в журнал. Проверьте целевое окно и настройки вставки.',
+        tone: appeared ? 'success' : 'warn',
+        ttl: 10000,
+      });
+      setProbe(null);
+    },
+    [probe, push],
+  );
 
   // адрес берём из настроек главного процесса: он же переживает перезапуск
   useEffect(() => {
@@ -103,7 +281,41 @@ export default function DiagnosticsSection() {
   const saveReport = async () => {
     const bridge = window.zspeakly?.native;
     if (!bridge?.diagSaveReport) {
-      push({ title: 'Только в приложении', description: 'Открыть Windows-сборку ZSpeakly.', tone: 'warn' });
+      // В браузере (превью) отчёт можно честно скачать файлом: Blob + <a download>.
+      // Раньше кнопка просто упиралась в «только в приложении».
+      try {
+        const events = localEvents()
+          .slice(-200)
+          .map((e) => `[${new Date(e.at).toLocaleString('ru-RU')}] ${e.level}/${e.scope}: ${e.message}`)
+          .join('\n');
+        const text = [
+          'ZSpeakly — отчёт о работе (браузер)',
+          `Версия: ${APP?.version || '—'} · ${APP?.build || ''}`,
+          `Браузер: ${navigator.userAgent}`,
+          `Язык: ${navigator.language} · Платформа: ${navigator.platform || '—'}`,
+          `Экран: ${window.screen?.width}×${window.screen?.height}`,
+          `Адрес: ${location.origin}`,
+          '',
+          `Событий в журнале: ${events ? events.split('\n').length : 0}`,
+          events || 'журнал пуст',
+        ].join('\n');
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'zspeakly-report.txt';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        push({
+          title: 'Отчёт скачан',
+          description: 'Файл zspeakly-report.txt в папке загрузок браузера.',
+          tone: 'success',
+        });
+      } catch (err) {
+        push({ title: 'Не удалось сохранить отчёт', description: String(err?.message || err), tone: 'warn' });
+      }
       return;
     }
     setBusy('report');
@@ -186,7 +398,7 @@ export default function DiagnosticsSection() {
         tone: 'success',
       });
     } catch (err) {
-      push({ title: 'Скопировать не удалось', description: String(err?.message || err), tone: 'warn' });
+      push(clipboardCopyError(err, String(err?.message || err)));
     }
   };
 
@@ -212,13 +424,362 @@ export default function DiagnosticsSection() {
 
   const errors = events.filter((e) => e.level === 'error').length;
 
+  // Проверка «здесь и сейчас»: 2 секунды с микрофона → движок → цифры и текст.
+  // Это единственный способ честно ответить на «работает или нет» на этом ПК.
+  const checkDictation = useCallback(async () => {
+    if (selfBusy) return;
+    setSelfBusy(true);
+    setSelfTest(null);
+    push({ title: 'Проверяю диктовку', description: 'Скажите любую фразу — идёт запись 2 секунды.', tone: 'info', ttl: 3000 });
+    try {
+      const res = await runDictationSelfTest({
+        seconds: 2,
+        lang: settings.language || 'ru',
+        model: settings.whisperModel || '',
+      });
+      setSelfTest(res);
+      push({
+        title: res.ok ? 'Диктовка работает' : 'Диктовка не сработала',
+        description: describeSelfTest(res),
+        tone: res.ok ? 'success' : 'warn',
+        ttl: 9000,
+      });
+    } catch (err) {
+      const res = { ok: false, reason: String(err?.message || err) };
+      setSelfTest(res);
+      push({ title: 'Проверка сорвалась', description: res.reason, tone: 'warn', ttl: 9000 });
+    } finally {
+      setSelfBusy(false);
+    }
+  }, [selfBusy, settings.language, settings.whisperModel, push]);
+
   return (
     <div>
-      <h2 className="settings-section__title">Диагностика</h2>
-      <p className="settings-section__desc">
-        Чтобы ошибки можно было починить, а не угадывать. По умолчанию отправка включена, её можно
-        выключить в любой момент.
-      </p>
+      <div className="settings-group">
+        <div className="settings-group__title">Как сейчас работает диктовка</div>
+        <div className="settings-group__desc">То, что чаще всего объясняет «почему не так».</div>
+        <div className="kv-row">
+          <span className="kv-row__key">Движок</span>
+          <span className="kv-row__value">{engineName()}</span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Русский язык</span>
+          <span className="kv-row__value">
+            {russian === null
+              ? nativeBridge?.modelsStatus
+                ? 'проверяю…'
+                : 'только в приложении'
+              : russian.available
+                ? 'своя модель, включается сама'
+                : russian.reason}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Европейские языки</span>
+          <span className="kv-row__value">
+            {european === null
+              ? nativeBridge?.modelsStatus
+                ? 'проверяю…'
+                : 'только в приложении'
+              : european.available
+                ? 'своя модель, включается сама'
+                : european.reason}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Модель</span>
+          <span className="kv-row__value">
+            {tierForModel(settings.whisperModel)?.label || 'Сбалансированно'}
+            {settings.keepModelLoaded === true ? ', держится в памяти' : ''}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Живая расшифровка</span>
+          <span className="kv-row__value">
+            {(() => {
+              const live = resolveLiveDraft({
+                setting: settings.liveWhisper,
+                model: settings.whisperModel,
+                hasNative: hasNativeStt(),
+              });
+              if (!live.enabled) return 'выключена — текст после остановки';
+              return live.explicit
+                ? 'включена вручную — запись пересчитывается раз в 2,5 с'
+                : 'включена сама — движок успевает пересчитывать запись раз в 2,5 с';
+            })()}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Горячий микрофон</span>
+          <span className="kv-row__value">
+            {settings.micPreroll === true
+              ? 'включён — микрофон может быть открыт заранее, до 0,6 с звука добавляется к записи'
+              : 'выключен — запись начинается с нажатия'}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Сведения о распознавании</div>
+        <div className="settings-group__desc">
+          Разбор по своей же истории: был ли честный проход, усиливался ли звук, не считалась ли
+          фраза дольше, чем длилась. Без сети и без новых замеров. Без эталона эти сведения не измеряют точность.
+        </div>
+        <div className="quality-report">
+          {quality.verdicts.map((verdict, index) => (
+            <div className={`quality-report__row is-${verdict.level}`} key={`${verdict.level}-${index}`}>
+              <span className="quality-report__mark">
+                {verdict.level === 'ok' ? 'сведения' : verdict.level === 'warn' ? 'проверьте' : 'неизвестно'}
+              </span>
+              <span className="quality-report__title">{verdict.title}</span>
+              <span className="quality-report__hint">{verdict.hint}</span>
+            </div>
+          ))}
+        </div>
+        {quality.models.length ? (
+          <div className="settings-foot-hint" style={{ marginTop: 6 }}>
+            {quality.models
+              .map((m) => `${m.model}: ${m.count} фраз${m.secondPass ? `, второй проход ${m.secondPass}` : ''}`)
+              .join(' · ')}
+          </div>
+        ) : null}
+        <div className="row-8" style={{ flexWrap: 'wrap', marginTop: 8 }}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              try {
+                await writeClipboard(qualityReportText(quality, { version: APP.version }));
+                push({
+                  title: 'Разбор скопирован',
+                  description: 'Только числа и модель — текст диктовок не копируется.',
+                  tone: 'success',
+                });
+              } catch (err) {
+                push(clipboardCopyError(err, String(err?.message || err)));
+              }
+            }}
+          >
+            Скопировать разбор
+          </Button>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Скорость: укладывается ли в пять секунд</div>
+        <div className="settings-group__desc">
+          Замеры последних диктовок: сколько говорили и сколько считал движок.
+        </div>
+        {speed.samples.length ? (
+          <div className="speed-report">
+            {speed.samples.map((row, index) => (
+              <div className="speed-report__row" key={`${row.at}-${index}`}>
+                <span className="speed-report__main">
+                  {row.spoken.toFixed(1)} с речи → {row.total.toFixed(1)} с ожидания
+                </span>
+                <span className="speed-report__meta">
+                  {/* Человеку важно не «сколько считал движок», а сколько он ждал.
+                      Счёт показываем рядом, чтобы было видно, где именно секунды. */}
+                  {row.tail >= 0.2 ? `счёт ${row.compute.toFixed(1)} с · остальное ${row.tail.toFixed(1)} с · ` : ''}
+                  {row.factor ? `×${row.factor.toFixed(1)}` : '—'}
+                  {row.mode ? ` · ${engineWord(row.mode)}` : ''}
+                  {row.parts > 1 ? ` · ${row.parts} фрагмента` : ''}
+                  {row.pre ? ` · заранее посчитано: ${row.pre}` : ''}
+                </span>
+                <span className={`speed-report__mark ${row.fits ? 'is-ok' : 'is-slow'}`}>
+                  {row.fits ? 'в норме' : 'долго'}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="settings-foot-hint" style={{ marginTop: 6 }}>
+          {speed.advice}
+        </div>
+        {speed.verdict === 'slow' && speed.computeBound && lighter ? (
+          <div style={{ marginTop: 8 }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Zap size={12} />}
+              onClick={goLighter}
+              disabled={switching}
+            >
+              {switching
+                ? 'Переключаю…'
+                : `Переключить на «${lighter.label.toLowerCase()}» — ${lighter.size}`}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Система и железо</div>
+        <div className="settings-group__desc">
+          Проверенные факты, а не настройки: зарегистрировались ли глобальные сочетания, включён ли
+          мониторинг буфера, есть ли движок и модель на диске.
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Глобальные сочетания</span>
+          <span className="kv-row__value">
+            {system?.hotkeys?.length ? system.hotkeys.join(', ') : 'нет доступа к системе (превью в браузере)'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Вставка текста</span>
+          <span className="kv-row__value">
+            {system?.insertMethod === 'sendinput'
+              ? system?.insertSupported
+                ? 'SendInput, без буфера обмена'
+                : 'SendInput выбран, но работает только в Windows — сейчас буфер'
+              : 'буфер обмена + Ctrl+V'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Мониторинг буфера</span>
+          <span className="kv-row__value">
+            {system ? (system.clipboardWatch
+              ? `включён${system.clipboardWatchTextError ? ' · ошибка чтения текста' : ''}${system.clipboardWatchImageIssue === 'error' ? ' · ошибка чтения изображения' : system.clipboardWatchImageIssue === 'size' ? ' · изображение превышает лимит' : ''}`
+              : 'выключен') : '—'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Модель на диске</span>
+          <span className="kv-row__value">
+            {system
+              ? `${system.model} — ${system.modelDownloaded ? 'скачана' : 'нет файла'}${system.vad ? ', VAD на месте' : ', без VAD'}`
+              : '—'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Модель в памяти</span>
+          <span className="kv-row__value">
+            {!system
+              ? '—'
+              : system.engineWarm
+                ? 'прогрета — распознавание без загрузки весов'
+                : system.engineWarming
+                  ? 'греется: первая фраза может быть медленнее'
+                  : 'не прогрета — каждая фраза начинается с загрузки весов'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Оформление под окно</span>
+          <span className="kv-row__value">
+            {!target
+              ? 'окно не определено'
+              : `${target.app || 'без имени'} — ${describeTarget(target).label}`}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Помощник ввода</span>
+          <span className="kv-row__value">
+            {!system?.inputHost
+              ? '—'
+              : !system.inputHost.available
+                ? 'системой не поддержан — вставка через буфер'
+                : system.inputHost.ready
+                  ? 'готов — вставка без запуска программ'
+                  : system.inputHost.running
+                    ? 'запускается'
+                    : 'не запущен — первая вставка будет медленнее'}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Движок вставки</span>
+          <span className="kv-row__value">
+            {!inputStatus
+              ? '—'
+              : inputStatus.ready
+                ? 'свой помощник SendInput готов — вставка без PowerShell'
+                : `помощник SendInput недоступен: ${inputStatus.reason || 'неизвестно'} — вставка через буфер и PowerShell`}
+            {inputStatus?.last?.at
+              ? ` · прошлая: ${inputStatus.last.ok ? 'получилась' : 'не получилась'}${inputStatus.last.method ? `, способ ${inputStatus.last.method === 'win-input' ? 'SendInput' : inputStatus.last.method === 'powershell' ? 'PowerShell' : 'буфер'}` : ''}${inputStatus.last.reason ? ` (${inputStatus.last.reason})` : ''}`
+              : ''}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="kv-row__key">Запуск окна</span>
+          <span className="kv-row__value">
+            {!system
+              ? '—'
+              : system.startupMs
+                ? `${(Math.round(system.startupMs / 100) / 10).toLocaleString('ru-RU')} с от запуска приложения до окна`
+                : '—'}
+          </span>
+        </div>
+
+        <div className="kv-row">
+          <span className="kv-row__key">Компьютер</span>
+          <span className="kv-row__value">
+            {system ? `${system.cpus} ядер, ${system.ramGb} ГБ памяти, версия ${system.version}` : '—'}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Вставка в другие окна</div>
+        <div className="settings-group__desc">
+          Текст вставляется в активное окно. Проверка честная: приложение вставит настоящий
+          пробный текст, а вы скажете, появился он или нет — приложение не может увидеть чужие окна.
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Проверка вставки
+            <div className="setting-row__desc">
+              {probeBusy
+                ? 'Вставляю через три секунды после нажатия…'
+                : probe
+                  ? probe.ok
+                    ? 'Текст отправлен в активное окно. Появился?'
+                    : probe.uncertain || probe.partial > 0
+                      ? 'Результат ввода не подтверждён: текст мог попасть в окно полностью или частично. Проверьте окно перед повтором.'
+                      : `Вставка отказала: ${probe.reason || 'причина неизвестна'}. Текст остался в буфере — вставьте через Ctrl+V.`
+                  : 'Нажмите, переключитесь в Блокнот или Word и дождитесь пробного текста.'}
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={checkInsert} disabled={probeBusy}>
+            {probeBusy ? 'Вставляю…' : 'Проверить вставку'}
+          </Button>
+        </div>
+        {probe?.ok ? (
+          <div className="setting-row">
+            <div className="setting-row__label">
+              Текст появился?
+              <div className="setting-row__desc">Ответ попадёт в журнал — по нему видно, работает ли вставка.</div>
+            </div>
+            <div className="setting-row__actions">
+              <Button variant="white" size="sm" onClick={() => confirmProbe(true)}>
+                Да, появился
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => confirmProbe(false)}>
+                Нет
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group__title">Проверить диктовку сейчас</div>
+        <div className="settings-group__desc">
+          Две секунды записи с микрофона и настоящий проход движка — без вставки в другие окна и без
+          записи в историю. Так видно, работает ли диктовка на этом компьютере, и за сколько секунд.
+        </div>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            Самопроверка
+            <div className="setting-row__desc">
+              {selfTest
+                ? describeSelfTest(selfTest)
+                : 'Нажмите и скажите любую фразу — результат появится здесь.'}
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={checkDictation} disabled={selfBusy}>
+            {selfBusy ? 'Проверяю…' : 'Проверить диктовку'}
+          </Button>
+        </div>
+      </div>
 
       <div className="settings-group">
         <div className="settings-group__title">Отправка отчётов</div>
@@ -226,10 +787,8 @@ export default function DiagnosticsSection() {
           <div className="setting-row__label">
             Отправлять ошибки и логи
             <div className="setting-row__desc">
-              Уходят только технические события: уровни, тексты ошибок, версия, платформа и состояние
-              движка распознавания. <strong>Не уходят:</strong> распознанный текст, содержимое буфера
-              обмена, словарь, имя пользователя и звук. Почта и пути вида C:\Users\Имя вырезаются перед
-              отправкой.
+              Журнал пишется только на этом компьютере. <strong>Не уходят:</strong> распознанный
+              текст, буфер, словарь, имя и звук — даже если отправка включена.
             </div>
           </div>
           <Toggle checked={settings.diagnostics !== false} onChange={toggleEnabled} />
@@ -255,18 +814,15 @@ export default function DiagnosticsSection() {
           <span className="kv-row__value">{status?.installId || 'локальный'}</span>
         </div>
         <div className="settings-group__desc">
-          По умолчанию ничего никуда не уходит: журнал лежит на этом компьютере. Если что-то не
-          работает — нажмите «Сохранить отчёт в файл»: на Рабочем столе появится текстовый файл
-          с журналом и окружением, его достаточно приложить к сообщению. Кнопка «Скопировать
-          ошибки» делает то же самое, но в буфер обмена. Отправка на сервер нужна только тем,
-          у кого он есть.
+          Что-то не работает? Нажмите «Сохранить отчёт в файл» — получится текстовый файл с
+          журналом и окружением, его достаточно приложить к сообщению.
         </div>
-        <div className="setting-row">
+        <div className="setting-row setting-row--wrap">
           <div className="setting-row__label">
             Адрес приёмника
             <div className="setting-row__desc">
-              По умолчанию — сервер ZSpeakly. Можно указать свой (например, развёрнутый из папки
-              server). Пустое поле — ничего не отправлять: журнал остаётся на компьютере.
+              По умолчанию пусто — журнал остаётся на компьютере. Можно указать свой приёмник
+              (например, развёрнутый из папки server): тогда события дополнительно уйдут туда.
             </div>
           </div>
           <div className="row-8">
@@ -281,7 +837,7 @@ export default function DiagnosticsSection() {
               variant="white"
               size="sm"
               onClick={saveEndpoint}
-              disabled={busy === 'endpoint' || !isElectron()}
+              disabled={busy === 'endpoint'}
             >
               {busy === 'endpoint' ? 'Сохраняю…' : 'Сохранить'}
             </Button>
@@ -293,7 +849,7 @@ export default function DiagnosticsSection() {
                 setEndpointDraft('');
                 saveEndpoint('');
               }}
-              disabled={busy === 'endpoint' || !isElectron()}
+              disabled={busy === 'endpoint'}
             >
               Только на компьютере
             </Button>
@@ -308,13 +864,13 @@ export default function DiagnosticsSection() {
           </span>
         </div>
         <div className="row-8" style={{ flexWrap: 'wrap', marginTop: 8 }}>
-          <Button variant="white" size="sm" onClick={saveReport} disabled={busy === 'report' || !isElectron()}>
+          <Button variant="white" size="sm" onClick={saveReport} disabled={busy === 'report'}>
             {busy === 'report' ? 'Сохраняю…' : 'Сохранить отчёт в файл'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy === 'send' || !isElectron()}>
+          <Button variant="ghost" size="sm" onClick={sendNow} disabled={busy === 'send'}>
             {busy === 'send' ? 'Отправляю…' : 'Отправить сейчас'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={ping} disabled={busy === 'ping' || !isElectron()}>
+          <Button variant="ghost" size="sm" onClick={ping} disabled={busy === 'ping'}>
             {busy === 'ping' ? 'Проверяю…' : 'Проверить канал'}
           </Button>
           <Button variant="ghost" size="sm" onClick={copyLogs}>

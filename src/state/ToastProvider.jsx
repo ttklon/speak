@@ -19,7 +19,8 @@ export function ToastProvider({ children }) {
       seq += 1;
       const id = `t_${seq}`;
       const item = typeof toast === 'string' ? { title: toast } : { ...toast, id };
-      setItems((prev) => [...prev.slice(-3), { ...item, id }]);
+      // Не терять несохранённый текст из-за следующих обычных уведомлений.
+      setItems((prev) => [...prev.filter((t) => t.recoverText), ...prev.filter((t) => !t.recoverText).slice(-3), { ...item, id }]);
       const ttl = item.ttl ?? 3200;
       if (ttl > 0) setTimeout(() => dismiss(id), ttl);
       return id;
@@ -47,6 +48,9 @@ export function ToastProvider({ children }) {
             <div className="toast__body">
               <div className="toast__title">{t.title}</div>
               {t.description ? <div className="toast__desc">{t.description}</div> : null}
+              {t.recoverText ? (
+                <textarea className="toast__recover" aria-label={t.recoverLabel || 'Невставленный результат инструкции'} readOnly value={t.recoverText} rows={4} />
+              ) : null}
               {t.action?.label ? (
                 <button
                   type="button"

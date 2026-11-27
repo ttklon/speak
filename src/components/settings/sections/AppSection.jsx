@@ -6,10 +6,13 @@ import { APP, LANGUAGES } from '../../../lib/config.js';
 import { isElectron } from '../../../lib/storage.js';
 import MicTester from './MicTester.jsx';
 import { useToast } from '../../../state/ToastProvider.jsx';
+import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 
 export default function AppSection() {
   const { settings, updateSettings, resetAll } = useAppData();
   const { push } = useToast();
+  // сброс удаляет историю, буфер и словарь — спрашиваем подтверждение
+  const [confirmReset, setConfirmReset] = useState(false);
   // голоса Windows подгружаются асинхронно — слушаем onvoiceschanged
   const [voices, setVoices] = useState([]);
   useEffect(() => {
@@ -22,22 +25,8 @@ export default function AppSection() {
 
   return (
     <div>
-      <h2 className="settings-section__title">Приложение</h2>
-      <p className="settings-section__desc">
-        Внешний вид, запуск и поведение окна. Всё применяется сразу.
-      </p>
-
       <div className="settings-group">
         <div className="settings-group__title">Интерфейс</div>
-        <div className="setting-row">
-          <div className="setting-row__label">Язык интерфейса</div>
-          <Select
-            value={settings.language}
-            onChange={(v) => updateSettings({ language: v })}
-            options={LANGUAGES.map((l) => ({ value: l.id, label: l.native }))}
-            width={170}
-          />
-        </div>
         <div className="setting-row">
           <div className="setting-row__label">Тема</div>
           <Select
@@ -45,6 +34,7 @@ export default function AppSection() {
             onChange={(v) => updateSettings({ theme: v })}
             options={[
               { value: 'dark', label: 'Тёмная' },
+              { value: 'light', label: 'Светлая' },
               { value: 'system', label: 'Как в системе' },
             ]}
             width={170}
@@ -54,8 +44,8 @@ export default function AppSection() {
           <div className="setting-row__label">
             Плавающий индикатор записи
             <div className="setting-row__desc">
-              Показывает «Слушаю…» с уровнем микрофона поверх окон. Выключите, если мешает, —
-              запись при этом работает как обычно.
+              Окно поверх всех приложений: живой текст и кнопки «Остановить» и «Скрыть».
+              Выключите — запись работает как обычно, индикатор вернётся в окно.
             </div>
           </div>
           <Toggle
@@ -71,8 +61,7 @@ export default function AppSection() {
           <div className="setting-row__label">
             Читать результат голосом
             <div className="setting-row__desc">
-              После диктовки ZSpeakly озвучит текст системным голосом Windows — удобно проверить, что
-              распознано верно.
+              ZSpeakly озвучит текст системным голосом Windows — слышно, что распознано.
             </div>
           </div>
           <Toggle
@@ -122,13 +111,6 @@ export default function AppSection() {
           </div>
           <Toggle checked={settings.soundFeedback} onChange={(v) => updateSettings({ soundFeedback: v })} />
         </div>
-        <div className="setting-row">
-          <div className="setting-row__label">
-            Эффект печати
-            <div className="setting-row__desc">Текст появляется по словам, а не целиком.</div>
-          </div>
-          <Toggle checked={settings.typingEffect} onChange={(v) => updateSettings({ typingEffect: v })} />
-        </div>
       </div>
 
       <div className="settings-group">
@@ -144,15 +126,21 @@ export default function AppSection() {
           </div>
           <Toggle
             checked={settings.autoLaunch}
-            onChange={(v) => {
-              updateSettings({ autoLaunch: v });
-              window.zspeakly?.native?.setAutoLaunch?.(v);
-            }}
+            // сам вызов main делает эффект в App.jsx — он же синхронизирует
+            // автозапуск при старте, поэтому здесь только настройка
+            onChange={(v) => updateSettings({ autoLaunch: v })}
             disabled={!isElectron()}
           />
         </div>
         <div className="setting-row">
-          <div className="setting-row__label">Свернуть в трей при закрытии</div>
+          <div className="setting-row__label">
+            Свернуть в трей при закрытии
+            <div className="setting-row__desc">
+              {isElectron()
+                ? 'Крестик прячет окно, приложение продолжает слушать сочетания клавиш.'
+                : 'В браузере трея нет: окно закрывается вместе с вкладкой.'}
+            </div>
+          </div>
           <Toggle
             checked={settings.closeToTray !== false}
             onChange={(v) => updateSettings({ closeToTray: v })}
@@ -164,22 +152,32 @@ export default function AppSection() {
       <div className="settings-group">
         <div className="settings-group__title">Сброс</div>
         <div className="settings-group__desc">
-          Удаляет историю диктовок, буфер, словарь и заметки на этом устройстве.
+          Удаляет историю диктовок, буфер, словарь, заметки, имя и настройки на этом устройстве.
+          Приложение вернётся к состоянию после первой установки.
         </div>
-        <Button
-          variant="danger"
-          size="sm"
-          onClick={() => {
-            resetAll();
-            push({ title: 'Данные сброшены', description: 'ZSpeakly вернулся к настройкам по умолчанию.', tone: 'warn' });
-          }}
-        >
+        <Button variant="danger" size="sm" onClick={() => setConfirmReset(true)}>
           Сбросить все данные
         </Button>
         <div className="settings-foot-hint" style={{ marginTop: 10 }}>
           Версия {APP.version} · сборка {APP.build}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={() => {
+          resetAll();
+          push({
+            title: 'Данные сброшены',
+            description: 'История, буфер, словарь и настройки удалены. Имя спросим заново.',
+            tone: 'warn',
+          });
+        }}
+        title="Сбросить все данные?"
+        description="История диктовок, буфер обмена, словарь, заметки, имя и настройки будут удалены с этого компьютера. Вернуть их не получится."
+        confirmLabel="Сбросить"
+      />
     </div>
   );
 }
