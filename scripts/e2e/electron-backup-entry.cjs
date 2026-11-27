@@ -2,7 +2,7 @@
  * Диалог выбора файла заменён установкой File в input; проводник не открывается. */
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, dialog } = require('electron');
 const mode = process.env.ZS_BACKUP_MODE;
 const desktop = process.env.ZS_BACKUP_DESKTOP;
 if (!['export', 'import', 'failure', 'verify'].includes(mode) || !desktop) throw new Error('Не задан режим проверки копии');
@@ -94,7 +94,24 @@ app.whenReady().then(async () => {
           JSON.stringify(state[1]) !== JSON.stringify(previous['zs.dictionary']) || state[2]?.code !== 'RECOVERY_PENDING' ||
           !pending['zs.dictations']?.some((item) => item.id === 'backup-e2e-history') ||
           !pending['zs.dictionary']?.some((item) => item.id === 'backup-e2e-word')) throw new Error('Пакетный отказ изменил оригинал или не сохранил temp');
-      console.log('BACKUP_E2E_OK failure'); app.quit(); return;
+      // Профиль защищён и имеет несохранённые изменения окна. Обычный выход
+      // показывает предупреждение: в тесте явно выбираем «Выйти без сохранения».
+      let dialogs = 0;
+      dialog.showMessageBoxSync = (options) => {
+        dialogs += 1;
+        if (options.defaultId !== 0 || options.cancelId !== 0 || options.buttons?.length !== 2) throw new Error('Небезопасный диалог выхода');
+        return 1;
+      };
+      app.once('will-quit', () => {
+        try {
+          const after = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+          const savedTemp = JSON.parse(fs.readFileSync(`${profilePath}.tmp`, 'utf8'));
+          if (dialogs !== 1 || JSON.stringify(after['zs.dictations']) !== JSON.stringify(previous['zs.dictations']) ||
+              !savedTemp['zs.dictations']?.some((item) => item.id === 'backup-e2e-history')) throw new Error('Защита не сохранилась при выходе');
+          console.log('BACKUP_E2E_OK failure');
+        } catch (err) { fail(err); }
+      });
+      app.quit(); return;
     }
     // Прочитать диск сразу после обработчика кнопки: все разделы уже записаны,
     // а не только появились позднее отдельными отложенными операциями React.
