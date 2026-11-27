@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     available: true,
     platform: process.platform,
     sttStatus: (model) => ipcRenderer.invoke('stt:status', model),
+    sttReadiness: (request) => ipcRenderer.invoke('stt:readiness', request),
     transcribePcm: (payload) => ipcRenderer.invoke('stt:transcribe-pcm', payload),
     // отменить долгий проход (кнопка «Отменить» в плашке распознавания)
     cancelTranscribe: () => ipcRenderer.invoke('stt:cancel'),

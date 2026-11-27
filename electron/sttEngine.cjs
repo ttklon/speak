@@ -63,4 +63,17 @@ function chooseEngine({ language, gigaam, parakeet, seconds, preference } = {}) 
   return { engine: ENGINES.whisper, why: `язык «${base}» — европейская модель его не знает` };
 }
 
-module.exports = { ENGINES, MIN_SECONDS, chooseEngine };
+/** Наличие файлов/рантайма для обычной фразы, не проверка микрофона и качества. */
+function determineReadiness({ language = 'ru', preference, gigaam, parakeet, whisper } = {}) {
+  const lang = String(language || 'ru').toLowerCase().trim().split(/[-_]/)[0] || 'ru';
+  const known = (status) => typeof status?.available === 'boolean';
+  if (!known(whisper) || (preference !== 'whisper' &&
+      (lang === 'ru' ? !known(gigaam) : !known(parakeet) || !Array.isArray(parakeet?.languages)))) {
+    return { status: 'unknown', engine: '', shortAvailable: null };
+  }
+  const choice = chooseEngine({ language: lang, preference, gigaam, parakeet, seconds: MIN_SECONDS });
+  const selected = choice.engine === ENGINES.gigaam ? gigaam : choice.engine === ENGINES.parakeet ? parakeet : whisper;
+  return { status: selected.available ? 'available' : 'missing', engine: choice.engine, shortAvailable: whisper.available };
+}
+
+module.exports = { ENGINES, MIN_SECONDS, chooseEngine, determineReadiness };

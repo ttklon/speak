@@ -592,6 +592,7 @@ async function scenarioOnboarding(browser) {
     // модель ещё не скачана: main отвечает, что распознавать нечем
     if (window.zspeakly?.native) {
       window.zspeakly.native.sttStatus = async () => ({ available: false, reason: 'модель не найдена' });
+      window.zspeakly.native.sttReadiness = async () => ({ status: 'missing', engine: 'whisper', shortAvailable: false });
     }
     localStorage.setItem('mockstore:zs.settings', JSON.stringify({ onboarded: false }));
   });
@@ -633,6 +634,26 @@ async function scenarioOnboarding(browser) {
     `кнопка=${cta.found} настройки=${mid.settingsOpen} звонки=${calls.filter((c) => c.startsWith('models:')).join(',')} финал=${after.text.split('\n').pop()}`,
   );
   await bare.close();
+
+  for (const kind of ['onnx', 'error']) {
+    const p = await browser.newPage();
+    await p.setViewport({ width: 1280, height: 800 });
+    await p.evaluateOnNewDocument(installMockBridge);
+    await p.evaluateOnNewDocument((mode) => {
+      window.zspeakly.native.sttStatus = async () => ({ available: false });
+      window.zspeakly.native.sttReadiness = mode === 'onnx'
+        ? async () => ({ status: 'available', engine: 'gigaam', shortAvailable: false })
+        : async () => { throw new Error('status unavailable'); };
+      localStorage.setItem('mockstore:zs.settings', JSON.stringify({ onboarded: false }));
+    }, kind);
+    await p.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('.modal');
+    await sleep(300);
+    const text = await p.evaluate(() => document.querySelector('.modal')?.innerText || '');
+    record('сценарии', kind === 'onnx' ? 'онбординг: ONNX не требует скачивать Whisper' : 'онбординг: неизвестный статус не считается отсутствующей моделью',
+      !/Скачать и начать/.test(text) && /Начать работу/.test(text) && (kind === 'onnx' || /Не удалось проверить/.test(text)), text.slice(-200));
+    await p.close();
+  }
 }
 
 async function scenarioDictation(browser) {
@@ -8013,7 +8034,7 @@ async function scenarioNoModel(browser) {
     settle: 500,
     patchNative: () => {
       const native = window.zspeakly && window.zspeakly.native;
-      if (native) native.sttStatus = async () => ({ available: false, reason: 'модель не найдена' });
+      if (native) native.sttReadiness = async () => ({ status: 'missing', engine: 'whisper', shortAvailable: false });
     },
   });
   takeErrors(page);
@@ -8034,6 +8055,78 @@ async function scenarioNoModel(browser) {
   );
   const errors = takeErrors(page);
   record('сценарии', 'без модели: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
+async function scenarioReadiness(browser) {
+  const page = await openPage(browser, '#/home', {
+    settings: { language: 'ru', recognitionEngine: 'auto' },
+    patchNative: () => {
+      const n = window.zspeakly.native;
+      window.__readiness = { result: { status: 'available', engine: 'gigaam', shortAvailable: false }, requests: [] };
+      n.sttStatus = async () => ({ available: false });
+      n.sttReadiness = (req) => {
+        window.__readiness.requests.push(req);
+        if (window.__readiness.hold) return new Promise((resolve) => { window.__readiness.resolve = resolve; });
+        if (window.__readiness.fail) return Promise.reject(new Error('offline'));
+        return Promise.resolve(window.__readiness.result);
+      };
+    },
+  });
+  takeErrors(page);
+  const hello = () => page.evaluate(() => document.querySelector('.hero__hello')?.innerText || '');
+  let text = await hello();
+  record('сценарии', 'готовность: ONNX без Whisper и короткие фрагменты', /GigaAM/.test(text) && /короче секунды/.test(text) && /не проверка микрофона/.test(text), text);
+  await clickText(page, 'Начать диктовку');
+  await sleep(900);
+  const alert = await page.evaluate(() => document.body.innerText);
+  record('сценарии', 'готовность: отсутствие Whisper не объявляется ошибкой ONNX при старте', !/Движок распознавания не установлен/.test(alert), alert.slice(0, 180));
+  // Новая страница отдельно проверяет асинхронный статус вне активной записи.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.hero__hello');
+  await sleep(350);
+  await page.evaluate(() => {
+    window.__readiness.hold = true;
+    window.__e2e.emit('model:progress', { done: true });
+  });
+  await sleep(100);
+  const checking = await hello();
+  await page.evaluate(() => {
+    window.__readiness.hold = false;
+    window.__readiness.result = { status: 'missing', engine: 'whisper', shortAvailable: false };
+    window.__e2e.emit('model:progress', { done: true, deleted: true });
+  });
+  await sleep(150);
+  await page.evaluate(() => window.__readiness.resolve({ status: 'available', engine: 'gigaam', shortAvailable: true }));
+  await sleep(150);
+  text = await hello();
+  record('сценарии', 'готовность: события и устаревший ответ не возвращают старую модель', /Проверяю/.test(checking) && /не подключена/.test(text) && !/GigaAM/.test(text), text);
+  await page.evaluate(() => { window.__readiness.fail = true; window.dispatchEvent(new Event('focus')); });
+  await sleep(150);
+  text = await hello();
+  record('сценарии', 'готовность: ошибка проверки не обещает готовность', /Не удалось проверить/.test(text), text);
+  // Настройки меняются настоящими элементами интерфейса, а не подменой стора.
+  await page.evaluate(() => { window.__readiness.fail = false; document.querySelector('.hero__hello button')?.click(); });
+  await sleep(500);
+  await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.setting-row')].find((el) => /Язык диктовки/.test(el.innerText));
+    row?.querySelector('.select__btn')?.click();
+  });
+  await sleep(100);
+  const changed = await page.evaluate(() => {
+    const option = [...document.querySelectorAll('[role="option"]')].find((el) => /Английский/.test(el.innerText));
+    option?.click();
+    const toggle = document.querySelector('[role="switch"][aria-label="Использовать только Whisper"]');
+    toggle?.click();
+    return Boolean(option && toggle);
+  });
+  await sleep(300);
+  await page.evaluate(() => { location.hash = '#/home'; });
+  await sleep(500);
+  const request = await page.evaluate(() => window.__readiness.requests.at(-1));
+  record('сценарии', 'готовность: новый язык и ручной Whisper передаются при смене настроек', changed && request?.language === 'en' && request?.preference === 'whisper', JSON.stringify(request));
+  const errors = takeErrors(page).filter((e) => !/AudioContext|NotAllowedError|microphone/i.test(e));
+  record('сценарии', 'готовность: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
 }
 
@@ -11543,6 +11636,7 @@ async function main() {
       ['очистка истории', scenarioClearDictations],
       ['заметка со снимком', scenarioNote],
       ['пустая установка без модели', scenarioNoModel],
+      ['готовность диктовки', scenarioReadiness],
       ['обновление', scenarioUpdateFlow],
       ['сбой обновления', scenarioUpdateFailure],
       ['сеть', scenarioNetwork],

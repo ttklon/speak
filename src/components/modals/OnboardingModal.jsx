@@ -5,7 +5,6 @@ import { Button } from '../ui/Controls.jsx';
 import { useAppData } from '../../state/AppDataProvider.jsx';
 import { keysLabel } from '../../lib/utils.js';
 import { APP } from '../../lib/config.js';
-import { engineName } from '../../lib/recognition/engine.js';
 import { navigate } from '../../lib/router.js';
 
 /**
@@ -30,17 +29,8 @@ export default function OnboardingModal() {
     if (open) setName(preset);
   }, [open, preset]);
 
-  // Офлайн-диктовку даёт только whisper.cpp. Web Speech в браузере требует
-  // интернета, поэтому на чистой установке сразу говорим, где взять движок.
-  //
-  // «Мост есть» ≠ «модель скачана»: transcribePcm живёт в рендерере всегда, а
-  // файла модели может не быть. Раньше онбординг из-за этого говорил «готово»,
-  // а первая диктовка заканчивалась ошибкой. Поэтому спрашиваем main-процесс.
-  const engine = engineName();
   const [engineState, setEngineState] = useState('check');
-  const engineHint = /Web Speech/.test(engine)
-    ? 'В браузере распознаёт системный движок — ему нужен интернет. Для офлайн-диктовки нажмите «Скачать и начать».'
-    : 'Движок распознавания ещё не установлен. «Скачать и начать» поставит его и модель — один раз, дальше всё работает без интернета.';
+  const engineHint = 'Для общего языка модель не найдена. Можно скачать Whisper или выбрать модель в настройках.';
 
   // Подготовка к диктовке прямо в окне онбординга: движок, потом модель.
   // Состояния: idle → engine → model → ready, либо failed с причиной.
@@ -52,28 +42,28 @@ export default function OnboardingModal() {
 
   useEffect(() => {
     if (!open) return undefined;
-    if (!bridge?.sttStatus) {
-      // В браузере спрашивать некого: решает то, что видно по движку
-      setEngineState(/whisper\.cpp/.test(engine) ? 'ready' : 'missing');
+    if (!bridge?.sttReadiness) {
+      setEngineState('unknown');
       return undefined;
     }
     let alive = true;
-    bridge
-      .sttStatus(settings.whisperModel)
-      .then((res) => {
-        if (alive) setEngineState(res?.available ? 'ready' : 'missing');
-      })
-      .catch(() => {
-        if (alive) setEngineState(/whisper\.cpp/.test(engine) ? 'ready' : 'missing');
-      });
-    return () => {
-      alive = false;
+    let retry;
+    const check = (attempt = 0) => {
+      bridge.sttReadiness({ language: settings.language || 'ru', preference: settings.recognitionEngine || 'auto', model: settings.whisperModel || 'small' })
+        .then((res) => {
+          if (!alive) return;
+          if (res?.status === 'pending' && attempt < 3) {
+            retry = setTimeout(() => check(attempt + 1), 1000);
+          } else {
+            setEngineState(res?.status === 'available' ? 'ready' : res?.status === 'missing' ? 'missing' : 'unknown');
+          }
+        }).catch(() => { if (alive) setEngineState('unknown'); });
     };
-    // engine — вычисляемое имя движка, зависит только от наличия моста
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, bridge, settings.whisperModel]);
+    setEngineState('check');
+    check();
+    return () => { alive = false; clearTimeout(retry); };
+  }, [open, bridge, settings.language, settings.recognitionEngine, settings.whisperModel]);
 
-  const engineReady = engineState === 'ready';
 
   // Процент приходит событием из главного процесса; в браузере его нет
   useEffect(() => {
@@ -145,7 +135,7 @@ export default function OnboardingModal() {
       return;
     }
     setEngineState('ready');
-    setPrep({ state: 'ready', percent: 100, note: 'Готово: диктовка работает без интернета.' });
+    setPrep({ state: 'ready', percent: 100, note: 'Готово: Whisper скачан. Проверьте микрофон и распознавание на своей речи.' });
   };
 
 
@@ -156,7 +146,7 @@ export default function OnboardingModal() {
   };
 
   const preparing = busy;
-  const needsSetup = canDownload && !engineReady && prep.state === 'idle';
+  const needsSetup = canDownload && engineState === 'missing' && prep.state === 'idle';
   // Одна кнопка на старте: либо настройка, либо сразу работа.
   const cta = needsSetup
     ? { label: 'Скачать и начать', onClick: prepare }
@@ -224,6 +214,9 @@ export default function OnboardingModal() {
             нажмите ещё раз — текст вставится.
           </span>
         </div>
+        {engineState === 'unknown' && prep.state === 'idle' ? (
+          <div className="onboarding__hint onboarding__hint--warn"><TriangleAlert size={12} /><span>Не удалось проверить модели. Их можно проверить в настройках.</span></div>
+        ) : null}
         {needsSetup ? (
           <div className="onboarding__hint onboarding__hint--warn">
             <TriangleAlert size={12} />

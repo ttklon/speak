@@ -2749,6 +2749,35 @@ await check('stt:status честно говорит, что движка нет'
   if (st.bin || st.model) throw new Error('статус показывает несуществующие файлы');
 });
 
+await check('stt:readiness использует настройки main и маршрутизацию PCM', async () => {
+  const w = require(path.resolve('electron/whisper.cjs'));
+  const g = require(path.resolve('electron/gigaam.cjs'));
+  const p = require(path.resolve('electron/parakeet.cjs'));
+  const old = [w.status, g.status, p.status];
+  const settings = handlers.get('store:get')({}, 'zs:settings') || {};
+  try {
+    w.status = () => ({ available: false });
+    g.status = () => ({ available: true });
+    p.status = () => ({ available: true });
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, recognitionEngine: 'auto', whisperModel: 'small' });
+    const read = handlers.get('stt:readiness');
+    const ru = await read({}, { language: 'ru', preference: 'auto', model: 'small' });
+    const en = await read({}, { language: 'en-US', preference: 'auto', model: 'small' });
+    const zh = await read({}, { language: 'zh', preference: 'auto', model: 'small' });
+    const pending = await read({}, { language: 'ru', preference: 'whisper', model: 'small' });
+    if (ru.engine !== 'gigaam' || ru.status !== 'available' || ru.shortAvailable !== false ||
+        en.engine !== 'parakeet' || en.status !== 'available' || zh.engine !== 'whisper' || zh.status !== 'missing' || pending.status !== 'pending') {
+      throw new Error(JSON.stringify({ ru, en, zh, pending }));
+    }
+    handlers.get('store:set')({}, 'zs:settings', { ...settings, recognitionEngine: 'whisper', whisperModel: 'small' });
+    const manual = await read({}, { language: 'ru', preference: 'whisper', model: 'small' });
+    if (manual.engine !== 'whisper' || manual.status !== 'missing') throw new Error(JSON.stringify(manual));
+  } finally {
+    [w.status, g.status, p.status] = old;
+    handlers.get('store:set')({}, 'zs:settings', settings);
+  }
+});
+
 const whisperBin = path.join(userData, 'bin', 'whisper-cli.exe');
 const whisperModel = path.join(userData, 'models', 'ggml-small.bin');
 fs.mkdirSync(path.dirname(whisperBin), { recursive: true });

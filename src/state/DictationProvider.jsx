@@ -1203,24 +1203,9 @@ export function DictationProvider({ children }) {
       // настройка «Звуковой отклик» — короткий сигнал на старте
       if (settingsRef.current.soundFeedback !== false) playCue('start');
 
-      // На свежей установке движок или модель могут быть не скачаны.
-      // Предупреждаем сразу — иначе человек наговорит минуту и получит пустоту.
-      if (hasNativeStt() && window.zspeakly?.native?.sttStatus) {
-        window.zspeakly.native
-          .sttStatus(settingsRef.current.whisperModel)
-          .then((st) => {
-            if (isCurrentSession() && st && st.available === false) {
-              setError({
-                code: 'engine-missing',
-                title: 'Движок распознавания не установлен',
-                hint: `${
-                  !st.bin ? 'Нет whisper.cpp' : 'Нет модели'
-                } — скачайте в «Настройки → Диктовка → Модель распознавания».`,
-              });
-            }
-          })
-          .catch(() => {});
-      }
+      // Язык активного окна может определиться позже, а короткий и обычный
+      // фрагменты используют разные движки. Ошибку сообщает сам запрос STT;
+      // проверка только Whisper на старте давала ложную тревогу для ONNX.
 
       // предролл забираем один раз: иначе звук прошлой диктовки попадёт в новую
       const preroll = micWarm.current?.take?.() || null;

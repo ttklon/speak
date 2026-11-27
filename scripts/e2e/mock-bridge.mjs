@@ -132,6 +132,10 @@ export function installMockBridge() {
       record('stt:status', [model]);
       return { available: true, bin: true, model: `ggml-${model || 'small'}.bin`, path: 'C:\\ZSpeakly\\whisper-cli.exe' };
     },
+    sttReadiness: async (request) => {
+      record('stt:readiness', [request]);
+      return { status: 'available', engine: 'whisper', shortAvailable: true };
+    },
     // контракт main-процесса: { ok, text, reason } — без ok движок считает,
     // что whisper ничего не распознал
     transcribe: async (payload) => {

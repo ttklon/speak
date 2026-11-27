@@ -50,7 +50,7 @@ const whisper = require('./whisper.cjs');
 const gigaam = require('./gigaam.cjs');
 // европейский движок: Parakeet TDT v3, включается сам для европейских языков
 const parakeet = require('./parakeet.cjs');
-const { chooseEngine } = require('./sttEngine.cjs');
+const { chooseEngine, determineReadiness } = require('./sttEngine.cjs');
 const { createUpdater } = require('./updater.cjs');
 const models = require('./models.cjs');
 // Подбор модели под железо: одна и та же модель не может быть быстрой и на
@@ -2032,6 +2032,27 @@ function registerIpc() {
 
   ipcMain.handle('stt:status', (_e, model) => whisper.status(model));
 
+  // Та же политика, что для PCM. Это снимок файлов и рантайма, не проверка
+  // микрофона и не гарантия, что последующий запуск модели не откажет.
+  ipcMain.handle('stt:readiness', (_e, request) => {
+    const settings = store?.get('zs:settings') || {};
+    const language = request?.language;
+    const requested = typeof language === 'string' && /^[a-zA-Z]{2}(?:[-_][a-zA-Z]{2})?$/.test(language)
+      ? language : settings.language || 'ru';
+    // Не выдавать снимок старых настроек за новые, пока запись ещё в пути.
+    if (request && ((request.preference || 'auto') !== (settings.recognitionEngine || 'auto') ||
+        (request.model || 'small') !== (settings.whisperModel || 'small'))) {
+      return { status: 'pending', engine: '', shortAvailable: null };
+    }
+    return determineReadiness({
+      language: requested,
+      preference: settings.recognitionEngine,
+      gigaam: gigaam.status(),
+      parakeet: { ...parakeet.status(), languages: parakeet.LANGUAGES },
+      whisper: whisper.status(settings.whisperModel || 'small'),
+    });
+  });
+
   // Вставка текста в активное окно.
   //
   // Порядок попыток — от самого надёжного к самому простому, и он же пишется
@@ -2846,6 +2867,7 @@ function registerIpc() {
     } catch {
       /* сервера могло не быть */
     }
+    try { mainWindow?.webContents.send('model:progress', { id, done: true, ok: true, deleted: true }); } catch { /* окно могло закрыться после удаления */ }
     logger.info('stt', 'Модель удалена', { keep: true, id, freedMb: res.freedMb, switchedTo });
     return { ...res, switchedTo };
   });

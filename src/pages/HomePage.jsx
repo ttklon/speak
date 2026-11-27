@@ -87,9 +87,7 @@ export default function HomePage() {
     [snippet],
   );
   const [editing, setEditing] = useState(null);
-  // Готовность диктовки: «Всё готово» не должно быть обещанием на пустой
-  // установке без модели whisper. В браузере опираемся на Web Speech.
-  const [readiness, setReadiness] = useState(null); // null | 'ready' | 'no-model'
+  const [readiness, setReadiness] = useState({ status: 'checking' });
   // Куда попадёт текст: наше поле (диктуем внутрь приложения) или другое окно.
   // Человек видит это ДО вставки, а не догадывается по результату.
   const [target, setTarget] = useState(null);
@@ -163,46 +161,72 @@ export default function HomePage() {
 
   useEffect(() => {
     const bridge = window.zspeakly?.native;
-    if (!bridge?.sttStatus) {
-      const hasWeb = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
-      setReadiness(hasWeb ? 'ready' : 'no-model');
+    if (!hasNativeStt()) {
+      setReadiness({ status: window.zspeakly?.isElectron ? 'native-missing' : hasWebSpeech ? 'browser' : 'no-browser' });
+      return undefined;
+    }
+    if (!bridge?.sttReadiness) {
+      setReadiness({ status: 'unknown' });
       return undefined;
     }
     let alive = true;
-    bridge
-      .sttStatus(settings.whisperModel)
-      .then((res) => {
-        if (alive) setReadiness(res?.available ? 'ready' : 'no-model');
-      })
-      .catch(() => {
-        if (alive) setReadiness('no-model');
+    let generation = 0;
+    let retry;
+    const refresh = (attempt = 0) => {
+      clearTimeout(retry);
+      const current = ++generation;
+      setReadiness({ status: 'checking' });
+      Promise.resolve().then(() => bridge.sttReadiness({
+        language: settings.language || 'ru',
+        preference: settings.recognitionEngine || 'auto',
+        model: settings.whisperModel || 'small',
+      })).then((res) => {
+        if (!alive || current !== generation) return;
+        if (res?.status === 'pending') {
+          setReadiness({ status: 'unknown' });
+          if (attempt < 3) retry = setTimeout(() => refresh(attempt + 1), 1000);
+        } else if ((res?.status === 'available' || res?.status === 'missing') &&
+          ['whisper', 'gigaam', 'parakeet'].includes(res.engine) && typeof res.shortAvailable === 'boolean') {
+          setReadiness(res);
+        } else {
+          setReadiness({ status: 'unknown' });
+        }
+      }).catch(() => {
+        if (alive && current === generation) setReadiness({ status: 'unknown' });
       });
+    };
+    refresh();
+    const unsubscribe = bridge.onModelProgress?.((event) => { if (event?.done) refresh(); });
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
     return () => {
       alive = false;
+      generation += 1;
+      clearTimeout(retry);
+      unsubscribe?.();
+      window.removeEventListener('focus', onFocus);
     };
-  }, [settings.whisperModel]);
+  }, [settings.language, settings.recognitionEngine, settings.whisperModel]);
 
   return (
     <div className="page page--home scroll-area">
       <header className="hero">
         <p className="hero__hello">
           {settings.userName ? `Привет, ${settings.userName}. ` : ''}
-          {state === 'listening'
-            ? 'Записываю…'
-            : readiness === 'no-model'
-              ? 'Модель распознавания ещё не подключена — диктовка не заработает, пока её нет.'
-              : 'Всё готово к диктовке.'}
-          {readiness === 'no-model' && state !== 'listening' ? (
-            <>
-              {' '}
-              <button
-                type="button"
-                className="link-btn"
-                onClick={() => navigate('settings', { section: 'dictation' })}
-              >
-                Выбрать модель
-              </button>
-            </>
+          {state === 'listening' ? 'Записываю…'
+            : readiness.status === 'checking' ? 'Проверяю наличие моделей…'
+              : readiness.status === 'unknown' ? 'Не удалось проверить модели. Попробуйте открыть настройки.'
+                : readiness.status === 'missing' ? 'Модель для общего языка не подключена.'
+                  : readiness.status === 'available' ? `Для общего языка найден ${ { whisper: 'Whisper', gigaam: 'GigaAM', parakeet: 'Parakeet' }[readiness.engine] }. Это не проверка микрофона и распознавания.`
+                    : readiness.status === 'browser' ? 'Доступен браузерный движок; проверьте микрофон и распознавание.'
+                      : readiness.status === 'native-missing' ? 'Нативный движок недоступен.'
+                        : 'Движок распознавания в браузере не найден.'}
+          {state !== 'listening' && readiness.status === 'available' && !readiness.shortAvailable && readiness.engine !== 'whisper' ?
+            ' Для фрагментов короче секунды и при отказе этой модели нужен Whisper, но он не найден.' : null}
+          {state !== 'listening' && readiness.status === 'available' && settings.appProfiles?.length ?
+            ' Для отдельных окон язык и модель могут отличаться.' : null}
+          {['missing', 'unknown'].includes(readiness.status) && state !== 'listening' ? (
+            <> {' '}<button type="button" className="link-btn" onClick={() => navigate('settings', { section: 'dictation' })}>Выбрать модель</button></>
           ) : null}
         </p>
         <h1 className="hero__title">
