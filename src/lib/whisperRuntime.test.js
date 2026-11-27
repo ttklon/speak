@@ -52,6 +52,28 @@ function fakeChild(file, args) {
       child.exitCode = cliMode === 'failed-signal' ? null : 1;
       child.emit('close', child.exitCode, cliMode === 'failed-signal' ? 'SIGKILL' : null);
     });
+    else if (['long-stdout', 'long-stderr', 'long-with-file', 'split-utf8', 'vad-long-retry', 'long-error', 'long-logs-only', 'stdout-boundary', 'retry-stdout', 'retry-read-error'].includes(cliMode)) queueMicrotask(() => {
+      if ((cliMode === 'vad-long-retry' || cliMode === 'retry-stdout' || cliMode === 'retry-read-error') && n === 1) {
+        child.stderr.emit('data', Buffer.from('error: unknown argument --vad'));
+        child.exitCode = 1; child.emit('close', 1); return;
+      }
+      if (cliMode === 'split-utf8') {
+        const bytes = Buffer.from('Привет мир');
+        child.stdout.emit('data', bytes.subarray(0, 1)); child.stdout.emit('data', bytes.subarray(1));
+      } else if (cliMode === 'stdout-boundary') {
+        child.stdout.emit('data', Buffer.from('x'.repeat(40000)));
+      } else if (cliMode === 'retry-stdout' || cliMode === 'retry-read-error') {
+        child.stdout.emit('data', Buffer.from('готовый ответ'));
+        if (cliMode === 'retry-read-error') mkdirSync(`${wav}.out.txt`);
+      } else if (cliMode === 'long-logs-only') {
+        child.stderr.emit('data', Buffer.from('whisper_info: ' + 'a'.repeat(21000)));
+      } else {
+        const stream = cliMode === 'long-stderr' ? child.stderr : child.stdout;
+        stream.emit('data', Buffer.from('начало ' + 'а'.repeat(41000) + ' конец'));
+        if (cliMode === 'long-with-file') writeFileSync(`${wav}.out.txt`, 'полный текст из файла');
+      }
+      child.exitCode = cliMode === 'long-error' ? 1 : 0; child.emit('close', child.exitCode);
+    });
     else if (cliMode !== 'hold' && cliMode !== 'vad-fallback') queueMicrotask(() => {
       child.stdout.emit('data', Buffer.from('новая модель'));
       child.exitCode = 0;
@@ -317,6 +339,60 @@ describe('жизненный цикл прогретого Whisper', () => {
     cliMode = 'throw-first';
     expect(await bounded(whisper.transcribe(wav, { model: 'small', keepLoaded: true }), 500)).toMatchObject({ ok: false, reason: 'не удалось запустить процесс' });
     expect(whisper.isBusy()).toBe(false);
+  });
+
+  it.each(['long-stdout', 'long-stderr', 'vad-long-retry'])('не выдаёт усечённый вывод %s за готовую расшифровку', async (kind) => {
+    cliMode = kind;
+    if (kind === 'vad-long-retry') writeFileSync(join(root, 'models', 'ggml-silero-v6.2.0.bin'), 'vad');
+    const res = await bounded(whisper.transcribe(wav, { model: 'small', timeout: 10000 }));
+    expect(res).toMatchObject({ ok: false, text: '', code: 'cli-output-truncated' });
+    expect(res.partialText).toMatch(/конец/);
+    expect(res.partialText).toMatch(/обрезан/i);
+  });
+
+  it('не прячет обрезку при ненулевом выходе', async () => {
+    cliMode = 'long-error';
+    const res = await bounded(whisper.transcribe(wav, { model: 'small' }));
+    expect(res).toMatchObject({ ok: false, text: '', code: 'cli-failed' });
+    expect(res.partialText).toMatch(/обрезан/);
+    expect(res.partialText).toMatch(/конец/);
+  });
+
+  it('не выдаёт пустой фильтрованный длинный журнал за полную тишину', async () => {
+    cliMode = 'long-logs-only';
+    const res = await bounded(whisper.transcribe(wav, { model: 'small' }));
+    expect(res).toMatchObject({ ok: false, text: '', code: 'cli-output-truncated' });
+  });
+
+  it('точная граница stdout не считается обрезкой', async () => {
+    cliMode = 'stdout-boundary';
+    const res = await bounded(whisper.transcribe(wav, { model: 'small' }));
+    expect(res.ok).toBe(true);
+    expect(res.text).toHaveLength(40000);
+  });
+
+  it('повтор без VAD без файла не выдаёт журнал за готовую расшифровку', async () => {
+    cliMode = 'retry-stdout';
+    writeFileSync(join(root, 'models', 'ggml-silero-v6.2.0.bin'), 'vad');
+    expect(await bounded(whisper.transcribe(wav, { model: 'small' }))).toMatchObject({ ok: false, text: '', code: 'empty' });
+    expect(children).toHaveLength(2);
+  });
+
+  it('ошибка чтения файла повтора не подменяется успешным журналом', async () => {
+    cliMode = 'retry-read-error';
+    writeFileSync(join(root, 'models', 'ggml-silero-v6.2.0.bin'), 'vad');
+    const res = await bounded(whisper.transcribe(wav, { model: 'small' }));
+    expect(res).toMatchObject({ ok: false, text: '', code: 'cli-failed' });
+  });
+
+  it('полный файл предпочтительнее длинного журнала', async () => {
+    cliMode = 'long-with-file';
+    expect(await bounded(whisper.transcribe(wav, { model: 'small' }))).toMatchObject({ ok: true, text: 'полный текст из файла' });
+  });
+
+  it('сохраняет символ UTF-8, разделённый между событиями stdout', async () => {
+    cliMode = 'split-utf8';
+    expect(await bounded(whisper.transcribe(wav, { model: 'small' }))).toMatchObject({ ok: true, text: 'Привет мир' });
   });
 
   it('не принимает оставшийся от прежнего запуска файл за новый результат', async () => {

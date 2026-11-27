@@ -94,6 +94,10 @@ export const EMPTY_RESULT_MESSAGES = {
     title: 'Движок не смог запуститься',
     hint: 'Не удалось удалить прежний временный вывод. Перезапустите приложение и проверьте доступ к временной папке.',
   },
+  'cli-output-truncated': {
+    title: 'Вывод движка обрезан',
+    hint: 'Начало вывода потеряно. Проверьте неполный текст вручную или повторите запись.',
+  },
   'cli-failed': {
     title: 'Движок завершился с ошибкой',
     hint: 'Попробуйте ещё раз. Если ошибка повторяется, проверьте модель в «Настройки → Диктовка → Модель распознавания».',
@@ -615,7 +619,7 @@ export function createRecognizer(opts = {}) {
           );
           // Частичный вывод ошибочного CLI — не итог и не команда: он может
           // содержать логи и пропуски. Сохраняем отдельно от предыдущего окна.
-          const failedOutput = (res?.code === 'cli-failed' || res?.code === 'output-cleanup-failed') && typeof res.partialText === 'string' ? res.partialText.trim() : '';
+          const failedOutput = (res?.code === 'cli-failed' || res?.code === 'cli-output-truncated' || res?.code === 'output-cleanup-failed') && typeof res.partialText === 'string' ? res.partialText.trim() : '';
           const recover = failedOutput
             ? [preText ? `Ранее распознанный фрагмент:\n${preText}` : '', `Частичный вывод после ошибки (может содержать служебные строки):\n${failedOutput}`].filter(Boolean).join('\n\n')
             : preText;

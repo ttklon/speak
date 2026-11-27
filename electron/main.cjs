@@ -1765,7 +1765,7 @@ function registerIpc() {
             done += 1;
             reportProgress(done);
             if (!one?.ok) {
-              if (one?.code === 'cli-failed' && typeof one.partialText === 'string') partials[index] = one.partialText;
+              if ((one?.code === 'cli-failed' || one?.code === 'cli-output-truncated') && typeof one.partialText === 'string') partials[index] = one.partialText;
               if (!failed) failed = one || { ok: false, text: '', code: 'stt-failed', reason: 'пустой ответ движка' };
               return;
             }
@@ -1796,7 +1796,7 @@ function registerIpc() {
         if (failed) {
           // кусок не распознался — честнее отдать ошибку, чем половину текста
           logger.warn('stt', 'Фрагмент диктовки не распознан', { keep: true, reason: failed.reason || '' });
-          if (failed.code === 'cli-failed' || failed.code === 'output-cleanup-failed') {
+          if (failed.code === 'cli-failed' || failed.code === 'cli-output-truncated' || failed.code === 'output-cleanup-failed') {
             const recovered = texts.map((text, index) => {
               const partial = partials[index];
               return text ? `[Распознан фрагмент ${index + 1}]\n${text}`

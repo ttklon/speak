@@ -3872,15 +3872,18 @@ await check('сбой CLI: успешный и частичный фрагмен
   const whisper = require(path.resolve('electron/whisper.cjs'));
   const saved = { transcribe: whisper.transcribe, serverStatus: whisper.serverStatus, split: whisper.splitBySilence };
   const settings = handlers.get('store:get')({}, 'zs:settings');
-  let n = 0;
+  let n = 0, errorCode = 'cli-failed';
   try {
     await handlers.get('store:set')({}, 'zs:settings', { ...settings, recognitionEngine: 'whisper', keepModelLoaded: true, decodeMode: 'fast', autoOptimize: false });
     whisper.serverStatus = () => ({ ready: true, processors: 1 });
     whisper.splitBySilence = (pcm) => [pcm.subarray(0, pcm.length / 2), pcm.subarray(pcm.length / 2)];
     whisper.transcribe = async () => ++n === 1 ? { ok: true, text: 'первый фрагмент', mode: 'server' }
-      : { ok: false, text: '', code: 'cli-failed', partialText: 'неполный вывод CLI', reason: 'сбой' };
+      : { ok: false, text: '', code: errorCode, partialText: 'неполный вывод CLI', reason: 'сбой' };
     const result = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(30000), sampleRate: 16000, lang: 'ru' });
     if (result.ok || result.code !== 'cli-failed' || !/первый фрагмент/.test(result.partialText || '') || !/неполный вывод CLI/.test(result.partialText || '') || result.text) throw new Error(JSON.stringify(result));
+    n = 0; errorCode = 'cli-output-truncated';
+    const truncated = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(30000), sampleRate: 16000, lang: 'ru' });
+    if (truncated.ok || truncated.code !== errorCode || !/первый фрагмент/.test(truncated.partialText || '') || !/неполный вывод CLI/.test(truncated.partialText || '') || truncated.text) throw new Error(JSON.stringify(truncated));
   } finally {
     whisper.transcribe = saved.transcribe; whisper.serverStatus = saved.serverStatus; whisper.splitBySilence = saved.split;
     await handlers.get('store:set')({}, 'zs:settings', settings);

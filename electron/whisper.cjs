@@ -15,11 +15,36 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
+const { StringDecoder } = require('node:string_decoder');
 const { app } = require('electron');
 const { writeWav } = require('./wav.cjs');
 
 const BIN_NAMES = ['whisper-cli.exe', 'whisper.exe', 'main.exe', 'whisper-cli', 'whisper'];
 const SERVER_NAMES = ['whisper-server.exe', 'whisper-server'];
+
+// Декодер переживает границы событий (в том числе внутри символа UTF-8).
+// Храним только хвост журнала и явно отмечаем потерю начала.
+function captureOutput(stream, limit) {
+  const decoder = new StringDecoder('utf8');
+  let text = '';
+  let truncated = false;
+  const append = (value) => {
+    text += value;
+    if (text.length > limit) {
+      let start = text.length - limit;
+      // Не оставляем в начале отдельную младшую половину UTF-16 пары.
+      if (start > 0 && text.charCodeAt(start) >= 0xdc00 && text.charCodeAt(start) <= 0xdfff) start++;
+      text = text.slice(start);
+      truncated = true;
+    }
+  };
+  stream?.on('data', (data) => append(decoder.write(Buffer.isBuffer(data) ? data : Buffer.from(data))));
+  let ended = false;
+  return () => {
+    if (!ended) { ended = true; append(decoder.end()); }
+    return { text, truncated };
+  };
+}
 
 function candidates(...paths) {
   return paths.filter(Boolean);
@@ -830,8 +855,8 @@ function transcribe(
       resolve({ ok: false, text: '', reason: err.message, mode: 'cli', ms: Date.now() - callStarted });
       return;
     }
-    let stderr = '';
-    let stdout = '';
+    const readStderr = captureOutput(child.stderr, 20000);
+    const readStdout = captureOutput(child.stdout, 40000);
     let settled = false;
     const run = { kind: 'cli', child, finish: null, cancelled: false };
     const finish = (value) => {
@@ -879,6 +904,13 @@ function transcribe(
       ...(partialText ? { partialText } : {}),
     });
 
+    const markTruncated = (text, truncated) => truncated
+      ? `[Вывод обрезан: начало потеряно, возможны служебные строки]${text ? `\n${text}` : ''}` : text;
+    const truncatedOutput = (text) => ({
+      ok: false, text: '', code: 'cli-output-truncated',
+      reason: 'вывод движка обрезан, полный текст неизвестен', partialText: markTruncated(text, true),
+    });
+
     // Один повтор без VAD: флаг поддержан не всеми сборками whisper.cpp.
     function retryWithoutVad() {
       const again = cliArgs({
@@ -897,16 +929,12 @@ function transcribe(
       try { child2 = spawn(bin, again, { windowsHide: true }); }
       catch (err) { finish({ ok: false, text: '', reason: err.message }); return; }
       run.child = child2;
-      let err2 = '';
-      let out2 = '';
-      child2.stdout?.on('data', (d) => { out2 += d.toString(); if (out2.length > 40000) out2 = out2.slice(-40000); });
-      child2.stderr?.on('data', (d) => {
-        err2 += d.toString();
-        if (err2.length > 8000) err2 = err2.slice(-8000);
-      });
+      const readErr2 = captureOutput(child2.stderr, 8000);
+      const readOut2 = captureOutput(child2.stdout, 40000);
       child2.on('error', (err) => finish({ ok: false, text: '', reason: err.message }));
       child2.on('close', (code2, signal2) => {
         if (settled) return;
+        const err2 = readErr2(), out2 = readOut2();
         try {
           const txt = `${wavPath}.out.txt`;
           if (fs.existsSync(txt)) {
@@ -918,30 +946,26 @@ function transcribe(
             }
           }
         } catch {
-          /* файл мог не появиться */
-        }
-        if (code2 !== 0 || signal2) {
-          finish(failedExit(code2, signal2, fromLog(out2) || fromLog(err2)));
+          finish({ ok: false, text: '', code: 'cli-failed', reason: 'не удалось прочитать или удалить вывод движка' });
           return;
         }
-        finish({ ok: false, text: '', code: 'empty', reason: err2.slice(-400) || `код ${code2}` });
+        const retryText = fromLog(out2.text) || fromLog(err2.text);
+        const truncated = out2.truncated || err2.truncated;
+        if (code2 !== 0 || signal2) {
+          finish(failedExit(code2, signal2, markTruncated(retryText, truncated)));
+          return;
+        }
+        if (truncated) { finish(truncatedOutput(retryText)); return; }
+        finish({ ok: false, text: '', code: 'empty', reason: err2.text.slice(-400) || `код ${code2}` });
       });
     }
 
-    child.stderr.on('data', (d) => {
-      stderr += d.toString();
-      // старые сборки whisper.cpp пишут расшифровку в stderr, а не в файл
-      if (stderr.length > 20000) stderr = stderr.slice(-20000);
-    });
-    child.stdout?.on('data', (d) => {
-      stdout += d.toString();
-      if (stdout.length > 40000) stdout = stdout.slice(-40000);
-    });
     child.on('error', (err) => {
       finish({ ok: false, text: '', reason: err.message });
     });
     child.on('close', (code, signal) => {
       if (settled) return;
+      const stderr = readStderr(), stdout = readStdout();
       // 1) файл -otxt, если сборка его пишет
       try {
         const txt = `${wavPath}.out.txt`;
@@ -953,21 +977,22 @@ function transcribe(
             return;
           }
         }
-      } catch (err) {
-        finish({ ok: false, text: '', reason: err.message });
+      } catch {
+        finish({ ok: false, text: '', code: 'cli-failed', reason: 'не удалось прочитать или удалить вывод движка' });
         return;
       }
       // 2) вывод процесса: убираем служебные строки whisper.cpp
-      const text = fromLog(stdout) || fromLog(stderr);
+      const text = fromLog(stdout.text) || fromLog(stderr.text);
+      const truncated = stdout.truncated || stderr.truncated;
       if (text) {
-        finish(code === 0 && !signal ? { ok: true, text, code } : failedExit(code, signal, text));
+        finish(code === 0 && !signal ? (truncated ? truncatedOutput(text) : { ok: true, text, code }) : failedExit(code, signal, markTruncated(text, truncated)));
         return;
       }
       if (run.cancelled) {
         finish({ ok: false, text: '', code: 'cancelled', reason: 'распознавание отменено' });
         return;
       }
-      const reason = (stderr || stdout).slice(-400).trim();
+      const reason = (stderr.text || stdout.text).slice(-400).trim();
       // Старая сборка whisper.cpp не знает про --vad: не оставляем человека
       // без диктовки, повторяем проход без распознавания тишины.
       // Флаги VAD могут быть незнакомы старой сборке, а формат VAD-модели —
@@ -979,7 +1004,8 @@ function transcribe(
         retryWithoutVad();
         return;
       }
-      if (code !== 0 || signal) { finish(failedExit(code, signal)); return; }
+      if (code !== 0 || signal) { finish(failedExit(code, signal, markTruncated('', truncated))); return; }
+      if (truncated) { finish(truncatedOutput('')); return; }
       finish({
         ok: false,
         text: '',

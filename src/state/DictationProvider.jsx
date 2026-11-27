@@ -965,9 +965,9 @@ export function DictationProvider({ children }) {
         }
         if (job.cancelled) break;
         const checked = classifyFileResponse(res);
-        const failedPartial = res?.ok === false && res.code === 'cli-failed' && typeof res.partialText === 'string' && res.partialText.trim()
+        const failedPartial = res?.ok === false && (res.code === 'cli-failed' || res.code === 'cli-output-truncated') && typeof res.partialText === 'string' && res.partialText.trim()
           ? res.partialText : '';
-        const cliFailed = res?.ok === false && (res.code === 'cli-failed' || res.code === 'output-cleanup-failed');
+        const cliFailed = res?.ok === false && (res.code === 'cli-failed' || res.code === 'cli-output-truncated' || res.code === 'output-cleanup-failed');
         if (checked.kind === 'oversized' || cliFailed) {
           // Ответ уже получен через IPC. Не обрезаем и не склеиваем его с
           // предыдущими окнами: это может быть как сбой модели, так и текст.
@@ -978,7 +978,7 @@ export function DictationProvider({ children }) {
           diag.warn('stt', cliFailed ? 'Частичный вывод ошибки окна файла' : 'Длинный ответ окна файла', { part: i + 1, chars: manual.length });
           pushToast({
             title: cliFailed ? 'Ошибка движка распознавания' : 'Необычно длинный ответ модели',
-            description: `Фрагмент ${i + 1} из ${windows.length}: ${cliFailed ? (failedPartial ? 'движок вернул неполный вывод, в нём возможны служебные строки' : 'движок не вернул текст или не смог запуститься') : `ответ превышает ${FILE_LIMITS.chunkChars} символов`}. Обработка остановлена, история не изменена. ${manual ? 'Ответ ниже не проверен: скопируйте его до закрытия уведомления или приложения. Поле может изменить вид переносов строк.' : ''} ${i + 1 < windows.length ? 'Последующие фрагменты не обработаны.' : 'Это последний фрагмент.'}`,
+            description: `Фрагмент ${i + 1} из ${windows.length}: ${cliFailed ? (failedPartial ? (res.code === 'cli-output-truncated' ? 'начало вывода потеряно при ограничении размера, возможны служебные строки' : 'движок вернул неполный вывод, в нём возможны служебные строки') : 'движок не вернул текст или не смог запуститься') : `ответ превышает ${FILE_LIMITS.chunkChars} символов`}. Обработка остановлена, история не изменена. ${manual ? 'Ответ ниже не проверен: скопируйте его до закрытия уведомления или приложения. Поле может изменить вид переносов строк.' : ''} ${i + 1 < windows.length ? 'Последующие фрагменты не обработаны.' : 'Это последний фрагмент.'}`,
             recoverText: manual,
             recoverLabel: cliFailed ? 'Частичный вывод движка для ручной проверки' : 'Длинный ответ модели для ручной проверки', tone: 'warn', ttl: 0,
           });
