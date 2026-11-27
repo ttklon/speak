@@ -1167,6 +1167,78 @@ async function scenarioAudioFilePartial(browser) {
   } finally { rmSync(wav, { force: true }); }
 }
 
+// Слишком большой или неправильно сформированный ответ модели не должен
+// маскироваться под полноценную расшифровку. STT/декодер подменены.
+async function scenarioAudioFileResponseBounds(browser) {
+  const wav = writeToneWav(join(tmpdir(), 'zspeakly-file-response-bounds.wav'));
+  try {
+    for (const scenario of ['first', 'middle', 'after-error', 'malformed', 'boundary']) {
+      const page = await openPage(browser, '#/home', {
+        settings: { aiDictationRewrite: false, dictionaryEnabled: false },
+        storeSeed: { 'zs.dictations': [{ id: 'keep', text: 'Старая запись', createdAt: Date.now() }] },
+        patchArg: scenario,
+        patchNative: (which) => {
+          window.AudioContext = class {
+            decodeAudioData() { return Promise.resolve({ length: 16000 * 80, sampleRate: 16000, duration: 80,
+              numberOfChannels: 1, getChannelData: () => new Float32Array(16000 * 80) }); }
+            close() { return Promise.resolve(); }
+          };
+          window.OfflineAudioContext = class {
+            createBufferSource() { return { connect() {}, start() {} }; }
+            startRendering() { return Promise.resolve({ sampleRate: 16000, getChannelData: () => new Float32Array(16000 * 80) }); }
+          };
+          window.__hugeResult = ` \n${'я'.repeat(20000)}😀\n `;
+          window.__fileCalls = 0;
+          window.zspeakly.native.transcribePcm = async () => {
+            const index = window.__fileCalls++;
+            if ((which === 'first' && index === 0) || (which === 'middle' && index === 1) || (which === 'after-error' && index === 2))
+              return { ok: true, text: window.__hugeResult, model: 'gigaam-v3' };
+            if (which === 'after-error' && index === 0) return { ok: false };
+            if (which === 'malformed' && index === 1) return { ok: true };
+            if (which === 'boundary' && index === 0) return { ok: true, text: 'х'.repeat(20000) };
+            return { ok: true, text: index === 0 ? 'Сохранённое начало.' : 'Второй текст.' };
+          };
+        },
+      });
+      try {
+        await (await page.$('input[type="file"]')).uploadFile(wav);
+        await page.waitForFunction(() => !document.querySelector('.live-draft--processing') && [...document.querySelectorAll('.toast')].some((el) => /Файл расшифрован|Необычно длинный ответ модели/.test(el.innerText)), { timeout: 12000 });
+        const result = await page.evaluate(() => ({
+          history: window.__e2e.read('zs.dictations') || [], body: document.body.innerText, calls: window.__fileCalls,
+          original: window.__hugeResult,
+          raw: document.querySelector('[aria-label="Длинный ответ модели для ручной проверки"]')?.value,
+          prior: document.querySelector('[aria-label="Ранее распознанная часть файла"]')?.value || '',
+        }));
+        if (['first', 'middle', 'after-error'].includes(scenario)) {
+          const expectedCalls = { first: 1, middle: 2, 'after-error': 3 }[scenario];
+          record('сценарии', `файл: длинный ответ (${scenario}) остановлен и сохранён для ручной проверки`,
+            result.calls === expectedCalls && result.history.length === 1 && result.history[0].id === 'keep' &&
+            result.raw === result.original && /Необычно длинный ответ модели/.test(result.body) && !/Файл расшифрован/.test(result.body),
+            `calls=${result.calls} history=${result.history.length} raw=${result.raw?.length}`);
+          if (scenario !== 'first') record('сценарии', `файл: предыдущая часть (${scenario}) отдельно доступна и отмечена`,
+            /Остановлено/.test(result.prior) && (scenario === 'middle' ? /Сохранённое начало/.test(result.prior) : /Не удалось распознать фрагмент 1/.test(result.prior) && /Второй текст/.test(result.prior)), result.prior);
+          if (scenario === 'middle') {
+            await (await page.$('input[type="file"]')).uploadFile(wav);
+            await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 2, { timeout: 12000 });
+            const next = await page.evaluate(() => ({ history: window.__e2e.read('zs.dictations'),
+              raw: document.querySelector('[aria-label="Длинный ответ модели для ручной проверки"]')?.value,
+              prior: document.querySelector('[aria-label="Ранее распознанная часть файла"]')?.value || '', original: window.__hugeResult }));
+            record('сценарии', 'файл: следующий импорт не уничтожает временные результаты предыдущего',
+              next.history.length === 2 && next.history.some((entry) => entry.id === 'keep') && next.raw === next.original && /Сохранённое начало/.test(next.prior));
+          }
+        } else if (scenario === 'malformed') {
+          record('сценарии', 'файл: успешный ответ без текста считается отказом, а не тишиной',
+            result.calls === 3 && result.history.length === 2 && /Не удалось распознать фрагмент 2/.test(result.history[0].text || '') && /Файл расшифрован не полностью/.test(result.body), result.history[0]?.text || '');
+        } else {
+          record('сценарии', 'файл: ответ ровно на границе принимается без обрезки',
+            result.calls === 3 && result.history.length === 2 && result.history[0].text.startsWith('х'.repeat(20000)) && /Файл расшифрован/.test(result.body), `calls=${result.calls}; chars=${result.history[0]?.text?.length}`);
+        }
+        const errors = takeErrors(page); record('сценарии', `файл: проверка ответа (${scenario}) без ошибок консоли`, errors.length === 0, errors[0] || '');
+      } finally { await page.close(); }
+    }
+  } finally { rmSync(wav, { force: true }); }
+}
+
 // Отмена во время второго окна не должна уничтожать текст первого, даже если
 // вызов модели завис: проверяем возможность копировать до ответа моста.
 async function scenarioAudioFileCancelPartial(browser) {
@@ -11562,6 +11634,7 @@ async function main() {
       ['файл: проверка сигнала', scenarioAudioDecodeSignal],
       ['файл: границы декодирования', scenarioAudioFileBounds],
       ['файл: частичный отказ', scenarioAudioFilePartial],
+      ['файл: ограничение ответа', scenarioAudioFileResponseBounds],
       ['файл: отмена с частичным текстом', scenarioAudioFileCancelPartial],
       ['файл: безопасность склейки', scenarioAudioFileOverlapSafety],
       ['файл: словарь включён или выключен', scenarioFileDictionary],

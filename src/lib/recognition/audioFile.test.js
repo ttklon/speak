@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AUDIO_ACCEPT,
   assembleFileParts,
+  classifyFileResponse,
   FILE_LIMITS,
   fileExt,
   fileTitle,
@@ -106,6 +107,22 @@ describe('audioFile: неполные результаты', () => {
     const result = assembleFileParts(['встреча в три часа', 'в три часа дня', null], windows, transform);
     expect(result.text).toBe('встреча в 15:00\n[Не удалось распознать фрагмент 3: 0:58–1:20]');
     expect(result.speechText).toBe('встреча в 15:00');
+  });
+});
+
+describe('ответы файлового распознавания', () => {
+  it('принимает строку на границе и не считает ошибку или неправильную структуру тишиной', () => {
+    const edge = 'я'.repeat(FILE_LIMITS.chunkChars);
+    expect(classifyFileResponse({ ok: true, text: edge })).toEqual({ kind: 'text', text: edge });
+    expect(classifyFileResponse({ ok: true, text: '   ' })).toEqual({ kind: 'text', text: '' });
+    expect(classifyFileResponse({ ok: false, code: 'silent' })).toEqual({ kind: 'silent' });
+    for (const response of [null, {}, { ok: true }, { ok: true, text: null }, { ok: true, text: 4 }, { ok: 'yes', text: 'x' }, { ok: false }]) {
+      expect(classifyFileResponse(response)).toEqual({ kind: 'failed' });
+    }
+  });
+  it('слишком длинный ответ сохраняет точно и не обрезает пробелы или символы', () => {
+    const raw = ` \n${'я'.repeat(FILE_LIMITS.chunkChars)}😀\n `;
+    expect(classifyFileResponse({ ok: true, text: raw })).toEqual({ kind: 'oversized', text: raw });
   });
 });
 

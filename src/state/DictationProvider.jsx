@@ -53,6 +53,7 @@ import {
   fileTitle,
   formatDuration,
   assembleFileParts,
+  classifyFileResponse,
   summarizeFileModels,
   planWindows,
   slicePcm,
@@ -948,8 +949,9 @@ export function DictationProvider({ children }) {
         if (job.cancelled) break;
         const win = windows[i];
         setFileJob({ name, phase: 'run', done: i, total: windows.length, preview: assembleFileParts(parts, windows, (text) => text, { preserve: preserveFile }).text.slice(-240) });
+        let res;
         try {
-          const res = await native.transcribePcm({
+          res = await native.transcribePcm({
             pcm: slicePcm(decoded.pcm, { ...win, sampleRate: decoded.sampleRate }),
             durationMs: win.toMs - win.fromMs,
             lang,
@@ -958,20 +960,42 @@ export function DictationProvider({ children }) {
             useDictionary,
             contextPrompt: '',
           });
-          if (job.cancelled) break;
-          if (res?.ok) {
-            modelResponses.push({ ok: true, model: res.model });
-            const text = String(res.text || '').trim();
-            parts.push(text);
-            sttMs += Number(res.ms) || 0;
-          } else if (res?.code === 'silent') {
-            parts.push('');
-          } else {
-            failed += 1;
-            parts.push(null);
-          }
         } catch {
-          if (job.cancelled) break;
+          res = null;
+        }
+        if (job.cancelled) break;
+        const checked = classifyFileResponse(res);
+        if (checked.kind === 'oversized') {
+          // Ответ уже получен через IPC. Не обрезаем и не склеиваем его с
+          // предыдущими окнами: это может быть как сбой модели, так и текст.
+          job.onCancel = null;
+          fileJobRef.current = null;
+          setFileJob(null);
+          diag.warn('stt', 'Длинный ответ окна файла', { part: i + 1, chars: checked.text.length });
+          pushToast({
+            title: 'Необычно длинный ответ модели',
+            description: `Фрагмент ${i + 1} из ${windows.length} превышает ${FILE_LIMITS.chunkChars} символов. Обработка остановлена, история не изменена. Ответ ниже не проверен: скопируйте его до закрытия уведомления или приложения. Поле может изменить вид переносов строк. ${i + 1 < windows.length ? 'Последующие фрагменты не обработаны.' : 'Это последний фрагмент.'}`,
+            recoverText: checked.text,
+            recoverLabel: 'Длинный ответ модели для ручной проверки', tone: 'warn', ttl: 0,
+          });
+          // Сохраняем только уже завершённые окна, без словаря и без удаления
+          // повторов: они могут быть значимы. Это временный ручной черновик.
+          const prior = assembleFileParts(parts, windows, (text) => text, { preserve: true }).text;
+          if (prior) pushToast({
+            title: 'Ранее обработанная часть файла',
+            description: 'Проверьте и скопируйте отдельно до закрытия уведомления или приложения. Возможны повторы на границах; история не изменена.',
+            recoverText: `${prior}\n[Остановлено: ответ фрагмента ${i + 1} из ${windows.length} показан отдельно]`,
+            recoverLabel: 'Ранее распознанная часть файла', tone: 'warn', ttl: 0,
+          });
+          return null;
+        }
+        if (checked.kind === 'text') {
+          modelResponses.push({ ok: true, model: res.model });
+          parts.push(checked.text);
+          sttMs += Number(res.ms) || 0;
+        } else if (checked.kind === 'silent') {
+          parts.push('');
+        } else {
           failed += 1;
           parts.push(null);
         }

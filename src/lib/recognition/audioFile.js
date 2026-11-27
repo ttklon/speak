@@ -27,7 +27,7 @@ export const FILE_LIMITS = {
   bytes: 300 * 1024 * 1024,
   durationMs: 2 * 60 * 60 * 1000,
   workingBytes: 768 * 1024 * 1024,
-  // сколько символов текста принимаем от одного куска (защита от мусора)
+  // Длина ответа одного окна в UTF-16: выше — остановка и ручная проверка, не обрезка.
   chunkChars: 20000,
 };
 
@@ -154,6 +154,17 @@ export function assembleFileParts(parts = [], windows = [], transform = (text) =
   });
   flush();
   return { text: sections.join('\n'), speechText: speech.join('\n') };
+}
+
+/** Проверка ответа одного окна после IPC. Большой текст не усекать и не
+ * считать подтверждённым распознаванием; вызывающий предлагает его отдельно. */
+export function classifyFileResponse(res) {
+  if (res?.ok === true) {
+    if (typeof res.text !== 'string') return { kind: 'failed' };
+    if (res.text.length > FILE_LIMITS.chunkChars) return { kind: 'oversized', text: res.text };
+    return { kind: 'text', text: res.text.trim() };
+  }
+  return res?.ok === false && res.code === 'silent' ? { kind: 'silent' } : { kind: 'failed' };
 }
 
 /** Только модели успешных окон из ответов main; отказанное окно ничего не доказывает. */
