@@ -896,7 +896,7 @@ export function DictationProvider({ children }) {
           pushToast({ title: reason === 'too-long' ? 'Запись слишком длинная' : 'Этот файл не подойдёт', description: limit.message, tone: 'warn', ttl: 11000 });
           return null;
         }
-        const key = reason === 'decode' ? 'decode' : 'failed';
+        const key = reason === 'decode' ? 'decode' : reason === 'too-much-memory' ? 'too-much-memory' : 'failed';
         diag.warn('stt', 'Файл не разобрался', { reason });
         pushToast({ ...FILE_ERRORS[key], tone: 'warn', ttl: 12000 });
         return null;

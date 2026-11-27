@@ -47,6 +47,48 @@ function browserOffline(channels, frames, rate) {
   return Offline ? new Offline(channels, frames, rate) : null;
 }
 
+// Предварительная оценка только для обычного несжатого RIFF/WAVE с полным,
+// согласованным fmt и data в начале файла. Заголовок недоверенный: если он
+// сомнителен, это не доказательство безопасности и решение остаётся кодеку.
+function pcmWavInfo(buffer, fileSize) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 12 || !Number.isSafeInteger(fileSize)) return null;
+  const v = new DataView(buffer, 0, Math.min(buffer.byteLength, 65536));
+  const tag = (at, text) => at + text.length <= v.byteLength && [...text].every((c, i) => v.getUint8(at + i) === c.charCodeAt(0));
+  if (!tag(0, 'RIFF') || !tag(8, 'WAVE')) return null;
+  const end = v.getUint32(4, true) + 8;
+  if (end > fileSize || end < 12) return null;
+  let pos = 12; let fmt = null;
+  while (pos + 8 <= v.byteLength && pos + 8 <= end) {
+    const size = v.getUint32(pos + 4, true);
+    const body = pos + 8;
+    if (body + size > end) return null;
+    if (tag(pos, 'fmt ')) {
+      if (size < 16 || body + 16 > v.byteLength || fmt) return null;
+      const format = v.getUint16(body, true); const channels = v.getUint16(body + 2, true);
+      const rate = v.getUint32(body + 4, true); const bytesPerSecond = v.getUint32(body + 8, true);
+      const align = v.getUint16(body + 12, true); const bits = v.getUint16(body + 14, true);
+      if (!channels || channels > 32 || !rate || !align || align !== channels * bits / 8 ||
+          bytesPerSecond !== rate * align || !((format === 1 && [8, 16, 24, 32].includes(bits)) || (format === 3 && [32, 64].includes(bits)))) return null;
+      fmt = { rate, align, channels };
+    } else if (tag(pos, 'data')) {
+      if (!fmt || size % fmt.align !== 0) return null;
+      return { durationMs: size / fmt.align / fmt.rate * 1000, channels: fmt.channels };
+    }
+    const next = body + size + (size % 2);
+    if (next > end || next <= pos) return null;
+    pos = next;
+  }
+  return null;
+}
+
+export function pcmWavDurationMs(buffer, fileSize) {
+  return pcmWavInfo(buffer, fileSize)?.durationMs ?? null;
+}
+
+function estimatedBytes(encodedBytes, length, channels, outputFrames) {
+  return encodedBytes + length * channels * 4 + (channels > 1 ? length * 4 : 0) + outputFrames * 6;
+}
+
 /**
  * Файл → { pcm, durationMs, sampleRate }.
  *
@@ -58,6 +100,7 @@ export async function decodeAudioFile(file, opts = {}) {
   const targetRate = Number(opts.targetRate) || SAMPLE_RATE;
   const maxBytes = opts.maxBytes ?? FILE_LIMITS.bytes;
   const maxDurationMs = opts.maxDurationMs ?? FILE_LIMITS.durationMs;
+  const maxWorkingBytes = opts.maxWorkingBytes ?? FILE_LIMITS.workingBytes;
   const createContext = opts.createContext || browserContext;
   const createOffline = opts.createOffline || browserOffline;
   const isCancelled = opts.isCancelled || (() => false);
@@ -66,15 +109,38 @@ export async function decodeAudioFile(file, opts = {}) {
   };
   if (!file || typeof file.arrayBuffer !== 'function') throw new Error('no-file');
   if (!Number.isFinite(targetRate) || targetRate <= 0 || targetRate > 192000 ||
-      !Number.isFinite(maxBytes) || maxBytes <= 0 || !Number.isFinite(maxDurationMs) || maxDurationMs <= 0) throw new Error('invalid-limits');
+      !Number.isFinite(maxBytes) || maxBytes <= 0 || !Number.isFinite(maxDurationMs) || maxDurationMs <= 0 ||
+      !Number.isFinite(maxWorkingBytes) || maxWorkingBytes <= 0) throw new Error('invalid-limits');
   checkCancelled();
   // File.size is available without reading the compressed file into memory.
   if (Number(file.size) > maxBytes) throw new Error('too-big');
-  const bytes = await file.arrayBuffer();
-  checkCancelled();
-  if (!bytes || !Number.isSafeInteger(bytes.byteLength) || bytes.byteLength > maxBytes) throw new Error('too-big');
-  const ctx = createContext();
+  let wav = null;
+  if (typeof file.slice === 'function' && Number.isSafeInteger(file.size) && file.size >= 12) {
+    let header = null;
+    try { header = await file.slice(0, Math.min(file.size, 65536)).arrayBuffer(); } catch { /* обычное чтение покажет ошибку */ }
+    checkCancelled();
+    wav = pcmWavInfo(header, file.size);
+    if (wav && wav.durationMs > maxDurationMs) throw new Error('too-long');
+  }
+  let ctx = null;
   try {
+    // Для понятного WAV AudioContext сообщает частоту, к которой Chromium
+    // приводит decodeAudioData. Это оценка, а не проверка содержимого файла.
+    if (wav) {
+      ctx = createContext();
+      if (!ctx || typeof ctx.decodeAudioData !== 'function') throw new Error('no-decoder');
+      if (Number.isFinite(ctx.sampleRate) && ctx.sampleRate > 0 && ctx.sampleRate <= 192000) {
+        const length = Math.ceil(wav.durationMs / 1000 * ctx.sampleRate);
+        const frames = Math.ceil(wav.durationMs / 1000 * targetRate);
+        const estimate = estimatedBytes(file.size, length, wav.channels, frames);
+        if (!Number.isSafeInteger(estimate) || estimate > maxWorkingBytes) throw new Error('too-much-memory');
+      }
+    }
+    const bytes = await file.arrayBuffer();
+    checkCancelled();
+    if (!bytes || !Number.isSafeInteger(bytes.byteLength) || bytes.byteLength > maxBytes) throw new Error('too-big');
+    const encodedBytes = bytes.byteLength; // decodeAudioData может отсоединить ArrayBuffer
+    if (!ctx) ctx = createContext();
     if (!ctx || typeof ctx.decodeAudioData !== 'function') throw new Error('no-decoder');
     let decoded;
     try {
@@ -94,9 +160,13 @@ export async function decodeAudioFile(file, opts = {}) {
     if (length / inputRate * 1000 > maxDurationMs || duration * 1000 > maxDurationMs) throw new Error('too-long');
     if (!length) return { pcm: new Int16Array(0), sampleRate: targetRate, durationMs: 0 };
     const frames = Math.max(1, Math.round((length / inputRate) * targetRate));
+    // Учитываем известные большие буферы, но не внутренние копии кодека,
+    // движок STT, прочую память процесса или физически доступную память.
+    const estimate = estimatedBytes(encodedBytes, length, decoded.numberOfChannels, frames);
+    if (!Number.isSafeInteger(frames) || !Number.isSafeInteger(estimate) || estimate > maxWorkingBytes) throw new Error('too-much-memory');
     const off = createOffline(1, frames, targetRate);
     if (!off) throw new Error('no-decoder');
-    const mono = mixToMono(decoded, (ch, len, rate) =>
+    const mono = decoded.numberOfChannels === 1 ? decoded : mixToMono(decoded, (ch, len, rate) =>
       typeof ctx.createBuffer === 'function' ? ctx.createBuffer(ch, len, rate) : { getChannelData: () => new Float32Array(len) },
     );
     checkCancelled();

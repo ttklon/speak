@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { decodeAudioFile, floatToInt16, mixToMono } from './decodeFile.js';
+import { decodeAudioFile, floatToInt16, mixToMono, pcmWavDurationMs } from './decodeFile.js';
 
 function fakeFile(bytes = [1, 2, 3]) {
   return {
@@ -53,6 +53,38 @@ function makeOffline() {
   };
 }
 
+// Заголовок отдельный: имитируем большой файл, не выделяя мегабайты в тесте.
+function wavHeader({ seconds = 1, rate = 16000, channels = 1, bits = 16, format = 1, trailing = 0 } = {}) {
+  const align = channels * bits / 8;
+  const bytes = seconds * rate * align;
+  const header = new Uint8Array(44);
+  const v = new DataView(header.buffer);
+  const tag = (offset, text) => [...text].forEach((c, i) => { header[offset + i] = c.charCodeAt(0); });
+  tag(0, 'RIFF'); v.setUint32(4, 36 + bytes + trailing, true); tag(8, 'WAVE'); tag(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, format, true); v.setUint16(22, channels, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * align, true); v.setUint16(32, align, true);
+  v.setUint16(34, bits, true); tag(36, 'data'); v.setUint32(40, bytes, true);
+  return { header, size: 44 + bytes + trailing };
+}
+
+describe('ограниченный заголовок WAV', () => {
+  it('читает только достоверно согласованный формат и игнорирует неподдерживаемые данные', () => {
+    const good = wavHeader({ seconds: 7200, channels: 2, rate: 8000 });
+    expect(pcmWavDurationMs(good.header.buffer, good.size)).toBe(7_200_000);
+    expect(pcmWavDurationMs(good.header.buffer, good.size - 1)).toBeNull();
+    expect(pcmWavDurationMs(new ArrayBuffer(5), 5)).toBeNull();
+    new DataView(good.header.buffer).setUint16(32, 1, true); // некорректный block align
+    expect(pcmWavDurationMs(good.header.buffer, good.size)).toBeNull();
+  });
+  it('понимает нечётный дополнительный chunk с паддингом', () => {
+    const { header, size } = wavHeader({ seconds: 1 });
+    const extra = new Uint8Array(54); extra.set(header.subarray(0, 12));
+    extra.set([74, 85, 78, 75, 1, 0, 0, 0, 42, 0], 12); extra.set(header.subarray(12), 22);
+    new DataView(extra.buffer).setUint32(4, size + 2, true);
+    expect(pcmWavDurationMs(extra.buffer, size + 10)).toBe(1000);
+  });
+});
+
 describe('decodeAudioFile', () => {
   it('отдаёт 16-битный звук и длительность по готовому звуку', async () => {
     const ctx = makeContext();
@@ -84,6 +116,82 @@ describe('decodeAudioFile', () => {
     const arrayBuffer = vi.fn(async () => new ArrayBuffer(10));
     await expect(decodeAudioFile({ size: 11, arrayBuffer }, { maxBytes: 10 })).rejects.toThrow('too-big');
     expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('проверяет длительность обычного WAV по ограниченному заголовку до полного чтения и декодирования', async () => {
+    const { header, size } = wavHeader({ seconds: 7201 });
+    const read = vi.fn(async () => new ArrayBuffer(0));
+    const slice = vi.fn(() => ({ arrayBuffer: async () => header.buffer }));
+    const ctx = vi.fn(makeContext);
+    await expect(decodeAudioFile({ size, slice, arrayBuffer: read }, { createContext: ctx })).rejects.toThrow('too-long');
+    expect(slice).toHaveBeenCalledWith(0, Math.min(size, 65536));
+    expect(read).not.toHaveBeenCalled(); expect(ctx).not.toHaveBeenCalled();
+  });
+
+  it('обычный WAV с большой оценкой буферов отклоняется до полного чтения и decodeAudioData', async () => {
+    const { header, size } = wavHeader({ seconds: 1200, rate: 16000, channels: 2 });
+    const file = { size, slice: () => ({ arrayBuffer: async () => header.buffer }), arrayBuffer: vi.fn(async () => new ArrayBuffer(1)) };
+    const ctx = makeContext(); ctx.sampleRate = 48000; ctx.decodeAudioData = vi.fn(ctx.decodeAudioData);
+    await expect(decodeAudioFile(file, { createContext: () => ctx })).rejects.toThrow('too-much-memory');
+    expect(file.arrayBuffer).not.toHaveBeenCalled(); expect(ctx.decodeAudioData).not.toHaveBeenCalled(); expect(ctx.closed).toBe(true);
+  });
+
+  it('закрывает заранее созданный контекст при ошибке полного чтения WAV', async () => {
+    const { header, size } = wavHeader({ seconds: 1 });
+    const file = { size, slice: () => ({ arrayBuffer: async () => header.buffer }), arrayBuffer: async () => { throw new Error('disk error'); } };
+    const ctx = makeContext(); ctx.sampleRate = 48000; ctx.decodeAudioData = vi.fn(ctx.decodeAudioData);
+    await expect(decodeAudioFile(file, { createContext: () => ctx })).rejects.toThrow('disk error');
+    expect(ctx.closed).toBe(true); expect(ctx.decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it('не доверяет неизвестному формату WAV или обрезанным данным и оставляет решение декодеру', async () => {
+    for (const type of ['unsupported', 'truncated']) {
+      const { header, size } = wavHeader({ seconds: 7201, format: type === 'unsupported' ? 6 : 1 });
+      const file = { size: type === 'truncated' ? size - 1 : size,
+        slice: () => ({ arrayBuffer: async () => header.buffer }), arrayBuffer: vi.fn(async () => new ArrayBuffer(3)) };
+      const ctx = makeContext({ fail: true });
+      await expect(decodeAudioFile(file, { createContext: () => ctx })).rejects.toThrow('decode');
+      expect(file.arrayBuffer).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('отмена во время чтения заголовка не вызывает полное чтение и декодер', async () => {
+    let finish; let cancelled = false;
+    const file = { size: 1000, slice: () => ({ arrayBuffer: () => new Promise((resolve) => { finish = resolve; }) }),
+      arrayBuffer: vi.fn(async () => new ArrayBuffer(0)) };
+    const ctx = vi.fn(makeContext);
+    const pending = decodeAudioFile(file, { createContext: ctx, isCancelled: () => cancelled });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    cancelled = true; finish(new ArrayBuffer(0));
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(file.arrayBuffer).not.toHaveBeenCalled(); expect(ctx).not.toHaveBeenCalled();
+  });
+
+  it('отклоняет расчётный объём звука до дополнительных моно и offline буферов', async () => {
+    const decoded = { length: 1_000_000, sampleRate: 48000, duration: 1_000_000 / 48000,
+      numberOfChannels: 2, getChannelData: vi.fn() };
+    const ctx = makeContext({ decoded }); ctx.createBuffer = vi.fn(ctx.createBuffer);
+    const offline = vi.fn(makeOffline);
+    await expect(decodeAudioFile(fakeFile(), { createContext: () => ctx, createOffline: offline, maxWorkingBytes: 9_000_000 })).rejects.toThrow('too-much-memory');
+    expect(ctx.createBuffer).not.toHaveBeenCalled(); expect(offline).not.toHaveBeenCalled(); expect(ctx.closed).toBe(true);
+  });
+
+  it('оценочный лимит буферов принимает границу и отклоняет превышение на байт', async () => {
+    const exact = 3 + 4410 * 2 * 4 + 4410 * 4 + 1600 * 6;
+    const ctx = makeContext();
+    await expect(decodeAudioFile(fakeFile(), { createContext: () => ctx, createOffline: makeOffline, maxWorkingBytes: exact })).resolves.toMatchObject({ sampleRate: 16000 });
+    const second = makeContext(); const offline = vi.fn(makeOffline);
+    await expect(decodeAudioFile(fakeFile(), { createContext: () => second, createOffline: offline, maxWorkingBytes: exact - 1 })).rejects.toThrow('too-much-memory');
+    expect(offline).not.toHaveBeenCalled(); expect(second.closed).toBe(true);
+  });
+
+  it('использует моно буфер напрямую вместо дополнительной копии', async () => {
+    const decoded = fakeDecoded({ channels: 1 });
+    const ctx = makeContext({ decoded }); ctx.createBuffer = vi.fn(ctx.createBuffer);
+    let source;
+    const offline = () => ({ ...makeOffline(), createBufferSource: () => (source = { connect() {}, start() {} }) });
+    await decodeAudioFile(fakeFile(), { createContext: () => ctx, createOffline: offline });
+    expect(ctx.createBuffer).not.toHaveBeenCalled(); expect(source.buffer).toBe(decoded);
   });
 
   it('слишком длинный декодированный звук отказывает до создания моно и offline-буферов', async () => {

@@ -941,12 +941,12 @@ async function scenarioSnippetSafety(browser) {
  * декодируется в браузере, режется на куски и склеивается, а не что кнопка
  * что-то показала. Мок движка отвечает текстом, поэтому результат сравним.
  */
-function writeToneWav(path, { seconds = 1.2, sampleRate = 16000 } = {}) {
+function writeToneWav(path, { seconds = 1.2, sampleRate = 16000, channels = 1 } = {}) {
   const frames = Math.round(seconds * sampleRate);
-  const data = Buffer.alloc(frames * 2);
+  const data = Buffer.alloc(frames * channels * 2);
   for (let i = 0; i < frames; i += 1) {
     const v = Math.round(Math.sin((2 * Math.PI * 220 * i) / sampleRate) * 8000);
-    data.writeInt16LE(v, i * 2);
+    for (let ch = 0; ch < channels; ch += 1) data.writeInt16LE(v, (i * channels + ch) * 2);
   }
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
@@ -955,10 +955,10 @@ function writeToneWav(path, { seconds = 1.2, sampleRate = 16000 } = {}) {
   header.write('fmt ', 12);
   header.writeUInt32LE(16, 16); // размер блока fmt
   header.writeUInt16LE(1, 20); // PCM
-  header.writeUInt16LE(1, 22); // моно
+  header.writeUInt16LE(channels, 22);
   header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28); // байт в секунду
-  header.writeUInt16LE(2, 32); // выравнивание блока
+  header.writeUInt32LE(sampleRate * channels * 2, 28); // байт в секунду
+  header.writeUInt16LE(channels * 2, 32); // выравнивание блока
   header.writeUInt16LE(16, 34); // бит на отсчёт
   header.write('data', 36);
   header.writeUInt32LE(data.length, 40);
@@ -1012,18 +1012,33 @@ async function scenarioFileDictionary(browser) {
 // подмена, сам WAV реален, модель и мост остаются моковыми.
 async function scenarioAudioFileBounds(browser) {
   const wav = writeToneWav(join(tmpdir(), 'zspeakly-file-bounds.wav'));
+  // Синтетический WAV 8 Гц позволяет проверить двухчасовой заголовок без сотен
+  // мегабайт на Windows CI. Это не тест поддержки воспроизведения такого файла.
+  const longWav = join(tmpdir(), 'zspeakly-long-header.wav');
+  const count = 7201 * 8;
+  const raw = Buffer.alloc(44 + count);
+  raw.write('RIFF', 0); raw.writeUInt32LE(raw.length - 8, 4); raw.write('WAVEfmt ', 8);
+  raw.writeUInt32LE(16, 16); raw.writeUInt16LE(1, 20); raw.writeUInt16LE(1, 22);
+  raw.writeUInt32LE(8, 24); raw.writeUInt32LE(8, 28); raw.writeUInt16LE(1, 32);
+  raw.writeUInt16LE(8, 34); raw.write('data', 36); raw.writeUInt32LE(count, 40);
+  writeFileSync(longWav, raw);
+  const largeHeaderWav = writeToneWav(join(tmpdir(), 'zspeakly-memory-header.wav'), { seconds: 1200, sampleRate: 8, channels: 2 });
   try {
-    for (const scenario of ['long', 'bad', 'cancel']) {
+    for (const scenario of ['long', 'bad', 'cancel', 'header', 'prebudget', 'memory']) {
       const page = await openPage(browser, '#/home', { storeSeed: { 'zs.dictations': [] }, patchArg: scenario,
         patchNative: (scenario) => {
-          window.__fileDecodeCalls = 0; window.__fileClosed = 0; window.__fileOffline = 0;
+          window.__fileDecodeCalls = 0; window.__fileClosed = 0; window.__fileOffline = 0; window.__fullFileRead = 0;
+          const readFile = File.prototype.arrayBuffer;
+          File.prototype.arrayBuffer = function () { window.__fullFileRead++; return readFile.call(this); };
           const decoded = (seconds) => ({ length: 16000 * seconds, sampleRate: 16000, duration: seconds,
             numberOfChannels: 1, getChannelData: () => new Float32Array(1600) });
           window.AudioContext = class {
+            constructor() { this.sampleRate = 48000; }
             decodeAudioData() {
               window.__fileDecodeCalls++;
               if (scenario === 'long') return Promise.resolve(decoded(7201));
               if (scenario === 'bad') return Promise.reject(new Error('bad codec'));
+              if (scenario === 'memory') return Promise.resolve({ length: 48000 * 3000, sampleRate: 48000, duration: 3000, numberOfChannels: 2, getChannelData: () => { throw new Error('unexpected data copy'); } });
               return new Promise((resolve) => { window.__releaseFileDecode = () => resolve(decoded(0.1)); });
             }
             close() { window.__fileClosed++; return Promise.resolve(); }
@@ -1033,8 +1048,16 @@ async function scenarioAudioFileBounds(browser) {
       try {
         // Приложение может предварительно создавать AudioContext при открытии.
         await page.evaluate(() => { window.__fileClosed = 0; window.__fileOffline = 0; window.__fileDecodeCalls = 0; });
-        await (await page.$('input[type="file"]')).uploadFile(wav);
-        if (scenario === 'long') {
+        await (await page.$('input[type="file"]')).uploadFile(scenario === 'header' ? longWav : scenario === 'prebudget' ? largeHeaderWav : wav);
+        if (scenario === 'header' || scenario === 'prebudget' || scenario === 'memory') {
+          const expected = scenario === 'header' ? /Запись слишком длинная/i : /Запись требует слишком много памяти/i;
+          await page.waitForFunction((pattern) => new RegExp(pattern, 'i').test(document.body.innerText), { timeout: 8000 }, expected.source).catch(() => {});
+          const result = await page.evaluate(() => ({ text: document.body.innerText, read: window.__fullFileRead, decode: window.__fileDecodeCalls, closed: window.__fileClosed, offline: window.__fileOffline,
+            calls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm').length, history: window.__e2e.read('zs.dictations') || [] }));
+          record('сценарии', scenario === 'header' ? 'файл: длинный WAV отклонён до полного чтения' : scenario === 'prebudget' ? 'файл: оценка памяти WAV отклоняет до чтения и декодирования' : 'файл: превышение оценки памяти показывает выход до дополнительных буферов',
+            expected.test(result.text) && result.offline === 0 && result.calls === 0 && result.history.length === 0 &&
+            (scenario === 'header' ? result.read === 0 && result.decode === 0 : scenario === 'prebudget' ? result.read === 0 && result.decode === 0 && result.closed === 1 && /Разделите файл/.test(result.text) : result.read === 1 && result.decode === 1 && result.closed === 1 && /Разделите файл/.test(result.text)), JSON.stringify({ read: result.read, decode: result.decode, offline: result.offline, closed: result.closed }));
+        } else if (scenario === 'long') {
           await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((el) => /Запись слишком длинная/i.test(el.innerText)), { timeout: 8000 }).catch(() => {});
           const result = await page.evaluate(() => ({ text: document.body.innerText, closed: window.__fileClosed, offline: window.__fileOffline,
             calls: (window.__bridgeCalls || []).filter((c) => c.channel === 'stt:transcribe-pcm').length,
@@ -1066,7 +1089,7 @@ async function scenarioAudioFileBounds(browser) {
         const errors = takeErrors(page); record('сценарии', `файл: границы (${scenario}) без ошибок консоли`, errors.length === 0, errors[0] || '');
       } finally { await page.close(); }
     }
-  } finally { rmSync(wav, { force: true }); }
+  } finally { rmSync(wav, { force: true }); rmSync(longWav, { force: true }); rmSync(largeHeaderWav, { force: true }); }
 }
 
 // Файл реальный, декодирование и ответы модели контролируемые: воспроизводим
@@ -1339,6 +1362,34 @@ async function scenarioAudioFile(browser) {
   record('сценарии', 'файл в текст: без ошибок консоли', errors.length === 0, errors[0] || '');
   await page.close();
   rmSync(wav, { force: true });
+}
+
+// Настоящий браузерный кодек и ресемплирование; STT и мост — подмена.
+async function scenarioAudioDecodeSignal(browser) {
+  for (const channels of [1, 2]) {
+    const path = writeToneWav(join(tmpdir(), `zspeakly-signal-${channels}.wav`), { sampleRate: 44100, channels });
+    const page = await openPage(browser, '#/home', {
+      storeSeed: { 'zs.dictations': [] },
+      patchNative: () => {
+        const native = window.zspeakly.native;
+        const original = native.transcribePcm;
+        native.transcribePcm = async (payload) => {
+          let peak = 0; let energy = 0;
+          for (const n of payload.pcm) { peak = Math.max(peak, Math.abs(n)); energy += n * n; }
+          window.__signal = { length: payload.pcm.length, peak, rms: Math.sqrt(energy / payload.pcm.length), duration: payload.durationMs };
+          return original(payload);
+        };
+      },
+    });
+    try {
+      await (await page.$('input[type="file"]')).uploadFile(path);
+      await page.waitForFunction(() => window.__signal, { timeout: 8000 });
+      const signal = await page.evaluate(() => window.__signal);
+      record('сценарии', `файл: ${channels === 1 ? 'моно' : 'стерео'} WAV сохраняет сигнал после реального ресемплирования`,
+        Math.abs(signal.length - 19200) <= 2 && signal.peak > 7000 && signal.peak < 9000 && signal.rms > 5000 && signal.rms < 6000 && Math.abs(signal.duration - 1200) <= 1, JSON.stringify(signal));
+      const errors = takeErrors(page); record('сценарии', `файл: сигнал ${channels} каналов без ошибок консоли`, errors.length === 0, errors[0] || '');
+    } finally { await page.close(); rmSync(path, { force: true }); }
+  }
 }
 
 /**
@@ -11508,6 +11559,7 @@ async function main() {
       ['быстрые блоки', scenarioSnippets],
       ['безопасность быстрых блоков', scenarioSnippetSafety],
       ['файл в текст', scenarioAudioFile],
+      ['файл: проверка сигнала', scenarioAudioDecodeSignal],
       ['файл: границы декодирования', scenarioAudioFileBounds],
       ['файл: частичный отказ', scenarioAudioFilePartial],
       ['файл: отмена с частичным текстом', scenarioAudioFileCancelPartial],
