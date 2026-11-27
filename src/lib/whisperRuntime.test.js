@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -40,10 +40,17 @@ function fakeChild(file, args) {
   if (String(file).includes('whisper-server') && serverMode === 'first-fails' && children.filter((item) => String(item.file).includes('whisper-server')).length === 1) child.exitCode = 1;
   if (!String(file).includes('whisper-server')) {
     const n = children.filter((item) => !String(item.file).includes('whisper-server')).length;
-    if (['vad-fallback', 'throw-retry'].includes(cliMode) && n === 1) queueMicrotask(() => {
+    if (['vad-fallback', 'throw-retry', 'vad-retry-failed'].includes(cliMode) && n === 1) queueMicrotask(() => {
       child.stderr.emit('data', Buffer.from('error: unknown argument --vad'));
       child.exitCode = 1;
       child.emit('close', 1);
+    });
+    else if (['failed-file', 'failed-log', 'failed-signal', 'failed-empty', 'vad-retry-failed'].includes(cliMode)) queueMicrotask(() => {
+      if (cliMode === 'failed-file' || cliMode === 'vad-retry-failed' || cliMode === 'failed-signal') writeFileSync(`${wav}.out.txt`, 'частичный текст');
+      if (cliMode === 'failed-log') child.stdout.emit('data', Buffer.from('частичный текст'));
+      child.stderr.emit('data', Buffer.from('error: искусственный сбой'));
+      child.exitCode = cliMode === 'failed-signal' ? null : 1;
+      child.emit('close', child.exitCode, cliMode === 'failed-signal' ? 'SIGKILL' : null);
     });
     else if (cliMode !== 'hold' && cliMode !== 'vad-fallback') queueMicrotask(() => {
       child.stdout.emit('data', Buffer.from('новая модель'));
@@ -311,6 +318,28 @@ describe('жизненный цикл прогретого Whisper', () => {
     expect(await bounded(whisper.transcribe(wav, { model: 'small', keepLoaded: true }), 500)).toMatchObject({ ok: false, reason: 'не удалось запустить процесс' });
     expect(whisper.isBusy()).toBe(false);
   });
+
+  it('не принимает оставшийся от прежнего запуска файл за новый результат', async () => {
+    writeFileSync(`${wav}.out.txt`, 'старый чужой результат');
+    cliMode = 'failed-empty';
+    const res = await bounded(whisper.transcribe(wav, { model: 'small', timeout: 10000 }));
+    expect(res).toMatchObject({ ok: false, text: '', code: 'cli-failed' });
+    expect(res.partialText).toBeUndefined();
+    expect(existsSync(`${wav}.out.txt`)).toBe(false);
+  });
+
+  it.each(['failed-file', 'failed-log', 'failed-signal', 'failed-empty', 'vad-retry-failed'])(
+    'ошибка CLI (%s) не выдаёт неполный вывод за успешный результат', async (kind) => {
+      cliMode = kind;
+      if (kind === 'vad-retry-failed') writeFileSync(join(root, 'models', 'ggml-silero-v6.2.0.bin'), 'vad');
+      const res = await bounded(whisper.transcribe(wav, { model: 'small', timeout: 10000 }));
+      expect(res).toMatchObject({ ok: false, text: '', code: 'cli-failed' });
+      if (kind !== 'failed-empty') expect(res.partialText).toBe('частичный текст');
+      expect(existsSync(`${wav}.out.txt`)).toBe(false);
+      expect(whisper.isBusy()).toBe(false);
+      expect(children).toHaveLength(kind === 'vad-retry-failed' ? 2 : 1);
+    },
+  );
 
   it('ошибка запуска повтора без VAD освобождает состояние занятости', async () => {
     writeFileSync(join(root, 'models', 'ggml-silero-v6.2.0.bin'), 'vad');

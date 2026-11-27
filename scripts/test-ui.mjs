@@ -1172,7 +1172,7 @@ async function scenarioAudioFilePartial(browser) {
 async function scenarioAudioFileResponseBounds(browser) {
   const wav = writeToneWav(join(tmpdir(), 'zspeakly-file-response-bounds.wav'));
   try {
-    for (const scenario of ['first', 'middle', 'after-error', 'malformed', 'boundary']) {
+    for (const scenario of ['first', 'middle', 'after-error', 'malformed', 'boundary', 'cli-failed', 'cli-empty']) {
       const page = await openPage(browser, '#/home', {
         settings: { aiDictationRewrite: false, dictionaryEnabled: false },
         storeSeed: { 'zs.dictations': [{ id: 'keep', text: 'Старая запись', createdAt: Date.now() }] },
@@ -1194,6 +1194,8 @@ async function scenarioAudioFileResponseBounds(browser) {
             if ((which === 'first' && index === 0) || (which === 'middle' && index === 1) || (which === 'after-error' && index === 2))
               return { ok: true, text: window.__hugeResult, model: 'gigaam-v3' };
             if (which === 'after-error' && index === 0) return { ok: false };
+            if (which === 'cli-empty' && index === 1) return { ok: false, code: 'cli-failed', text: '' };
+            if (which === 'cli-failed' && index === 1) return { ok: false, code: 'cli-failed', text: '', partialText: 'незавершённый вывод' };
             if (which === 'malformed' && index === 1) return { ok: true };
             if (which === 'boundary' && index === 0) return { ok: true, text: 'х'.repeat(20000) };
             return { ok: true, text: index === 0 ? 'Сохранённое начало.' : 'Второй текст.' };
@@ -1202,7 +1204,7 @@ async function scenarioAudioFileResponseBounds(browser) {
       });
       try {
         await (await page.$('input[type="file"]')).uploadFile(wav);
-        await page.waitForFunction(() => !document.querySelector('.live-draft--processing') && [...document.querySelectorAll('.toast')].some((el) => /Файл расшифрован|Необычно длинный ответ модели/.test(el.innerText)), { timeout: 12000 });
+        await page.waitForFunction(() => !document.querySelector('.live-draft--processing') && [...document.querySelectorAll('.toast')].some((el) => /Файл расшифрован|Необычно длинный ответ модели|Ошибка движка распознавания/.test(el.innerText)), { timeout: 12000 });
         const result = await page.evaluate(() => ({
           history: window.__e2e.read('zs.dictations') || [], body: document.body.innerText, calls: window.__fileCalls,
           original: window.__hugeResult,
@@ -1226,6 +1228,10 @@ async function scenarioAudioFileResponseBounds(browser) {
             record('сценарии', 'файл: следующий импорт не уничтожает временные результаты предыдущего',
               next.history.length === 2 && next.history.some((entry) => entry.id === 'keep') && next.raw === next.original && /Сохранённое начало/.test(next.prior));
           }
+        } else if (scenario === 'cli-failed' || scenario === 'cli-empty') {
+          const failed = await page.evaluate(() => document.querySelector('[aria-label="Частичный вывод движка для ручной проверки"]')?.value);
+          record('сценарии', 'файл: частичный вывод после сбоя движка доступен без автоматического сохранения',
+            result.calls === 2 && result.history.length === 1 && (scenario === 'cli-empty' ? !failed : failed === 'незавершённый вывод') && /Сохранённое начало/.test(result.prior) && /Ошибка движка распознавания/.test(result.body), JSON.stringify({ calls: result.calls, history: result.history.length, failed, prior: result.prior }));
         } else if (scenario === 'malformed') {
           record('сценарии', 'файл: успешный ответ без текста считается отказом, а не тишиной',
             result.calls === 3 && result.history.length === 2 && /Не удалось распознать фрагмент 2/.test(result.history[0].text || '') && /Файл расшифрован не полностью/.test(result.body), result.history[0]?.text || '');
@@ -2068,7 +2074,7 @@ async function scenarioPreSnapshotFailure(browser) {
 }
 
 async function scenarioDictationIncompleteTail(browser) {
-  for (const kind of ['failure', 'exception', 'empty', 'cancelled', 'live', 'both', 'command']) {
+  for (const kind of ['failure', 'exception', 'empty', 'cancelled', 'live', 'both', 'command', 'cli-failed']) {
     const page = await openPage(browser, '#/home', {
       settings: { aiDictationRewrite: false, liveWhisper: kind === 'live' || kind === 'both', micPreroll: false },
       storeSeed: { 'zs.dictations': [] }, patchArg: kind,
@@ -2106,6 +2112,7 @@ async function scenarioDictationIncompleteTail(browser) {
           if (kind === 'exception') throw new Error('искусственный отказ IPC');
           if (kind === 'empty') return { ok: true, text: '  ' };
           if (kind === 'cancelled') return { ok: false, code: 'cancelled' };
+          if (kind === 'cli-failed') return { ok: false, code: 'cli-failed', partialText: 'неполный вывод CLI', reason: 'сбой процесса' };
           return { ok: false, code: 'stt-failed', reason: 'искусственный отказ' };
         };
       },
@@ -2145,7 +2152,7 @@ async function scenarioDictationIncompleteTail(browser) {
         clipboardWrites: (window.__bridgeCalls || []).filter((c) => c.channel === 'clipboard:write').length,
         calls: window.__callsIncomplete,
       }));
-      const expected = kind === 'live' ? 'Живой непроверенный черновик' : kind === 'both'
+      const expected = kind === 'cli-failed' ? 'Ранее распознанный фрагмент:\nГотовое начало.\n\nЧастичный вывод после ошибки (может содержать служебные строки):\nнеполный вывод CLI' : kind === 'live' ? 'Живой непроверенный черновик' : kind === 'both'
         ? 'Предварительный фрагмент:\nГотовое начало.\n\nЖивой черновик (может повторять фрагмент):\nЖивой непроверенный черновик'
         : 'Готовое начало.';
       const errors = takeErrors(page);

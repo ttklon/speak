@@ -965,18 +965,22 @@ export function DictationProvider({ children }) {
         }
         if (job.cancelled) break;
         const checked = classifyFileResponse(res);
-        if (checked.kind === 'oversized') {
+        const failedPartial = res?.ok === false && res.code === 'cli-failed' && typeof res.partialText === 'string' && res.partialText.trim()
+          ? res.partialText : '';
+        const cliFailed = res?.ok === false && (res.code === 'cli-failed' || res.code === 'output-cleanup-failed');
+        if (checked.kind === 'oversized' || cliFailed) {
           // Ответ уже получен через IPC. Не обрезаем и не склеиваем его с
           // предыдущими окнами: это может быть как сбой модели, так и текст.
           job.onCancel = null;
           fileJobRef.current = null;
           setFileJob(null);
-          diag.warn('stt', 'Длинный ответ окна файла', { part: i + 1, chars: checked.text.length });
+          const manual = failedPartial || (checked.kind === 'oversized' ? checked.text : '');
+          diag.warn('stt', cliFailed ? 'Частичный вывод ошибки окна файла' : 'Длинный ответ окна файла', { part: i + 1, chars: manual.length });
           pushToast({
-            title: 'Необычно длинный ответ модели',
-            description: `Фрагмент ${i + 1} из ${windows.length} превышает ${FILE_LIMITS.chunkChars} символов. Обработка остановлена, история не изменена. Ответ ниже не проверен: скопируйте его до закрытия уведомления или приложения. Поле может изменить вид переносов строк. ${i + 1 < windows.length ? 'Последующие фрагменты не обработаны.' : 'Это последний фрагмент.'}`,
-            recoverText: checked.text,
-            recoverLabel: 'Длинный ответ модели для ручной проверки', tone: 'warn', ttl: 0,
+            title: cliFailed ? 'Ошибка движка распознавания' : 'Необычно длинный ответ модели',
+            description: `Фрагмент ${i + 1} из ${windows.length}: ${cliFailed ? (failedPartial ? 'движок вернул неполный вывод, в нём возможны служебные строки' : 'движок не вернул текст или не смог запуститься') : `ответ превышает ${FILE_LIMITS.chunkChars} символов`}. Обработка остановлена, история не изменена. ${manual ? 'Ответ ниже не проверен: скопируйте его до закрытия уведомления или приложения. Поле может изменить вид переносов строк.' : ''} ${i + 1 < windows.length ? 'Последующие фрагменты не обработаны.' : 'Это последний фрагмент.'}`,
+            recoverText: manual,
+            recoverLabel: cliFailed ? 'Частичный вывод движка для ручной проверки' : 'Длинный ответ модели для ручной проверки', tone: 'warn', ttl: 0,
           });
           // Сохраняем только уже завершённые окна, без словаря и без удаления
           // повторов: они могут быть значимы. Это временный ручной черновик.
@@ -984,7 +988,7 @@ export function DictationProvider({ children }) {
           if (prior) pushToast({
             title: 'Ранее обработанная часть файла',
             description: 'Проверьте и скопируйте отдельно до закрытия уведомления или приложения. Возможны повторы на границах; история не изменена.',
-            recoverText: `${prior}\n[Остановлено: ответ фрагмента ${i + 1} из ${windows.length} показан отдельно]`,
+            recoverText: `${prior}\n[Остановлено на фрагменте ${i + 1} из ${windows.length}${manual ? ': ответ показан отдельно' : ''}]`,
             recoverLabel: 'Ранее распознанная часть файла', tone: 'warn', ttl: 0,
           });
           return null;

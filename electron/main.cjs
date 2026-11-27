@@ -1746,6 +1746,7 @@ function registerIpc() {
         const canParallel = server.ready === true && Number(server.processors) > 1;
         const parallel = canParallel ? Math.min(chunks.length, Number(server.processors)) : 1;
         const texts = new Array(chunks.length).fill('');
+        const partials = new Array(chunks.length).fill('');
         const modes = new Array(chunks.length).fill('');
         let failed = null;
         let done = 0;
@@ -1764,7 +1765,8 @@ function registerIpc() {
             done += 1;
             reportProgress(done);
             if (!one?.ok) {
-              if (!failed) failed = one;
+              if (one?.code === 'cli-failed' && typeof one.partialText === 'string') partials[index] = one.partialText;
+              if (!failed) failed = one || { ok: false, text: '', code: 'stt-failed', reason: 'пустой ответ движка' };
               return;
             }
             if (one.text) texts[index] = String(one.text).trim();
@@ -1794,7 +1796,14 @@ function registerIpc() {
         if (failed) {
           // кусок не распознался — честнее отдать ошибку, чем половину текста
           logger.warn('stt', 'Фрагмент диктовки не распознан', { keep: true, reason: failed.reason || '' });
-          res = failed;
+          if (failed.code === 'cli-failed' || failed.code === 'output-cleanup-failed') {
+            const recovered = texts.map((text, index) => {
+              const partial = partials[index];
+              return text ? `[Распознан фрагмент ${index + 1}]\n${text}`
+                : partial ? `[Частичный вывод фрагмента ${index + 1} после ошибки; возможны служебные строки]\n${partial}` : '';
+            }).filter(Boolean).join('\n\n');
+            res = { ...failed, ...(recovered ? { partialText: recovered } : {}) };
+          } else res = failed;
         } else {
           const joined = texts
             .filter(Boolean)

@@ -818,6 +818,12 @@ function transcribe(
       outBase: `${wavPath}.out`,
     });
 
+    // Старый результат на том же пути нельзя принять за ответ нового процесса.
+    try { fs.rmSync(`${wavPath}.out.txt`, { force: true }); }
+    catch (err) {
+      resolve({ ok: false, text: '', code: 'output-cleanup-failed', reason: `не удалось удалить прежний вывод: ${err.message}`, mode: 'cli', ms: Date.now() - callStarted });
+      return;
+    }
     let child;
     try { child = spawn(bin, args, { windowsHide: true }); }
     catch (err) {
@@ -850,6 +856,29 @@ function transcribe(
       finish({ ok: false, text: '', code: 'timeout', reason: 'таймаут распознавания' });
     }, timeout);
 
+    const fromLog = (blob) =>
+      blob
+        .split(/\r?\n/)
+        .map((line) => line.replace(/^\s*\[[^\]]*\]\s*/, '').trim())
+        .filter((line) => line)
+        .filter(
+            (line) =>
+              !/^(whisper_|ggml_|system_info|main:|output_|load_|mem_|init:)/i.test(line) &&
+              !/^error:/i.test(line) &&
+              !/^\s*(warning|using|processing|auto-detected)/i.test(line) &&
+              // служебные строки whisper-cli: read_audio_data: …, miniaudio, …
+              !/read_audio_data|miniaudio|trying to|failed to|audio data/i.test(line) &&
+              // общий признак лога «идентификатор_с_подчёркиванием: текст»
+              !/^[a-z0-9]*_[a-z0-9_]*\s*:/i.test(line),
+          )
+        .join(' ')
+        .trim();
+    const failedExit = (code, signal, partialText = '') => ({
+      ok: false, text: '', code: 'cli-failed', exitCode: Number.isInteger(code) ? code : null,
+      reason: signal ? 'движок распознавания завершился по сигналу' : `движок распознавания завершился с ошибкой${Number.isInteger(code) ? ` (код ${code})` : ''}`,
+      ...(partialText ? { partialText } : {}),
+    });
+
     // Один повтор без VAD: флаг поддержан не всеми сборками whisper.cpp.
     function retryWithoutVad() {
       const again = cliArgs({
@@ -869,12 +898,14 @@ function transcribe(
       catch (err) { finish({ ok: false, text: '', reason: err.message }); return; }
       run.child = child2;
       let err2 = '';
+      let out2 = '';
+      child2.stdout?.on('data', (d) => { out2 += d.toString(); if (out2.length > 40000) out2 = out2.slice(-40000); });
       child2.stderr?.on('data', (d) => {
         err2 += d.toString();
         if (err2.length > 8000) err2 = err2.slice(-8000);
       });
       child2.on('error', (err) => finish({ ok: false, text: '', reason: err.message }));
-      child2.on('close', (code2) => {
+      child2.on('close', (code2, signal2) => {
         if (settled) return;
         try {
           const txt = `${wavPath}.out.txt`;
@@ -882,12 +913,16 @@ function transcribe(
             const text = fs.readFileSync(txt, 'utf8').trim();
             fs.unlinkSync(txt);
             if (text) {
-              finish({ ok: true, text, code: code2 });
+              finish(code2 === 0 && !signal2 ? { ok: true, text, code: code2 } : failedExit(code2, signal2, text));
               return;
             }
           }
         } catch {
           /* файл мог не появиться */
+        }
+        if (code2 !== 0 || signal2) {
+          finish(failedExit(code2, signal2, fromLog(out2) || fromLog(err2)));
+          return;
         }
         finish({ ok: false, text: '', code: 'empty', reason: err2.slice(-400) || `код ${code2}` });
       });
@@ -905,7 +940,7 @@ function transcribe(
     child.on('error', (err) => {
       finish({ ok: false, text: '', reason: err.message });
     });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       if (settled) return;
       // 1) файл -otxt, если сборка его пишет
       try {
@@ -914,7 +949,7 @@ function transcribe(
           const text = fs.readFileSync(txt, 'utf8').trim();
           fs.unlinkSync(txt);
           if (text) {
-            finish({ ok: true, text, code });
+            finish(code === 0 && !signal ? { ok: true, text, code } : failedExit(code, signal, text));
             return;
           }
         }
@@ -923,26 +958,9 @@ function transcribe(
         return;
       }
       // 2) вывод процесса: убираем служебные строки whisper.cpp
-      const fromLog = (blob) =>
-        blob
-          .split(/\r?\n/)
-          .map((line) => line.replace(/^\s*\[[^\]]*\]\s*/, '').trim())
-          .filter((line) => line)
-          .filter(
-            (line) =>
-              !/^(whisper_|ggml_|system_info|main:|output_|load_|mem_|init:)/i.test(line) &&
-              !/^error:/i.test(line) &&
-              !/^\s*(warning|using|processing|auto-detected)/i.test(line) &&
-              // служебные строки whisper-cli: read_audio_data: …, miniaudio, …
-              !/read_audio_data|miniaudio|trying to|failed to|audio data/i.test(line) &&
-              // общий признак лога «идентификатор_с_подчёркиванием: текст»
-              !/^[a-z0-9]*_[a-z0-9_]*\s*:/i.test(line),
-          )
-          .join(' ')
-          .trim();
       const text = fromLog(stdout) || fromLog(stderr);
       if (text) {
-        finish({ ok: true, text, code });
+        finish(code === 0 && !signal ? { ok: true, text, code } : failedExit(code, signal, text));
         return;
       }
       if (run.cancelled) {
@@ -961,6 +979,7 @@ function transcribe(
         retryWithoutVad();
         return;
       }
+      if (code !== 0 || signal) { finish(failedExit(code, signal)); return; }
       finish({
         ok: false,
         text: '',

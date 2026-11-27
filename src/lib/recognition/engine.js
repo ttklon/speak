@@ -90,6 +90,14 @@ export const EMPTY_RESULT_MESSAGES = {
     title: 'Слишком короткая запись',
     hint: 'Говорите сразу после нажатия сочетания клавиш.',
   },
+  'output-cleanup-failed': {
+    title: 'Движок не смог запуститься',
+    hint: 'Не удалось удалить прежний временный вывод. Перезапустите приложение и проверьте доступ к временной папке.',
+  },
+  'cli-failed': {
+    title: 'Движок завершился с ошибкой',
+    hint: 'Попробуйте ещё раз. Если ошибка повторяется, проверьте модель в «Настройки → Диктовка → Модель распознавания».',
+  },
   default: {
     title: 'Движок не распознал речь',
     // «проверьте в настройках» человек выполнить не может: называем точные разделы
@@ -605,7 +613,13 @@ export function createRecognizer(opts = {}) {
               hint: res?.reason || EMPTY_RESULT_MESSAGES.default.hint,
             },
           );
-          onEnd?.({ text: '', incomplete: true, partialText: preText, incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
+          // Частичный вывод ошибочного CLI — не итог и не команда: он может
+          // содержать логи и пропуски. Сохраняем отдельно от предыдущего окна.
+          const failedOutput = (res?.code === 'cli-failed' || res?.code === 'output-cleanup-failed') && typeof res.partialText === 'string' ? res.partialText.trim() : '';
+          const recover = failedOutput
+            ? [preText ? `Ранее распознанный фрагмент:\n${preText}` : '', `Частичный вывод после ошибки (может содержать служебные строки):\n${failedOutput}`].filter(Boolean).join('\n\n')
+            : preText;
+          onEnd?.({ text: '', incomplete: true, partialText: recover, incompleteReason: captureInterrupted ? 'mic-interrupted' : '' });
           return { text: '', code: 'incomplete' };
         }
         return { text };

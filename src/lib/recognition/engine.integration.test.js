@@ -212,6 +212,15 @@ describe('диктовка целиком: что получает челове�
     },
   );
 
+  it('частичный вывод отказавшего CLI не вставляется, но доступен отдельно для ручной проверки', async () => {
+    answers = [{ ok: false, code: 'cli-failed', reason: 'движок завершился с ошибкой', partialText: 'неполный ответ' }];
+    const end = vi.fn(), final = vi.fn(); const recognizer = createRecognizer({ onEnd: end, onFinal: final });
+    await recognizer.start(); await speak(0, 2000);
+    expect(await recognizer.stop()).toMatchObject({ text: '', code: 'incomplete' });
+    expect(final).not.toHaveBeenCalled();
+    expect(end).toHaveBeenCalledWith(expect.objectContaining({ text: '', incomplete: true, partialText: expect.stringContaining('неполный ответ') }));
+  });
+
   it('отказ полного прохода без предварительных кусков тоже запрещает выдачу черновика за итог', async () => {
     answers = [{ ok: false, code: 'stt-failed', reason: 'engine failed' }];
     const end = vi.fn(); const recognizer = createRecognizer({ onEnd: end });
