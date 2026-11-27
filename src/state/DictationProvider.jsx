@@ -1746,9 +1746,16 @@ export function DictationProvider({ children }) {
         return { ok: false, reason: 'bridge-failed' };
       }
       if (!res?.ok) {
+        // Только известные контракты явного неполного результата. Это не
+        // команда и не замена исходной истории; в логе могут быть служебные строки.
+        const canRecover = ['cli-failed', 'cli-output-truncated', 'incomplete-chunks'].includes(res?.code);
+        const partial = canRecover && typeof res?.partialText === 'string' && res.partialText.trim() ? res.partialText : '';
         pushToast({
           title: 'Точный проход не удался',
-          description: res?.reason || 'движок не ответил',
+          description: partial
+            ? 'Точный проход не изменил историю. Вывод неполный и может содержать служебные строки; проверьте и скопируйте его до закрытия уведомления или приложения.'
+            : res?.reason || 'движок не ответил',
+          ...(partial ? { recoverText: partial, recoverLabel: 'Неполный вывод точного прохода для ручной проверки', ttl: 0 } : {}),
           tone: 'warn',
         });
         return { ok: false, reason: res?.reason || 'failed' };

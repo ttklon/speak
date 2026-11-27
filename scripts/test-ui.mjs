@@ -7437,6 +7437,64 @@ async function scenarioRetryAlreadyEdited(browser) {
   } finally { await page.close(); }
 }
 
+// Неполный ответ точного повтора — не новая история и не готовый результат.
+async function scenarioRetryIncomplete(browser) {
+  for (const kind of ['cli-failed', 'cli-output-truncated', 'incomplete-chunks', 'incomplete-chunks-edit', 'cancelled']) {
+    const page = await openPage(browser, '#/home', {
+      settings: { aiDictationRewrite: false, liveWhisper: false, micPreroll: false, preserveText: true },
+      storeSeed: { 'zs.dictations': [] }, patchArg: kind,
+      patchNative: (kind) => {
+        let attempts = 0;
+        window.zspeakly.native.transcribePcm = (payload) => {
+          if (!payload?.thorough) return Promise.resolve({ ok: true, text: 'Первый текст.', mode: 'cli' });
+          attempts++;
+          if (attempts > 1) return Promise.resolve({ ok: true, text: 'Первый текст с дополнительными словами.', mode: 'cli' });
+          return new Promise((resolve) => { window.__failExact = () => resolve({ ok: false, code: kind === 'incomplete-chunks-edit' ? 'incomplete-chunks' : kind, reason: 'сбой', partialText: '[Фрагмент 1]\nЧастичный вывод CLI' }); });
+        };
+      },
+    });
+    takeErrors(page);
+    try {
+      await page.click('.hero__mic'); await sleep(1000);
+      await page.evaluate(() => { const stop = document.querySelector('[aria-label="Остановить запись"]'); if (stop) stop.click(); else [...document.querySelectorAll('button')].find((b) => /Слушаю/i.test(b.innerText))?.click(); });
+      await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || []).length === 1, { timeout: 10000 });
+      let before = await page.evaluate(() => ({ history: window.__e2e.read('zs.dictations'),
+        inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert' || c.channel === 'text:replace-selection').length }));
+      await page.click('.last-result [aria-label="Переспросить точно"]');
+      await page.waitForFunction(() => typeof window.__failExact === 'function', { timeout: 5000 });
+      if (kind === 'incomplete-chunks-edit') {
+        await page.click('.recent__row');
+        await page.evaluate(() => [...document.querySelectorAll('.snippet button')].find((b) => /Исправить/.test(b.innerText))?.click());
+        await page.waitForSelector('.modal textarea');
+        const field = await page.$('.modal textarea');
+        await field.click({ clickCount: 3 }); await field.type('Моя ручная правка.');
+        await page.evaluate(() => [...document.querySelectorAll('.modal button')].find((b) => /Сохранить/i.test(b.innerText))?.click());
+        await page.waitForFunction(() => (window.__e2e.read('zs.dictations') || [])[0]?.text === 'Моя ручная правка.', { timeout: 5000 });
+        before = await page.evaluate(() => ({ history: window.__e2e.read('zs.dictations'),
+          inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert' || c.channel === 'text:replace-selection').length }));
+      }
+      await page.evaluate(() => window.__failExact());
+      await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Точный проход не удался/.test(t.innerText)), { timeout: 5000 });
+      const result = await page.evaluate(() => ({ history: window.__e2e.read('zs.dictations'),
+        text: document.querySelector('textarea[aria-label="Неполный вывод точного прохода для ручной проверки"]')?.value || '',
+        toasts: [...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' '),
+        disabled: document.querySelector('.last-result [aria-label="Переспросить точно"]')?.disabled,
+        inserts: (window.__bridgeCalls || []).filter((c) => c.channel === 'text:insert' || c.channel === 'text:replace-selection').length }));
+      const errors = takeErrors(page);
+      record('сценарии', `точный проход: неполный ответ (${kind}) только для ручной проверки`,
+        JSON.stringify(result.history) === JSON.stringify(before.history) && result.inserts === before.inserts && !result.disabled &&
+        (kind === 'cancelled' ? !result.text : result.text === '[Фрагмент 1]\nЧастичный вывод CLI' && /служебные строки/i.test(result.toasts)) && errors.length === 0,
+        JSON.stringify({ ...result, before, errors }));
+      if (kind === 'incomplete-chunks') {
+        await page.click('.last-result [aria-label="Переспросить точно"]');
+        await page.waitForFunction(() => /дополнительными словами/.test((window.__e2e.read('zs.dictations') || [])[0]?.text || ''), { timeout: 8000 });
+        const recover = await page.evaluate(() => document.querySelector('textarea[aria-label="Неполный вывод точного прохода для ручной проверки"]')?.value);
+        record('сценарии', 'точный проход: следующий успешный повтор не уничтожает неполный вывод', recover === '[Фрагмент 1]\nЧастичный вывод CLI', recover || '');
+      }
+    } finally { await page.close(); }
+  }
+}
+
 async function scenarioRetryFailure(browser) {
   const page = await openPage(browser, '#/home', {
     settings: { aiDictationRewrite: false, liveWhisper: false },
@@ -11753,6 +11811,7 @@ async function main() {
       ['точный проход: отказ копии аудио', scenarioRetryAudioCopyFailure],
       ['точный проход: конфликты', scenarioRetryConflict],
       ['точный проход: двойное нажатие', scenarioRetryDoubleClick],
+      ['точный проход: неполный ответ', scenarioRetryIncomplete],
       ['точный проход: ошибка моста', scenarioRetryFailure],
       ['точный проход: заранее изменённая запись', scenarioRetryAlreadyEdited],
       ['режим распознавания', scenarioDecodeMode],
