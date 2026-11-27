@@ -16,6 +16,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
+const { randomUUID } = require('node:crypto');
 const { app } = require('electron');
 const { writeWav } = require('./wav.cjs');
 
@@ -830,6 +831,9 @@ function transcribe(
     // thorough — второй проход: перебор вариантов шире, окно энкодера полное,
     // повтор с другой температурой разрешён. Дороже, поэтому только по нужде.
     const audioCtx = thorough ? 0 : computeAudioCtx(wavPath);
+    // Каждый вызов владеет своим выходом, в том числе после отмены и таймаута.
+    const outBase = `${wavPath}.${randomUUID()}.out`;
+    const outFile = `${outBase}.txt`;
     const args = cliArgs({
       modelPath,
       wavPath,
@@ -840,13 +844,12 @@ function transcribe(
       audioCtx,
       beamSize: thorough ? 5 : 3,
       fallback: thorough,
-      outBase: `${wavPath}.out`,
+      outBase,
     });
 
-    // Старый результат на том же пути нельзя принять за ответ нового процесса.
-    try { fs.rmSync(`${wavPath}.out.txt`, { force: true }); }
-    catch (err) {
-      resolve({ ok: false, text: '', code: 'output-cleanup-failed', reason: `не удалось удалить прежний вывод: ${err.message}`, mode: 'cli', ms: Date.now() - callStarted });
+    // Не трогаем чужой файл даже в маловероятном случае совпадения имени.
+    if (fs.existsSync(outFile)) {
+      resolve({ ok: false, text: '', code: 'output-cleanup-failed', reason: 'имя временного вывода уже занято', mode: 'cli', ms: Date.now() - callStarted });
       return;
     }
     let child;
@@ -923,7 +926,7 @@ function transcribe(
         beamSize: thorough ? 5 : 3,
         fallback: thorough,
         audioCtx,
-        outBase: `${wavPath}.out`,
+        outBase,
       });
       let child2;
       try { child2 = spawn(bin, again, { windowsHide: true }); }
@@ -933,10 +936,10 @@ function transcribe(
       const readOut2 = captureOutput(child2.stdout, 40000);
       child2.on('error', (err) => finish({ ok: false, text: '', reason: err.message }));
       child2.on('close', (code2, signal2) => {
-        if (settled) return;
+        if (settled) { try { fs.rmSync(outFile, { force: true }); } catch { /* best effort */ } return; }
         const err2 = readErr2(), out2 = readOut2();
         try {
-          const txt = `${wavPath}.out.txt`;
+          const txt = outFile;
           if (fs.existsSync(txt)) {
             const text = fs.readFileSync(txt, 'utf8').trim();
             fs.unlinkSync(txt);
@@ -964,11 +967,11 @@ function transcribe(
       finish({ ok: false, text: '', reason: err.message });
     });
     child.on('close', (code, signal) => {
-      if (settled) return;
+      if (settled) { try { fs.rmSync(outFile, { force: true }); } catch { /* best effort */ } return; }
       const stderr = readStderr(), stdout = readStdout();
       // 1) файл -otxt, если сборка его пишет
       try {
-        const txt = `${wavPath}.out.txt`;
+        const txt = outFile;
         if (fs.existsSync(txt)) {
           const text = fs.readFileSync(txt, 'utf8').trim();
           fs.unlinkSync(txt);

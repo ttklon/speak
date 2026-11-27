@@ -31,6 +31,7 @@ function fakeChild(file, args) {
   const isCli = !String(file).includes('whisper-server');
   const cliCount = children.filter((item) => !String(item.file).includes('whisper-server')).length;
   if (isCli && (cliMode === 'throw-first' || (cliMode === 'throw-retry' && cliCount === 1))) throw new Error('не удалось запустить процесс');
+  const outFile = `${args[args.indexOf('-of') + 1]}.txt`;
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -46,7 +47,7 @@ function fakeChild(file, args) {
       child.emit('close', 1);
     });
     else if (['failed-file', 'failed-log', 'failed-signal', 'failed-empty', 'vad-retry-failed'].includes(cliMode)) queueMicrotask(() => {
-      if (cliMode === 'failed-file' || cliMode === 'vad-retry-failed' || cliMode === 'failed-signal') writeFileSync(`${wav}.out.txt`, 'частичный текст');
+      if (cliMode === 'failed-file' || cliMode === 'vad-retry-failed' || cliMode === 'failed-signal') writeFileSync(outFile, 'частичный текст');
       if (cliMode === 'failed-log') child.stdout.emit('data', Buffer.from('частичный текст'));
       child.stderr.emit('data', Buffer.from('error: искусственный сбой'));
       child.exitCode = cliMode === 'failed-signal' ? null : 1;
@@ -64,13 +65,13 @@ function fakeChild(file, args) {
         child.stdout.emit('data', Buffer.from('x'.repeat(40000)));
       } else if (cliMode === 'retry-stdout' || cliMode === 'retry-read-error') {
         child.stdout.emit('data', Buffer.from('готовый ответ'));
-        if (cliMode === 'retry-read-error') mkdirSync(`${wav}.out.txt`);
+        if (cliMode === 'retry-read-error') mkdirSync(outFile);
       } else if (cliMode === 'long-logs-only') {
         child.stderr.emit('data', Buffer.from('whisper_info: ' + 'a'.repeat(21000)));
       } else {
         const stream = cliMode === 'long-stderr' ? child.stderr : child.stdout;
         stream.emit('data', Buffer.from('начало ' + 'а'.repeat(41000) + ' конец'));
-        if (cliMode === 'long-with-file') writeFileSync(`${wav}.out.txt`, 'полный текст из файла');
+        if (cliMode === 'long-with-file') writeFileSync(outFile, 'полный текст из файла');
       }
       child.exitCode = cliMode === 'long-error' ? 1 : 0; child.emit('close', child.exitCode);
     });
@@ -395,13 +396,62 @@ describe('жизненный цикл прогретого Whisper', () => {
     expect(await bounded(whisper.transcribe(wav, { model: 'small' }))).toMatchObject({ ok: true, text: 'Привет мир' });
   });
 
+  it('позднее закрытие отменённого CLI не читает и не удаляет вывод нового запуска того же WAV', async () => {
+    cliMode = 'hold';
+    const first = whisper.transcribe(wav, { model: 'small', timeout: 10000 });
+    const oldChild = children[0].child;
+    const oldPath = `${children[0].args[children[0].args.indexOf('-of') + 1]}.txt`;
+    oldChild.kill = () => true; // процесс завершается позже ответа отмены
+    expect(whisper.cancel()).toBe(true);
+    expect(await bounded(first)).toMatchObject({ ok: false, code: 'cancelled' });
+    const second = whisper.transcribe(wav, { model: 'small', timeout: 10000 });
+    const newChild = children[1].child;
+    const newPath = `${children[1].args[children[1].args.indexOf('-of') + 1]}.txt`;
+    expect(newPath).not.toBe(oldPath);
+    writeFileSync(newPath, 'новый результат');
+    writeFileSync(oldPath, 'устаревший результат');
+    oldChild.emit('close', 0);
+    expect(existsSync(oldPath)).toBe(false);
+    expect(existsSync(newPath)).toBe(true);
+    newChild.emit('close', 0);
+    expect(await bounded(second)).toMatchObject({ ok: true, text: 'новый результат' });
+    expect(existsSync(newPath)).toBe(false);
+  });
+
+  it('после таймаута удаляет вывод, появившийся до позднего закрытия CLI', async () => {
+    cliMode = 'hold';
+    const task = whisper.transcribe(wav, { model: 'small', timeout: 40 });
+    const child = children[0].child;
+    child.kill = () => true;
+    const out = `${children[0].args[children[0].args.indexOf('-of') + 1]}.txt`;
+    expect(await bounded(task)).toMatchObject({ ok: false, code: 'timeout' });
+    writeFileSync(out, 'временный вывод');
+    child.emit('close', 0);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('после отмены повтора без VAD удаляет его поздний вывод', async () => {
+    cliMode = 'vad-fallback';
+    writeFileSync(join(root, 'models', 'ggml-silero-v6.2.0.bin'), 'vad');
+    const task = whisper.transcribe(wav, { model: 'small', timeout: 10000 });
+    await bounded((async () => { while (children.length < 2) await wait(5); })());
+    const child = children[1].child;
+    const out = `${children[1].args[children[1].args.indexOf('-of') + 1]}.txt`;
+    child.kill = () => true;
+    expect(whisper.cancel()).toBe(true);
+    expect(await bounded(task)).toMatchObject({ ok: false, code: 'cancelled' });
+    writeFileSync(out, 'поздний вывод повтора');
+    child.emit('close', 0);
+    expect(existsSync(out)).toBe(false);
+  });
+
   it('не принимает оставшийся от прежнего запуска файл за новый результат', async () => {
     writeFileSync(`${wav}.out.txt`, 'старый чужой результат');
     cliMode = 'failed-empty';
     const res = await bounded(whisper.transcribe(wav, { model: 'small', timeout: 10000 }));
     expect(res).toMatchObject({ ok: false, text: '', code: 'cli-failed' });
     expect(res.partialText).toBeUndefined();
-    expect(existsSync(`${wav}.out.txt`)).toBe(false);
+    expect(existsSync(`${wav}.out.txt`)).toBe(true); // чужой/старый файл не трогаем
   });
 
   it.each(['failed-file', 'failed-log', 'failed-signal', 'failed-empty', 'vad-retry-failed'])(
@@ -411,7 +461,7 @@ describe('жизненный цикл прогретого Whisper', () => {
       const res = await bounded(whisper.transcribe(wav, { model: 'small', timeout: 10000 }));
       expect(res).toMatchObject({ ok: false, text: '', code: 'cli-failed' });
       if (kind !== 'failed-empty') expect(res.partialText).toBe('частичный текст');
-      expect(existsSync(`${wav}.out.txt`)).toBe(false);
+      expect(existsSync(`${children.at(-1).args[children.at(-1).args.indexOf('-of') + 1]}.txt`)).toBe(false);
       expect(whisper.isBusy()).toBe(false);
       expect(children).toHaveLength(kind === 'vad-retry-failed' ? 2 : 1);
     },

@@ -164,7 +164,8 @@ check(
   'пустой результат помечен кодом, а не «успехом»',
   `code=${res.code || '—'} reason=${String(res.reason || '').slice(0, 120)}`,
 );
-check(!fs.existsSync(`${wav}.out.txt`), 'служебный .out.txt удалён после прохода');
+const leftoverOutputs = fs.readdirSync(path.dirname(wav)).filter((name) => name.startsWith(`${path.basename(wav)}.`) && name.endsWith('.out.txt'));
+check(leftoverOutputs.length === 0, 'служебный .out.txt удалён после прохода', `остатков: ${leftoverOutputs.length}`);
 
 // ── отмена ────────────────────────────────────────────────────────────────
 // На быстром раннере короткий файл успевает распознаться до отмены, поэтому
