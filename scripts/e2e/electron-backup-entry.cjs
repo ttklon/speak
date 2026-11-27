@@ -5,7 +5,7 @@ const path = require('node:path');
 const { app, BrowserWindow, shell } = require('electron');
 const mode = process.env.ZS_BACKUP_MODE;
 const desktop = process.env.ZS_BACKUP_DESKTOP;
-if (!['export', 'import', 'verify'].includes(mode) || !desktop) throw new Error('Не задан режим проверки копии');
+if (!['export', 'import', 'failure', 'verify'].includes(mode) || !desktop) throw new Error('Не задан режим проверки копии');
 app.setPath('desktop', desktop);
 shell.showItemInFolder = () => {};
 require('./electron-entry.cjs');
@@ -52,7 +52,7 @@ app.whenReady().then(async () => {
       await until(() => fs.readdirSync(desktop).filter((name) => /^zspeakly-backup-.*\.json$/.test(name)).length >= i + 1, 'файл экспорта');
     }
     await until(() => evaluate("document.body.innerText.includes('Копия сохранена')"), 'подтверждение экспорта');
-  } else if (mode === 'import') {
+  } else if (mode === 'import' || mode === 'failure') {
     const backup = fs.readFileSync(process.env.ZS_BACKUP_FILE, 'utf8');
     const script = `(() => {
       const input = document.querySelector('.settings-main input[type=file]');
@@ -63,6 +63,18 @@ app.whenReady().then(async () => {
     })()`;
     await evaluate(script);
     await until(() => evaluate('Boolean(document.querySelector(".confirm__text"))'), 'предпросмотр');
+    let originalRename, previous;
+    const profilePath = path.join(process.env.ZS_E2E_PROFILE, 'profile.json');
+    if (mode === 'failure') {
+      previous = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+      originalRename = fs.renameSync;
+      fs.renameSync = (...args) => {
+        if (args[0] === `${profilePath}.tmp` && args[1] === profilePath) {
+          throw Object.assign(new Error('simulated failure'), { code: 'EACCES' });
+        }
+        return originalRename(...args);
+      };
+    }
     const clicked = await evaluate(`(() => {
       const modal = document.querySelector('.confirm__text')?.closest('.modal');
       const button = [...(modal?.querySelectorAll('button') || [])].find((item) => item.textContent.trim() === 'Восстановить');
@@ -70,6 +82,26 @@ app.whenReady().then(async () => {
       button.click(); return true;
     })()`);
     if (!clicked) throw new Error('Подтверждение импорта не найдено');
+    if (mode === 'failure') {
+      fs.renameSync = originalRename;
+      await until(() => evaluate("document.body.innerText.includes('Не удалось подтвердить сохранение копии')"), 'ошибка пакетной записи');
+      const unchanged = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+      const pending = JSON.parse(fs.readFileSync(`${profilePath}.tmp`, 'utf8'));
+      const state = await evaluate("Promise.all([window.zspeakly.store.get('zs.dictations'), window.zspeakly.store.get('zs.dictionary'), window.zspeakly.store.statusSync()])");
+      if (JSON.stringify(unchanged['zs.dictations']) !== JSON.stringify(previous['zs.dictations']) ||
+          JSON.stringify(unchanged['zs.dictionary']) !== JSON.stringify(previous['zs.dictionary']) ||
+          JSON.stringify(state[0]) !== JSON.stringify(previous['zs.dictations']) ||
+          JSON.stringify(state[1]) !== JSON.stringify(previous['zs.dictionary']) || state[2]?.code !== 'RECOVERY_PENDING' ||
+          !pending['zs.dictations']?.some((item) => item.id === 'backup-e2e-history') ||
+          !pending['zs.dictionary']?.some((item) => item.id === 'backup-e2e-word')) throw new Error('Пакетный отказ изменил оригинал или не сохранил temp');
+      console.log('BACKUP_E2E_OK failure'); app.quit(); return;
+    }
+    // Прочитать диск сразу после обработчика кнопки: все разделы уже записаны,
+    // а не только появились позднее отдельными отложенными операциями React.
+    const committed = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+    if (!committed['zs.dictations']?.some((item) => item.id === 'backup-e2e-history') ||
+        !committed['zs.dictionary']?.some((item) => item.id === 'backup-e2e-word') ||
+        !committed['zs:dictionary']?.some((item) => item.id === 'backup-e2e-word')) throw new Error('Снимок не был записан до подтверждения');
     await until(() => evaluate("document.body.innerText.includes('Данные применены в приложении')"), 'применение копии');
     await until(async () => {
       const history = await evaluate("window.zspeakly.store.get('zs.dictations')");

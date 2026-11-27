@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('zspeakly', {
     remove: (key) => ipcRenderer.invoke('store:remove', key),
     sizeSync: () => ipcRenderer.sendSync('store:size'),
     statusSync: () => ipcRenderer.sendSync('store:status'),
+    commitBackupSync: (sections) => ipcRenderer.sendSync('store:commit-backup', sections),
     onError: (cb) => on('store:error', cb),
   },
 

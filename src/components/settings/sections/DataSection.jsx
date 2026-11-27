@@ -362,18 +362,20 @@ export default function DataSection({ onOpenSection }) {
               title: 'Данные применены в приложении',
               description: status?.ok === false
                 ? `${current.name}: ${applied.join(', ')}. Профиль защищён от записи или не сохранён: изменения могут быть потеряны.`
-                : `${current.name}: ${applied.join(', ')}. Запись в профиль выполняется отдельно; следите за предупреждениями о сохранении.`,
+                : isElectron()
+                  ? `${current.name}: ${applied.join(', ')}. Снимок профиля записан; последующие изменения сохраняются отдельно. Следите за предупреждениями.`
+                  : `${current.name}: ${applied.join(', ')}. Запись в профиль выполняется отдельно; следите за предупреждениями о сохранении.`,
               tone: status?.ok === false ? 'warn' : 'info',
               ttl: 10000,
             });
           } catch (err) {
-            push({ title: 'Не удалось восстановить', description: String(err?.message || err), tone: 'warn' });
+            push({ title: 'Не удалось восстановить', description: String(err?.message || err), tone: 'warn', ttl: 0 });
           }
         }}
         title="Восстановить данные из копии?"
         description={
           pendingBackup
-            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.selected.map((key) => BACKUP_SECTIONS[key].toLowerCase()).join(', ') || 'ничего не выбрано'}.${pendingBackup.compatibility.legacy ? ' Копия без полной метки приложения или версии: совместимость не гарантирована.' : ''}${pendingBackup.compatibility.ignoredFields ? ` Нераспознанные поля верхнего уровня будут пропущены: ${pendingBackup.compatibility.ignoredFields}.` : ''}${retentionWarning} Восстановление не атомарно: при сбое часть прежних данных может быть заменена, а часть — нет. Сначала сохраните отдельную копию текущих данных; при повреждённом профиле она может быть неполной.`
+            ? `${pendingBackup.name} · от ${String(pendingBackup.payload?.exportedAt || 'неизвестной даты').slice(0, 10)}. Будут заменены: ${pendingBackup.selected.map((key) => BACKUP_SECTIONS[key].toLowerCase()).join(', ') || 'ничего не выбрано'}.${pendingBackup.compatibility.legacy ? ' Копия без полной метки приложения или версии: совместимость не гарантирована.' : ''}${pendingBackup.compatibility.ignoredFields ? ` Нераспознанные поля верхнего уровня будут пропущены: ${pendingBackup.compatibility.ignoredFields}.` : ''}${retentionWarning} ${isElectron() ? 'Выбранные разделы записываются единым снимком профиля; последующие изменения и очистка по сроку сохраняются отдельно. При сбое проверьте профиль и временный файл.' : 'В браузере восстановление не атомарно: при сбое часть прежних данных может быть заменена, а часть — нет.'} Сначала сохраните отдельную копию текущих данных; при повреждённом профиле она может быть неполной.`
             : ''
         }
         confirmLabel="Восстановить"

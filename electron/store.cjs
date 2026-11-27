@@ -133,6 +133,38 @@ class JsonStore {
     }
   }
 
+  // Сначала записываем полный снимок, и только после успешной замены файла
+  // публикуем его в кэше. Неподтверждённый temp никогда не перезаписываем.
+  commitSnapshot(changes) {
+    if (this.writeProtectionCode || this.lastWriteError) return false;
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) return false;
+    const tmp = `${this.file}.tmp`;
+    this.checkPendingWrite();
+    if (this.writeProtectionCode) return false;
+    try {
+      const next = { ...this.cache, ...changes };
+      const data = JSON.stringify(next);
+      // wx защищает temp, появившийся между проверкой и открытием.
+      fs.writeFileSync(tmp, data, { encoding: 'utf8', flag: 'wx' });
+      fs.renameSync(tmp, this.file);
+      this.cache = next;
+      clearTimeout(this.timer);
+      this.timer = null;
+      this.dirty = false;
+      this.lastWriteError = null;
+      return true;
+    } catch (err) {
+      // Если temp остался, блокируем также отложенный flush старого кэша:
+      // он не должен уничтожить возможную копию незавершённой операции.
+      this.checkPendingWrite();
+      if (!this.writeProtectionCode) {
+        const code = /^[A-Z0-9_]{1,32}$/.test(String(err?.code || '')) ? err.code : 'UNKNOWN';
+        this.reportError(code);
+      }
+      return false;
+    }
+  }
+
   status() {
     return this.lastWriteError ? { ok: false, ...this.lastWriteError } : { ok: true };
   }

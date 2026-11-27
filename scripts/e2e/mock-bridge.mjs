@@ -59,6 +59,13 @@ export function installMockBridge() {
       localStorage.removeItem(PREFIX + key);
       return true;
     },
+    commitBackupSync: (sections) => {
+      record('store:commit-backup', [Object.keys(sections)]);
+      // Мок localStorage не подтверждает атомарность реального диска.
+      for (const [key, value] of Object.entries(sections)) writeStore(key, value);
+      if (sections['zs.settings']) writeStore('zs:settings', sections['zs.settings']);
+      return true;
+    },
     sizeSync: () => JSON.stringify(localStorage).length,
   };
 

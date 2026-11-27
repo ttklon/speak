@@ -8447,7 +8447,7 @@ async function scenarioBackup(browser) {
         state.dictionary.some((w) => w.word === 'ИмпортСлово') &&
         state.dictations.some((d) => /Восстановленная запись/.test(d.text)) &&
         state.dictations.some((d) => d.id === 'a-import' && d.source === 'agent') &&
-        /Данные применены в приложении/i.test(state.toast) && /Запись в профиль выполняется отдельно/i.test(state.toast),
+        /Данные применены в приложении/i.test(state.toast) && /Снимок профиля записан/i.test(state.toast),
       `asked=${asked.slice(0, 30)} confirm=${confirm} dict=${state.dictionary.length} hist=${state.dictations.length} toast=${state.toast.slice(0, 80)}`,
     );
     const fileRecord = state.dictations.find((d) => d.id === 'f-import');
@@ -9033,7 +9033,7 @@ async function scenarioProtectedBackup(browser) {
         }));
         const errors = takeErrors(page);
         record('сценарии', `данные: известный сбой записи останавливает импорт (${mode})`,
-          /Будут заменены: история диктовок, словарь/i.test(preview) && /не.*атомар/i.test(preview) && /сохраните.*копи/i.test(preview) &&
+          /Будут заменены: история диктовок, словарь/i.test(preview) && /единым снимком/i.test(preview) && /сохраните.*копи/i.test(preview) &&
           /Не удалось восстановить/i.test(result.toast) && /не изменены/i.test(result.toast) &&
           result.history === before.history && result.dictionary === before.dictionary &&
           !result.toast.includes('секретный путь') && errors.length === 0,
@@ -9051,6 +9051,51 @@ async function scenarioProtectedBackup(browser) {
       } finally { await page.close(); }
     }
   } finally { rmSync(backupPath, { force: true }); }
+}
+
+// Мост подменён: проверяем отказ до ответа и неоднозначную потерю ответа после записи.
+async function scenarioBackupCommitFailure(browser) {
+  const path = join(tmpdir(), `zs-commit-failure-${Date.now()}.json`);
+  writeFileSync(path, JSON.stringify({ app: 'ZSpeakly', format: 1,
+    dictations: [{ id: 'new-history', text: 'новый текст', createdAt: Date.now() }],
+    dictionary: [{ id: 'new-word', word: 'новый термин' }] }), 'utf8');
+  try {
+    for (const mode of ['false', 'missing', 'throw-before', 'throw-after']) {
+      const page = await openPage(browser, '#/settings?section=data&from=home', {
+        settle: 600, patchArg: mode,
+        storeSeed: { 'zs.dictations': [{ id: 'old-history', text: 'старая запись', createdAt: Date.now() }],
+          'zs.dictionary': [{ id: 'old-word', word: 'старое слово' }] },
+        patchNative: (mode) => {
+          const store = window.zspeakly.store, commit = store.commitBackupSync;
+          if (mode === 'missing') delete store.commitBackupSync;
+          else store.commitBackupSync = (sections) => {
+            if (mode === 'throw-after') commit(sections);
+            if (mode.startsWith('throw')) throw new Error('личный путь');
+            return false;
+          };
+        },
+      });
+      try {
+        takeErrors(page);
+        const input = await page.$('.settings-main input[type=file]');
+        await input.uploadFile(path); await page.waitForSelector('.backup-sections');
+        await clickIn(page, '', 'Восстановить'); await sleep(400);
+        const result = await page.evaluate(() => ({
+          history: JSON.parse(localStorage.getItem('mockstore:zs.dictations') || '[]'),
+          dictionary: JSON.parse(localStorage.getItem('mockstore:zs.dictionary') || '[]'),
+          toast: [...document.querySelectorAll('.toast')].map((node) => node.innerText).join(' '),
+        }));
+        await input.uploadFile(path); await page.waitForSelector('.backup-sections');
+        const summary = await page.evaluate(() => document.querySelector('.backup-sections').innerText);
+        const unchangedMemory = /История диктовок\s+Сейчас: 1 · в копии: 1\s+Общих ID: 0 · прежних ID нет в копии: 1/.test(summary);
+        const diskId = mode === 'throw-after' ? 'new-history' : 'old-history';
+        record('сценарии', `данные: неподтверждённая пакетная запись (${mode})`,
+          result.history[0]?.id === diskId && unchangedMemory && /Не удалось подтвердить сохранение/i.test(result.toast) &&
+          /может быть неизвестно/i.test(result.toast) && !/Данные применены в приложении|личный путь/i.test(result.toast) && takeErrors(page).length === 0,
+          JSON.stringify({ mode, diskId: result.history[0]?.id, unchangedMemory, toast: result.toast.slice(-250) }));
+      } finally { await page.close(); }
+    }
+  } finally { rmSync(path, { force: true }); }
 }
 
 // Browser localStorage пишет каждый раздел отдельно: сбой нельзя выдавать за транзакцию.
@@ -11427,6 +11472,7 @@ async function main() {
       ['данные: большая копия на экспорт', scenarioBackupLargeExport],
       ['данные: экспорт защищённого профиля', scenarioBackupProtectedExport],
       ['данные: копия защищённого профиля', scenarioProtectedBackup],
+      ['данные: сбой пакетного импорта', scenarioBackupCommitFailure],
       ['данные: частичная запись копии', scenarioBackupPartialWrite],
       ['хранилище заполнено', scenarioStorageFull],
       ['ошибка хранилища Electron', scenarioElectronStorageError],

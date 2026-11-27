@@ -301,3 +301,87 @@ describe('профиль Electron: сбой записи', () => {
     expect(store.status()).toEqual({ ok: false, code: 'ENOSPC' });
   });
 });
+
+describe('пакетная запись профиля при восстановлении копии', () => {
+  const original = { 'zs.dictations': [{ id: 'old', text: 'старый текст' }], 'zs.dictionary': [{ id: 'old-word', word: 'слово' }], unrelated: { keep: true } };
+  const changes = { 'zs.dictations': [{ id: 'new', text: 'новый текст' }], 'zs.dictionary': [{ id: 'new-word', word: 'новое слово' }] };
+  it('пишет все разделы одной заменой и сохраняет текущие невыбранные изменения', () => {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, JSON.stringify(original));
+    const store = new JsonStore();
+    store.set('pending', 'ожидает сохранения');
+    const rename = vi.spyOn(fs, 'renameSync');
+    expect(store.commitSnapshot(changes)).toBe(true);
+    const expected = { ...original, ...changes, pending: 'ожидает сохранения' };
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(expected);
+    expect(store.get('zs.dictations')).toEqual(changes['zs.dictations']);
+    expect(store.get('pending')).toBe('ожидает сохранения');
+    vi.runAllTimers();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(new JsonStore().get('zs.dictionary')).toEqual(changes['zs.dictionary']);
+  });
+  it('при ошибке rename не меняет данные на диске или в кэше и не затирает временный файл', () => {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, JSON.stringify(original));
+    const store = new JsonStore();
+    store.set('pending', 'сохранить отдельно');
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('частный путь'), { code: 'EACCES' }); });
+    expect(store.commitSnapshot(changes)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(original);
+    expect(store.get('zs.dictations')).toEqual(original['zs.dictations']);
+    expect(store.get('pending')).toBe('сохранить отдельно');
+    const temporary = fs.readFileSync(`${file}.tmp`, 'utf8');
+    expect(JSON.parse(temporary)).toMatchObject(changes);
+    rename.mockRestore();
+    vi.runAllTimers();
+    expect(fs.readFileSync(`${file}.tmp`, 'utf8')).toBe(temporary);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(original);
+    expect(store.status()).toEqual({ ok: false, code: 'RECOVERY_PENDING' });
+    expect(new JsonStore().status()).toEqual({ ok: false, code: 'RECOVERY_PENDING' });
+  });
+  it.each(['before', 'after'])('прерывание процесса %s rename сохраняет целую старую или новую версию', (stage) => {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, JSON.stringify(original));
+    const script = `
+      const Module = require('node:module'), fs = require('node:fs');
+      const load = Module._load;
+      Module._load = function(name, ...args) { if (name === 'electron') return { app: { getPath: () => process.argv[1] } }; return load.call(this, name, ...args); };
+      const { JsonStore } = require(process.argv[2]); Module._load = load;
+      const rename = fs.renameSync;
+      fs.renameSync = (...args) => { if (process.argv[3] === 'after') rename(...args); process.exit(91); };
+      const store = new JsonStore(); store.commitSnapshot(JSON.parse(process.argv[4])); process.exit(92);
+    `;
+    const child = spawnSync(process.execPath, ['-e', script, dir, require.resolve('../../electron/store.cjs'), stage, JSON.stringify(changes)], { encoding: 'utf8', timeout: 10000 });
+    expect(child.status, child.stderr).toBe(91);
+    const disk = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (stage === 'before') {
+      expect(disk).toEqual(original);
+      expect(JSON.parse(fs.readFileSync(`${file}.tmp`, 'utf8'))).toEqual({ ...original, ...changes });
+      expect(new JsonStore().status()).toEqual({ ok: false, code: 'RECOVERY_PENDING' });
+    } else {
+      expect(disk).toEqual({ ...original, ...changes });
+      expect(fs.existsSync(`${file}.tmp`)).toBe(false);
+      expect(new JsonStore().status()).toEqual({ ok: true });
+    }
+  });
+  it('не перезаписывает существующий временный файл или защищённый профиль', () => {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, JSON.stringify(original));
+    const store = new JsonStore();
+    fs.writeFileSync(`${file}.tmp`, 'непроверенный черновик');
+    expect(store.commitSnapshot(changes)).toBe(false);
+    expect(fs.readFileSync(`${file}.tmp`, 'utf8')).toBe('непроверенный черновик');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(original);
+    expect(store.status()).toEqual({ ok: false, code: 'RECOVERY_PENDING' });
+  });
+  it('при ошибке подготовки до записи оставляет старые разделы и уведомляет без частного пути', () => {
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(file, JSON.stringify(original));
+    const store = new JsonStore();
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw Object.assign(new Error('частный путь'), { code: 'ENOSPC' }); });
+    expect(store.commitSnapshot(changes)).toBe(false);
+    expect(store.get('zs.dictations')).toEqual(original['zs.dictations']);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(original);
+    expect(store.status()).toEqual({ ok: false, code: 'ENOSPC' });
+  });
+});

@@ -13,8 +13,8 @@ const main = fs.readFileSync('electron/main.cjs', 'utf8');
 
 /** Каналы вида invoke('name') — запрос-ответ. */
 const invoked = [...new Set([...preload.matchAll(/invoke\('([^']+)'/g)].map((m) => m[1]))];
-/** Каналы вида send('name') — события «выстрелил и забыл». */
-const sent = [...new Set([...preload.matchAll(/send\('([^']+)'/g)].map((m) => m[1]))];
+/** Каналы send и sendSync должны иметь обработчик (синхронные ждут ответ). */
+const sent = [...new Set([...preload.matchAll(/(?:send|sendSync)\('([^']+)'/g)].map((m) => m[1]))];
 
 /** Обработчики главного процесса. */
 const handled = new Set([

@@ -40,7 +40,8 @@ function run(mode, profile, desktop, backupFile = '') {
   const desktop = path.join(root, "Копии O'Brien 😀 с пробелами");
   const source = path.join(root, 'исходный профиль');
   const target = path.join(root, 'новый профиль');
-  for (const dir of [desktop, source, target]) fs.mkdirSync(dir, { recursive: true });
+  const failedTarget = path.join(root, 'профиль отказа');
+  for (const dir of [desktop, source, target, failedTarget]) fs.mkdirSync(dir, { recursive: true });
   const sourceProfile = {
     'zs.settings': settings, 'zs:settings': settings,
     'zs.dictations': [{ id: 'backup-e2e-history', text, rawText: 'Оригинал 😀', createdAt: Date.now(), source: 'file', fileName: 'запись.wav', words: 5 }],
@@ -51,6 +52,9 @@ function run(mode, profile, desktop, backupFile = '') {
   };
   fs.writeFileSync(path.join(source, 'profile.json'), JSON.stringify(sourceProfile));
   fs.writeFileSync(path.join(target, 'profile.json'), JSON.stringify({ 'zs.settings': settings, 'zs:settings': settings }));
+  fs.writeFileSync(path.join(failedTarget, 'profile.json'), JSON.stringify({ 'zs.settings': settings, 'zs:settings': settings,
+    'zs.dictations': [{ id: 'old-history', text: 'старый текст', createdAt: Date.now() }],
+    'zs.dictionary': [{ id: 'old-word', word: 'старое слово' }] }));
   try {
     await run('export', source, desktop);
     const files = fs.readdirSync(desktop).filter((name) => /^zspeakly-backup-.*\.json$/.test(name));
@@ -68,6 +72,7 @@ function run(mode, profile, desktop, backupFile = '') {
     const file = path.join(desktop, files[0]);
     await run('import', target, desktop, file);
     await run('verify', target, desktop);
+    await run('failure', failedTarget, desktop, file);
     const profile = JSON.parse(fs.readFileSync(path.join(target, 'profile.json'), 'utf8'));
     assert.equal(profile['zs.dictations'].find((item) => item.id === 'backup-e2e-history')?.text, text);
     assert.equal(profile['zs.dictations'].find((item) => item.id === 'backup-e2e-history')?.rawText, 'Оригинал 😀');
@@ -75,7 +80,7 @@ function run(mode, profile, desktop, backupFile = '') {
     assert.equal(profile['zs.snippets'].find((item) => item.id === 'backup-e2e-snippet')?.body, 'Первая строка\nВторая 😀');
     assert.equal(profile['zs.profile']?.name, 'Имя из копии');
     assert.ok(!profile['zs.clipboard']?.some((item) => item.id === 'backup-e2e-clipboard'));
-    console.log('Electron backup: экспорт в Unicode-путь, импорт в отдельный профиль, перезапуск — OK (выбор файла и проводник подменены)');
+    console.log('Electron backup: экспорт в Unicode-путь, импорт в отдельный профиль, перезапуск и отказ rename — OK (выбор файла и проводник подменены)');
   } finally {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }

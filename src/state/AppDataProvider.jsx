@@ -5,7 +5,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { assertBackupImportAllowed, read, write, storageBytes } from '../lib/storage.js';
+import { commitBackupSections, read, write, storageBytes } from '../lib/storage.js';
 import {
   DEFAULT_AI_PRESETS,
   DEFAULT_CUSTOM_INSTRUCTIONS,
@@ -595,7 +595,15 @@ export function AppDataProvider({ children }) {
       const data = prepareBackup(payload);
       // Проверяем непосредственно перед первым изменением, а не при выборе
       // файла: за время предпросмотра состояние диска могло измениться.
-      assertBackupImportAllowed();
+      const sectionKeys = {
+        settings: STORAGE_KEYS.settings, dictations: STORAGE_KEYS.dictations, dictionary: STORAGE_KEYS.dictionary,
+        snippets: STORAGE_KEYS.snippets, voiceHotkeys: STORAGE_KEYS.hotkeys, presets: STORAGE_KEYS.presets,
+        instructions: STORAGE_KEYS.instructions, stats: STORAGE_KEYS.stats, profile: STORAGE_KEYS.profile,
+      };
+      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [sectionKeys[key], value]));
+      // При отказе до setState UI сохраняет старые разделы. Если ответ IPC
+      // потерян, нельзя обещать, что диск остался прежним.
+      commitBackupSections(sections);
       const applied = [];
       if (data.settings) {
         setSettings(data.settings);

@@ -36,6 +36,17 @@ export function assertBackupImportAllowed() {
   if (!ok) throw new Error('Профиль защищён, не сохранён или его статус недоступен. Исправьте проблему записи перед восстановлением. Текущие данные не изменены.');
 }
 
+/** В Electron применяем подготовленные разделы одной записью профиля до setState.
+ * false означает браузерный режим, где пакетной записи localStorage нет. */
+export function commitBackupSections(sections) {
+  if (!isElectron()) return false;
+  assertBackupImportAllowed();
+  let committed = false;
+  try { committed = bridge()?.commitBackupSync?.(sections) === true; } catch { /* исход операции может быть неизвестен */ }
+  if (!committed) throw new Error('Не удалось подтвердить сохранение копии. Состояние на диске может быть неизвестно. Не продолжайте работу: закройте приложение и проверьте профиль и временный файл перед повтором.');
+  return true;
+}
+
 /** Синхронное чтение (мост использует sendSync — данные уже в памяти main). */
 export function read(key) {
   return readRaw(key);

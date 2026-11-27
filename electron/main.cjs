@@ -44,6 +44,7 @@ const {
 } = require('electron');
 
 const { JsonStore } = require('./store.cjs');
+const { buildBackupChanges } = require('./backupCommit.cjs');
 const whisper = require('./whisper.cjs');
 // русский движок: GigaAM v3 на процессоре, включается сам для русского языка
 const gigaam = require('./gigaam.cjs');
@@ -1256,6 +1257,20 @@ function registerIpc() {
   });
   ipcMain.on('store:status', (event) => {
     event.returnValue = store.status();
+  });
+  // Один синхронный вызов не оставляет окну времени изменить состояние между
+  // сохранением снимка и применением его в React. Это может задержать UI на
+  // медленном диске; не используем для обычной записи по каждому нажатию.
+  ipcMain.on('store:commit-backup', (event, data) => {
+    let committed = false;
+    try {
+      const changes = buildBackupChanges(data, store.get('zs:settings') || {});
+      committed = store.commitSnapshot(changes);
+    } catch { /* не выводим содержимое копии или путь */ }
+    if (committed && Object.hasOwn(data, 'zs.settings')) {
+      try { syncClipboardWatch(); } catch { /* запись уже состоялась */ }
+    }
+    event.returnValue = committed;
   });
   // Ручной выбор модели в настройках закрепляем: дальше приложение не будет
   // менять его само (иначе «оно передумало» выглядит как поломка).

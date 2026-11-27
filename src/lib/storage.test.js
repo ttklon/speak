@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { assertBackupImportAllowed, read, write, remove, storageBytes, formatBytes, isElectron } from './storage.js';
+import { assertBackupImportAllowed, commitBackupSections, read, write, remove, storageBytes, formatBytes, isElectron } from './storage.js';
 
 beforeEach(() => {
   localStorage.clear();
@@ -62,6 +62,20 @@ describe('хранилище в Electron', () => {
     }
     window.zspeakly = { isElectron: true, store: { statusSync: () => ({ ok: true }) } };
     expect(() => assertBackupImportAllowed()).not.toThrow();
+  });
+
+  it('не применяет импорт в Electron без подтверждённой пакетной записи', () => {
+    for (const commitBackupSync of [undefined, () => false, () => { throw new Error('личный путь'); }]) {
+      window.zspeakly = { isElectron: true, store: { statusSync: () => ({ ok: true }), commitBackupSync } };
+      expect(() => commitBackupSections({ 'zs.dictations': [] })).toThrow(/не удалось подтвердить/i);
+      try { commitBackupSections({ 'zs.dictations': [] }); } catch (err) { expect(err.message).not.toContain('личный путь'); }
+    }
+    const commitBackupSync = vi.fn(() => true);
+    window.zspeakly = { isElectron: true, store: { statusSync: () => ({ ok: true }), commitBackupSync } };
+    expect(commitBackupSections({ 'zs.dictations': [] })).toBe(true);
+    expect(commitBackupSync).toHaveBeenCalledWith({ 'zs.dictations': [] });
+    window.zspeakly.isElectron = false;
+    expect(commitBackupSections({ 'zs.dictations': [] })).toBe(false);
   });
 
   it('ходит через мост, а не в localStorage', () => {
