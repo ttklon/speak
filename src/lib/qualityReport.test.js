@@ -43,10 +43,10 @@ describe('analyseQuality', () => {
       entry({ sttSecondPass: true }),
       entry({ sttThorough: true }),
     ]);
-    const verdict = res.verdicts.find((v) => /Второй проход в/i.test(v.title));
+    const verdict = res.verdicts.find((v) => /Второй проход отмечен/i.test(v.title));
     expect(verdict?.level).toBe('warn');
-    expect(verdict?.hint).toMatch(/«Точно»/);
-    expect(res.secondPass.share).toBeCloseTo(2 / 3, 2);
+    expect(verdict?.hint).toMatch(/не доказывает ошибку/);
+    expect(res.secondPass.samples).toBe(2);
   });
 
   it('тихий звук считается по усилению, а не по громкости', () => {
@@ -55,7 +55,7 @@ describe('analyseQuality', () => {
       entry({ sttGainDb: 12 }),
       entry({ sttGainDb: 2 }),
     ]);
-    const quiet = res.verdicts.find((v) => /тихий/i.test(v.title));
+    const quiet = res.verdicts.find((v) => /усиление/i.test(v.title));
     expect(quiet?.level).toBe('warn');
     expect(res.quiet.count).toBe(2);
     expect(res.quiet.maxGain).toBe(14);
@@ -68,17 +68,17 @@ describe('analyseQuality', () => {
       entry({ sttMs: 4000, spokenMs: 2000 }),
       entry({ sttMs: 500, spokenMs: 2000 }),
     ]);
-    const slow = res.verdicts.find((v) => /тяжело/i.test(v.title));
+    const slow = res.verdicts.find((v) => /Долгое распознавание/i.test(v.title));
     expect(slow?.level).toBe('warn');
-    expect(slow?.hint).toMatch(/процессор/);
+    expect(slow?.hint).toMatch(/Причина неизвестна/);
     expect(res.slow.count).toBe(2);
   });
 
   it('если причин нет — так и говорит, без выдуманных советов', () => {
     const res = analyseQuality([entry(), entry(), entry()]);
     expect(res.verdicts).toHaveLength(1);
-    expect(res.verdicts[0].level).toBe('ok');
-    expect(res.verdicts[0].title).toMatch(/Причин .* не видно/);
+    expect(res.verdicts[0].level).toBe('unknown');
+    expect(res.verdicts[0].title).toMatch(/точность неизвестна/);
   });
 
   it('модели считаются по фразам, а не по времени', () => {
@@ -116,7 +116,7 @@ describe('qualityReportText', () => {
   it('это текст для чата: числа и модель, без самой диктовки', () => {
     const text = qualityReportText(report, { version: '1.33.0', at: 0 });
     expect(text).toMatch(/ZSpeakly 1\.33\.0/);
-    expect(text).toContain('Второй проход: 1');
+    expect(text).toContain('Второй проход отмечен: 1');
     expect(text).toContain('small-q5_1');
     expect(text).not.toContain('проверка');
   });
@@ -126,4 +126,44 @@ describe('qualityReportText', () => {
     expect(text).toMatch(/Фраз в истории: 0/);
     expect(text).toMatch(/нечего разбирать|Пока/);
   });
+});
+
+describe('диагностика не выдумывает отсутствующие измерения', () => {
+  it('одни имена моделей не говорят ни о громкости, ни о скорости, ни о точности', () => {
+    const report = analyseQuality(Array.from({ length: 3 }, () => ({ sttModel: 'small' })));
+    const text = qualityReportText(report, { at: 0 });
+    expect(report.secondPass.samples).toBe(0);
+    expect(report.quiet.samples).toBe(0);
+    expect(report.slow.samples).toBe(0);
+    expect(text).not.toMatch(/звук громкий|быстрее речи|значит дело/i);
+    expect(text).toMatch(/нет данных/i);
+    expect(text).toMatch(/не (оценивает|измеряет|измеряют) точность/i);
+  });
+  it('делит долю вторых проходов только на явно известные значения, не на все записи', () => {
+    const report = analyseQuality([
+      { sttSecondPass: true }, { sttSecondPass: false }, { sttModel: 'small' },
+      { sttSecondPass: null }, { sttSecondPass: 'false' },
+    ]);
+    expect(report.secondPass.samples).toBe(2);
+    expect(qualityReportText(report, { at: 0 })).toMatch(/Второй проход отмечен: 1; отсутствие отметки/);
+  });
+  it('ноль — известное измерение, null, пустая строка и некорректные значения — нет', () => {
+    const report = analyseQuality([
+      { sttGainDb: 0, sttMs: 2000, spokenMs: 1000, sttPausesMs: 0 },
+      { sttGainDb: null, sttMs: null, spokenMs: 1000, sttPausesMs: null },
+      { sttGainDb: '', sttMs: 0, spokenMs: 0 },
+      { sttGainDb: '15', sttMs: 500, spokenMs: NaN },
+    ]);
+    expect(report.quiet.samples).toBe(1);
+    expect(report.slow.samples).toBe(1);
+    expect(report.pausesSamples).toBe(1);
+    expect(report.quiet.count).toBe(0);
+    expect(qualityReportText(report, { at: 0 })).toMatch(/Усиление.*0 из 1/);
+  });
+});
+
+
+it('старый файл не приписывается выбранной, но неподтверждённой модели', () => {
+  const report = analyseQuality([{ source: 'file', sttModel: 'small-q5_1' }]);
+  expect(report.models[0].model).toBe('файл: фактическая модель неизвестна');
 });

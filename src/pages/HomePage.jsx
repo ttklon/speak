@@ -8,7 +8,7 @@ import { useToast } from '../state/ToastProvider.jsx';
 import { navigate } from '../lib/router.js';
 import { engineName, hasNativeStt, hasWebSpeech } from '../lib/recognition/engine.js';
 import { VOICE_COMMAND_TIP } from '../lib/voiceCommands.js';
-import { AUDIO_ACCEPT, progressLabel } from '../lib/recognition/audioFile.js';
+import { AUDIO_ACCEPT, progressLabel, fileModelLabel } from '../lib/recognition/audioFile.js';
 import { keysLabel, timeHM, truncate, dayLabel, formatSeconds, formatK, words } from '../lib/utils.js';
 import { APP, WHY_BETTER } from '../lib/config.js';
 import { diffWords, hasRawText } from '../lib/historyRaw.js';
@@ -39,7 +39,8 @@ function howItRan(item) {
   else if (item.sttThorough) bits.push('честный проход сразу');
   if (item.sttGainDb) bits.push(`+${item.sttGainDb} дБ громкости`);
   if (item.sttPausesMs) bits.push(`паузы сжаты на ${(item.sttPausesMs / 1000).toFixed(1).replace('.', ',')} с`);
-  if (item.sttModel) bits.push(item.sttModel.replace(/^ggml-/, '').replace(/\.bin$/, ''));
+  const model = fileModelLabel(item);
+  if (model) bits.push(model);
   return bits.join(' · ');
 }
 

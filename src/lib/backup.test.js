@@ -7,11 +7,11 @@ describe('подготовка резервной копии', () => {
     const text = 'Юникод 😀\n'.repeat(1200);
     const rawText = 'исходный 😀\n'.repeat(90).trim();
     const input = { app: 'ZSpeakly', dictations: [
-      { id: 'f', text, rawText, source: 'file', fileName: 'встреча.wav', sttModel: 'small-q5_1', sttParts: 3 },
+      { id: 'f', text, rawText, source: 'file', fileName: 'встреча.wav', sttModel: 'small-q5_1', sttModelSource: 'file-responses-v1', sttParts: 3 },
       { id: 'c', text: 'ответ', source: 'command', command: 'сократи' },
     ], dictionary: [{ id: 'w', word: 'Слово', pronunciation: 'слово', pinned: true, hits: 7, lastUsedAt: 123 }] };
     const result = prepareBackup(input);
-    expect(result.dictations[0]).toMatchObject({ id: 'f', text, rawText, source: 'file', fileName: 'встреча.wav', sttModel: 'small-q5_1', sttParts: 3 });
+    expect(result.dictations[0]).toMatchObject({ id: 'f', text, rawText, source: 'file', fileName: 'встреча.wav', sttModel: 'small-q5_1', sttModelSource: 'file-responses-v1', sttParts: 3 });
     expect(result.dictations[1]).toMatchObject({ source: 'command', command: 'сократи' });
     expect(result.dictionary[0]).toMatchObject(input.dictionary[0]);
   });

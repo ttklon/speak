@@ -1078,7 +1078,7 @@ async function scenarioAudioFilePartial(browser) {
             }
             if (scenario === 'silent-code' && i === 1) return { ok: false, code: 'silent', text: '' };
             if (scenario === 'silent-failed' || (scenario === 'silence' && i === 1)) return { ok: true, text: '' };
-            return { ok: true, text: i === 0 ? 'важно проверить' : 'важно проверить ещё раз' };
+            return { ok: true, model: i === 0 ? 'gigaam-v3' : 'small-q5_1', text: i === 0 ? 'важно проверить' : 'важно проверить ещё раз' };
           };
         },
       });
@@ -1088,6 +1088,12 @@ async function scenarioAudioFilePartial(browser) {
         const result = await page.evaluate(() => ({ history: window.__e2e.read('zs.dictations') || [], body: document.body.innerText }));
         if (scenario === 'partial') {
           const text = result.history[0]?.text || '';
+          record('сценарии', 'файл: фактические модели успешных фрагментов сохранены вместо настройки Whisper',
+            result.history[0]?.sttModel === 'gigaam-v3, small-q5_1' && result.history[0]?.sttModelSource === 'file-responses-v1', JSON.stringify(result.history[0]));
+          await page.evaluate(() => document.querySelector('.recent__row')?.click());
+          const modelInfo = await page.evaluate(() => document.querySelector('.snippet__meta')?.innerText || '');
+          record('сценарии', 'файл: в истории подписаны реальные модели успешных фрагментов',
+            /Модели успешных фрагментов: gigaam-v3, small-q5_1/.test(modelInfo), modelInfo);
           record('сценарии', 'файл: отказ среднего фрагмента сохраняет оба текста и помечает пропуск',
             /^важно проверить\s*\[Не удалось распознать фрагмент 2[^\]]*\]\s*важно проверить ещё раз$/.test(text), text);
           record('сценарии', 'файл: частичный результат сопровождается предупреждением, а не успехом',
@@ -1097,8 +1103,8 @@ async function scenarioAudioFilePartial(browser) {
             await reopened.evaluateOnNewDocument(installMockBridge);
             await reopened.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
             await reopened.waitForSelector('.app-window', { timeout: 15000 }); await sleep(600);
-            const persisted = await reopened.evaluate(() => ({ text: window.__e2e.read('zs.dictations')?.[0]?.text, body: document.body.innerText }));
-            record('сценарии', 'файл: отметка пропуска сохраняется в истории после перезагрузки', persisted.text === text && /Не удалось распознать фрагмент 2/.test(persisted.body || ''));
+            const persisted = await reopened.evaluate(() => ({ item: window.__e2e.read('zs.dictations')?.[0], body: document.body.innerText }));
+            record('сценарии', 'файл: отметка пропуска и модели сохраняются в истории после перезагрузки', persisted.item?.text === text && persisted.item?.sttModel === 'gigaam-v3, small-q5_1' && persisted.item?.sttModelSource === 'file-responses-v1' && /Не удалось распознать фрагмент 2/.test(persisted.body || ''));
           } finally { await reopened.close(); }
         } else if (scenario === 'partial-overbudget') {
           const recover = await page.evaluate(() => document.querySelector('.toast__recover')?.value || '');
@@ -7568,6 +7574,16 @@ async function scenarioDictionaryAliases(browser) {
  * главное — что приложение называет причину словами и не выдумывает её, когда
  * данных мало.
  */
+async function scenarioAudioPrivacyNotice(browser) {
+  const page = await openPage(browser, '#/settings?section=data&from=home', { settle: 700 });
+  const text = await page.evaluate(() => document.querySelector('.settings-main')?.innerText || '');
+  record('сценарии', 'приватность: временный WAV и остаток после аварии указаны в данных',
+    /временный WAV/i.test(text) && /аварийном завершении файл может остаться/i.test(text) && !/звук никуда не пишется/i.test(text), text.slice(-500));
+  const errors = takeErrors(page);
+  record('сценарии', 'приватность звука: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await page.close();
+}
+
 async function scenarioQualityReport(browser) {
   const at = Date.now();
   const seeded = [
@@ -7588,12 +7604,12 @@ async function scenarioQualityReport(browser) {
       hint: row.querySelector('.quality-report__hint')?.innerText || '',
     })),
   );
-  const secondPass = rows.find((r) => /Второй проход в/.test(r.title)) || {};
-  const quiet = rows.find((r) => /Звук тихий/.test(r.title)) || {};
+  const secondPass = rows.find((r) => /Второй проход отмечен/.test(r.title)) || {};
+  const quiet = rows.find((r) => /Заметное усиление/.test(r.title)) || {};
   record(
     'сценарии',
     'разбор точности: называет причину словами, а не «распознаёт плохо»',
-    secondPass.level === 'is-warn' && /2 из 3/.test(secondPass.title) && /«Точно»/.test(secondPass.hint || ''),
+    secondPass.level === 'is-warn' && /отмечен: 2/.test(secondPass.title) && /не доказывает ошибку/.test(secondPass.hint || ''),
     `${secondPass.title || 'нет строки'} — ${(secondPass.hint || '').slice(0, 60)}`,
   );
   record(
@@ -7618,7 +7634,7 @@ async function scenarioQualityReport(browser) {
   record(
     'сценарии',
     'разбор точности: копируется текстом и без самого текста диктовок',
-    copied && /Второй проход: 2/.test(clipboard) && !/третья|вторая/.test(clipboard),
+    copied && /Второй проход отмечен: 2/.test(clipboard) && !/третья|вторая/.test(clipboard),
     `${clipboard.split('\n')[0] || 'буфер пуст'} · ${clipboard.length} символов`,
   );
 
@@ -7644,8 +7660,15 @@ async function scenarioQualityReport(browser) {
     thinRow.level === 'is-unknown' && /Пока нечего разбирать/.test(thinRow.title),
     `${thinRow.title} — ${(thinRow.hint || '').slice(0, 50)}`,
   );
-  const errors = [...takeErrors(page), ...takeErrors(thin)];
+  const unknown = await openPage(browser, '#/settings?section=diagnostics&from=home', {
+    storeSeed: { 'zs.dictations': [0, 1, 2].map((i) => ({ id: `u${i}`, text: 'текст', createdAt: Date.now() - i, sttModel: 'small' })) }, settle: 700,
+  });
+  const unknownText = await unknown.evaluate(() => document.querySelector('.quality-report')?.innerText || '');
+  record('сценарии', 'разбор точности: только названия моделей не становятся диагнозом',
+    /точность неизвестна/i.test(unknownText) && !/звук громкий|быстрее речи|значит дело/i.test(unknownText), unknownText);
+  const errors = [...takeErrors(page), ...takeErrors(thin), ...takeErrors(unknown)];
   record('сценарии', 'разбор точности: без ошибок консоли', errors.length === 0, errors[0] || '');
+  await unknown.close();
   await thin.close();
 }
 
@@ -8414,7 +8437,7 @@ async function scenarioBackup(browser) {
       dictations: [
         { id: 'd-import', text: 'Восстановленная запись из копии', createdAt: Date.now(), words: 5, seconds: 4 },
         { id: 'a-import', text: 'Ответ агента из копии', createdAt: Date.now(), words: 4, source: 'agent' },
-        { id: 'f-import', text: 'Юникод 😀\n'.repeat(1200), rawText: 'Исходный текст 😀\n'.repeat(90).trim(), createdAt: Date.now(), source: 'file', fileName: 'встреча.wav', sttModel: 'small-q5_1', sttParts: 3 },
+        { id: 'f-import', text: 'Юникод 😀\n'.repeat(1200), rawText: 'Исходный текст 😀\n'.repeat(90).trim(), createdAt: Date.now(), source: 'file', fileName: 'встреча.wav', sttModel: 'gigaam-v3, small-q5_1', sttModelSource: 'file-responses-v1', sttParts: 3 },
         { id: 'c-import', text: 'Результат команды', command: 'сократи', createdAt: Date.now(), source: 'command' },
       ],
       settings: { dictationRetentionDays: 3650 },
@@ -8455,7 +8478,7 @@ async function scenarioBackup(browser) {
     const word = state.dictionary.find((w) => w.id === 'w-import');
     record('сценарии', 'данные: восстановление сохраняет длинный текст, оригинал, источники и статистику словаря',
       fileRecord?.text === 'Юникод 😀\n'.repeat(1200) && fileRecord?.rawText === 'Исходный текст 😀\n'.repeat(90).trim() &&
-      fileRecord?.source === 'file' && fileRecord?.fileName === 'встреча.wav' && fileRecord?.sttModel === 'small-q5_1' && fileRecord?.sttParts === 3 &&
+      fileRecord?.source === 'file' && fileRecord?.fileName === 'встреча.wav' && fileRecord?.sttModel === 'gigaam-v3, small-q5_1' && fileRecord?.sttModelSource === 'file-responses-v1' && fileRecord?.sttParts === 3 &&
       commandRecord?.source === 'command' && commandRecord?.command === 'сократи' &&
       word?.pinned === true && word?.hits === 27 && word?.lastUsedAt === 1790000000000,
       JSON.stringify({ textLength: fileRecord?.text?.length, rawLength: fileRecord?.rawText?.length, source: fileRecord?.source, fileName: fileRecord?.fileName, command: commandRecord?.source, word }));
@@ -11230,8 +11253,8 @@ async function scenarioModelCompare(browser) {
   );
   record(
     'сценарии',
-    'сравнение моделей: победителя называем по словарю, а не «на глаз»',
-    /3 из 3/.test(state?.summary || '') && /Сбалансированно|Быстро|Максимум качества/.test(state?.winner || ''),
+    'сравнение моделей: совпадения не выдаются за оценку точности',
+    /совпадения со словарём/i.test(state?.summary || '') && /не оценка точности/i.test(state?.summary || '') && !state?.winner,
     state?.summary || 'итога нет',
   );
   const sent = await page.evaluate(() => {
@@ -11460,6 +11483,7 @@ async function main() {
       ['модели', scenarioModels],
       ['микрофон', scenarioMic],
       ['локальная модель: приватность', scenarioLocalModelPrivacy],
+      ['данные: приватность звука', scenarioAudioPrivacyNotice],
       ['данные: резервная копия', scenarioBackup],
       ['данные: совместимость копии', scenarioBackupCompatibility],
       ['данные: полный круг копии', scenarioBackupRoundTrip],

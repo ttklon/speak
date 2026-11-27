@@ -155,6 +155,31 @@ export function assembleFileParts(parts = [], windows = [], transform = (text) =
   return { text: sections.join('\n'), speechText: speech.join('\n') };
 }
 
+/** Только модели успешных окон из ответов main; отказанное окно ничего не доказывает. */
+export function summarizeFileModels(results = []) {
+  const seen = new Set();
+  let other = false;
+  let unknown = false;
+  for (const result of results) {
+    if (result?.ok !== true) continue;
+    const name = typeof result.model === 'string' ? result.model.trim() : '';
+    if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(name)) { unknown = true; continue; }
+    if (seen.has(name)) continue;
+    if (seen.size < 4) seen.add(name);
+    else other = true;
+  }
+  if (!seen.size && !other) unknown = true;
+  return { sttModel: [...seen, ...(other ? ['другие'] : []), ...(unknown ? ['неизвестно'] : [])].join(', '), sttModelSource: 'file-responses-v1' };
+}
+
+/** Старые файлы сохраняли выбранную Whisper, а не фактически использованную модель. */
+export function fileModelLabel(item = {}) {
+  const model = typeof item.sttModel === 'string' ? item.sttModel : '';
+  if (item.source !== 'file') return model.replace(/^ggml-/, '').replace(/\.bin$/, '');
+  if (item.sttModelSource === 'file-responses-v1') return `Модели успешных фрагментов: ${model || 'неизвестно'}`;
+  return model ? `Выбранная модель: ${model}; фактическая неизвестна` : 'Фактическая модель неизвестна';
+}
+
 /**
  * Годится ли файл. Возвращает {ok, reason, message}: reason — для тестов и
  * журнала, message — то, что увидит человек, и оно обязано называть выход.

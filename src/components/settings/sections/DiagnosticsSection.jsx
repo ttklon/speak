@@ -520,16 +520,16 @@ export default function DiagnosticsSection() {
       </div>
 
       <div className="settings-group">
-        <div className="settings-group__title">Где теряется точность</div>
+        <div className="settings-group__title">Сведения о распознавании</div>
         <div className="settings-group__desc">
           Разбор по своей же истории: был ли честный проход, усиливался ли звук, не считалась ли
-          фраза дольше, чем длилась. Без сети и без новых замеров.
+          фраза дольше, чем длилась. Без сети и без новых замеров. Без эталона эти сведения не измеряют точность.
         </div>
         <div className="quality-report">
           {quality.verdicts.map((verdict, index) => (
             <div className={`quality-report__row is-${verdict.level}`} key={`${verdict.level}-${index}`}>
               <span className="quality-report__mark">
-                {verdict.level === 'ok' ? 'в порядке' : verdict.level === 'warn' ? 'стоит поправить' : 'мало данных'}
+                {verdict.level === 'ok' ? 'сведения' : verdict.level === 'warn' ? 'проверьте' : 'неизвестно'}
               </span>
               <span className="quality-report__title">{verdict.title}</span>
               <span className="quality-report__hint">{verdict.hint}</span>

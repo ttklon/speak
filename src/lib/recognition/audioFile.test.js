@@ -10,6 +10,8 @@ import {
   mergeFileText,
   planWindows,
   progressLabel,
+  summarizeFileModels,
+  fileModelLabel,
   slicePcm,
   validateAudioFile,
 } from './audioFile.js';
@@ -153,5 +155,25 @@ describe('audioFile: пределы и подписи', () => {
     for (const ext of ['.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm']) {
       expect(AUDIO_ACCEPT).toContain(ext);
     }
+  });
+});
+
+
+describe('фактические модели файла', () => {
+  it('сохраняет фактическую модель из ответов, а не выбор в настройках', () => {
+    expect(summarizeFileModels([{ ok: true, model: 'gigaam-v3' }, { ok: true, model: 'gigaam-v3' }]))
+      .toEqual({ sttModel: 'gigaam-v3', sttModelSource: 'file-responses-v1' });
+  });
+  it('показывает разные и неизвестные модели, не угадывая для отказов', () => {
+    const mixed = summarizeFileModels([{ ok: true, model: 'gigaam-v3' }, { ok: false }, { ok: true, model: 'small-q5_1' }, { ok: true }]);
+    expect(mixed.sttModel).toBe('gigaam-v3, small-q5_1, неизвестно');
+    expect(fileModelLabel({ source: 'file', ...mixed })).toMatch(/успешных фрагментов.*gigaam-v3.*неизвестно/);
+    expect(summarizeFileModels([{ ok: true }]).sttModel).toBe('неизвестно');
+    expect(summarizeFileModels(['a', 'b', 'c', 'd', 'e', ''].map((model) => ({ ok: true, model }))).sttModel)
+      .toBe('a, b, c, d, другие, неизвестно');
+  });
+  it('старую запись не выдаёт за фактическую модель', () => {
+    expect(fileModelLabel({ source: 'file', sttModel: 'small-q5_1' })).toMatch(/выбранная.*small-q5_1.*фактическая неизвестна/i);
+    expect(fileModelLabel({ source: 'dictation', sttModel: 'small-q5_1' })).toBe('small-q5_1');
   });
 });

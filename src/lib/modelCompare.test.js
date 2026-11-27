@@ -77,8 +77,9 @@ describe('describeComparison', () => {
       { model: 'base', ok: true, text: 'включи зум', words: ['Zoom', 'Telegram'] },
       { model: 'small', ok: true, text: 'включи Zoom и Telegram', words: ['Zoom', 'Telegram'] },
     ]);
-    expect(withWords.winner).toBe('small');
-    expect(withWords.summary).toMatch(/2 из 2/);
+    expect(withWords.winner).toBe('');
+    expect(withWords.rows[1].score.matched).toHaveLength(2);
+    expect(withWords.summary).toMatch(/не оценка точности/);
   });
 
   it('при равенстве терминов победителя не объявляет', () => {
@@ -87,7 +88,7 @@ describe('describeComparison', () => {
       { model: 'small', ok: true, text: 'включи Zoom', words: ['Zoom'] },
     ]);
     expect(res.winner).toBe('');
-    expect(res.summary).toMatch(/одинаково/);
+    expect(res.summary).toMatch(/совпаден/);
   });
 
   it('если текст дала одна модель — сравнивать нечего', () => {
@@ -99,5 +100,29 @@ describe('describeComparison', () => {
     const res = scoreTerms('открой зум и телеграм', [{ word: 'Zoom' }, { word: 'Telegram' }, { word: 'Docker' }]);
     expect(res.matched).toEqual(['zoom', 'telegram']);
     expect(res.total).toBe(3);
+  });
+});
+
+describe('сравнение не знает, что говорили', () => {
+  it('совпадения не доказывают точность и не объявляют победителя', () => {
+    const res = describeComparison([
+      { model: 'a', ok: true, text: 'не надо', words: ['Zoom'] },
+      { model: 'b', ok: true, text: 'Zoom надо', words: ['Zoom'] },
+    ]);
+    expect(res.winner).toBe('');
+    expect(res.summary).toMatch(/совпаден/i);
+    expect(res.summary).toMatch(/не оценка точности/i);
+  });
+  it('равные совпадения не означают одинакового текста', () => {
+    const res = describeComparison([
+      { model: 'a', ok: true, text: 'не отправляй Zoom', words: ['Zoom'] },
+      { model: 'b', ok: true, text: 'отправляй Zoom', words: ['Zoom'] },
+    ]);
+    expect(res.summary).not.toMatch(/услышали одинаково/i);
+    expect(res.summary).toMatch(/совпаден/i);
+  });
+  it('пустой словарь не говорит о том, что произнесено', () => {
+    const res = describeComparison([{ model: 'a', ok: true, text: 'zoom' }, { model: 'b', ok: true, text: 'zoom' }]);
+    expect(res.summary).not.toMatch(/слов из словаря в этой фразе нет/i);
   });
 });

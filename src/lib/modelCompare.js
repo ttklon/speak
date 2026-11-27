@@ -7,9 +7,8 @@
  * он сам — это и есть честно: приложение не знает, что человек сказал, и не может
  * объявить победителя.
  *
- * Что считается объективно: попадание слов из словаря. Если человек продиктовал
- * «Зум», «Телеграм» и «Докер», а в словаре есть Zoom, Telegram и Docker — модель,
- * которая их узнала, объективно лучше на этом микрофоне. Всё остальное — глазами.
+ * Совпадение со словарём не доказывает, что слово было произнесено: без
+ * эталона нельзя объявлять модель точнее или выбирать победителя.
  */
 
 import { startPcmRecording } from './audio/pcmRecorder.js';
@@ -77,34 +76,18 @@ export function scoreTerms(text, words = []) {
 }
 
 /**
- * Итог сравнения словами. Победителя объявляем только когда есть объективный
- * признак — попадание терминов. Иначе честно: смотрите глазами.
+ * Итог сравнения словами без автоматического выбора победителя.
  */
 export function describeComparison(rows = []) {
   const ok = (rows || []).filter((row) => row && row.ok && row.text);
   if (ok.length < 2) return { winner: '', summary: 'Сравнивать нечего: текст дала только одна модель.' };
   const scored = ok.map((row) => ({ ...row, score: scoreTerms(row.text, row.words || []) }));
-  const name = (row) => row.label || row.model;
   const withTerms = scored.filter((row) => row.score.total > 0);
-  if (withTerms.length) {
-    const best = withTerms.reduce((a, b) => (b.score.matched.length > a.score.matched.length ? b : a));
-    const worst = withTerms.reduce((a, b) => (b.score.matched.length < a.score.matched.length ? b : a));
-    if (best.score.matched.length > worst.score.matched.length) {
-      return {
-        winner: best.model,
-        summary: `«${name(best)}»: ${best.score.matched.length} из ${best.score.total} совпадений со словарём против ${worst.score.matched.length} у «${name(worst)}». Это не оценка точности: проверьте, что именно вы сказали.`,
-        rows: scored,
-      };
-    }
-    return {
-      winner: '',
-      summary: `Все модели услышали одинаково: ${best.score.matched.length} из ${best.score.total} слов словаря. Смотрите текст — разница в знаках и порядке слов.`,
-      rows: scored,
-    };
-  }
   return {
     winner: '',
-    summary: 'Слов из словаря в этой фразе нет — сравните текст глазами: приложение не знает, что вы сказали, и не станет объявлять победителя.',
+    summary: withTerms.length
+      ? 'Показаны совпадения со словарём в результатах. Это не оценка точности: приложение не знает, что вы сказали. Сравните тексты вручную.'
+      : 'Словарь для сравнения пуст. Приложение не знает, что вы сказали: сравните тексты вручную.',
     rows: scored,
   };
 }

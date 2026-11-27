@@ -53,6 +53,7 @@ import {
   fileTitle,
   formatDuration,
   assembleFileParts,
+  summarizeFileModels,
   planWindows,
   slicePcm,
   validateAudioFile,
@@ -925,6 +926,7 @@ export function DictationProvider({ children }) {
 
       const lang = String(langTag(settingsRef.current.language) || 'ru-RU').slice(0, 2);
       const parts = [];
+      const modelResponses = [];
       // Не ждём медленного или зависшего IPC: к моменту нажатия доступны
       // только уже завершённые окна. Текущий вызов может ответить позже.
       job.onCancel = () => {
@@ -958,6 +960,7 @@ export function DictationProvider({ children }) {
           });
           if (job.cancelled) break;
           if (res?.ok) {
+            modelResponses.push({ ok: true, model: res.model });
             const text = String(res.text || '').trim();
             parts.push(text);
             sttMs += Number(res.ms) || 0;
@@ -1004,7 +1007,7 @@ export function DictationProvider({ children }) {
         source: 'file',
         fileName: name,
         sttMs: sttMs || undefined,
-        sttModel: settingsRef.current.whisperModel,
+        ...summarizeFileModels(modelResponses),
         sttParts: windows.length > 1 ? windows.length : undefined,
       };
       const savedToHistory = addDictation(item);

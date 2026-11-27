@@ -43,7 +43,7 @@ export function describeBackupCompatibility(payload) {
 }
 
 const fail = (section) => { throw new Error(`Некорректный раздел копии: ${section}. Текущие данные не изменены.`); };
-const strings = ['rawText', 'language', 'command', 'fileName', 'sttModel', 'sttMode'];
+const strings = ['rawText', 'language', 'command', 'fileName', 'sttModel', 'sttMode', 'sttModelSource'];
 const numbers = ['durationMs', 'words', 'createdAt', 'editedAt', 'sttMs', 'spokenMs', 'sttParts', 'sttPreParts', 'sttGainDb', 'sttPausesMs', 'waitMs'];
 const flags = ['undone', 'sttWarm', 'sttThorough', 'sttSecondPass'];
 
