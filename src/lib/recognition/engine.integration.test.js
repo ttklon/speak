@@ -212,7 +212,7 @@ describe('диктовка целиком: что получает челове�
     },
   );
 
-  it.each(['cli-failed', 'cli-output-truncated'])('частичный вывод CLI (%s) не вставляется, но доступен отдельно для ручной проверки', async (code) => {
+  it.each(['cli-failed', 'cli-output-truncated', 'incomplete-chunks'])('частичный вывод CLI (%s) не вставляется, но доступен отдельно для ручной проверки', async (code) => {
     answers = [{ ok: false, code, reason: 'движок завершился с ошибкой', partialText: 'неполный ответ' }];
     const end = vi.fn(), final = vi.fn(); const recognizer = createRecognizer({ onEnd: end, onFinal: final });
     await recognizer.start(); await speak(0, 2000);

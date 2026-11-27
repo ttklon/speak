@@ -3880,10 +3880,57 @@ await check('сбой CLI: успешный и частичный фрагмен
     whisper.transcribe = async () => ++n === 1 ? { ok: true, text: 'первый фрагмент', mode: 'server' }
       : { ok: false, text: '', code: errorCode, partialText: 'неполный вывод CLI', reason: 'сбой' };
     const result = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(30000), sampleRate: 16000, lang: 'ru' });
-    if (result.ok || result.code !== 'cli-failed' || !/первый фрагмент/.test(result.partialText || '') || !/неполный вывод CLI/.test(result.partialText || '') || result.text) throw new Error(JSON.stringify(result));
+    if (result.ok || result.code !== 'incomplete-chunks' || result.causeCode !== 'cli-failed' || !/первый фрагмент/.test(result.partialText || '') || !/неполный вывод CLI/.test(result.partialText || '') || result.text) throw new Error(JSON.stringify(result));
     n = 0; errorCode = 'cli-output-truncated';
     const truncated = await handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(30000), sampleRate: 16000, lang: 'ru' });
-    if (truncated.ok || truncated.code !== errorCode || !/первый фрагмент/.test(truncated.partialText || '') || !/неполный вывод CLI/.test(truncated.partialText || '') || truncated.text) throw new Error(JSON.stringify(truncated));
+    if (truncated.ok || truncated.code !== 'incomplete-chunks' || truncated.causeCode !== errorCode || !/первый фрагмент/.test(truncated.partialText || '') || !/неполный вывод CLI/.test(truncated.partialText || '') || truncated.text) throw new Error(JSON.stringify(truncated));
+  } finally {
+    whisper.transcribe = saved.transcribe; whisper.serverStatus = saved.serverStatus; whisper.splitBySilence = saved.split;
+    await handlers.get('store:set')({}, 'zs:settings', settings);
+  }
+});
+
+await check('внутренние фрагменты: разные ошибки, исключение и отмена не теряют порядок', async () => {
+  const whisper = require(path.resolve('electron/whisper.cjs'));
+  const saved = { transcribe: whisper.transcribe, serverStatus: whisper.serverStatus, split: whisper.splitBySilence };
+  const settings = handlers.get('store:get')({}, 'zs:settings');
+  let calls = 0, scenario = '';
+  try {
+    await handlers.get('store:set')({}, 'zs:settings', { ...settings, recognitionEngine: 'whisper', keepModelLoaded: true, decodeMode: 'fast', autoOptimize: false });
+    whisper.splitBySilence = (pcm) => [pcm.subarray(0, pcm.length / 3), pcm.subarray(pcm.length / 3, 2 * pcm.length / 3), pcm.subarray(2 * pcm.length / 3)];
+    whisper.serverStatus = () => ({ ready: true, processors: scenario === 'parallel' || scenario === 'parallel-success' || scenario === 'cancel' ? 2 : 1 });
+    whisper.transcribe = async () => {
+      const i = calls++;
+      if (scenario === 'parallel') {
+        if (i === 0) return { ok: false, code: 'busy', reason: 'отказ сервера' };
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { ok: false, code: 'cli-failed', partialText: 'частичный вывод второго', reason: 'ошибка CLI' };
+      }
+      if (scenario === 'parallel-success') {
+        if (i === 0) return { ok: false, code: 'busy' };
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { ok: true, text: 'поздний успешный фрагмент' };
+      }
+      if (scenario === 'cancel') {
+        if (i === 0) return { ok: false, code: 'busy' };
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { ok: false, code: 'cancelled' };
+      }
+      if (i === 0) return { ok: true, text: 'готовое начало' };
+      if (scenario === 'throw') throw new Error('сбой STT');
+      if (scenario === 'malformed') return { ok: true };
+      return { ok: false, code: 'busy', reason: 'отказ сервера' };
+    };
+    const invoke = () => handlers.get('stt:transcribe-pcm')({}, { pcm: speechPcm(30000), sampleRate: 16000, lang: 'ru' });
+    for (scenario of ['failure', 'throw', 'malformed', 'parallel', 'parallel-success']) {
+      calls = 0;
+      const result = await invoke();
+      if (result.ok || result.code !== 'incomplete-chunks' || result.text || !/фрагмент 1/i.test(result.partialText || '') || !/фрагмент 2/i.test(result.partialText || '') || !/фрагмент 3/i.test(result.partialText || '') ||
+        (scenario === 'parallel' ? !/частичный вывод второго/.test(result.partialText || '') : scenario === 'parallel-success' ? !/поздний успешный фрагмент/.test(result.partialText || '') : !/готовое начало/.test(result.partialText || ''))) throw new Error(`${scenario}: ${JSON.stringify(result)}`);
+    }
+    scenario = 'cancel'; calls = 0;
+    const cancelled = await invoke();
+    if (cancelled.ok || cancelled.code !== 'cancelled' || cancelled.partialText) throw new Error(`cancel: ${JSON.stringify(cancelled)}`);
   } finally {
     whisper.transcribe = saved.transcribe; whisper.serverStatus = saved.serverStatus; whisper.splitBySilence = saved.split;
     await handlers.get('store:set')({}, 'zs:settings', settings);

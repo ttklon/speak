@@ -1172,7 +1172,7 @@ async function scenarioAudioFilePartial(browser) {
 async function scenarioAudioFileResponseBounds(browser) {
   const wav = writeToneWav(join(tmpdir(), 'zspeakly-file-response-bounds.wav'));
   try {
-    for (const scenario of ['first', 'middle', 'after-error', 'malformed', 'boundary', 'cli-failed', 'cli-empty', 'cli-truncated']) {
+    for (const scenario of ['first', 'middle', 'after-error', 'malformed', 'boundary', 'cli-failed', 'cli-empty', 'cli-truncated', 'incomplete-chunks']) {
       const page = await openPage(browser, '#/home', {
         settings: { aiDictationRewrite: false, dictionaryEnabled: false },
         storeSeed: { 'zs.dictations': [{ id: 'keep', text: 'Старая запись', createdAt: Date.now() }] },
@@ -1195,6 +1195,7 @@ async function scenarioAudioFileResponseBounds(browser) {
               return { ok: true, text: window.__hugeResult, model: 'gigaam-v3' };
             if (which === 'after-error' && index === 0) return { ok: false };
             if (which === 'cli-empty' && index === 1) return { ok: false, code: 'cli-failed', text: '' };
+            if (which === 'incomplete-chunks' && index === 1) return { ok: false, code: 'incomplete-chunks', text: '', partialText: '[Фрагмент 1]\nготовый текст\n[Фрагмент 2 не распознан]' };
             if (which === 'cli-truncated' && index === 1) return { ok: false, code: 'cli-output-truncated', text: '', partialText: '[Вывод обрезан]\nнезавершённый вывод' };
             if (which === 'cli-failed' && index === 1) return { ok: false, code: 'cli-failed', text: '', partialText: 'незавершённый вывод' };
             if (which === 'malformed' && index === 1) return { ok: true };
@@ -1229,10 +1230,10 @@ async function scenarioAudioFileResponseBounds(browser) {
             record('сценарии', 'файл: следующий импорт не уничтожает временные результаты предыдущего',
               next.history.length === 2 && next.history.some((entry) => entry.id === 'keep') && next.raw === next.original && /Сохранённое начало/.test(next.prior));
           }
-        } else if (scenario === 'cli-failed' || scenario === 'cli-empty' || scenario === 'cli-truncated') {
+        } else if (scenario === 'cli-failed' || scenario === 'cli-empty' || scenario === 'cli-truncated' || scenario === 'incomplete-chunks') {
           const failed = await page.evaluate(() => document.querySelector('[aria-label="Частичный вывод движка для ручной проверки"]')?.value);
           record('сценарии', 'файл: частичный вывод после сбоя движка доступен без автоматического сохранения',
-            result.calls === 2 && result.history.length === 1 && (scenario === 'cli-empty' ? !failed : scenario === 'cli-truncated' ? failed === '[Вывод обрезан]\nнезавершённый вывод' : failed === 'незавершённый вывод') && /Сохранённое начало/.test(result.prior) && /Ошибка движка распознавания/.test(result.body), JSON.stringify({ calls: result.calls, history: result.history.length, failed, prior: result.prior }));
+            result.calls === 2 && result.history.length === 1 && (scenario === 'cli-empty' ? !failed : scenario === 'cli-truncated' ? failed === '[Вывод обрезан]\nнезавершённый вывод' : scenario === 'incomplete-chunks' ? failed === '[Фрагмент 1]\nготовый текст\n[Фрагмент 2 не распознан]' : failed === 'незавершённый вывод') && /Сохранённое начало/.test(result.prior) && /Ошибка движка распознавания/.test(result.body), JSON.stringify({ calls: result.calls, history: result.history.length, failed, prior: result.prior }));
         } else if (scenario === 'malformed') {
           record('сценарии', 'файл: успешный ответ без текста считается отказом, а не тишиной',
             result.calls === 3 && result.history.length === 2 && /Не удалось распознать фрагмент 2/.test(result.history[0].text || '') && /Файл расшифрован не полностью/.test(result.body), result.history[0]?.text || '');
@@ -2075,7 +2076,7 @@ async function scenarioPreSnapshotFailure(browser) {
 }
 
 async function scenarioDictationIncompleteTail(browser) {
-  for (const kind of ['failure', 'exception', 'empty', 'cancelled', 'live', 'both', 'command', 'cli-failed', 'cli-truncated']) {
+  for (const kind of ['failure', 'exception', 'empty', 'cancelled', 'live', 'both', 'command', 'cli-failed', 'cli-truncated', 'incomplete-chunks']) {
     const page = await openPage(browser, '#/home', {
       settings: { aiDictationRewrite: false, liveWhisper: kind === 'live' || kind === 'both', micPreroll: false },
       storeSeed: { 'zs.dictations': [] }, patchArg: kind,
@@ -2113,6 +2114,7 @@ async function scenarioDictationIncompleteTail(browser) {
           if (kind === 'exception') throw new Error('искусственный отказ IPC');
           if (kind === 'empty') return { ok: true, text: '  ' };
           if (kind === 'cancelled') return { ok: false, code: 'cancelled' };
+          if (kind === 'incomplete-chunks') return { ok: false, code: 'incomplete-chunks', partialText: '[Фрагмент 1]\nготовый текст\n[Фрагмент 2 не распознан]' };
           if (kind === 'cli-truncated') return { ok: false, code: 'cli-output-truncated', partialText: '[Вывод обрезан]\nнеполный вывод CLI' };
           if (kind === 'cli-failed') return { ok: false, code: 'cli-failed', partialText: 'неполный вывод CLI', reason: 'сбой процесса' };
           return { ok: false, code: 'stt-failed', reason: 'искусственный отказ' };
@@ -2154,7 +2156,7 @@ async function scenarioDictationIncompleteTail(browser) {
         clipboardWrites: (window.__bridgeCalls || []).filter((c) => c.channel === 'clipboard:write').length,
         calls: window.__callsIncomplete,
       }));
-      const expected = kind === 'cli-truncated' ? 'Ранее распознанный фрагмент:\nГотовое начало.\n\nЧастичный вывод после ошибки (может содержать служебные строки):\n[Вывод обрезан]\nнеполный вывод CLI' : kind === 'cli-failed' ? 'Ранее распознанный фрагмент:\nГотовое начало.\n\nЧастичный вывод после ошибки (может содержать служебные строки):\nнеполный вывод CLI' : kind === 'live' ? 'Живой непроверенный черновик' : kind === 'both'
+      const expected = kind === 'incomplete-chunks' ? 'Ранее распознанный фрагмент:\nГотовое начало.\n\nЧастичный вывод после ошибки (может содержать служебные строки):\n[Фрагмент 1]\nготовый текст\n[Фрагмент 2 не распознан]' : kind === 'cli-truncated' ? 'Ранее распознанный фрагмент:\nГотовое начало.\n\nЧастичный вывод после ошибки (может содержать служебные строки):\n[Вывод обрезан]\nнеполный вывод CLI' : kind === 'cli-failed' ? 'Ранее распознанный фрагмент:\nГотовое начало.\n\nЧастичный вывод после ошибки (может содержать служебные строки):\nнеполный вывод CLI' : kind === 'live' ? 'Живой непроверенный черновик' : kind === 'both'
         ? 'Предварительный фрагмент:\nГотовое начало.\n\nЖивой черновик (может повторять фрагмент):\nЖивой непроверенный черновик'
         : 'Готовое начало.';
       const errors = takeErrors(page);

@@ -1748,10 +1748,13 @@ function registerIpc() {
         const texts = new Array(chunks.length).fill('');
         const partials = new Array(chunks.length).fill('');
         const modes = new Array(chunks.length).fill('');
+        const states = new Array(chunks.length).fill('not-started');
         let failed = null;
+        let cancelled = false;
         let done = 0;
         const runPart = async (index) => {
           const partWav = `${wav}.${index}.wav`;
+          states[index] = 'running';
           try {
             fs.writeFileSync(partWav, writeWav(chunks[index], sr));
             const one = await whisper.transcribe(partWav, {
@@ -1762,17 +1765,26 @@ function registerIpc() {
               useVad,
               thorough: plan.thorough,
             });
-            done += 1;
-            reportProgress(done);
-            if (!one?.ok) {
+            if (!one?.ok || typeof one.text !== 'string') {
+              states[index] = 'failed';
               if ((one?.code === 'cli-failed' || one?.code === 'cli-output-truncated') && typeof one.partialText === 'string') partials[index] = one.partialText;
-              if (!failed) failed = one || { ok: false, text: '', code: 'stt-failed', reason: 'пустой ответ движка' };
+              const failure = one?.ok ? { ok: false, text: '', code: 'malformed', reason: 'неверный ответ движка' }
+                : one || { ok: false, text: '', code: 'stt-failed', reason: 'пустой ответ движка' };
+              if (failure.code === 'cancelled') cancelled = true;
+              if (!failed) failed = failure;
               return;
             }
-            if (one.text) texts[index] = String(one.text).trim();
+            states[index] = 'success';
+            texts[index] = one.text.trim();
             modes[index] = one.mode || 'cli';
+          } catch (err) {
+            states[index] = 'failed';
+            if (!failed) failed = { ok: false, text: '', code: 'stt-failed', reason: String(err?.message || err) };
           } finally {
-            fs.rmSync(partWav, { force: true });
+            done += 1;
+            reportProgress(done);
+            try { fs.rmSync(partWav, { force: true }); }
+            catch (err) { logger.warn('stt', 'Не удалось удалить временный аудиофрагмент', { keep: true, reason: String(err?.message || err) }); }
           }
         };
         if (parallel > 1) {
@@ -1794,16 +1806,23 @@ function registerIpc() {
           }
         }
         if (failed) {
-          // кусок не распознался — честнее отдать ошибку, чем половину текста
           logger.warn('stt', 'Фрагмент диктовки не распознан', { keep: true, reason: failed.reason || '' });
-          if (failed.code === 'cli-failed' || failed.code === 'cli-output-truncated' || failed.code === 'output-cleanup-failed') {
-            const recovered = texts.map((text, index) => {
-              const partial = partials[index];
-              return text ? `[Распознан фрагмент ${index + 1}]\n${text}`
-                : partial ? `[Частичный вывод фрагмента ${index + 1} после ошибки; возможны служебные строки]\n${partial}` : '';
-            }).filter(Boolean).join('\n\n');
-            res = { ...failed, ...(recovered ? { partialText: recovered } : {}) };
-          } else res = failed;
+          if (cancelled) {
+            // Явную отмену нельзя превратить в восстановление или успех.
+            res = { ok: false, text: '', code: 'cancelled', reason: 'распознавание отменено' };
+          } else {
+            const hasText = texts.some(Boolean) || partials.some(Boolean);
+            const recovered = hasText ? states.map((state, index) => {
+              const label = `фрагмент ${index + 1} из ${chunks.length}`;
+              if (state === 'success') return texts[index] ? `[Распознан ${label}]\n${texts[index]}` : `[Пустой ответ: ${label}]`;
+              if (state === 'failed') return partials[index]
+                ? `[Ошибка: ${label}; частичный вывод может содержать служебные строки]\n${partials[index]}`
+                : `[Не распознан ${label}]`;
+              return `[Не обработан ${label}]`;
+            }).join('\n\n') : '';
+            res = { ok: false, text: '', code: 'incomplete-chunks', causeCode: failed.code || '',
+              reason: failed.reason || 'один или несколько фрагментов не распознаны', ...(recovered ? { partialText: recovered } : {}) };
+          }
         } else {
           const joined = texts
             .filter(Boolean)
